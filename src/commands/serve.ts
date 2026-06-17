@@ -1192,7 +1192,7 @@ export async function cmdServe() {
                     name: tmuxName,
                     cwd,
                     prompt,
-                    model: model ?? "gpt-5.3-codex",
+                    model: model ?? "gpt-5.5",
                     key: codexAisdkKey!,
                   })
                 : agent === "opencode"

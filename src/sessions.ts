@@ -5,7 +5,12 @@ import { statSync, readFileSync } from "node:fs";
 import { join, basename } from "node:path";
 import { tmuxTargetForPid } from "./tmux";
 import { isManagedName } from "./managed";
-import { listEntries as listAisdkEntries, isPidAlive } from "./aisdk-registry";
+import {
+  listEntries as listAisdkEntries,
+  isPidAlive,
+  patchEntry as patchAisdkEntry,
+  findEntryByAnyId as findAisdkEntryByAnyId,
+} from "./aisdk-registry";
 import { isClosing } from "./closing";
 import { userAssignments } from "./users";
 import { PATHS } from "./config";
@@ -247,7 +252,7 @@ async function firstPromptTitle(path: string): Promise<string | null> {
       }
       const cm = normalizeCodexLine(line);
       if (cm?.role === "user" && cm.kind === "text") {
-        const t = cm.text.trim().replace(/\s+/g, " ");
+        const t = stripConversationPrefix(cm.text).trim().replace(/\s+/g, " ");
         if (t && !t.startsWith("<"))
           return t.length > TITLE_MAX ? t.slice(0, TITLE_MAX - 1) + "…" : t;
       }
@@ -398,6 +403,14 @@ function samePrompt(a: string | null, b: string | null): boolean {
   return clean(a) === clean(b);
 }
 
+function promptStartsWithTitle(prompt: string | null, title: string | null | undefined): boolean {
+  if (!prompt || !title) return false;
+  const clean = (s: string) => stripConversationPrefix(s).replace(/\s+/g, " ").trim();
+  const p = clean(prompt);
+  const t = clean(title);
+  return !!t && (p === t || p.startsWith(t));
+}
+
 // How far an unclaimed transcript may lag the freshest transcript in the same
 // cwd and still be trusted as a live process's current session. A running
 // `claude` writes its transcript continuously, so the session a pid is on is
@@ -445,13 +458,33 @@ async function newestUnclaimedInCwd(
   return { path: best.path, id: best.id };
 }
 
-// The ai-sdk-provider-claude-code formats every user turn as "Human: <text>"
-// before handing it to the claude CLI, which persists that literal prefix in the
-// transcript. Strip it so an "aisdk" session's user messages (and the card title
-// derived from them) read like a normal claude session's. Claude/Codex user
-// lines never carry this prefix, so this is a no-op for them.
+function inferCodexThreadForHarness(
+  e: { cwd: string; title?: string | null; createdAt: number },
+  threads: CodexThread[],
+  claimed: Set<string>,
+): CodexThread | null {
+  const minTime = (e.createdAt ?? 0) - 30_000;
+  const matches = threads
+    .filter(
+      (t) =>
+        t.cwd === e.cwd &&
+        !claimed.has(t.id) &&
+        (t.createdAt ?? 0) >= minTime &&
+        promptStartsWithTitle(t.firstUserText, e.title),
+    )
+    .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+  return matches[0] ?? null;
+}
+
+// AI-SDK backed providers can persist a speaker prefix ("Human:" for Claude,
+// "User:" for Codex). Strip it so cards and transcript user messages read like
+// normal CLI sessions.
 function stripHumanPrefix(text: string): string {
-  return text.replace(/^Human:[ \t]+/, "");
+  return stripConversationPrefix(text);
+}
+
+function stripConversationPrefix(text: string): string {
+  return text.replace(/^(?:Human|User):[ \t]+/i, "");
 }
 
 function extractText(content: unknown): string {
@@ -546,7 +579,7 @@ function normalizeCodexLine(line: string): SessionMsg | null {
   if (!p) return null;
 
   if (x.type === "event_msg" && p.type === "user_message" && p.message?.trim()) {
-    const text = p.message.trim();
+    const text = stripConversationPrefix(p.message.trim());
     return { id: codexLineId(x, text), role: "user", kind: "text", text, ts };
   }
   if (x.type === "event_msg" && p.type === "agent_message") return null;
@@ -692,7 +725,7 @@ async function lastUserText(path: string): Promise<string | null> {
       }
       const cm = normalizeCodexLine(lines[i]);
       if (cm?.role === "user" && cm.kind === "text") {
-        const t = cm.text.trim().replace(/\s+/g, " ");
+        const t = stripConversationPrefix(cm.text).trim().replace(/\s+/g, " ");
         if (t && !t.startsWith("<")) return t.length > 140 ? t.slice(0, 139) + "…" : t;
       }
       if (x.type !== "user" || x.isMeta) continue;
@@ -995,12 +1028,21 @@ export async function listSessions(): Promise<Session[]> {
     // the app-server threadId, which we only know after turn 1 — so the transcript
     // is null until then, and the live-view id is the threadId once available
     // (deep-links straight to the rollout) else the control-plane key.
+    let codexThreadId = isCodex ? (e.threadId ?? null) : null;
+    if (isCodex && !codexThreadId) {
+      const inferred = inferCodexThreadForHarness(e, codex, claimedCodex);
+      if (inferred) {
+        codexThreadId = inferred.id;
+        claimedCodex.add(inferred.id);
+        patchAisdkEntry(e.sessionId, { threadId: inferred.id });
+      }
+    }
     const transcriptPath = isCodex
-      ? e.threadId
-        ? await findCodexTranscriptById(e.threadId)
+      ? codexThreadId
+        ? await findCodexTranscriptById(codexThreadId)
         : null
       : await findTranscriptById(e.sessionId);
-    const sessionId = isCodex ? (e.threadId ?? e.sessionId) : e.sessionId;
+    const sessionId = isCodex ? (codexThreadId ?? e.sessionId) : e.sessionId;
     let last: SessionMsg | null = null;
     let lastActivityAt: number | null = null;
     let lastUser: string | null = null;
@@ -1104,7 +1146,16 @@ function ppidOf(pid: number): number | null {
 
 export async function resolveTranscript(sessionId: string): Promise<string | null> {
   if (!UUID.test(sessionId)) return null;
-  return (await findTranscriptById(sessionId)) ?? findCodexTranscriptById(sessionId);
+  const entry = findAisdkEntryByAnyId(sessionId);
+  let id = entry?.agent === "codex" && entry.threadId ? entry.threadId : sessionId;
+  if (entry?.agent === "codex" && !entry.threadId) {
+    const inferred = inferCodexThreadForHarness(entry, await codexThreads(), new Set());
+    if (inferred) {
+      id = inferred.id;
+      patchAisdkEntry(entry.sessionId, { threadId: inferred.id });
+    }
+  }
+  return (await findTranscriptById(id)) ?? findCodexTranscriptById(id);
 }
 
 // The cwd a claude transcript was recorded in. Every claude JSONL line carries a

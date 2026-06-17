@@ -55,7 +55,7 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
   // The control-plane key (a uuid) — names the registry/command files. NOT the
   // codex thread id (which we don't know until after turn 1).
   const keyArg = arg(argv, "--key");
-  const model = arg(argv, "--model") ?? "gpt-5.3-codex";
+  const model = arg(argv, "--model") ?? "gpt-5.5";
   const cwd = arg(argv, "--cwd") ?? process.cwd();
   const tmuxName = arg(argv, "--tmux") ?? "";
   // Everything after `--` is the initial prompt (mirrors how the Claude harness
@@ -77,6 +77,7 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
   const { streamText } = await import("ai");
   // Lazy-import the provider so the rest of the CLI never hard-depends on it.
   const { createCodexAppServer } = await import("ai-sdk-provider-codex-cli");
+  let threadId: string | null = null; // learned early via onSessionCreated, then reused to resume
 
   // One provider per harness: it owns a shared `codex app-server` child process
   // reused across every turn (and resumed thread). Full-access + never-approve
@@ -92,6 +93,15 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
       // Auto-answer any approval request the provider can't route through a
       // handler, so an unattended turn never blocks waiting on stdin.
       autoApprove: true,
+      // Codex creates the persistent app-server thread before the turn
+      // completes. Publish that id immediately so lfg can tail the rollout
+      // transcript while the first response is still running.
+      onSessionCreated: (session: { threadId?: string }) => {
+        if (typeof session.threadId === "string" && session.threadId) {
+          threadId = session.threadId;
+          patchEntry(key, { threadId });
+        }
+      },
       ...(codexPath ? { codexPath } : {}),
     },
   });
@@ -113,7 +123,6 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
   });
 
   const queue: string[] = [];
-  let threadId: string | null = null; // learned after turn 1, then reused to resume
   let currentAc: AbortController | null = null;
   let draining = false;
   let closing = false;

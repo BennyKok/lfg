@@ -183,17 +183,17 @@ type QueueMsg = {
 };
 
 const CLAUDE_MODELS = ["sonnet", "opus", "haiku", "fable"];
-const CODEX_MODELS = ["gpt-5-codex", "gpt-5", "o3"];
+const CODEX_MODELS = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"];
 // Models the one-shot AI-SDK test option supports (the provider maps these
 // aliases). Kept in sync with the AISDK_MODELS allowlist in serve.ts.
 const AISDK_MODELS = ["opus", "sonnet", "haiku"];
-const CODEX_AISDK_MODELS = ["gpt-5.3-codex", "gpt-5.3", "gpt-5.3-codex-mini"];
+const CODEX_AISDK_MODELS = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"];
 const OPENCODE_MODELS = [
   "anthropic/claude-sonnet-4-6",
   "anthropic/claude-opus-4-8",
   "anthropic/claude-haiku-4-5",
-  "openai/gpt-5.3-codex",
-  "openai/gpt-5.3",
+  "openai/gpt-5.5",
+  "openai/gpt-5.4",
 ];
 
 type AgentKind = "claude" | "aisdk" | "codex" | "codex-aisdk" | "opencode";
@@ -211,8 +211,8 @@ const AGENT_MODELS: Record<AgentKind, string[]> = {
 const AGENT_DEFAULT_MODEL: Record<AgentKind, string> = {
   claude: "sonnet",
   aisdk: "opus",
-  codex: "gpt-5-codex",
-  "codex-aisdk": "gpt-5.3-codex",
+  codex: "gpt-5.5",
+  "codex-aisdk": "gpt-5.5",
   opencode: "anthropic/claude-sonnet-4-6",
 };
 
@@ -239,6 +239,14 @@ function agentIconAlt(agent?: string): string {
   if (agent === "codex" || agent === "codex-aisdk") return "Codex";
   if (agent === "opencode") return "OpenCode";
   return "Claude";
+}
+
+function isHarnessAgent(agent?: string | null): boolean {
+  return agent === "aisdk" || agent === "codex-aisdk" || agent === "opencode";
+}
+
+function canDriveSession(session: Pick<Session, "agent" | "tmuxTarget">): boolean {
+  return !!session.tmuxTarget || isHarnessAgent(session.agent);
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -1166,11 +1174,10 @@ export function App() {
         .filter(
           (session) =>
             session.sessionId &&
-            // A pane target means a driveable TUI session. "aisdk" sessions have
-            // no pane (tmuxTarget is null by design — send/interrupt route through
-            // the harness command file), so admit them explicitly; otherwise this
-            // filter would silently drop every AI-SDK session from the live view.
-            (session.tmuxTarget || session.agent === "aisdk") &&
+            // A pane target means a driveable TUI session. Harness-backed
+            // sessions have no pane, so admit those explicitly; otherwise Codex
+            // AI-SDK sessions are fetched from /api/sessions and then hidden here.
+            canDriveSession(session) &&
             !removedSids.has(session.sessionId),
         )
         // Deterministic, stable position per session (like v1): order by start
@@ -2910,7 +2917,7 @@ function SessionChat({
         <div className="border-t border-border/70 px-3 py-1.5 text-xs text-destructive">{error}</div>
       ) : null}
 
-      {session.tmuxTarget || session.agent === "aisdk" ? (
+      {canDriveSession(session) ? (
         <form onSubmit={sendMessage} className="flex gap-2 border-t border-border/70 bg-muted/35 p-2">
           <input
             value={messageText}
@@ -3591,7 +3598,7 @@ const SessionCard = memo(function SessionCard({
                 </DropdownMenuRadioItem>
               ))}
             </DropdownMenuRadioGroup>
-            {session.tmuxTarget || session.agent === "aisdk" ? (
+            {canDriveSession(session) ? (
               <>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={() => void interrupt()}>
