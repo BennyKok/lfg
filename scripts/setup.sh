@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# lfg — one-command setup for a fresh VPS or macOS workstation.
+# lfg - one-command setup for a fresh VPS or macOS workstation.
 #
 # Provisions Bun, tmux, git, the Claude CLI, fetches lfg, optionally joins your
 # Tailscale tailnet, and runs the web UI as a background user service.
@@ -13,7 +13,7 @@
 # Re-run / update after install:
 #   lfg setup
 #
-# It is idempotent — safe to run repeatedly.
+# It is idempotent - safe to run repeatedly.
 
 set -euo pipefail
 
@@ -29,9 +29,9 @@ TS_AUTHKEY="${TS_AUTHKEY:-}"
 SERVICE="lfg"
 SERVICE_LABEL="dev.omg.lfg"
 # Install source:
-#   release (default) — download the bundled tarball (vendored node_modules incl.
+#   release (default) - download the bundled tarball (vendored node_modules incl.
 #                       the private "vibes" AI-SDK provider). No registry install.
-#   source            — git clone + `bun install` (for development / forks that
+#   source            - git clone + `bun install` (for development / forks that
 #                       can resolve the private provider themselves).
 LFG_INSTALL_MODE="${LFG_INSTALL_MODE:-release}"
 # Which release to pull in release mode: "latest" or a tag like v0.1.0.
@@ -41,11 +41,11 @@ say()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[!]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
 
-on_err() { die "setup failed at line $1. Fix the issue above and re-run — it resumes safely."; }
+on_err() { die "setup failed at line $1. Fix the issue above and re-run - it resumes safely."; }
 trap 'on_err $LINENO' ERR
 
 # ---- preflight ----
-[ "$(id -u)" -eq 0 ] && die "Run as a normal sudo-capable user, not root — agents must not run as root."
+[ "$(id -u)" -eq 0 ] && die "Run as a normal sudo-capable user, not root - agents must not run as root."
 OS_NAME="$(uname -s)"
 case "$OS_NAME" in
   Linux)
@@ -104,7 +104,7 @@ tailscale_sudo() {
 
 # ---- 1. base packages ----
 if [ "$OS_NAME" = "Linux" ]; then
-  say "Installing base packages (git, tmux, curl, jq)…"
+  say "Installing base packages (git, tmux, curl, jq)..."
   sudo apt-get update -y -qq
   sudo apt-get install -y -qq git tmux curl ca-certificates jq
 else
@@ -114,7 +114,7 @@ else
   done
   if [ "${#MISSING_PKGS[@]}" -gt 0 ]; then
     command -v brew >/dev/null 2>&1 || die "Homebrew is required to install missing packages on macOS: ${MISSING_PKGS[*]}"
-    say "Installing base packages with Homebrew (${MISSING_PKGS[*]})…"
+    say "Installing base packages with Homebrew (${MISSING_PKGS[*]})..."
     brew install "${MISSING_PKGS[@]}"
   else
     say "Base packages already installed."
@@ -123,7 +123,7 @@ fi
 
 # ---- 2. Bun ----
 if ! command -v bun >/dev/null 2>&1; then
-  say "Installing Bun…"
+  say "Installing Bun..."
   curl -fsSL https://bun.sh/install | bash
 fi
 export PATH="$HOME/.bun/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
@@ -131,29 +131,29 @@ ensure_path_line 'export PATH="$HOME/.bun/bin:$PATH"'
 command -v bun >/dev/null || die "Bun install did not land on PATH."
 
 # ---- 3. agent CLIs (claude / codex / opencode) ----
-# The release bundle ships NO vendored agent binaries — lfg drives whatever
+# The release bundle ships NO vendored agent binaries - lfg drives whatever
 # `claude` / `codex` / `opencode` it finds on PATH (override via LFG_*_PATH).
 # Claude is required (default agent); codex + opencode are optional/best-effort.
 if ! command -v claude >/dev/null 2>&1; then
-  say "Installing the Claude CLI…"
+  say "Installing the Claude CLI..."
   curl -fsSL https://claude.ai/install.sh | bash
 fi
 export PATH="$HOME/.local/bin:$PATH"
 ensure_path_line 'export PATH="$HOME/.local/bin:$PATH"'
 
-# Optional runtimes — install globally via bun (lands in ~/.bun/bin, already on
+# Optional runtimes - install globally via bun (lands in ~/.bun/bin, already on
 # PATH). Best-effort: a failure just means that agent kind is unavailable.
 if [ "${LFG_INSTALL_CODEX:-1}" = "1" ] && ! command -v codex >/dev/null 2>&1; then
-  say "Installing the Codex CLI (optional)…"
-  bun add -g @openai/codex >/dev/null 2>&1 || warn "codex install failed — the 'codex' agent kind will be unavailable."
+  say "Installing the Codex CLI (optional)..."
+  bun add -g @openai/codex >/dev/null 2>&1 || warn "codex install failed - the 'codex' agent kind will be unavailable."
 fi
 if [ "${LFG_INSTALL_OPENCODE:-1}" = "1" ] && ! command -v opencode >/dev/null 2>&1; then
-  say "Installing OpenCode (optional)…"
-  bun add -g opencode-ai >/dev/null 2>&1 || warn "opencode install failed — the 'opencode' agent kind will be unavailable."
+  say "Installing OpenCode (optional)..."
+  bun add -g opencode-ai >/dev/null 2>&1 || warn "opencode install failed - the 'opencode' agent kind will be unavailable."
 fi
 
 # ---- 4. fetch lfg (bundled release tarball, or git clone for dev) ----
-# A git checkout always wins — `lfg setup` from inside a dev clone updates via
+# A git checkout always wins - `lfg setup` from inside a dev clone updates via
 # git, never clobbering it with a release tarball.
 if [ -d "$LFG_DIR/.git" ]; then
   LFG_INSTALL_MODE="source"
@@ -161,19 +161,19 @@ fi
 
 if [ "$LFG_INSTALL_MODE" = "source" ]; then
   if [ -d "$LFG_DIR/.git" ]; then
-    say "Updating lfg at $LFG_DIR (git)…"
+    say "Updating lfg at ${LFG_DIR} (git)..."
     git -C "$LFG_DIR" pull --ff-only || warn "git pull skipped (local changes?)"
   else
-    say "Cloning lfg into $LFG_DIR (git)…"
+    say "Cloning lfg into ${LFG_DIR} (git)..."
     git clone "$LFG_REPO_URL" "$LFG_DIR"
   fi
   # The web UI ships prebuilt in web/dist, so no web build is needed here.
-  say "Installing dependencies…"
+  say "Installing dependencies..."
   ( cd "$LFG_DIR" && bun install )
 else
   # Release mode: download the self-contained tarball (vendored node_modules,
   # incl. the private "vibes" AI-SDK provider that isn't on the public registry)
-  # and extract it over $LFG_DIR. No `bun install` — nothing to resolve.
+  # and extract it over $LFG_DIR. No `bun install` - nothing to resolve.
   release_url() {
     local asset="$1"
     if [ "$LFG_RELEASE" = "latest" ]; then
@@ -185,32 +185,32 @@ else
 
   ASSET="${LFG_RELEASE_ASSET:-lfg-bundle.tar.gz}"
   URL="$(release_url "$ASSET")"
-  say "Downloading bundled release ($LFG_RELEASE) from $LFG_REPO_SLUG…"
+  say "Downloading bundled release (${LFG_RELEASE}) from ${LFG_REPO_SLUG}..."
   TMP_TGZ="$(mktemp_tgz)"
   if ! curl -fSL "$URL" -o "$TMP_TGZ"; then
     rm -f "$TMP_TGZ"
     if [ -n "${LFG_RELEASE_ASSET:-}" ]; then
-      die "Could not download $URL — check the tag, or use LFG_INSTALL_MODE=source."
+      die "Could not download $URL - check the tag, or use LFG_INSTALL_MODE=source."
     elif [ "$OS_NAME" = "Linux" ]; then
       ASSET="lfg-linux-x64.tar.gz"
       URL="$(release_url "$ASSET")"
       warn "Platform-neutral bundle not found; trying legacy asset $ASSET."
       TMP_TGZ="$(mktemp_tgz)"
-      curl -fSL "$URL" -o "$TMP_TGZ" || die "Could not download $URL — check the tag, or use LFG_INSTALL_MODE=source."
+      curl -fSL "$URL" -o "$TMP_TGZ" || die "Could not download $URL - check the tag, or use LFG_INSTALL_MODE=source."
     else
-      die "Could not download $URL — no macOS-compatible bundle was found. Check the tag, or use LFG_INSTALL_MODE=source."
+      die "Could not download $URL - no macOS-compatible bundle was found. Check the tag, or use LFG_INSTALL_MODE=source."
     fi
   fi
   # Verify the checksum when the release ships one (best-effort).
   if curl -fsSL "$URL.sha256" -o "$TMP_TGZ.sha256" 2>/dev/null; then
     EXPECTED="$(awk '{print $1}' "$TMP_TGZ.sha256")"
     ACTUAL="$(sha256_file "$TMP_TGZ")"
-    [ "$EXPECTED" = "$ACTUAL" ] || die "Checksum mismatch for $ASSET — refusing to install."
+    [ "$EXPECTED" = "$ACTUAL" ] || die "Checksum mismatch for $ASSET - refusing to install."
     say "Checksum verified."
   fi
   mkdir -p "$LFG_DIR"
   # Strip the leading lfg/ dir; leaves $LFG_DIR/.env and data/ (not in the tarball) intact.
-  say "Extracting into $LFG_DIR…"
+  say "Extracting into ${LFG_DIR}..."
   tar -xzf "$TMP_TGZ" -C "$LFG_DIR" --strip-components=1
   rm -f "$TMP_TGZ" "$TMP_TGZ.sha256"
 fi
@@ -222,7 +222,7 @@ chmod +x "$LFG_DIR/src/cli.ts" 2>/dev/null || true
 
 # ---- 7. .env (never overwrite an existing one) ----
 if [ ! -f "$LFG_DIR/.env" ]; then
-  say "Creating .env from .env.example…"
+  say "Creating .env from .env.example..."
   cp "$LFG_DIR/.env.example" "$LFG_DIR/.env"
 fi
 seed_env() { grep -q "^$1=" "$LFG_DIR/.env" || echo "$1=$2" >> "$LFG_DIR/.env"; }
@@ -235,21 +235,21 @@ mkdir -p "$LFG_REPOS_ROOT"
 # ---- 8. Tailscale ----
 if ! command -v tailscale >/dev/null 2>&1; then
   if [ "$OS_NAME" = "Linux" ]; then
-    say "Installing Tailscale…"
+    say "Installing Tailscale..."
     curl -fsSL https://tailscale.com/install.sh | sh
   else
     warn "Tailscale CLI not found. Install Tailscale for macOS to enable tailnet access, then re-run setup."
   fi
 fi
 if command -v tailscale >/dev/null 2>&1 && ! tailscale status >/dev/null 2>&1; then
-  say "Joining your tailnet…"
+  say "Joining your tailnet..."
   if [ -z "$TS_AUTHKEY" ]; then
     if [ -t 0 ]; then
-      read -rsp "Tailscale auth key (tskey-auth-…): " TS_AUTHKEY; echo
+      read -rsp "Tailscale auth key (tskey-auth-...): " TS_AUTHKEY; echo
     elif [ "$OS_NAME" = "Darwin" ]; then
       warn "No tailnet session and no TS_AUTHKEY; skipping Tailscale setup on macOS."
     else
-      die "No tailnet session and no TTY. Re-run with TS_AUTHKEY=tskey-auth-… prefixed."
+      die "No tailnet session and no TTY. Re-run with TS_AUTHKEY=tskey-auth-... prefixed."
     fi
   fi
   if [ -n "$TS_AUTHKEY" ]; then
@@ -259,12 +259,12 @@ if command -v tailscale >/dev/null 2>&1 && ! tailscale status >/dev/null 2>&1; t
 fi
 
 install_linux_service() {
-  say "Installing the systemd user service ($SERVICE)…"
+  say "Installing the systemd user service (${SERVICE})..."
   UNIT_DIR="$HOME/.config/systemd/user"
   mkdir -p "$UNIT_DIR"
   cat > "$UNIT_DIR/$SERVICE.service" <<UNIT
 [Unit]
-Description=lfg — self-hosted AI coding agent control plane
+Description=lfg - self-hosted AI coding agent control plane
 After=network-online.target tailscaled.service
 Wants=network-online.target
 
@@ -281,7 +281,7 @@ Restart=on-failure
 RestartSec=3
 # The tmux server that holds every Claude session is spawned by serve, so it
 # lives in this unit's cgroup. With the default KillMode=control-group a restart
-# (every deploy) SIGKILLs the whole cgroup — wiping all running sessions. Kill
+# (every deploy) SIGKILLs the whole cgroup - wiping all running sessions. Kill
 # only the main bun process so tmux and the sessions survive a redeploy.
 KillMode=process
 
@@ -305,7 +305,7 @@ xml_escape() {
 }
 
 install_macos_service() {
-  say "Installing the launchd user service ($SERVICE_LABEL)…"
+  say "Installing the launchd user service (${SERVICE_LABEL})..."
   UNIT_DIR="$HOME/Library/LaunchAgents"
   LOG_DIR="$HOME/Library/Logs"
   PLIST="$UNIT_DIR/$SERVICE_LABEL.plist"
@@ -357,9 +357,9 @@ fi
 
 # ---- 10. expose the UI over the tailnet (HTTPS on MagicDNS), never publicly ----
 if command -v tailscale >/dev/null 2>&1 && tailscale status >/dev/null 2>&1; then
-  say "Configuring tailscale serve → 127.0.0.1:$LFG_PORT…"
+  say "Configuring tailscale serve -> 127.0.0.1:${LFG_PORT}..."
   tailscale_sudo serve --bg --https=443 "http://127.0.0.1:$LFG_PORT" || \
-    warn "tailscale serve failed — enable HTTPS/MagicDNS in the Tailscale admin console, then re-run."
+    warn "tailscale serve failed - enable HTTPS/MagicDNS in the Tailscale admin console, then re-run."
 else
   warn "Tailscale is not connected; lfg will be available on this machine at http://127.0.0.1:$LFG_PORT."
 fi
@@ -392,7 +392,7 @@ if [ "$OS_NAME" = "Linux" ]; then
   4. Logs:                      journalctl --user -u $SERVICE -f
 
 The UI is reachable only from devices on your tailnet. Do NOT open port $LFG_PORT
-or 443 to the public internet — Tailscale handles ingress over WireGuard.
+or 443 to the public internet - Tailscale handles ingress over WireGuard.
 NEXT
 else
   cat <<NEXT
