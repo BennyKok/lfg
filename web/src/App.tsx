@@ -928,6 +928,11 @@ export function App() {
     return localStorage.getItem("lfg_user") || "__all";
   });
   const didDefaultFilter = useRef(false);
+  // The active profile for this browser ("who are you"). Null until chosen —
+  // when null (and a roster exists) we gate the app behind the picker on start.
+  const [identity, setIdentity] = useState<string | null>(() =>
+    localStorage.getItem("lfg_user"),
+  );
 
   const loadCore = useCallback(async () => {
     const [agentsPayload, sessionsPayload, usersPayload, reposPayload] =
@@ -1348,6 +1353,21 @@ export function App() {
   }
 
   if (loading) return <AppShellSkeleton />;
+
+  // First start on this browser: ask who you are before showing the app. Only
+  // gates when a roster exists and no profile is chosen yet — once picked it's
+  // remembered in localStorage (lfg_user) so we don't ask again.
+  if (!identity && users.length) {
+    return (
+      <WhoAreYou
+        users={users}
+        onPick={(email) => {
+          setIdentity(email);
+          changeUserFilter(email);
+        }}
+      />
+    );
+  }
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
@@ -1823,6 +1843,64 @@ function UserFilterMenu({
         ))}
       </select>
     </label>
+  );
+}
+
+// First-run identity picker. Shown full-screen when this browser has no chosen
+// profile yet — pick yourself from the roster and we tag the sessions you start
+// (and default the live filter to you). Choice persists in localStorage.
+function WhoAreYou({
+  users,
+  onPick,
+}: {
+  users: User[];
+  onPick: (email: string) => void;
+}) {
+  return (
+    <div className="flex h-dvh flex-col items-center justify-center bg-background px-6 text-foreground">
+      <div className="w-full max-w-sm">
+        <div className="mb-4 flex items-center gap-2">
+          <div className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-foreground text-background">
+            <Terminal className="size-4" />
+          </div>
+          <span className="text-base font-semibold">lfg</span>
+        </div>
+        <h1 className="text-xl font-semibold">Who are you?</h1>
+        <p className="mb-5 mt-1 text-sm text-muted-foreground">
+          Pick your profile so we can tag the sessions you start.
+        </p>
+        <div className="flex flex-col gap-2">
+          {users.map((user) => (
+            <button
+              key={user.email}
+              type="button"
+              onClick={() => onPick(user.email)}
+              className="flex items-center gap-3 rounded-xl border border-border bg-muted/40 px-3 py-2.5 text-left transition-colors hover:bg-muted"
+            >
+              {user.avatar ? (
+                <img
+                  src={user.avatar}
+                  alt=""
+                  className="size-9 shrink-0 rounded-full"
+                />
+              ) : (
+                <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted">
+                  <UserRound className="size-4" />
+                </span>
+              )}
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-medium capitalize">
+                  {shortUser(user.email)}
+                </span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  {user.email}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
   );
 }
 
