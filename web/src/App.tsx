@@ -2194,7 +2194,11 @@ const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_QUEUE: QueueMsg[] = [];
 
 function LiveView({
-  sessions,
+  // Defense-in-depth: `sessions`/`findings`/`autoAgents` are read via `.length`
+  // unconditionally below (the original `findings.length` crash site). The fetch
+  // layer already guards these to [], but default here too so any future caller
+  // passing `undefined` degrades to an empty render instead of crashing the view.
+  sessions = [],
   users,
   userFilter,
   messagesBySid,
@@ -2205,8 +2209,8 @@ function LiveView({
   onRefresh,
   onRemove,
   onNew,
-  findings,
-  autoAgents,
+  findings = [],
+  autoAgents = [],
   onOpenFinding,
 }: {
   sessions: Session[];
@@ -2350,7 +2354,7 @@ function LiveView({
 // session flipping working↔idle no longer makes the layout jump — that motion
 // is confined to the small status dot in the rail. Up to 4 columns.
 function RailStage({
-  sessions,
+  sessions = [],
   users,
   messagesBySid,
   busyBySid,
@@ -2359,7 +2363,7 @@ function RailStage({
   onOptimisticMessage,
   onRefresh,
   onRemove,
-  findings,
+  findings = [],
   nameFor,
   onOpenFinding,
 }: {
@@ -5575,8 +5579,8 @@ function ScheduleSummary({ expr, tz }: { expr: string; tz: string }) {
 }
 
 function AutoManageView({
-  autoAgents,
-  findings,
+  autoAgents = [],
+  findings = [],
   tz,
   onEdit,
   onRunNow,
