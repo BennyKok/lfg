@@ -32,6 +32,7 @@ import {
 } from "../auto/store.ts";
 import { runAutoAgent } from "../auto/runner.ts";
 import { startAutoScheduler } from "../auto/scheduler.ts";
+import { reportClientError, listClientErrors } from "../client-errors.ts";
 import {
   listSessions,
   resolveTranscript,
@@ -851,6 +852,29 @@ export async function cmdServe() {
       if (path === "/api/auto/findings" && req.method === "GET") {
         const status = url.searchParams.get("status") || undefined;
         return json({ findings: await listFindings(status) });
+      }
+
+      // ── Client (frontend) error auto-report → auto-fix ────────────────────
+      // The web app funnels uncaught errors here. Each report is stored, shown
+      // to the human via the findings feed + push, and (for real shipped builds)
+      // an Opus fix agent is dispatched. Heavily storm-guarded inside the module
+      // — a render loop can't fork a fleet of agents. Always 200s so a reporting
+      // failure never cascades back into the page that's already broken.
+      if (path === "/api/client-error" && req.method === "POST") {
+        const b = (await req.json().catch(() => null)) as Record<string, unknown> | null;
+        if (!b || typeof b.message !== "string" || !b.message.trim())
+          return err(400, "missing message");
+        try {
+          const r = await reportClientError(b as Parameters<typeof reportClientError>[0]);
+          return json(r);
+        } catch (e) {
+          console.error("[client-error] report failed:", e);
+          return json({ stored: false, reported: false, dispatched: false });
+        }
+      }
+      if (path === "/api/client-errors" && req.method === "GET") {
+        const limit = Math.min(Math.max(parseInt(url.searchParams.get("limit") ?? "200", 10) || 200, 1), 1000);
+        return json({ errors: await listClientErrors(limit) });
       }
       {
         const m = path.match(/^\/api\/auto\/findings\/([0-9a-f]+)$/);

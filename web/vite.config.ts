@@ -12,6 +12,11 @@ const API_TARGET = process.env.LFG_API_TARGET ?? "http://localhost:8766";
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // Emit source maps so the auto-fix agent can map a minified production stack
+  // frame back to the original source in web/src. "hidden" keeps the .map files
+  // out of the served bundle's sourceMappingURL (no end-user devtools exposure),
+  // while still writing web/dist/assets/*.js.map for server-side / agent use.
+  build: { sourcemap: "hidden" },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

@@ -58,6 +58,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { haptic } from "@/lib/haptics";
+import { reportError } from "./lib/report-error";
 import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 // Code-split: the terminal pulls in ghostty-web's ~400KB WASM, so only load it
@@ -704,6 +705,14 @@ class ErrorBoundary extends Component<
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("lfg: render error caught by boundary", error, info);
+    // Auto-report render errors with the React component stack — it usually
+    // names the failing component, which the auto-fix agent uses to locate it.
+    reportError({
+      kind: "react",
+      message: error?.message || String(error),
+      stack: error?.stack,
+      componentStack: info?.componentStack ?? undefined,
+    });
   }
 
   reset = () => this.setState({ error: null });

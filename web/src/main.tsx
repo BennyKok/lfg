@@ -6,6 +6,12 @@ import * as ReactDOM from "react-dom";
 import "./index.css";
 import { App, RootErrorBoundary } from "./App";
 import { registerExtension } from "./lib/extensions";
+import { installErrorReporting } from "./lib/report-error";
+
+// Capture uncaught errors + unhandled rejections and auto-report them to the
+// backend (which surfaces a finding/push and dispatches an auto-fix agent).
+// Installed first so an early-boot throw is still caught.
+installErrorReporting();
 
 // Runtime extension host. We expose the host's React (so external extension
 // bundles share ONE React instead of bundling their own — hooks break with two)
