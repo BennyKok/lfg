@@ -3231,6 +3231,16 @@ function SessionChat({
     }
   }
 
+  async function interrupt() {
+    if (!sid) return;
+    try {
+      await api(`/api/sessions/${sid}/interrupt`, { method: "POST" });
+      await onRefresh();
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <PausedBanner session={session} onRefresh={onRefresh} />
@@ -3272,6 +3282,19 @@ function SessionChat({
               void sendMessage(undefined, combined);
             }}
           />
+          {busy && canDriveSession(session) ? (
+            <Button
+              size="icon"
+              type="button"
+              variant="destructive"
+              className="size-11 md:size-9"
+              onClick={() => void interrupt()}
+              aria-label="Stop (Esc or Ctrl/Cmd+.)"
+              title="Stop — Esc or Ctrl/Cmd+."
+            >
+              <CircleStop className="size-4" />
+            </Button>
+          ) : null}
           <Button
             size="icon"
             className="size-11 md:size-9"
