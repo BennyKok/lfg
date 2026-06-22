@@ -100,7 +100,10 @@ export function installErrorReporting(): void {
     // It carries no message or stack and serializes to a useless `{"isTrusted":
     // true}`, yet would still raise a finding + dispatch an auto-fix agent. Drop
     // it, mirroring the resource-load filter in the 'error' handler above.
-    if (typeof Event !== "undefined" && reason instanceof Event) return;
+    if (isUnactionableEvent(reason)) {
+      console.debug("lfg: ignored non-error promise rejection", reason);
+      return;
+    }
     const message =
       reason instanceof Error
         ? reason.message
@@ -119,4 +122,28 @@ export function installErrorReporting(): void {
       stack: reason instanceof Error ? reason.stack : undefined,
     });
   });
+}
+
+// A promise rejected with a DOM Event (rather than an Error) is, by construction,
+// a failed/aborted *resource* or *transport* — EventSource, WebSocket, media,
+// <img>/<script>, WebRTC — typically surfaced from inside a third-party library
+// (livekit-client, etc.). It is never a JS logic bug: no stack, no message, and
+// it JSON-serializes to the infamous `{"isTrusted":true}`. The owning code
+// already recovers (sockets reconnect, media degrades), so escalating it as a
+// "frontend error" only spams the feed and dispatches an auto-fix agent against a
+// phantom bug. We detect and drop it.
+//
+// `instanceof Event` alone is not enough: events that cross a realm boundary
+// (iframe, or a library's own realm) fail the check yet still serialize to that
+// same `{"isTrusted":true}`. So we also structurally match an event-like object —
+// an `isTrusted` flag plus a string `type` — which is what actually reached the
+// reporter in the wild.
+function isUnactionableEvent(reason: unknown): boolean {
+  if (typeof Event !== "undefined" && reason instanceof Event) return true;
+  return (
+    typeof reason === "object" &&
+    reason !== null &&
+    "isTrusted" in reason &&
+    typeof (reason as { type?: unknown }).type === "string"
+  );
 }
