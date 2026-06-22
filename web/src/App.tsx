@@ -1614,27 +1614,48 @@ export function App() {
     );
   }
 
+  const sectionTitle = activeExtTab
+    ? activeExtTab.label
+    : tab === "auto"
+      ? "Auto agents"
+      : tab === "term"
+        ? "Terminal"
+        : tab === "browser"
+          ? "Browser Profiles"
+          : tab === "settings"
+            ? "Settings"
+            : "";
+
   return (
     <div ref={rootRef} className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
-      <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-background px-3">
-        <img src="/icon.svg" alt="lfg" className="size-6 shrink-0" />
-        <div className="min-w-0 flex-1 truncate text-sm font-semibold">
-          {activeExtTab ? activeExtTab.label : tab === "auto" ? "Auto agents" : tab === "term" ? "Terminal" : tab === "browser" ? "Browser Profiles" : tab === "settings" ? "Settings" : ""}
-        </div>
+      {/* Two floating "islands" — brand/title on the left, live filters on the
+          right — mirroring the bottom nav's gradient-bordered pill so the whole
+          chrome reads as one matched set. */}
+      <header className="z-40 flex shrink-0 items-center justify-between gap-2 px-3 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))]">
+        <NavIsland className="min-w-0">
+          <div className="flex h-11 min-w-0 items-center gap-2 rounded-full bg-background/80 px-3.5 backdrop-blur-xl">
+            <img src="/icon.svg" alt="lfg" className="size-6 shrink-0" />
+            {sectionTitle ? (
+              <span className="min-w-0 truncate text-sm font-semibold">{sectionTitle}</span>
+            ) : null}
+          </div>
+        </NavIsland>
 
         {tab === "live" ? (
-          <>
-            <ProjectFilterMenu
-              value={projectFilter}
-              projects={projectOptions}
-              onChange={setProjectFilter}
-            />
-            <UserFilterMenu
-              value={userFilter}
-              users={users}
-              onChange={changeUserFilter}
-            />
-          </>
+          <NavIsland>
+            <div className="flex h-11 items-center gap-2 rounded-full bg-background/80 px-2 backdrop-blur-xl">
+              <ProjectFilterMenu
+                value={projectFilter}
+                projects={projectOptions}
+                onChange={setProjectFilter}
+              />
+              <UserFilterMenu
+                value={userFilter}
+                users={users}
+                onChange={changeUserFilter}
+              />
+            </div>
+          </NavIsland>
         ) : null}
       </header>
 
@@ -2074,6 +2095,28 @@ function TabButton({
   );
 }
 
+// The shared "island" shell: a 1px gradient border (p-px) wrapping a rounded
+// pill, with the same soft shadow the bottom nav uses. Children supply their own
+// rounded-full interior so each island can size itself to its contents.
+function NavIsland({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      className={cn(
+        "rounded-full bg-gradient-to-b from-white/70 via-white/25 to-white/10 p-px shadow-[0_8px_28px_rgba(0,0,0,0.18)] dark:from-white/25 dark:via-white/10 dark:to-white/5",
+        className,
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
 function UserFilterMenu({
   value,
   users,
@@ -2124,13 +2167,17 @@ function ProjectFilterMenu({
   return (
     <label
       className={cn(
-        "relative inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-muted/70",
-        active ? "text-primary" : "text-foreground",
+        "relative inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-xs font-semibold transition",
+        active
+          ? "border-primary/30 bg-primary/10 text-primary"
+          : "border-border bg-muted/70 text-muted-foreground",
       )}
       aria-label="Filter live sessions by project"
       title={active ? shortProject(value) : "All projects"}
     >
-      <Folder className="size-4 shrink-0" />
+      <Folder className="size-3.5 shrink-0" />
+      <span className="max-w-28 truncate">{active ? shortProject(value) : "Project"}</span>
+      <ChevronDown className="size-3.5 shrink-0 opacity-60" />
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
