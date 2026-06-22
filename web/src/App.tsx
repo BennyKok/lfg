@@ -309,6 +309,14 @@ function shortUser(email?: string | null) {
   return email ? email.split("@")[0] : "unassigned";
 }
 
+// A human-friendly label for a project. The backend derives `project` from the
+// session's cwd as a dash-joined path (e.g. "home-dev-repos-lfg"), so show the
+// last path segment ("lfg") in compact UI like the filter menu.
+function shortProject(project: string): string {
+  const parts = project.split("-").filter(Boolean);
+  return parts[parts.length - 1] || project;
+}
+
 function titleForSession(session: Session) {
   return (
     session.title ||
@@ -1029,6 +1037,9 @@ export function App() {
     if (saved && saved !== "__all") return saved;
     return localStorage.getItem("lfg_user") || "__all";
   });
+  const [projectFilter, setProjectFilter] = useState(
+    () => localStorage.getItem("lfg_v2_project_filter") || "__all",
+  );
   const didDefaultFilter = useRef(false);
   // The active profile for this browser ("who are you"). Null until chosen —
   // when null (and a roster exists) we gate the app behind the picker on start.
@@ -1338,6 +1349,10 @@ export function App() {
     localStorage.setItem("lfg_v2_user_filter", userFilter);
   }, [userFilter]);
 
+  useEffect(() => {
+    localStorage.setItem("lfg_v2_project_filter", projectFilter);
+  }, [projectFilter]);
+
   const changeUserFilter = useCallback((value: string) => {
     setUserFilter(value);
     // Selecting a concrete user makes them the active profile (remembered as
@@ -1370,13 +1385,36 @@ export function App() {
     [sessions, removedSids],
   );
 
-  const liveSessions = useMemo(() => {
+  // Unique projects present across the (user-filtered) live sessions, so the
+  // project menu only ever offers projects you can actually see.
+  const userScopedSessions = useMemo(() => {
     if (userFilter === "__all") return allLiveSessions;
     if (userFilter === "__unassigned") {
       return allLiveSessions.filter((session) => !session.assignedUser);
     }
     return allLiveSessions.filter((session) => session.assignedUser === userFilter);
   }, [allLiveSessions, userFilter]);
+
+  const projectOptions = useMemo(
+    () =>
+      Array.from(
+        new Set(userScopedSessions.map((s) => s.project).filter((p): p is string => !!p)),
+      ).sort((a, b) => shortProject(a).localeCompare(shortProject(b))),
+    [userScopedSessions],
+  );
+
+  // If the chosen project disappears (sessions ended, or it's hidden by the
+  // current user filter), fall back to "all" rather than showing nothing.
+  useEffect(() => {
+    if (projectFilter !== "__all" && !projectOptions.includes(projectFilter)) {
+      setProjectFilter("__all");
+    }
+  }, [projectFilter, projectOptions]);
+
+  const liveSessions = useMemo(() => {
+    if (projectFilter === "__all") return userScopedSessions;
+    return userScopedSessions.filter((session) => session.project === projectFilter);
+  }, [userScopedSessions, projectFilter]);
 
   const liveStream = useLiveSessionStream(liveSessions);
 
@@ -1587,11 +1625,18 @@ export function App() {
         </div>
 
         {tab === "live" ? (
-          <UserFilterMenu
-            value={userFilter}
-            users={users}
-            onChange={changeUserFilter}
-          />
+          <>
+            <ProjectFilterMenu
+              value={projectFilter}
+              projects={projectOptions}
+              onChange={setProjectFilter}
+            />
+            <UserFilterMenu
+              value={userFilter}
+              users={users}
+              onChange={changeUserFilter}
+            />
+          </>
         ) : null}
       </header>
 
@@ -2058,6 +2103,43 @@ function UserFilterMenu({
         {users.map((user) => (
           <option key={user.email} value={user.email}>
             {user.name ?? shortUser(user.email)}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function ProjectFilterMenu({
+  value,
+  projects,
+  onChange,
+}: {
+  value: string;
+  projects: string[];
+  onChange: (value: string) => void;
+}) {
+  const active = value !== "__all";
+  return (
+    <label
+      className={cn(
+        "relative inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-muted/70",
+        active ? "text-primary" : "text-foreground",
+      )}
+      aria-label="Filter live sessions by project"
+      title={active ? shortProject(value) : "All projects"}
+    >
+      <Folder className="size-4 shrink-0" />
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        aria-label="Filter live sessions by project"
+        className="absolute inset-0 cursor-pointer appearance-none bg-transparent text-transparent opacity-0 outline-none"
+      >
+        <option value="__all">All projects</option>
+        {projects.map((project) => (
+          <option key={project} value={project}>
+            {shortProject(project)}
           </option>
         ))}
       </select>
