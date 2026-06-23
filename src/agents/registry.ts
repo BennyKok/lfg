@@ -13,6 +13,16 @@ export type InputSpec =
       filter?: string[];
       limit?: number;
     }
+  | {
+      // Deterministic price-drift verdict for the OpenRouter models we carry.
+      // Parses SupportedModels out of llm.go and diffs each carried price
+      // against the live PER-MODEL endpoint envelope ([min..max] across every
+      // provider), flagging only prices that fall outside what any provider
+      // offers. Unlike `openrouter_models` (which diffs the flapping cheapest-
+      // endpoint catalog floor), this does not false-flag provider spread.
+      kind: "openrouter_drift";
+      llm_go?: string;
+    }
   | { kind: "github_issues"; repo: string; state?: string; limit?: number }
   | { kind: "github_prs"; repo: string; state?: string; limit?: number }
   | {
@@ -38,6 +48,7 @@ export type InputSpec =
 export const KNOWN_INPUT_KINDS = new Set<InputSpec["kind"]>([
   "git_log",
   "openrouter_models",
+  "openrouter_drift",
   "github_issues",
   "github_prs",
   "repo_files",

@@ -2,6 +2,7 @@ import { join } from "node:path";
 import type { InputSpec } from "../registry.ts";
 import { collectGitLog } from "./git.ts";
 import { collectOpenRouterModels } from "./openrouter.ts";
+import { collectOpenRouterDrift } from "./openrouter-drift.ts";
 import { collectGithubIssues, collectGithubPrs } from "./github.ts";
 import { collectRepoFiles } from "./repo-files.ts";
 import { collectSecurityScan } from "./security.ts";
@@ -50,6 +51,8 @@ export async function runCollector(spec: InputSpec): Promise<CollectorResult> {
         return await collectGitLog(spec);
       case "openrouter_models":
         return await collectOpenRouterModels(spec);
+      case "openrouter_drift":
+        return await collectOpenRouterDrift(spec);
       case "github_issues":
         return await collectGithubIssues(spec);
       case "github_prs":
