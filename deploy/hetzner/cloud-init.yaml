@@ -1,0 +1,33 @@
+#cloud-config
+#
+# Hetzner Cloud user-data template for lfg.
+#
+# Replace CHANGE_ME_TS_AUTHKEY with an ephemeral, preauthorized Tailscale auth
+# key before creating the server. If you do not want Tailscale setup at boot,
+# remove `TS_AUTHKEY=CHANGE_ME_TS_AUTHKEY` from the install command below and
+# SSH in to run `tailscale up` later.
+
+package_update: true
+package_upgrade: false
+
+users:
+  - name: lfg
+    groups: sudo
+    shell: /bin/bash
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ssh-ed25519 REPLACE_WITH_YOUR_PUBLIC_SSH_KEY
+
+runcmd:
+  - mkdir -p /home/lfg/repos
+  - chown -R lfg:lfg /home/lfg/repos
+  - |
+    sudo -iu lfg bash -lc '
+      export LFG_DIR="$HOME/lfg"
+      export LFG_REPOS_ROOT="$HOME/repos"
+      export LFG_INSTALL_MODE=release
+      curl -fsSL https://raw.githubusercontent.com/BennyKok/lfg/main/scripts/setup.sh | TS_AUTHKEY=CHANGE_ME_TS_AUTHKEY bash
+    '
+
+final_message: "lfg install finished. Check cloud-init output and the lfg user service logs."

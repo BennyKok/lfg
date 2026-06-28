@@ -204,7 +204,7 @@ import { startFleetWatcher, subscribeFleet, type FleetEvent } from "../voice-bus
 import { handleElevenLlm, handleElevenToken } from "../voice-eleven-llm.ts";
 import { resolveVoiceIntent, type VoiceIntentRequest } from "../voice-intent.ts";
 
-const PORT = Number(process.env.LFG_PORT ?? 8766);
+const PORT = Number(process.env.LFG_PORT ?? process.env.PORT ?? 8766);
 // Bind to loopback by default — the UI is meant to be reached over Tailscale
 // (via `tailscale serve`), never the public internet. Override LFG_HOST only
 // if you understand the exposure.

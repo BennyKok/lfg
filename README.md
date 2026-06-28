@@ -57,13 +57,42 @@ curl -fsSL https://raw.githubusercontent.com/BennyKok/lfg/main/scripts/setup.sh 
 For a non-interactive Tailscale setup:
 
 ```bash
-TS_AUTHKEY=tskey-auth-xxxx \
-  curl -fsSL https://raw.githubusercontent.com/BennyKok/lfg/main/scripts/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/BennyKok/lfg/main/scripts/setup.sh \
+  | TS_AUTHKEY=tskey-auth-xxxx bash
 ```
 
 The setup script downloads the latest release, installs production dependencies,
 writes `.env`, starts the server as a user service, and configures
 `tailscale serve` when Tailscale is available.
+
+## One-click Launch
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template?template=https://github.com/BennyKok/lfg)
+
+Railway is useful for a hosted demo, but `lfg` works best on the machine that
+has your repos, `tmux`, and authenticated agent CLIs. See
+[deploy/railway](./deploy/railway/README.md) for details.
+
+For Hetzner, use the cloud-init template in
+[deploy/hetzner](./deploy/hetzner/README.md). Hetzner's official deploy button
+only preselects Hetzner App images, so the repo ships a first-boot installer
+instead.
+
+Railway user requirements:
+
+- Railway account and GitHub access to this repo.
+- Keep Public Networking disabled unless you put auth in front of `lfg`.
+- Optional provider keys in Railway variables, such as `ANTHROPIC_API_KEY`,
+  `OPENAI_API_KEY`, or `ELEVENLABS_API_KEY`.
+
+Hetzner user requirements:
+
+- Hetzner Cloud account, SSH public key, and either the `hcloud` CLI or Console.
+- Tailscale account plus an ephemeral/preauthorized auth key for unattended
+  setup. The installer joins the server with `tailscale up --authkey ...` and
+  exposes the loopback-only UI through `tailscale serve`.
+- After boot, authenticate `claude`, `codex`, or `opencode` on the server, or
+  configure API-key based providers in `.env`.
 
 ## Local Development
 

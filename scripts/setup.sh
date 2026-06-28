@@ -9,7 +9,7 @@
 # Brand-new VPS (run as a normal sudo user, NOT root):
 #   curl -fsSL https://raw.githubusercontent.com/BennyKok/lfg/main/scripts/setup.sh | bash
 #   # or non-interactively, with the Tailscale auth key supplied up front:
-#   TS_AUTHKEY=tskey-auth-xxxx curl -fsSL https://raw.githubusercontent.com/BennyKok/lfg/main/scripts/setup.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/BennyKok/lfg/main/scripts/setup.sh | TS_AUTHKEY=tskey-auth-xxxx bash
 #
 # Re-run / update after install:
 #   lfg setup
