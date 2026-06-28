@@ -294,6 +294,15 @@ seed_env LFG_PORT "$LFG_PORT"
 seed_env LFG_REPOS_ROOT "$LFG_REPOS_ROOT"
 chmod 600 "$LFG_DIR/.env"
 mkdir -p "$LFG_REPOS_ROOT"
+mkdir -p "$LFG_DIR/data"
+jq -n \
+  --arg channel "$LFG_INSTALL_MODE" \
+  --arg repoSlug "$LFG_REPO_SLUG" \
+  --arg release "$LFG_RELEASE" \
+  --arg releaseAsset "${LFG_RELEASE_ASSET:-lfg-bundle.tar.gz}" \
+  --arg installedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  '{channel:$channel, repoSlug:$repoSlug, release:$release, releaseAsset:$releaseAsset, installedAt:$installedAt}' \
+  > "$LFG_DIR/data/install.json"
 
 # ---- 8. Tailscale ----
 if ! command -v tailscale >/dev/null 2>&1; then

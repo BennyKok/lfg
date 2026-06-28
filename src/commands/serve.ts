@@ -4,7 +4,7 @@ import { tmpdir, homedir } from "node:os";
 import { extname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { marked } from "marked";
-import { PATHS } from "../config.ts";
+import { PATHS, installInfo } from "../config.ts";
 import {
   AGENTS_DIR,
   listAgents,
@@ -1994,6 +1994,10 @@ export async function cmdServe() {
 
       if (path === "/api/sessions") {
         return json({ sessions: await listSessions() });
+      }
+
+      if (path === "/api/install") {
+        return json({ install: installInfo() });
       }
 
       // Combined usage/limits across every agent provider (Claude, Codex,

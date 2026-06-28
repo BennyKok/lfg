@@ -149,6 +149,7 @@ Common settings:
 | `LFG_OPENCODE_PATH` | Override the `opencode` binary path. |
 | `ANTHROPIC_API_KEY` | Optional API key for Claude SDK-backed flows. |
 | `LFG_WHATSAPP_*` | Optional WhatsApp bridge settings. |
+| `LFG_INSTALL_CHANNEL` | Optional install-channel override: `source`, `release`, or `container`. Normally written by setup/container deploys. |
 
 ## Security
 
