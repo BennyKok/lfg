@@ -1,0 +1,12 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "RAILPACK",
+    "buildCommand": "bun install"
+  },
+  "deploy": {
+    "startCommand": "LFG_HOST=0.0.0.0 LFG_PORT=${PORT:-8766} bun run serve",
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  }
+}
