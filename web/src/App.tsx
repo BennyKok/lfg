@@ -6807,6 +6807,57 @@ function NewSessionDialog({
     }
   }, [open]);
 
+  // GitHub repo picker state
+  const [githubPickerOpen, setGithubPickerOpen] = useState(false);
+  const [githubRepos, setGithubRepos] = useState<{
+    id: number; name: string; full_name: string; clone_url: string;
+    description: string | null; private: boolean; language: string | null;
+  }[]>([]);
+  const [githubSearch, setGithubSearch] = useState("");
+  const [githubLoading, setGithubLoading] = useState(false);
+  const [githubError, setGithubError] = useState<string | null>(null);
+  const [githubCloning, setGithubCloning] = useState<string | null>(null);
+
+  const openGithubPicker = useCallback(async () => {
+    setGithubPickerOpen(true);
+    setGithubError(null);
+    setGithubLoading(true);
+    try {
+      const res = await fetch("/api/github/repos");
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({ error: res.statusText })) as { error?: string };
+        throw new Error(j.error ?? res.statusText);
+      }
+      const j = await res.json() as { repos: typeof githubRepos };
+      setGithubRepos(j.repos);
+    } catch (e) {
+      setGithubError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGithubLoading(false);
+    }
+  }, []);
+
+  const cloneGithubRepo = useCallback(async (clone_url: string, name: string) => {
+    setGithubCloning(name);
+    try {
+      const res = await fetch("/api/github/repos/clone", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ clone_url, name }),
+      });
+      const j = await res.json() as { ok?: boolean; cwd?: string; error?: string };
+      if (!res.ok || !j.cwd) throw new Error(j.error ?? "clone failed");
+      await onReposChanged();
+      setRepo(j.cwd);
+      setGithubPickerOpen(false);
+      toast.success(`Cloned ${name}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGithubCloning(null);
+    }
+  }, [onReposChanged]);
+
   useEffect(() => {
     if (!open || !resumeOpen || resumable) return;
     api<{ sessions: ResumableSession[] }>("/api/sessions/resumable?limit=20")
@@ -7140,6 +7191,7 @@ function NewSessionDialog({
             value={selectedRepo}
             onChange={(e) => {
               if (e.target.value === "__add__") addCustomPath();
+              else if (e.target.value === "__github__") openGithubPicker();
               else setRepo(e.target.value);
             }}
             aria-label="Repo"
@@ -7151,6 +7203,7 @@ function NewSessionDialog({
               </option>
             ))}
             <option value="__add__">+ Add custom path…</option>
+            <option value="__github__">↓ Import from GitHub…</option>
           </select>
           {selectedIsCustom && (
             <button
@@ -7164,6 +7217,68 @@ function NewSessionDialog({
             </button>
           )}
         </FieldPill>
+      )}
+
+      {/* GitHub repo picker dialog */}
+      {githubPickerOpen && createPortal(
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={(e) => { if (e.target === e.currentTarget) setGithubPickerOpen(false); }}
+        >
+          <div className="flex w-full max-w-md flex-col gap-3 rounded-xl bg-background p-4 shadow-xl">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-semibold">Import from GitHub</span>
+              <button type="button" onClick={() => setGithubPickerOpen(false)} className="text-muted-foreground hover:text-foreground">
+                <X className="size-4" />
+              </button>
+            </div>
+            <input
+              autoFocus
+              type="text"
+              placeholder="Search repos…"
+              value={githubSearch}
+              onChange={(e) => setGithubSearch(e.target.value)}
+              className="rounded-lg border bg-transparent px-3 py-1.5 text-sm outline-none focus:ring-1 focus:ring-ring"
+            />
+            <div className="max-h-72 overflow-y-auto">
+              {githubLoading && (
+                <div className="flex items-center justify-center py-8 text-muted-foreground text-sm">
+                  <Loader2 className="mr-2 size-4 animate-spin" /> Loading…
+                </div>
+              )}
+              {githubError && (
+                <div className="py-4 text-center text-sm text-destructive">{githubError}</div>
+              )}
+              {!githubLoading && !githubError && githubRepos
+                .filter((r) => r.full_name.toLowerCase().includes(githubSearch.toLowerCase()))
+                .map((r) => (
+                  <button
+                    key={r.id}
+                    type="button"
+                    disabled={githubCloning === r.name}
+                    onClick={() => cloneGithubRepo(r.clone_url, r.name)}
+                    className="flex w-full items-start gap-2 rounded-lg px-2 py-2 text-left hover:bg-muted disabled:opacity-50"
+                  >
+                    <GitFork className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium">{r.full_name}</div>
+                      {r.description && (
+                        <div className="truncate text-xs text-muted-foreground">{r.description}</div>
+                      )}
+                    </div>
+                    {githubCloning === r.name && (
+                      <Loader2 className="ml-auto mt-0.5 size-3.5 shrink-0 animate-spin text-muted-foreground" />
+                    )}
+                  </button>
+                ))
+              }
+              {!githubLoading && !githubError && githubRepos.length === 0 && (
+                <div className="py-4 text-center text-sm text-muted-foreground">No repos found</div>
+              )}
+            </div>
+          </div>
+        </div>,
+        document.body
       )}
     </div>
   );

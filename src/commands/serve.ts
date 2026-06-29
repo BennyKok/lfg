@@ -21,6 +21,7 @@ import {
 import { executeAction, executeActionsCombined, dispatchSendFixAgent } from "../actions/index.ts";
 import { listPipelines, loadPipeline } from "../pipeline/registry.ts";
 import { runPipeline, readRun, listRunIds, generateRunId } from "../pipeline/runner.ts";
+import { fetchGithubRepos, cloneGithubRepo, githubConfigured } from "../github-repos.ts";
 import {
   listAutoAgents,
   getAutoAgent,
@@ -1456,6 +1457,36 @@ export async function cmdServe() {
           const r = await readAgentReport(m[1], m[2]);
           if (!r) return err(404, "not found");
           return json(r);
+        }
+      }
+
+      // ---- github repos ----
+      if (path === "/api/github/repos") {
+        if (!githubConfigured())
+          return err(501, "GITHUB_TOKEN is not set — add it to the lfg service environment");
+        try {
+          const repos = await fetchGithubRepos();
+          return json({ repos });
+        } catch (e) {
+          return err(502, e instanceof Error ? e.message : String(e));
+        }
+      }
+
+      if (path === "/api/github/repos/clone" && req.method === "POST") {
+        if (!githubConfigured())
+          return err(501, "GITHUB_TOKEN is not set");
+        const body = (await req.json().catch(() => null)) as {
+          clone_url?: string;
+          name?: string;
+        } | null;
+        if (!body?.clone_url || !body?.name)
+          return err(400, "expected { clone_url, name }");
+        try {
+          const cwd = await cloneGithubRepo(body.clone_url, body.name);
+          const repos = await listRepos();
+          return json({ ok: true, cwd, repos });
+        } catch (e) {
+          return err(502, e instanceof Error ? e.message : String(e));
         }
       }
 
