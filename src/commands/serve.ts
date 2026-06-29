@@ -19,6 +19,8 @@ import {
   type ActionRow,
 } from "../agents/runner.ts";
 import { executeAction, executeActionsCombined, dispatchSendFixAgent } from "../actions/index.ts";
+import { listPipelines, loadPipeline } from "../pipeline/registry.ts";
+import { runPipeline, readRun, listRunIds, generateRunId } from "../pipeline/runner.ts";
 import {
   listAutoAgents,
   getAutoAgent,
@@ -1454,6 +1456,63 @@ export async function cmdServe() {
           const r = await readAgentReport(m[1], m[2]);
           if (!r) return err(404, "not found");
           return json(r);
+        }
+      }
+
+      // ---- pipelines ----
+      if (path === "/api/pipelines") {
+        const pipelines = await listPipelines();
+        return json({
+          pipelines: pipelines.map((p) => ({
+            name: p.name,
+            title: p.frontmatter.title ?? p.name,
+            description: p.description,
+            stepCount: p.steps.length,
+            steps: p.steps.map((s) =>
+              s.kind === "agent"
+                ? { kind: "agent", agent: s.agent, model: s.model }
+                : { kind: "run", command: s.command },
+            ),
+          })),
+        });
+      }
+
+      {
+        const m = path.match(/^\/api\/pipelines\/([a-z0-9_-]+)\/run$/);
+        if (m && req.method === "POST") {
+          const name = m[1];
+          let body: { cwd?: string } | null = null;
+          try { body = (await req.json()) as { cwd?: string }; } catch {}
+          const cwd = body?.cwd ?? REPOS_ROOT;
+          let pipeline;
+          try {
+            pipeline = await loadPipeline(name);
+          } catch (e) {
+            return err(404, e instanceof Error ? e.message : String(e));
+          }
+          // Generate the run ID before kicking off so the caller can poll it immediately.
+          const runId = generateRunId();
+          runPipeline(pipeline, {
+            cwd,
+            id: runId,
+            onLog: (line) => console.log(line),
+          }).catch((e) => console.error("[pipeline] unhandled error:", e));
+          return json({ ok: true, runId, pipeline: name, cwd });
+        }
+      }
+
+      if (path === "/api/pipeline-runs") {
+        const ids = listRunIds().slice(0, 50);
+        const runs = ids.map((id) => readRun(id)).filter(Boolean);
+        return json({ runs });
+      }
+
+      {
+        const m = path.match(/^\/api\/pipeline-runs\/([a-zA-Z0-9_-]+)$/);
+        if (m) {
+          const run = readRun(m[1]);
+          if (!run) return err(404, "run not found");
+          return json(run);
         }
       }
 
