@@ -84,7 +84,7 @@ export async function pipeToCodexAiSdk(
       prompt,
       providerOptions: {
         "codex-app-server": {
-          threadMode: "ephemeral",
+          threadMode: "stateless",
           ...(thinkingLevel ? { effort: thinkingLevel } : {}),
         },
       },
