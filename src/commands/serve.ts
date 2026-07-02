@@ -125,6 +125,16 @@ import {
   runCodingAgentSetup,
   setCodingAgentVisibility,
 } from "../coding-agents.ts";
+import {
+  AISDK_MODELS,
+  CLAUDE_MODELS,
+  GROK_DEFAULT_MODEL,
+  GROK_MODELS,
+  HERMES_DEFAULT_MODEL,
+  OPENCODE_DEFAULT_MODEL,
+  OPENCODE_DISABLED_MODELS,
+  buildModelCatalogResponse,
+} from "../model-catalog.ts";
 
 // Where the user keeps the repos lfg can launch agents into. Scanned for git
 // repos at runtime; defaults to ~/repos. The lfg repo itself (PATHS.root) is
@@ -196,37 +206,7 @@ function uploadFilename(req: Request, url: URL): string {
   }
 }
 
-// Allowlisted Claude model aliases. They land both on a launch argv (--model)
-// and in a `/model <alias>` slash command we inject mid-session — so an unknown
-// value is a hard 400, never a silent fallback. These mirror Claude Code's own
-// `/model` aliases (same set the --model flag accepts).
-const CLAUDE_MODELS = ["fable", "opus", "sonnet", "haiku"];
-// Models the "aisdk" session kind accepts (the provider maps these aliases).
-const AISDK_MODELS = ["opus", "sonnet", "haiku"];
-const GROK_MODELS = ["grok-composer-2.5-fast", "grok-build"];
-const GROK_DEFAULT_MODEL = "grok-composer-2.5-fast";
-const HERMES_MODELS = [
-  "nousresearch/hermes-4-405b",
-  "nousresearch/hermes-4-70b",
-  "nousresearch/hermes-3-llama-3.1-405b",
-];
-const HERMES_DEFAULT_MODEL = "nousresearch/hermes-4-405b";
 const HERMES_PROVIDER = process.env.LFG_HERMES_PROVIDER?.trim() || undefined;
-const OPENCODE_DEFAULT_MODEL = "opencode-go/deepseek-v4-flash";
-// Models whose provider currently rejects our requests (Sakana's fugu returns a
-// hard 403 Forbidden, and the local Novita credential currently 403s too — see
-// opencode.log). A session born onto one of these streams zero output and
-// silently goes idle, so redirect create + model-switch away from them to the
-// verified OpenCode Go default instead of letting the turn die.
-const OPENCODE_DISABLED_MODELS = new Set<string>([
-  "fugu/fugu",
-  "fugu/fugu-ultra",
-  "fugu",
-  "fugu-ultra",
-  "novita-ai/deepseek/deepseek-v4-pro",
-  "novita-ai/zai-org/glm-5.2",
-  "novita-ai/zai-org/glm-5.1",
-]);
 const AUTO_AGENT_BACKENDS = ["aisdk", "codex-aisdk", "opencode", "hermes"] as const;
 // Reasoning/thinking-effort levels, per agent family. Codex (CLI + ai-sdk)
 // accepts none…xhigh; Claude (CLI + ai-sdk) accepts low…xhigh plus `max`. The
@@ -2385,6 +2365,10 @@ export async function cmdServe() {
             return err(400, "unknown user");
           return json({ ok: true });
         }
+      }
+
+      if (path === "/api/model-catalog" && req.method === "GET") {
+        return json(await buildModelCatalogResponse());
       }
 
       // Start a new lfg-managed session: spin up a detached tmux session

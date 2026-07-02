@@ -1,4 +1,4 @@
-import { Component, forwardRef, memo, Suspense, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Component, createContext, forwardRef, memo, Suspense, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   DEFAULT_SCHED_TZ,
@@ -24,6 +24,7 @@ import type {
   CSSProperties,
   ErrorInfo,
   FormEvent,
+  MutableRefObject,
   ReactNode,
   TouchEvent as ReactTouchEvent,
 } from "react";
@@ -115,6 +116,16 @@ import {
   disablePush,
 } from "./lib/push";
 import { AskNavButton, AskPage, AskProvider } from "./components/ask-center";
+import {
+  STATIC_MODEL_CATALOGS,
+  defaultModelForAgent,
+  fallbackModelsForAgent,
+  mergeModelCatalogs,
+  modelsForAgent,
+  type AgentKind,
+  type ModelCatalogResponse,
+  type ModelCatalogs,
+} from "./model-catalog";
 
 type Agent = {
   name: string;
@@ -251,34 +262,6 @@ type ComposerAttachment = {
   error?: string;
 };
 
-const CLAUDE_MODELS = ["sonnet", "opus", "haiku", "fable"];
-const CODEX_MODELS = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"];
-// Models the one-shot AI-SDK test option supports (the provider maps these
-// aliases). Kept in sync with the AISDK_MODELS allowlist in serve.ts.
-const AISDK_MODELS = ["opus", "sonnet", "haiku"];
-const CODEX_AISDK_MODELS = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"];
-const GROK_MODELS = ["grok-composer-2.5-fast", "grok-build"];
-const HERMES_MODELS = [
-  "nousresearch/hermes-4-405b",
-  "nousresearch/hermes-4-70b",
-  "nousresearch/hermes-3-llama-3.1-405b",
-];
-const OPENCODE_MODELS = [
-  "opencode-go/deepseek-v4-flash",
-  "opencode-go/deepseek-v4-pro",
-  "opencode-go/glm-5.1",
-  "opencode-go/glm-5.2",
-  "opencode-go/kimi-k2.6",
-  "opencode-go/kimi-k2.7-code",
-  "opencode-go/mimo-v2.5",
-  "opencode-go/mimo-v2.5-pro",
-  "opencode-go/minimax-m2.7",
-  "opencode-go/minimax-m3",
-  "opencode-go/qwen3.6-plus",
-  "opencode-go/qwen3.7-max",
-  "opencode-go/qwen3.7-plus",
-  "opencode/big-pickle",
-];
 const THINKING_LEVELS = ["low", "medium", "high", "xhigh"] as const;
 type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 type AutoAgentBackend = "aisdk" | "codex-aisdk" | "opencode" | "hermes";
@@ -288,12 +271,49 @@ const AUTO_AGENT_OPTIONS: { key: AutoAgentBackend; label: string }[] = [
   { key: "opencode", label: "opencode" },
   { key: "hermes", label: "hermes" },
 ];
+const ModelCatalogContext = createContext<ModelCatalogs>(STATIC_MODEL_CATALOGS);
+const ModelCatalogResolvedContext = createContext(false);
+
+function useModelCatalogs(): ModelCatalogs {
+  return useContext(ModelCatalogContext);
+}
+
+function useModelCatalogResolved(): boolean {
+  return useContext(ModelCatalogResolvedContext);
+}
+
+type ModelSelectionOrigin = "explicit" | "default";
+
+function syncModelWithCatalog({
+  defaultModel,
+  model,
+  models,
+  originRef,
+  resolved,
+  setModel,
+}: {
+  defaultModel: string;
+  model: string;
+  models: string[];
+  originRef: MutableRefObject<ModelSelectionOrigin>;
+  resolved: boolean;
+  setModel: (model: string) => void;
+}) {
+  if (!models.includes(model)) {
+    if (!resolved && originRef.current === "explicit") return;
+    originRef.current = "default";
+    setModel(defaultModel);
+    return;
+  }
+  if (originRef.current === "default" && model !== defaultModel) {
+    setModel(defaultModel);
+  }
+}
+
 function savedThinkingLevel(): ThinkingLevel {
   const value = localStorage.getItem("lfg_thinking_level");
   return THINKING_LEVELS.includes(value as ThinkingLevel) ? (value as ThinkingLevel) : "medium";
 }
-
-type AgentKind = "claude" | "aisdk" | "codex" | "codex-aisdk" | "opencode" | "grok" | "hermes";
 
 // Which agents honor a thinking/reasoning-effort level. Claude (CLI + ai-sdk)
 // takes an `effort`; Codex (CLI + ai-sdk) takes a `reasoning_effort` — both
@@ -312,28 +332,6 @@ function agentSupportsThinking(agent: AgentKind): boolean {
 function agentShowsClaudeUsage(agent: AgentKind): boolean {
   return agent === "claude" || agent === "aisdk";
 }
-
-// Per-agent model lists + default model, keyed by the backend agent-kind
-// contract. The new-session dialog and session cards both read from here so the
-// model picker stays correct per agent.
-const AGENT_MODELS: Record<AgentKind, string[]> = {
-  claude: CLAUDE_MODELS,
-  aisdk: AISDK_MODELS,
-  codex: CODEX_MODELS,
-  "codex-aisdk": CODEX_AISDK_MODELS,
-  grok: GROK_MODELS,
-  hermes: HERMES_MODELS,
-  opencode: OPENCODE_MODELS,
-};
-const AGENT_DEFAULT_MODEL: Record<AgentKind, string> = {
-  claude: "sonnet",
-  aisdk: "opus",
-  codex: "gpt-5.5",
-  "codex-aisdk": "gpt-5.5",
-  grok: "grok-composer-2.5-fast",
-  hermes: "nousresearch/hermes-4-405b",
-  opencode: "opencode-go/deepseek-v4-flash",
-};
 
 // New-session picker options, in display order. The three AI-SDK agents are the
 // only choices ("aisdk" leads since it's the default). Each carries a short
@@ -2001,6 +1999,8 @@ export function App() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [repos, setRepos] = useState<Repo[]>([]);
+  const [modelCatalogs, setModelCatalogs] = useState<ModelCatalogs>(STATIC_MODEL_CATALOGS);
+  const [modelCatalogResolved, setModelCatalogResolved] = useState(false);
   // Legacy report-view selector — retained so the old AgentView effects compile,
   // but the live UI now switches on `tab` (Live / Auto), so this stays "__live".
   const [selected, setSelected] = useState("__live");
@@ -2048,6 +2048,26 @@ export function App() {
   const [identity, setIdentity] = useState<string | null>(() =>
     localStorage.getItem("lfg_user"),
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    api<ModelCatalogResponse>("/api/model-catalog")
+      .then((payload) => {
+        if (!cancelled) {
+          setModelCatalogs(mergeModelCatalogs(payload));
+          setModelCatalogResolved(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setModelCatalogs(STATIC_MODEL_CATALOGS);
+          setModelCatalogResolved(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Mobile soft keyboard ↔ terminal sizing. iOS Safari (and older Androids)
   // shrink only the *visual* viewport when the on-screen keyboard opens — the
@@ -2821,8 +2841,10 @@ export function App() {
       : "pb-3";
 
   return (
-    <AskProvider>
-    <div ref={rootRef} className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
+    <ModelCatalogContext.Provider value={modelCatalogs}>
+      <ModelCatalogResolvedContext.Provider value={modelCatalogResolved}>
+        <AskProvider>
+          <div ref={rootRef} className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
       {/* Two floating "islands" — brand + Live on the left, an icon-only
           Settings button on the right — mirroring the bottom nav's
           gradient-bordered pill so the whole chrome reads as one matched set.
@@ -3073,8 +3095,10 @@ export function App() {
       />
 
       <Toaster position="bottom-center" />
-    </div>
-    </AskProvider>
+          </div>
+        </AskProvider>
+      </ModelCatalogResolvedContext.Provider>
+    </ModelCatalogContext.Provider>
   );
 }
 
@@ -4843,11 +4867,14 @@ function PausedBanner({
   session: Session;
   onRefresh: () => Promise<void>;
 }) {
+  const catalogs = useModelCatalogs();
   const [working, setWorking] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   if (session.status !== "blocked") return null;
   const sid = session.sessionId;
   const reason = session.statusReason;
+  const claudeFallbackModel = defaultModelForAgent(catalogs, "claude");
+  const opencodeFallbackModel = defaultModelForAgent(catalogs, "opencode");
   const canSwitchClaude =
     reason === "model_unavailable" && session.agent === "claude" && !!session.tmuxTarget && !!sid;
   const canSwitchOpencode =
@@ -4901,21 +4928,21 @@ function PausedBanner({
         {canSwitchClaude ? (
           <button
             type="button"
-            onClick={() => void switchModel("opus")}
+            onClick={() => void switchModel(claudeFallbackModel)}
             disabled={working}
             className="shrink-0 rounded-lg bg-warning px-3 py-1.5 font-medium text-white disabled:opacity-50"
           >
-            {working ? "Resuming…" : "Resume on Opus"}
+            {working ? "Resuming…" : `Resume on ${claudeFallbackModel}`}
           </button>
         ) : null}
         {canSwitchOpencode ? (
           <button
             type="button"
-            onClick={() => void switchModel("opencode/big-pickle")}
+            onClick={() => void switchModel(opencodeFallbackModel)}
             disabled={working}
             className="shrink-0 rounded-lg bg-warning px-3 py-1.5 font-medium text-white disabled:opacity-50"
           >
-            {working ? "Switching…" : "Use Big Pickle"}
+            {working ? "Switching…" : `Use ${opencodeFallbackModel}`}
           </button>
         ) : null}
       </div>
@@ -5850,7 +5877,7 @@ function SessionTitleSheet({
 
 function defaultForkAgent(sourceAgent?: string | null): AgentKind {
   const saved = localStorage.getItem("lfg_fork_agent") as AgentKind | null;
-  if (saved && AGENT_MODELS[saved]) return saved;
+  if (saved && STATIC_MODEL_CATALOGS[saved]) return saved;
   return sourceAgent === "codex-aisdk" ? "aisdk" : "codex-aisdk";
 }
 
@@ -5863,20 +5890,41 @@ function ForkSessionDialog({
   onClose: () => void;
   onCreated: () => Promise<void>;
 }) {
-  const [agent, setAgent] = useState<AgentKind>(() => defaultForkAgent(session.agent));
+  const catalogs = useModelCatalogs();
+  const catalogResolved = useModelCatalogResolved();
+  const initialModelRef = useRef<{ agent: AgentKind; savedModel: string | null } | null>(null);
+  if (!initialModelRef.current) {
+    const initialAgent = defaultForkAgent(session.agent);
+    initialModelRef.current = {
+      agent: initialAgent,
+      savedModel: localStorage.getItem(`lfg_fork_model_${initialAgent}`),
+    };
+  }
+  const modelOriginRef = useRef<ModelSelectionOrigin>(
+    initialModelRef.current.savedModel ? "explicit" : "default",
+  );
+  const [agent, setAgent] = useState<AgentKind>(() => initialModelRef.current!.agent);
   const [model, setModel] = useState(
     () =>
-      localStorage.getItem(`lfg_fork_model_${defaultForkAgent(session.agent)}`) ||
-      AGENT_DEFAULT_MODEL[defaultForkAgent(session.agent)],
+      initialModelRef.current!.savedModel ||
+      defaultModelForAgent(STATIC_MODEL_CATALOGS, initialModelRef.current!.agent),
   );
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(() => savedThinkingLevel());
   const [prompt, setPrompt] = useState("");
   const sid = session.sessionId;
-  const models = AGENT_MODELS[agent];
+  const models = modelsForAgent(catalogs, agent);
+  const defaultModel = defaultModelForAgent(catalogs, agent);
 
   useEffect(() => {
-    if (!models.includes(model)) setModel(models[0]);
-  }, [models, model]);
+    syncModelWithCatalog({
+      defaultModel,
+      model,
+      models,
+      originRef: modelOriginRef,
+      resolved: catalogResolved,
+      setModel,
+    });
+  }, [catalogResolved, defaultModel, models, model]);
 
   function submit(e?: FormEvent) {
     e?.preventDefault();
@@ -5935,8 +5983,10 @@ function ForkSessionDialog({
                 title={label}
                 aria-label={label}
                 onClick={() => {
+                  const savedModel = localStorage.getItem(`lfg_fork_model_${key}`);
+                  modelOriginRef.current = savedModel ? "explicit" : "default";
                   setAgent(key);
-                  setModel(localStorage.getItem(`lfg_fork_model_${key}`) || AGENT_DEFAULT_MODEL[key]);
+                  setModel(savedModel || defaultModelForAgent(catalogs, key));
                 }}
                 className={cn(
                   "flex h-7 w-9 items-center justify-center rounded-full transition",
@@ -5951,7 +6001,10 @@ function ForkSessionDialog({
           <FieldPill>
             <select
               value={model}
-              onChange={(e) => setModel(e.target.value)}
+              onChange={(e) => {
+                modelOriginRef.current = "explicit";
+                setModel(e.target.value);
+              }}
               aria-label="Model"
               className="max-w-36 appearance-none truncate bg-transparent pr-1 text-xs font-medium outline-none"
             >
@@ -6040,6 +6093,7 @@ const SessionCard = memo(function SessionCard({
   // the one-shot entrance animation on the card root.
   entering?: boolean;
 }) {
+  const catalogs = useModelCatalogs();
   const [error, setError] = useState<string | null>(null);
   const [forkOpen, setForkOpen] = useState(false);
   const [summarizing, setSummarizing] = useState(false);
@@ -6511,7 +6565,7 @@ const onTouchStart = (e: ReactTouchEvent) => {
                 }
               >
                 <DropdownMenuLabel>Model</DropdownMenuLabel>
-                {(AGENT_MODELS[session.agent as AgentKind] ?? CLAUDE_MODELS).map((item) => (
+                {modelsForAgent(catalogs, session.agent as AgentKind).map((item) => (
                   <DropdownMenuRadioItem key={item} value={item}>
                     {item}
                   </DropdownMenuRadioItem>
@@ -7310,15 +7364,31 @@ function NewSessionDialog({
   focusNonce?: number;
   codingAgents?: CodingAgentInfo[];
 }) {
+  const catalogs = useModelCatalogs();
+  const catalogResolved = useModelCatalogResolved();
+  const initialModelRef = useRef<{
+    agent: AgentKind;
+    savedModel: string | null;
+  } | null>(null);
+  if (!initialModelRef.current) {
+    const initialAgent = (localStorage.getItem("lfg_v2_agent") as AgentKind | null) || "aisdk";
+    initialModelRef.current = {
+      agent: initialAgent,
+      savedModel:
+        localStorage.getItem(`lfg_model_${initialAgent}`) || localStorage.getItem("lfg_model"),
+    };
+  }
+  const modelOriginRef = useRef<ModelSelectionOrigin>(
+    initialModelRef.current.savedModel ? "explicit" : "default",
+  );
   const [agent, setAgent] = useState<AgentKind>(
-    () => (localStorage.getItem("lfg_v2_agent") as AgentKind | null) || "aisdk",
+    () => initialModelRef.current!.agent,
   );
   const [repo, setRepo] = useState(() => localStorage.getItem("lfg_v2_repo") || "");
   const [model, setModel] = useState(
     () =>
-      localStorage.getItem(`lfg_model_${localStorage.getItem("lfg_v2_agent") || "aisdk"}`) ||
-      localStorage.getItem("lfg_model") ||
-      AGENT_DEFAULT_MODEL[(localStorage.getItem("lfg_v2_agent") as AgentKind | null) || "aisdk"],
+      initialModelRef.current!.savedModel ||
+      defaultModelForAgent(STATIC_MODEL_CATALOGS, initialModelRef.current!.agent),
   );
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(
     () => savedThinkingLevel(),
@@ -7494,7 +7564,7 @@ function NewSessionDialog({
     // Carry the chosen model only when it's a Claude alias (resume drives the
     // claude CLI); otherwise let the backend default it. Owner tags the resumed
     // session to whoever's active, same as a fresh create.
-    const claudeModel = ["fable", "opus", "sonnet", "haiku"].includes(model) ? model : undefined;
+    const claudeModel = fallbackModelsForAgent("claude").includes(model) ? model : undefined;
     onClose();
     toast.promise(
       api("/api/sessions/resume", {
@@ -7516,7 +7586,8 @@ function NewSessionDialog({
     if (open) setUser(defaultUser || localStorage.getItem("lfg_user") || users[0]?.email || "");
   }, [open, defaultUser, users]);
 
-  const models = AGENT_MODELS[agent];
+  const models = modelsForAgent(catalogs, agent);
+  const defaultModel = defaultModelForAgent(catalogs, agent);
   // When the live view is filtered to a specific project, lock new sessions to
   // that project's repo (and hide the picker below). Falls back to the normal
   // localStorage/first-repo default when viewing "All projects" or when the
@@ -7586,8 +7657,15 @@ function NewSessionDialog({
   }, [open, agent]);
 
   useEffect(() => {
-    if (!models.includes(model)) setModel(models[0]);
-  }, [models, model]);
+    syncModelWithCatalog({
+      defaultModel,
+      model,
+      models,
+      originRef: modelOriginRef,
+      resolved: catalogResolved,
+      setModel,
+    });
+  }, [catalogResolved, defaultModel, models, model]);
 
   const visibleAgentOptions = useMemo(() => {
     const visible = new Set<string>();
@@ -7601,9 +7679,11 @@ function NewSessionDialog({
   useEffect(() => {
     if (visibleAgentOptions.some((option) => option.key === agent)) return;
     const next = visibleAgentOptions[0]?.key ?? "aisdk";
+    const savedModel = localStorage.getItem(`lfg_model_${next}`);
+    modelOriginRef.current = savedModel ? "explicit" : "default";
     setAgent(next);
-    setModel(localStorage.getItem(`lfg_model_${next}`) || AGENT_DEFAULT_MODEL[next]);
-  }, [agent, visibleAgentOptions]);
+    setModel(savedModel || defaultModelForAgent(catalogs, next));
+  }, [agent, catalogs, visibleAgentOptions]);
 
   if (!open) return null;
 
@@ -7780,10 +7860,10 @@ function NewSessionDialog({
                   onExpandedChange?.(false);
                   return;
                 }
+                const savedModel = localStorage.getItem(`lfg_model_${key}`);
+                modelOriginRef.current = savedModel ? "explicit" : "default";
                 setAgent(key);
-                setModel(
-                  localStorage.getItem(`lfg_model_${key}`) || AGENT_DEFAULT_MODEL[key],
-                );
+                setModel(savedModel || defaultModelForAgent(catalogs, key));
               }}
               className={cn(
                 "flex h-7 w-9 items-center justify-center rounded-full transition",
@@ -7803,7 +7883,10 @@ function NewSessionDialog({
       <FieldPill flat={variant === "inline"}>
         <select
           value={model}
-          onChange={(e) => setModel(e.target.value)}
+          onChange={(e) => {
+            modelOriginRef.current = "explicit";
+            setModel(e.target.value);
+          }}
           aria-label="Model"
           className="max-w-28 appearance-none truncate bg-transparent pr-1 text-xs font-medium outline-none"
         >
@@ -8259,7 +8342,8 @@ function AutoAgentModelPicker({
   thinkingLevel: ThinkingLevel;
   setThinkingLevel: (v: ThinkingLevel) => void;
 }) {
-  const models = AGENT_MODELS[backend];
+  const catalogs = useModelCatalogs();
+  const models = modelsForAgent(catalogs, backend);
   return (
     <div className="mt-2 flex flex-wrap items-center gap-1.5">
       <div className="inline-flex h-8 items-center rounded-full bg-muted p-0.5 text-xs font-semibold">
@@ -8363,22 +8447,40 @@ function FindingSheet({
   ) => Promise<void>;
   onDismiss: (f: AutoFinding) => void;
 }) {
+  const catalogs = useModelCatalogs();
+  const catalogResolved = useModelCatalogResolved();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [backend, setBackend] = useState<AutoAgentBackend>(sourceAgent?.agent ?? "aisdk");
+  const modelOriginRef = useRef<ModelSelectionOrigin>(sourceAgent?.model ? "explicit" : "default");
+  const previousBackendRef = useRef<AutoAgentBackend>(sourceAgent?.agent ?? "aisdk");
   const [model, setModel] = useState(
-    sourceAgent?.model ?? AGENT_DEFAULT_MODEL[sourceAgent?.agent ?? "aisdk"],
+    sourceAgent?.model ?? defaultModelForAgent(STATIC_MODEL_CATALOGS, sourceAgent?.agent ?? "aisdk"),
   );
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(
     (sourceAgent?.thinkingLevel as ThinkingLevel | undefined) ?? savedThinkingLevel(),
   );
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const backendModels = AGENT_MODELS[backend];
+  const backendModels = modelsForAgent(catalogs, backend);
+  const defaultModel = defaultModelForAgent(catalogs, backend);
   const supportsThinking = agentSupportsThinking(backend);
 
   useEffect(() => {
-    if (!backendModels.includes(model)) setModel(AGENT_DEFAULT_MODEL[backend]);
-  }, [backend, backendModels, model]);
+    if (previousBackendRef.current !== backend) {
+      previousBackendRef.current = backend;
+      modelOriginRef.current = "default";
+      setModel(defaultModel);
+      return;
+    }
+    syncModelWithCatalog({
+      defaultModel,
+      model,
+      models: backendModels,
+      originRef: modelOriginRef,
+      resolved: catalogResolved,
+      setModel,
+    });
+  }, [backend, backendModels, catalogResolved, defaultModel, model]);
 
   const launchOpts = (): { agent: AutoAgentBackend; model: string; thinkingLevel?: string } => ({
     agent: backend,
@@ -8463,7 +8565,10 @@ function FindingSheet({
             backend={backend}
             setBackend={setBackend}
             model={model}
-            setModel={setModel}
+            setModel={(next) => {
+              modelOriginRef.current = "explicit";
+              setModel(next);
+            }}
             thinkingLevel={thinkingLevel}
             setThinkingLevel={setThinkingLevel}
           />
@@ -8540,6 +8645,8 @@ function NewAutoAgentComposer({
     opts: { agent?: AutoAgentBackend; model?: string; thinkingLevel?: string },
   ) => void;
 }) {
+  const catalogs = useModelCatalogs();
+  const catalogResolved = useModelCatalogResolved();
   const [idea, setIdea] = useState("");
   const scopedRepo =
     scopedProject !== "__all"
@@ -8547,14 +8654,30 @@ function NewAutoAgentComposer({
       : undefined;
   const [cwd, setCwd] = useState(scopedRepo?.cwd ?? repos[0]?.cwd ?? "");
   const [backend, setBackend] = useState<AutoAgentBackend>("aisdk");
-  const [model, setModel] = useState(AGENT_DEFAULT_MODEL.aisdk);
+  const modelOriginRef = useRef<ModelSelectionOrigin>("default");
+  const previousBackendRef = useRef<AutoAgentBackend>("aisdk");
+  const [model, setModel] = useState(defaultModelForAgent(STATIC_MODEL_CATALOGS, "aisdk"));
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(savedThinkingLevel());
-  const backendModels = AGENT_MODELS[backend];
+  const backendModels = modelsForAgent(catalogs, backend);
+  const defaultModel = defaultModelForAgent(catalogs, backend);
   const supportsThinking = agentSupportsThinking(backend);
 
   useEffect(() => {
-    if (!backendModels.includes(model)) setModel(AGENT_DEFAULT_MODEL[backend]);
-  }, [backend, backendModels, model]);
+    if (previousBackendRef.current !== backend) {
+      previousBackendRef.current = backend;
+      modelOriginRef.current = "default";
+      setModel(defaultModel);
+      return;
+    }
+    syncModelWithCatalog({
+      defaultModel,
+      model,
+      models: backendModels,
+      originRef: modelOriginRef,
+      resolved: catalogResolved,
+      setModel,
+    });
+  }, [backend, backendModels, catalogResolved, defaultModel, model]);
 
   // Fire-and-close: hand the idea to the parent (which runs compose → save
   // under a loading toast) and dismiss the sheet immediately. The slow,
@@ -8619,7 +8742,10 @@ function NewAutoAgentComposer({
           backend={backend}
           setBackend={setBackend}
           model={model}
-          setModel={setModel}
+          setModel={(next) => {
+            modelOriginRef.current = "explicit";
+            setModel(next);
+          }}
           thinkingLevel={thinkingLevel}
           setThinkingLevel={setThinkingLevel}
         />
@@ -8663,6 +8789,8 @@ function AgentEditorSheet({
   onDelete: (id: string) => void;
   onRunNow: (id: string) => void;
 }) {
+  const catalogs = useModelCatalogs();
+  const catalogResolved = useModelCatalogResolved();
   const isNew = agent === "new";
   const existing = isNew ? null : agent;
   const [name, setName] = useState(existing?.name ?? "");
@@ -8690,8 +8818,10 @@ function AgentEditorSheet({
   // else the first repo.
   const [cwd, setCwd] = useState(existing?.cwd ?? repos[0]?.cwd ?? "");
   const [backend, setBackend] = useState<AutoAgentBackend>(existing?.agent ?? "aisdk");
+  const modelOriginRef = useRef<ModelSelectionOrigin>(existing?.model ? "explicit" : "default");
+  const previousBackendRef = useRef<AutoAgentBackend>(existing?.agent ?? "aisdk");
   const [model, setModel] = useState(
-    existing?.model ?? AGENT_DEFAULT_MODEL[existing?.agent ?? "aisdk"],
+    existing?.model ?? defaultModelForAgent(STATIC_MODEL_CATALOGS, existing?.agent ?? "aisdk"),
   );
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(
     (existing?.thinkingLevel as ThinkingLevel | undefined) ?? savedThinkingLevel(),
@@ -8701,12 +8831,26 @@ function AgentEditorSheet({
   const [enhanceErr, setEnhanceErr] = useState<string | null>(null);
   // Scan only when the schedule changes, not on every keystroke elsewhere.
   const nextPreview = useMemo(() => nextRunAt(schedule, tz), [schedule, tz]);
-  const backendModels = AGENT_MODELS[backend];
+  const backendModels = modelsForAgent(catalogs, backend);
+  const defaultModel = defaultModelForAgent(catalogs, backend);
   const supportsThinking = agentSupportsThinking(backend);
 
   useEffect(() => {
-    if (!backendModels.includes(model)) setModel(AGENT_DEFAULT_MODEL[backend]);
-  }, [backend, backendModels, model]);
+    if (previousBackendRef.current !== backend) {
+      previousBackendRef.current = backend;
+      modelOriginRef.current = "default";
+      setModel(defaultModel);
+      return;
+    }
+    syncModelWithCatalog({
+      defaultModel,
+      model,
+      models: backendModels,
+      originRef: modelOriginRef,
+      resolved: catalogResolved,
+      setModel,
+    });
+  }, [backend, backendModels, catalogResolved, defaultModel, model]);
 
   // Rewrite the user's rough idea into a sharp watch-agent prompt in place. The
   // server runs a one-shot, tool-less claude pass; we swap the result into the
@@ -8946,7 +9090,10 @@ function AgentEditorSheet({
           backend={backend}
           setBackend={setBackend}
           model={model}
-          setModel={setModel}
+          setModel={(next) => {
+            modelOriginRef.current = "explicit";
+            setModel(next);
+          }}
           thinkingLevel={thinkingLevel}
           setThinkingLevel={setThinkingLevel}
         />
