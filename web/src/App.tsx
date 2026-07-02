@@ -4264,8 +4264,8 @@ function ProjectFilterMenu({
         active ? "max-w-[45vw] px-2.5 sm:max-w-[12rem]" : "size-8",
         solidSurface
           ? active
-            ? "border-primary/40 bg-background text-primary shadow-sm"
-            : "border-border bg-background text-muted-foreground shadow-sm"
+            ? "lfg-gborder border-transparent bg-background text-foreground shadow-sm"
+            : "lfg-gborder border-transparent bg-background text-muted-foreground shadow-sm"
           : active
             ? "border-primary/30 bg-primary/10 text-primary"
             : "border-border bg-muted/70 text-muted-foreground",
