@@ -4362,6 +4362,9 @@ function UsageRingsButton({ provider }: { provider: ProviderUsage }) {
             {provider.available ? provider.note ?? "No limit data reported" : provider.note ?? "Not signed in"}
           </p>
         )}
+        {windows.length && provider.note ? (
+          <p className="mt-2 text-[11px] leading-snug text-muted-foreground/80">{provider.note}</p>
+        ) : null}
         {windows.some((w) => w.resetsAt) ? (
           <p className="mt-2 border-t border-border/60 pt-2 text-[11px] text-muted-foreground/80">
             {windows.find((w) => w.resetsAt) ? fmtReset(windows.find((w) => w.resetsAt)!.resetsAt) : ""}

@@ -260,6 +260,58 @@ function opencodeStatsNote(): string | null {
   }
 }
 
+// OpenCode Go's published spend caps, per rolling window. Unlike Claude/Codex,
+// Go exposes no live "how much have I used" figure we can reach with the local
+// gateway key (it lives only in their web console, behind an account session).
+// But the CLI still records each message's underlying-model cost in opencode.db
+// — the very dollar figure these caps are measured against — even though the
+// gateway bills $0. We sum that per window and divide by the cap to reconstruct
+// the usage % the console shows. It's an estimate: local to this box, so it
+// under-counts if the same Go account is used on another machine.
+const GO_CAPS = "Go plan caps: $12 / 5h · $30 / week · $60 / month (live usage not exposed by OpenCode)";
+const GO_WINDOWS: { label: string; ms: number; cap: number }[] = [
+  { label: "5-hour · $12", ms: 5 * 60 * 60 * 1000, cap: 12 },
+  { label: "weekly · $30", ms: 7 * 24 * 60 * 60 * 1000, cap: 30 },
+  { label: "monthly · $60", ms: 30 * 24 * 60 * 60 * 1000, cap: 60 },
+];
+
+function opencodeGoWindows(): UsageWindow[] | null {
+  try {
+    const db = new Database(join(HOME, ".local", "share", "opencode", "opencode.db"), {
+      readonly: true,
+    });
+    try {
+      const now = Date.now();
+      const oldest = now - Math.max(...GO_WINDOWS.map((w) => w.ms));
+      const rows = db
+        .query("select data, time_created from message where time_created >= ?")
+        .all(oldest) as { data: string; time_created: number }[];
+      const spends: { t: number; cost: number }[] = [];
+      for (const r of rows) {
+        let d: { role?: string; providerID?: string; cost?: unknown } | null = null;
+        try {
+          d = JSON.parse(r.data);
+        } catch {
+          continue;
+        }
+        if (d?.role !== "assistant" || d?.providerID !== "opencode-go") continue;
+        const cost = typeof d.cost === "number" ? d.cost : 0;
+        if (cost > 0) spends.push({ t: r.time_created, cost });
+      }
+      if (!spends.length) return null;
+      return GO_WINDOWS.map((w) => {
+        const start = now - w.ms;
+        const spent = spends.reduce((s, c) => (c.t >= start ? s + c.cost : s), 0);
+        return { label: w.label, pct: Math.min(100, (spent / w.cap) * 100), resetsAt: null };
+      });
+    } finally {
+      db.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
 async function opencodeUsage(): Promise<ProviderUsage> {
   const base = { kind: "opencode", label: "OpenCode", plan: null as string | null };
   try {
@@ -269,12 +321,20 @@ async function opencodeUsage(): Promise<ProviderUsage> {
       (v) => v && typeof v === "object" && typeof (v as { key?: unknown }).key === "string",
     );
     if (!hasAny) return { ...base, available: false, note: "Not signed in on this box" };
-    return {
-      ...base,
-      available: true,
-      plan: hasGo ? "go" : null,
-      note: opencodeStatsNote() ?? (hasGo ? "Signed in to OpenCode Go" : "Signed in"),
-    };
+    if (hasGo) {
+      const windows = opencodeGoWindows();
+      const stats = opencodeStatsNote();
+      return {
+        ...base,
+        available: true,
+        plan: "go",
+        windows: windows ?? undefined,
+        note: windows
+          ? "Estimated from this device's OpenCode Go usage vs. plan caps ($12/5h · $30/wk · $60/mo)"
+          : `${GO_CAPS}.${stats ? ` ${stats}` : ""}`,
+      };
+    }
+    return { ...base, available: true, plan: null, note: opencodeStatsNote() ?? "Signed in" };
   } catch {
     return { ...base, available: false, note: "Not signed in on this box" };
   }
