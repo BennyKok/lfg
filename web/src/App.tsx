@@ -74,6 +74,7 @@ import { toast } from "sonner";
 import { haptic } from "@/lib/haptics";
 import { reportError } from "./lib/report-error";
 import { lazyWithReload } from "./lib/lazy-with-reload";
+import { appPath, appWebSocketUrl } from "./lib/base-path";
 import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -347,11 +348,11 @@ const AGENT_OPTIONS: { key: AgentKind; label: string; Icon: typeof Sparkles }[] 
 // Maps an agent-kind to its session-card / picker icon. codex variants share the
 // codex mark; claude variants (incl. aisdk) share the claude mark.
 function agentIconSrc(agent?: string): string {
-  if (agent === "codex" || agent === "codex-aisdk") return "/agent-codex.svg";
-  if (agent === "grok") return "/agent-grok.svg";
-  if (agent === "hermes") return "/agent-hermes.svg?v=20260629";
-  if (agent === "opencode") return "/agent-opencode.svg";
-  return "/agent-claude.svg";
+  if (agent === "codex" || agent === "codex-aisdk") return appPath("/agent-codex.svg");
+  if (agent === "grok") return appPath("/agent-grok.svg");
+  if (agent === "hermes") return `${appPath("/agent-hermes.svg")}?v=20260629`;
+  if (agent === "opencode") return appPath("/agent-opencode.svg");
+  return appPath("/agent-claude.svg");
 }
 function agentIconAlt(agent?: string): string {
   if (agent === "codex" || agent === "codex-aisdk") return "Codex";
@@ -370,7 +371,7 @@ function canDriveSession(session: Pick<Session, "agent" | "tmuxTarget">): boolea
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, init);
+  const res = await fetch(appPath(path), init);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(data?.error || `${res.status} ${res.statusText}`);
@@ -389,9 +390,9 @@ function evlog(event: string, fields: Record<string, unknown> = {}) {
     });
     if (navigator.sendBeacon) {
       const blob = new Blob([payload], { type: "application/json" });
-      if (navigator.sendBeacon("/api/evlog", blob)) return;
+      if (navigator.sendBeacon(appPath("/api/evlog"), blob)) return;
     }
-    void fetch("/api/evlog", {
+    void fetch(appPath("/api/evlog"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: payload,
@@ -427,7 +428,7 @@ function logFindingAction(
   path: "reply" | "execute" | "dismiss",
   hadText: boolean,
 ): void {
-  void fetch(`/api/auto/findings/${findingId}/action`, {
+  void fetch(appPath(`/api/auto/findings/${findingId}/action`), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path, hadText }),
@@ -830,7 +831,7 @@ function useDictation(opts: {
         offset += c.length;
       }
       try {
-        const res = await fetch("/api/voice/stt", {
+        const res = await fetch(appPath("/api/voice/stt"), {
           method: "POST",
           headers: { "Content-Type": "application/octet-stream" },
           body: floatToWav(merged, s.rate),
@@ -879,10 +880,9 @@ function useDictation(opts: {
       // Realtime-STT socket: stream resampled PCM up, receive {partial,final}
       // transcripts back. Built before capture starts so the first frame has
       // somewhere to go (queued in `pending` until the socket opens).
-      const proto = location.protocol === "https:" ? "wss:" : "ws:";
       let ws: WebSocket | null = null;
       try {
-        ws = new WebSocket(`${proto}//${location.host}/api/voice/stt-stream`);
+        ws = new WebSocket(appWebSocketUrl("/api/voice/stt-stream"));
         ws.binaryType = "arraybuffer";
       } catch {
         ws = null;
@@ -1667,7 +1667,7 @@ function useLiveSessionStream(sessions: Session[], streamIds: string[]) {
     const firstMsg = new Set<string>();
     const firstReady = new Set<string>();
     evlog("live_stream_client_start", { rid, ids, idsCount: ids.length });
-    const es = new EventSource(`/api/live/stream?ids=${ids.join(",")}&rid=${encodeURIComponent(rid)}`);
+    const es = new EventSource(appPath(`/api/live/stream?ids=${ids.join(",")}&rid=${encodeURIComponent(rid)}`));
     es.onopen = () => {
       evlog("live_stream_client_open", {
         rid,
@@ -2486,7 +2486,7 @@ export function App() {
   const liveStatusKey = liveStatusIds.join(",");
   useEffect(() => {
     if (tab !== "live" || !liveStatusKey) return;
-    const es = new EventSource(`/api/live/status?ids=${liveStatusKey}`);
+    const es = new EventSource(appPath(`/api/live/status?ids=${liveStatusKey}`));
     es.addEventListener("status", (event) => {
       const rows = parseLiveEvent<
         Array<
@@ -2578,7 +2578,7 @@ export function App() {
       const start = await api<{ runId: string }>(`/api/agents/${agent}/run`, {
         method: "POST",
       });
-      const events = new EventSource(`/api/agents/${agent}/runs/${start.runId}`);
+      const events = new EventSource(appPath(`/api/agents/${agent}/runs/${start.runId}`));
       events.addEventListener("log", (event) => {
         setRunLog((prev) => `${prev ?? ""}\n${JSON.parse(event.data)}`.trim());
       });
@@ -2856,7 +2856,7 @@ export function App() {
                 aria-current="page"
                 className="flex items-center rounded-full px-1.5 transition-transform active:scale-[0.96]"
               >
-                <img src="/icon.svg" alt="lfg" className="mx-1 size-6 shrink-0" />
+                <img src={appPath("/icon.svg")} alt="lfg" className="mx-1 size-6 shrink-0" />
               </button>
             ) : (
               <button
@@ -3531,7 +3531,7 @@ function WhoAreYou({
     <div className="flex h-dvh flex-col items-center justify-center bg-background px-6 text-foreground">
       <div className="w-full max-w-sm">
         <div className="mb-4 flex items-center gap-2">
-          <img src="/icon.svg" alt="lfg" className="size-7 shrink-0" />
+          <img src={appPath("/icon.svg")} alt="lfg" className="size-7 shrink-0" />
         </div>
         <h1 className="text-xl font-semibold">Who are you?</h1>
         <p className="mb-5 mt-1 text-sm text-muted-foreground">
@@ -6112,7 +6112,7 @@ const SessionCard = memo(function SessionCard({
     haptic("selection");
     try {
       stopSpeaking();
-      const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/summary/stream`, {
+      const res = await fetch(appPath(`/api/sessions/${encodeURIComponent(sid)}/summary/stream`), {
         method: "POST",
       });
       if (!res.ok) {
@@ -9139,7 +9139,7 @@ function VoiceSettingsSection() {
 
   useEffect(() => {
     let alive = true;
-    void fetch("/api/voice/config")
+    void fetch(appPath("/api/voice/config"))
       .then((r) => (r.ok ? r.json() : null))
       .then((d: VoiceConfig | null) => {
         if (alive && d) setCfg(d);
@@ -9154,7 +9154,7 @@ function VoiceSettingsSection() {
     setCfg((c) => (c ? { ...c, settings: { ...c.settings, ...patch } } : c));
     setSaving(true);
     try {
-      const r = await fetch("/api/voice/config", {
+      const r = await fetch(appPath("/api/voice/config"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),

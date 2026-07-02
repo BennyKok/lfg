@@ -14,6 +14,7 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { appPath } from "@/lib/base-path";
 import BrowserLoginView from "./BrowserLoginView";
 
 // Manage saved cloud-browser login profiles. Each profile captures the cookies
@@ -39,7 +40,7 @@ type TestResult = {
 // Mirror of App.tsx's tiny fetch wrapper: relative paths, JSON in/out, throws on
 // non-2xx with the server's `error` field when present.
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, init);
+  const res = await fetch(appPath(path), init);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error((data as { error?: string })?.error || `${res.status} ${res.statusText}`);

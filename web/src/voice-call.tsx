@@ -18,6 +18,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { lazyWithReload } from "./lib/lazy-with-reload";
+import { appPath } from "./lib/base-path";
 
 // ───────────────────────────────────────────────────────────────────────────
 // VoiceCall — "phone call mode" for the voice orb. A focused, fullscreen call
@@ -182,7 +183,7 @@ export function VoiceCall({
       setStatus("connecting");
       setAgentState("thinking");
       try {
-        const res = await fetch("/api/livekit/token");
+        const res = await fetch(appPath("/api/livekit/token"));
         if (!res.ok) throw new Error(`token ${res.status}`);
         const { url, token } = (await res.json()) as {
           url: string;

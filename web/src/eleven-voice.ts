@@ -18,6 +18,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import { Conversation } from "@elevenlabs/client";
+import { appPath } from "./lib/base-path";
 
 export type ElevenStatus = "idle" | "connecting" | "connected" | "error";
 
@@ -49,7 +50,7 @@ export async function startElevenVoice(opts: StartOpts = {}): Promise<ElevenHand
 
   // Mint a per-connect WebRTC token server-side (the API key never reaches the
   // browser). Backend reads the agent id from data/eleven-agent.json.
-  const res = await fetch("/api/voice/eleven-token");
+  const res = await fetch(appPath("/api/voice/eleven-token"));
   if (!res.ok) throw new Error(`token mint failed (${res.status})`);
   const { token, agentId } = (await res.json()) as {
     token?: string;

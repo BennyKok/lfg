@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { ClipboardPaste, CornerDownLeft, Delete, Loader2, RotateCcw, Save, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { appWebSocketUrl } from "@/lib/base-path";
 
 // Live, interactive remote-browser view. We open a WebSocket to the backend
 // session stream, paint incoming JPEG frames onto a <canvas>, and forward the
@@ -69,10 +70,9 @@ export default function BrowserLoginView(props: {
   // --- WebSocket lifecycle ---------------------------------------------------
   useLayoutEffect(() => {
     let disposed = false;
-    const proto = location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${proto}//${location.host}/api/browser/sessions/${encodeURIComponent(
+    const url = appWebSocketUrl(`/api/browser/sessions/${encodeURIComponent(
       sessionId,
-    )}/stream`;
+    )}/stream`);
     const ws = new WebSocket(url);
     wsRef.current = ws;
     setConn("connecting");

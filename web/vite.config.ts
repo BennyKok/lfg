@@ -10,6 +10,23 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // In dev the Vite server proxies them through so the SPA stays single-origin.
 const API_TARGET = process.env.LFG_API_TARGET ?? "http://localhost:8766";
 
+function normalizeBasePath(raw: string | undefined): string {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed || trimmed === "/") return "/";
+  const withLeading = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  const collapsed = withLeading.replace(/\/+/g, "/");
+  return collapsed.endsWith("/") ? collapsed : `${collapsed}/`;
+}
+
+const BASE_PATH = normalizeBasePath(process.env.LFG_BASE_PATH);
+const baseApiPrefix = BASE_PATH === "/" ? "/api" : `${BASE_PATH}api`;
+const baseApiRewrite = new RegExp(`^${BASE_PATH.slice(0, -1).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`);
+const apiProxy = {
+  target: API_TARGET,
+  changeOrigin: true,
+  ...(BASE_PATH === "/" ? {} : { rewrite: (p: string) => p.replace(baseApiRewrite, "") }),
+};
+
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   // Emit source maps so the auto-fix agent can map a minified production stack
@@ -35,6 +52,7 @@ export default defineConfig({
     hmr: { clientPort: 443 },
     proxy: {
       "/api": { target: API_TARGET, changeOrigin: true },
+      ...(baseApiPrefix === "/api" ? {} : { [baseApiPrefix]: apiProxy }),
     },
   },
   // `vite preview` serves the built app (dist) with NO hot-reload — this is what
@@ -46,6 +64,7 @@ export default defineConfig({
     allowedHosts: true,
     proxy: {
       "/api": { target: API_TARGET, changeOrigin: true },
+      ...(baseApiPrefix === "/api" ? {} : { [baseApiPrefix]: apiProxy }),
     },
   },
 });

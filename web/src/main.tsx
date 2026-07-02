@@ -7,6 +7,7 @@ import "./index.css";
 import { App, RootErrorBoundary } from "./App";
 import { registerExtension } from "./lib/extensions";
 import { installErrorReporting } from "./lib/report-error";
+import { appPath } from "./lib/base-path";
 
 // Capture uncaught errors + unhandled rejections and auto-report them to the
 // backend (which surfaces a finding/push and dispatches an auto-fix agent).
@@ -54,7 +55,7 @@ createRoot(document.getElementById("root")!).render(
 // offline. Network-first (see sw.js) keeps it from serving stale builds.
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch(() => {});
+    navigator.serviceWorker.register(appPath("/sw.js")).catch(() => {});
   });
 }
 
@@ -76,7 +77,7 @@ if (CURRENT_BUILD) {
 
   const latestBuild = async (): Promise<string | null> => {
     try {
-      const res = await fetch("/", { cache: "no-store" });
+      const res = await fetch(appPath("/"), { cache: "no-store" });
       if (!res.ok) return null;
       return (await res.text()).match(/index-[\w-]+\.js/)?.[0] ?? null;
     } catch {

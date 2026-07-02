@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Room } from "livekit-client";
 import { Phone } from "lucide-react";
 import { startElevenVoice, type ElevenHandle } from "./eleven-voice";
+import { appPath } from "./lib/base-path";
 
 // Opt-in fallback: route the launcher through ElevenLabs' managed agent
 // (Option B) instead of the self-hosted LiveKit worker when no dedicated phone
@@ -116,7 +117,7 @@ export function VoiceOrb({
     setAgentState("thinking");
     flash("Connecting…");
     try {
-      const res = await fetch("/api/livekit/token");
+      const res = await fetch(appPath("/api/livekit/token"));
       if (!res.ok) throw new Error(`token ${res.status}`);
       const { url, token } = (await res.json()) as { url: string; token: string };
 

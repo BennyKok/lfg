@@ -1,3 +1,5 @@
+import { appPath } from "./base-path";
+
 // Client-side Web Push enrolment. Talks to /api/push/* and the service worker
 // registered in main.tsx. Payload-less: the SW fetches the finding itself, so
 // here we only manage the subscription lifecycle.
@@ -45,7 +47,7 @@ export async function enablePush(user?: string | null): Promise<boolean> {
   const permission = await Notification.requestPermission();
   if (permission !== "granted") return false;
 
-  const keyRes = await fetch("/api/push/vapid");
+  const keyRes = await fetch(appPath("/api/push/vapid"));
   if (!keyRes.ok) throw new Error("Could not load push key");
   const { key } = (await keyRes.json()) as { key: string };
 
@@ -59,7 +61,7 @@ export async function enablePush(user?: string | null): Promise<boolean> {
   }
 
   const json = sub.toJSON() as { endpoint?: string; keys?: Record<string, string> };
-  await fetch("/api/push/subscribe", {
+  await fetch(appPath("/api/push/subscribe"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ endpoint: json.endpoint, keys: json.keys, user: user ?? null }),
@@ -75,7 +77,7 @@ export async function disablePush(): Promise<void> {
   if (!sub) return;
   const endpoint = sub.endpoint;
   await sub.unsubscribe().catch(() => {});
-  await fetch("/api/push/unsubscribe", {
+  await fetch(appPath("/api/push/unsubscribe"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ endpoint }),

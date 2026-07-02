@@ -1,3 +1,5 @@
+import { appPath } from "./base-path";
+
 // Frontend error auto-reporting. Uncaught errors (window.onerror), unhandled
 // promise rejections, and React error-boundary catches are funneled to
 // POST /api/client-error, where the backend stores them, surfaces a finding +
@@ -116,7 +118,7 @@ export function reportError(r: Report): void {
     };
     // Fire-and-forget. keepalive lets it survive a navigation/reload triggered
     // by the error. Any failure is swallowed — never re-enter the handlers.
-    void fetch("/api/client-error", {
+    void fetch(appPath("/api/client-error"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

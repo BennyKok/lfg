@@ -3,6 +3,7 @@
 // shell on the box. ghostty-web renders Claude Code's heavy TUI faithfully where
 // xterm.js mangles it, which is the case we mostly care about here.
 import { useCallback, useEffect, useRef, useState } from "react";
+import { appPath, appWebSocketUrl } from "@/lib/base-path";
 import type { TouchEvent as ReactTouchEvent } from "react";
 import { init, Terminal as GhosttyTerminal, FitAddon } from "ghostty-web";
 import { Check, ClipboardPaste, Copy, ExternalLink, Keyboard, KeyboardOff, TerminalSquare, X } from "lucide-react";
@@ -375,10 +376,9 @@ export function TermView() {
     // makes a deploy non-destructive instead of wiping the terminal.
     const connect = () => {
       if (disposed || !term) return;
-      const proto = location.protocol === "https:" ? "wss:" : "ws:";
-      const url = `${proto}//${location.host}/api/term?session=${encodeURIComponent(
+      const url = appWebSocketUrl(`/api/term?session=${encodeURIComponent(
         TERM_SESSION,
-      )}&cols=${term.cols}&rows=${term.rows}`;
+      )}&cols=${term.cols}&rows=${term.rows}`);
       const ws = new WebSocket(url);
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
@@ -475,7 +475,7 @@ export function TermView() {
     let alive = true;
     const poll = async () => {
       try {
-        const r = await fetch(`/api/term/scan?session=${TERM_SESSION}`);
+        const r = await fetch(appPath(`/api/term/scan?session=${TERM_SESSION}`));
         const d = await r.json();
         if (alive && Array.isArray(d.urls) && d.urls.length)
           setLinks((prev) => mergeUrls(prev, d.urls));

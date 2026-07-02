@@ -10,6 +10,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useSyncExternalStore } from "react";
+import { appPath } from "./lib/base-path";
 
 const TTS_SAMPLE_RATE = 24000; // matches synthesizeTts() output on the server
 
@@ -215,7 +216,7 @@ export async function speakText(
 
   let buf: ArrayBuffer;
   try {
-    const res = await fetch("/api/voice/tts", {
+    const res = await fetch(appPath("/api/voice/tts"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: t, voice: opts?.voice }),

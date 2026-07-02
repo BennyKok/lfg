@@ -4,7 +4,7 @@ import { tmpdir, homedir } from "node:os";
 import { dirname, extname, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { marked } from "marked";
-import { PATHS, installInfo } from "../config.ts";
+import { BASE_PATH, PATHS, installInfo } from "../config.ts";
 import {
   AGENTS_DIR,
   listAgents,
@@ -452,6 +452,39 @@ async function startRun(agent: string): Promise<RunState> {
 
 // ---------- HTTP helpers ----------
 
+function withBasePath(path: string): string {
+  if (BASE_PATH === "/") return path;
+  const clean = path.startsWith("/") ? path.slice(1) : path;
+  return `${BASE_PATH}${clean}`;
+}
+
+function routePathFor(pathname: string):
+  | { kind: "route"; path: string }
+  | { kind: "redirect"; locationPath: string }
+  | { kind: "not-found" } {
+  if (BASE_PATH === "/") return { kind: "route", path: pathname };
+
+  const bareBase = BASE_PATH.slice(0, -1);
+  if (pathname === bareBase) return { kind: "redirect", locationPath: BASE_PATH };
+  if (!pathname.startsWith(BASE_PATH)) return { kind: "not-found" };
+
+  const stripped = pathname.slice(BASE_PATH.length - 1);
+  return { kind: "route", path: stripped || "/" };
+}
+
+function rewriteIndexHtmlForBasePath(html: string): string {
+  const baseScript = `<script>window.__LFG_BASE_PATH__ = ${JSON.stringify(BASE_PATH)};</script>`;
+  const withRuntime = html.includes("</head>")
+    ? html.replace("</head>", `${baseScript}</head>`)
+    : `${baseScript}${html}`;
+  if (BASE_PATH === "/") return withRuntime;
+  return withRuntime
+    .replaceAll('href="/assets/', `href="${BASE_PATH}assets/`)
+    .replaceAll('src="/assets/', `src="${BASE_PATH}assets/`)
+    .replaceAll('href="/manifest.webmanifest"', `href="${withBasePath("/manifest.webmanifest")}"`)
+    .replaceAll('href="/icon.svg"', `href="${withBasePath("/icon.svg")}"`);
+}
+
 // v2 frontend: the Vite-built React app at <repo>/web/dist. (v1, the hand-written
 // single-file src/web/index.html, was removed.) Rebuild with `bun run build` in
 // web/ to publish changes.
@@ -459,10 +492,6 @@ const WEB_DIR = join(import.meta.dir, "..", "..", "web", "dist");
 const INDEX_PATH = join(WEB_DIR, "index.html");
 
 const STATIC_FILES: Record<string, { path: string; type: string }> = {
-  "/manifest.webmanifest": {
-    path: join(WEB_DIR, "manifest.webmanifest"),
-    type: "application/manifest+json",
-  },
   "/icon.svg": { path: join(WEB_DIR, "icon.svg"), type: "image/svg+xml" },
   "/icon-maskable.svg": {
     path: join(WEB_DIR, "icon-maskable.svg"),
@@ -495,6 +524,7 @@ async function webIndexResponse() {
       ? html.replace("</body>", `${tags}</body>`)
       : html + tags;
   }
+  html = rewriteIndexHtmlForBasePath(html);
   return new Response(html, {
     headers: {
       "Content-Type": "text/html; charset=utf-8",
@@ -1214,7 +1244,12 @@ export async function cmdServe() {
     },
     async fetch(req, server) {
       const url = new URL(req.url);
-      const path = url.pathname;
+      const route = routePathFor(url.pathname);
+      if (route.kind === "redirect") {
+        return Response.redirect(`${route.locationPath}${url.search}`, 308);
+      }
+      if (route.kind === "not-found") return err(404, "not found");
+      const path = route.path;
 
       if (path === "/api/evlog") {
         if (req.method === "POST") {
@@ -1307,12 +1342,35 @@ export async function cmdServe() {
           const s = statSync(INDEX_PATH);
           version = `${s.size}-${Math.floor(s.mtimeMs)}`;
         } catch {}
-        return new Response(src.replace(/__VERSION__/g, version), {
-          headers: {
-            "Content-Type": "application/javascript; charset=utf-8",
-            "Cache-Control": "no-cache",
-            "Service-Worker-Allowed": "/",
+        return new Response(
+          src
+            .replace(/__VERSION__/g, version)
+            .replace(/__LFG_BASE_PATH__/g, JSON.stringify(BASE_PATH)),
+          {
+            headers: {
+              "Content-Type": "application/javascript; charset=utf-8",
+              "Cache-Control": "no-cache",
+              "Service-Worker-Allowed": BASE_PATH,
+            },
           },
+        );
+      }
+      if (path === "/manifest.webmanifest") {
+        const raw = await Bun.file(join(WEB_DIR, "manifest.webmanifest")).json();
+        const manifest = raw as {
+          start_url?: string;
+          scope?: string;
+          icons?: { src?: string; [key: string]: unknown }[];
+          [key: string]: unknown;
+        };
+        return json({
+          ...manifest,
+          start_url: BASE_PATH,
+          scope: BASE_PATH,
+          icons: (manifest.icons ?? []).map((icon) => ({
+            ...icon,
+            src: icon.src?.startsWith("/") ? withBasePath(icon.src) : icon.src,
+          })),
         });
       }
       const staticFile = STATIC_FILES[path];
@@ -3565,5 +3623,6 @@ export async function cmdServe() {
   startFleetWatcher();
 
   console.log(`lfg web → http://${server.hostname}:${server.port}`);
+  if (BASE_PATH !== "/") console.log(`  base path: ${BASE_PATH}`);
   console.log(`  agents dir: ${AGENTS_DIR}`);
 }

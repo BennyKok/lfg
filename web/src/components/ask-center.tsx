@@ -26,6 +26,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { appPath } from "@/lib/base-path";
 import {
   ChevronDown,
   ChevronLeft,
@@ -82,13 +83,13 @@ export function AskProvider({ children }: { children: React.ReactNode }) {
       // Prefer this device's filtered feed (scoped to the push-bound user) so we
       // never surface another user's question. Falls back to the open list when
       // notifications aren't enabled on this device.
-      let feedUrl = "/api/ask?status=open";
+      let feedUrl = appPath("/api/ask?status=open");
       try {
         if ("serviceWorker" in navigator && "PushManager" in window) {
           const reg = await navigator.serviceWorker.ready;
           const sub = await reg.pushManager.getSubscription();
           if (sub?.endpoint)
-            feedUrl = `/api/push/pending?endpoint=${encodeURIComponent(sub.endpoint)}`;
+            feedUrl = appPath(`/api/push/pending?endpoint=${encodeURIComponent(sub.endpoint)}`);
         }
       } catch {
         // no subscription — keep the unscoped fallback
@@ -135,7 +136,7 @@ export function AskProvider({ children }: { children: React.ReactNode }) {
       if (busy || !text.trim()) return;
       setBusy(true);
       try {
-        const res = await fetch(`/api/ask/${q.id}/answer`, {
+        const res = await fetch(appPath(`/api/ask/${q.id}/answer`), {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ answer: text.trim(), via: "web" }),

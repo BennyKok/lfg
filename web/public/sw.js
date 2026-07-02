@@ -7,6 +7,13 @@
 // Everything else — dev modules (/@vite, /src, /node_modules), websockets and
 // the whole /api surface (SSE live streams!) — is passed straight through.
 const CACHE = "lfg-v2-shell";
+const BASE_PATH = typeof __LFG_BASE_PATH__ === "string" ? __LFG_BASE_PATH__ : "/";
+
+function appPath(path) {
+  const clean = path.startsWith("/") ? path.slice(1) : path;
+  if (!clean) return BASE_PATH;
+  return BASE_PATH === "/" ? `/${clean}` : `${BASE_PATH}${clean}`;
+}
 
 self.addEventListener("install", () => {
   self.skipWaiting();
@@ -26,9 +33,9 @@ self.addEventListener("activate", (event) => {
 });
 
 function cacheable(url, request) {
-  if (url.pathname.startsWith("/api")) return false; // never cache API / SSE
+  if (url.pathname.startsWith(appPath("/api"))) return false; // never cache API / SSE
   if (request.mode === "navigate") return true;
-  if (url.pathname.startsWith("/assets/")) return true; // hashed Vite build output
+  if (url.pathname.startsWith(appPath("/assets/"))) return true; // hashed Vite build output
   return /\.(svg|png|ico|webmanifest|woff2?)$/.test(url.pathname);
 }
 
@@ -51,21 +58,21 @@ async function showLatest(payload) {
   if (payload?.title) {
     await self.registration.showNotification(payload.title, {
       body: payload.body || "",
-      icon: "/icon.svg",
-      badge: "/icon-maskable.svg",
+      icon: appPath("/icon.svg"),
+      badge: appPath("/icon-maskable.svg"),
       tag: payload.tag || "lfg",
       renotify: true,
-      data: { url: payload.url || "/" },
+      data: { url: payload.url || appPath("/") },
     });
     return;
   }
 
   // Ask the backend for THIS device's feed only — filtered to the user this
   // push subscription is bound to, so we never show another user's question.
-  let feedUrl = "/api/ask?status=open";
+  let feedUrl = appPath("/api/ask?status=open");
   try {
     const sub = await self.registration.pushManager.getSubscription();
-    if (sub?.endpoint) feedUrl = `/api/push/pending?endpoint=${encodeURIComponent(sub.endpoint)}`;
+    if (sub?.endpoint) feedUrl = appPath(`/api/push/pending?endpoint=${encodeURIComponent(sub.endpoint)}`);
   } catch {
     // no subscription handle — fall back to the unscoped list
   }
@@ -77,30 +84,30 @@ async function showLatest(payload) {
     const opts = Array.isArray(q.options) && q.options.length ? ` — ${q.options.join(" / ")}` : "";
     await self.registration.showNotification("lfg needs your input", {
       body: (q.question || "A question is waiting") + opts,
-      icon: "/icon.svg",
-      badge: "/icon-maskable.svg",
+      icon: appPath("/icon.svg"),
+      badge: appPath("/icon-maskable.svg"),
       tag: `ask-${q.id}`,
       renotify: true,
       requireInteraction: true,
-      data: { url: "/" },
+      data: { url: appPath("/") },
     });
     return;
   }
 
   // Reuse the feed's findings if it carried them; else fetch the global list.
   const findings =
-    asked?.findings || (await fetchJson("/api/auto/findings?status=open"))?.findings || [];
+    asked?.findings || (await fetchJson(appPath("/api/auto/findings?status=open")))?.findings || [];
   const f = findings[0] || null;
   const title = f?.title || "lfg";
   const body =
     f?.suggest || (Array.isArray(f?.reasoning) ? f.reasoning[0] : "") || "New activity in your sessions";
   await self.registration.showNotification(title, {
     body,
-    icon: "/icon.svg",
-    badge: "/icon-maskable.svg",
+    icon: appPath("/icon.svg"),
+    badge: appPath("/icon-maskable.svg"),
     tag: f?.id ? `finding-${f.id}` : "lfg",
     renotify: true,
-    data: { url: "/", findingId: f?.id || null },
+    data: { url: appPath("/"), findingId: f?.id || null },
   });
 }
 
@@ -116,7 +123,7 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const target = event.notification.data?.url || "/";
+  const target = event.notification.data?.url || appPath("/");
   event.waitUntil(
     (async () => {
       const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
@@ -150,7 +157,7 @@ self.addEventListener("fetch", (event) => {
         const cached = await caches.match(request);
         if (cached) return cached;
         if (request.mode === "navigate") {
-          const shell = await caches.match("/");
+          const shell = await caches.match(appPath("/"));
           if (shell) return shell;
         }
         throw new Error("offline");

@@ -11,6 +11,25 @@ export const PATHS = {
   installInfo: join(ROOT, "data", "install.json"),
 };
 
+export function normalizeBasePath(raw: string | undefined): string {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed || trimmed === "/") return "/";
+  if (trimmed.includes("?") || trimmed.includes("#")) {
+    throw new Error("LFG_BASE_PATH must be a path without query string or hash");
+  }
+
+  const withLeading = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  const collapsed = withLeading.replace(/\/+/g, "/");
+  const segments = collapsed.split("/").filter(Boolean);
+  if (segments.some((segment) => segment === "." || segment === "..")) {
+    throw new Error("LFG_BASE_PATH must not contain . or .. path segments");
+  }
+
+  return collapsed.endsWith("/") ? collapsed : `${collapsed}/`;
+}
+
+export const BASE_PATH = normalizeBasePath(process.env.LFG_BASE_PATH);
+
 export type InstallChannel = "source" | "release" | "container" | "unknown";
 
 export type InstallInfo = {
