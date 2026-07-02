@@ -4868,11 +4868,14 @@ function PausedBanner({
   session: Session;
   onRefresh: () => Promise<void>;
 }) {
+  const catalogs = useModelCatalogs();
   const [working, setWorking] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   if (session.status !== "blocked") return null;
   const sid = session.sessionId;
   const reason = session.statusReason;
+  const claudeFallbackModel = defaultModelForAgent(catalogs, "claude");
+  const opencodeFallbackModel = defaultModelForAgent(catalogs, "opencode");
   const canSwitchClaude =
     reason === "model_unavailable" && session.agent === "claude" && !!session.tmuxTarget && !!sid;
   const canSwitchOpencode =
@@ -4926,21 +4929,21 @@ function PausedBanner({
         {canSwitchClaude ? (
           <button
             type="button"
-            onClick={() => void switchModel("opus")}
+            onClick={() => void switchModel(claudeFallbackModel)}
             disabled={working}
             className="shrink-0 rounded-lg bg-warning px-3 py-1.5 font-medium text-white disabled:opacity-50"
           >
-            {working ? "Resuming…" : "Resume on Opus"}
+            {working ? "Resuming…" : `Resume on ${claudeFallbackModel}`}
           </button>
         ) : null}
         {canSwitchOpencode ? (
           <button
             type="button"
-            onClick={() => void switchModel("opencode/big-pickle")}
+            onClick={() => void switchModel(opencodeFallbackModel)}
             disabled={working}
             className="shrink-0 rounded-lg bg-warning px-3 py-1.5 font-medium text-white disabled:opacity-50"
           >
-            {working ? "Switching…" : "Use Big Pickle"}
+            {working ? "Switching…" : `Use ${opencodeFallbackModel}`}
           </button>
         ) : null}
       </div>
