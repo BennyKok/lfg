@@ -44,6 +44,20 @@ describe("mergeModelCatalogs", () => {
     expect(catalogs.claude).toEqual(STATIC_MODEL_CATALOGS.claude);
   });
 
+  test("keeps frontend fallback order for static-source server catalogs", () => {
+    const catalogs = mergeModelCatalogs({
+      catalogs: {
+        claude: {
+          models: ["fable", "opus", "sonnet", "haiku"],
+          defaultModel: "sonnet",
+          source: "static",
+        },
+      },
+    });
+
+    expect(catalogs.claude).toEqual(STATIC_MODEL_CATALOGS.claude);
+  });
+
   test("filters dirty model values before trimming", () => {
     const catalogs = mergeModelCatalogs({
       catalogs: {

@@ -271,9 +271,14 @@ const AUTO_AGENT_OPTIONS: { key: AutoAgentBackend; label: string }[] = [
   { key: "hermes", label: "hermes" },
 ];
 const ModelCatalogContext = createContext<ModelCatalogs>(STATIC_MODEL_CATALOGS);
+const ModelCatalogResolvedContext = createContext(false);
 
 function useModelCatalogs(): ModelCatalogs {
   return useContext(ModelCatalogContext);
+}
+
+function useModelCatalogResolved(): boolean {
+  return useContext(ModelCatalogResolvedContext);
 }
 
 type ModelSelectionOrigin = "explicit" | "default";
@@ -283,15 +288,18 @@ function syncModelWithCatalog({
   model,
   models,
   originRef,
+  resolved,
   setModel,
 }: {
   defaultModel: string;
   model: string;
   models: string[];
   originRef: MutableRefObject<ModelSelectionOrigin>;
+  resolved: boolean;
   setModel: (model: string) => void;
 }) {
   if (!models.includes(model)) {
+    if (!resolved && originRef.current === "explicit") return;
     originRef.current = "default";
     setModel(defaultModel);
     return;
@@ -2010,6 +2018,7 @@ export function App() {
   const [users, setUsers] = useState<User[]>([]);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [modelCatalogs, setModelCatalogs] = useState<ModelCatalogs>(STATIC_MODEL_CATALOGS);
+  const [modelCatalogResolved, setModelCatalogResolved] = useState(false);
   // Legacy report-view selector — retained so the old AgentView effects compile,
   // but the live UI now switches on `tab` (Live / Auto), so this stays "__live".
   const [selected, setSelected] = useState("__live");
@@ -2062,10 +2071,16 @@ export function App() {
     let cancelled = false;
     api<ModelCatalogResponse>("/api/model-catalog")
       .then((payload) => {
-        if (!cancelled) setModelCatalogs(mergeModelCatalogs(payload));
+        if (!cancelled) {
+          setModelCatalogs(mergeModelCatalogs(payload));
+          setModelCatalogResolved(true);
+        }
       })
       .catch(() => {
-        if (!cancelled) setModelCatalogs(STATIC_MODEL_CATALOGS);
+        if (!cancelled) {
+          setModelCatalogs(STATIC_MODEL_CATALOGS);
+          setModelCatalogResolved(true);
+        }
       });
     return () => {
       cancelled = true;
@@ -2845,8 +2860,9 @@ export function App() {
 
   return (
     <ModelCatalogContext.Provider value={modelCatalogs}>
-      <AskProvider>
-        <div ref={rootRef} className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
+      <ModelCatalogResolvedContext.Provider value={modelCatalogResolved}>
+        <AskProvider>
+          <div ref={rootRef} className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
       {/* Two floating "islands" — brand + Live on the left, an icon-only
           Settings button on the right — mirroring the bottom nav's
           gradient-bordered pill so the whole chrome reads as one matched set.
@@ -3097,8 +3113,9 @@ export function App() {
       />
 
       <Toaster position="bottom-center" />
-        </div>
-      </AskProvider>
+          </div>
+        </AskProvider>
+      </ModelCatalogResolvedContext.Provider>
     </ModelCatalogContext.Provider>
   );
 }
@@ -5892,6 +5909,7 @@ function ForkSessionDialog({
   onCreated: () => Promise<void>;
 }) {
   const catalogs = useModelCatalogs();
+  const catalogResolved = useModelCatalogResolved();
   const initialModelRef = useRef<{ agent: AgentKind; savedModel: string | null } | null>(null);
   if (!initialModelRef.current) {
     const initialAgent = defaultForkAgent(session.agent);
@@ -5921,9 +5939,10 @@ function ForkSessionDialog({
       model,
       models,
       originRef: modelOriginRef,
+      resolved: catalogResolved,
       setModel,
     });
-  }, [defaultModel, models, model]);
+  }, [catalogResolved, defaultModel, models, model]);
 
   function submit(e?: FormEvent) {
     e?.preventDefault();
@@ -7364,6 +7383,7 @@ function NewSessionDialog({
   codingAgents?: CodingAgentInfo[];
 }) {
   const catalogs = useModelCatalogs();
+  const catalogResolved = useModelCatalogResolved();
   const initialModelRef = useRef<{
     agent: AgentKind;
     savedModel: string | null;
@@ -7660,9 +7680,10 @@ function NewSessionDialog({
       model,
       models,
       originRef: modelOriginRef,
+      resolved: catalogResolved,
       setModel,
     });
-  }, [defaultModel, models, model]);
+  }, [catalogResolved, defaultModel, models, model]);
 
   const visibleAgentOptions = useMemo(() => {
     const visible = new Set<string>();
@@ -8445,6 +8466,7 @@ function FindingSheet({
   onDismiss: (f: AutoFinding) => void;
 }) {
   const catalogs = useModelCatalogs();
+  const catalogResolved = useModelCatalogResolved();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [backend, setBackend] = useState<AutoAgentBackend>(sourceAgent?.agent ?? "aisdk");
@@ -8473,9 +8495,10 @@ function FindingSheet({
       model,
       models: backendModels,
       originRef: modelOriginRef,
+      resolved: catalogResolved,
       setModel,
     });
-  }, [backend, backendModels, defaultModel, model]);
+  }, [backend, backendModels, catalogResolved, defaultModel, model]);
 
   const launchOpts = (): { agent: AutoAgentBackend; model: string; thinkingLevel?: string } => ({
     agent: backend,
@@ -8640,6 +8663,8 @@ function NewAutoAgentComposer({
     opts: { agent?: AutoAgentBackend; model?: string; thinkingLevel?: string },
   ) => void;
 }) {
+  const catalogs = useModelCatalogs();
+  const catalogResolved = useModelCatalogResolved();
   const [idea, setIdea] = useState("");
   const scopedRepo =
     scopedProject !== "__all"
@@ -8651,7 +8676,6 @@ function NewAutoAgentComposer({
   const previousBackendRef = useRef<AutoAgentBackend>("aisdk");
   const [model, setModel] = useState(defaultModelForAgent(STATIC_MODEL_CATALOGS, "aisdk"));
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(savedThinkingLevel());
-  const catalogs = useModelCatalogs();
   const backendModels = modelsForAgent(catalogs, backend);
   const defaultModel = defaultModelForAgent(catalogs, backend);
   const supportsThinking = agentSupportsThinking(backend);
@@ -8668,9 +8692,10 @@ function NewAutoAgentComposer({
       model,
       models: backendModels,
       originRef: modelOriginRef,
+      resolved: catalogResolved,
       setModel,
     });
-  }, [backend, backendModels, defaultModel, model]);
+  }, [backend, backendModels, catalogResolved, defaultModel, model]);
 
   // Fire-and-close: hand the idea to the parent (which runs compose → save
   // under a loading toast) and dismiss the sheet immediately. The slow,
@@ -8782,6 +8807,8 @@ function AgentEditorSheet({
   onDelete: (id: string) => void;
   onRunNow: (id: string) => void;
 }) {
+  const catalogs = useModelCatalogs();
+  const catalogResolved = useModelCatalogResolved();
   const isNew = agent === "new";
   const existing = isNew ? null : agent;
   const [name, setName] = useState(existing?.name ?? "");
@@ -8822,7 +8849,6 @@ function AgentEditorSheet({
   const [enhanceErr, setEnhanceErr] = useState<string | null>(null);
   // Scan only when the schedule changes, not on every keystroke elsewhere.
   const nextPreview = useMemo(() => nextRunAt(schedule, tz), [schedule, tz]);
-  const catalogs = useModelCatalogs();
   const backendModels = modelsForAgent(catalogs, backend);
   const defaultModel = defaultModelForAgent(catalogs, backend);
   const supportsThinking = agentSupportsThinking(backend);
@@ -8839,9 +8865,10 @@ function AgentEditorSheet({
       model,
       models: backendModels,
       originRef: modelOriginRef,
+      resolved: catalogResolved,
       setModel,
     });
-  }, [backend, backendModels, defaultModel, model]);
+  }, [backend, backendModels, catalogResolved, defaultModel, model]);
 
   // Rewrite the user's rough idea into a sharp watch-agent prompt in place. The
   // server runs a one-shot, tool-less claude pass; we swap the result into the

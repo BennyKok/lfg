@@ -66,7 +66,7 @@ export const OPENCODE_DISABLED_MODELS = new Set<string>([
 ]);
 
 const MODEL_NAME_RE = /^[A-Za-z0-9_.:-]{1,80}$/;
-const OPENCODE_MODEL_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.:/-]{1,100}$/;
+const OPENCODE_MODEL_RE = /^(?=.{1,80}$)[A-Za-z0-9_.-]+\/[A-Za-z0-9_.:/-]+$/;
 
 function unique(values: string[]): string[] {
   return [...new Set(values)];

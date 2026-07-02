@@ -95,6 +95,7 @@ export function mergeModelCatalogs(response: ModelCatalogResponse | null | undef
   for (const key of AGENT_KEYS) {
     const entry = response?.catalogs?.[key];
     if (!validEntry(entry)) continue;
+    if (entry.source === "static") continue;
 
     const models = normalizeModels(entry.models);
     if (!models.length) continue;

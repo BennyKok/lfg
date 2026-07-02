@@ -33,11 +33,13 @@ describe("parseCodexDebugModels", () => {
 
 describe("parseOpencodeModels", () => {
   test("returns provider/model lines, deduped and filtered", () => {
+    const tooLong = `provider/${"x".repeat(80)}`;
     const stdout = [
       "opencode/big-pickle",
       "anthropic/claude-sonnet-5",
       "not a model",
       "fugu/fugu",
+      tooLong,
       "anthropic/claude-sonnet-5",
     ].join("\n");
 
