@@ -127,6 +127,10 @@ export function VoiceOrb({
       // background noise, and AGC. voiceIsolation is Chrome's stronger neural
       // suppressor — when supported it supersedes noiseSuppression. Without
       // audioCaptureDefaults these are left to UA defaults and uncontrolled.
+      // NB: livekit-client v2 mutes the mic track on setMicrophoneEnabled(false)
+      // WITHOUT stopping the underlying MediaStreamTrack, so unmute never re-runs
+      // getUserMedia (no repeat permission prompt in an installed PWA). If you
+      // ever bump to a major that reintroduces stop-on-mute, pin it back off.
       const room = new RoomCls({
         adaptiveStream: true,
         audioCaptureDefaults: {

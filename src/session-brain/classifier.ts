@@ -242,10 +242,17 @@ function heuristicClassify(features: SessionFeatures): ClassifiedSession {
 export async function classifySession(features: SessionFeatures, model?: string): Promise<{
   classification: ClassifiedSession;
   generated: boolean;
+  error?: string;
 }> {
   const fallback = heuristicClassify(features);
   const token = oauthToken();
-  if (!token) return { classification: fallback, generated: false };
+  if (!token) {
+    return {
+      classification: fallback,
+      generated: false,
+      error: "no OAuth token in ~/.claude/.credentials.json",
+    };
+  }
 
   const system = `You are LFG's central session steward.
 Classify one coding-agent session for lifecycle management.
@@ -285,7 +292,14 @@ Return ONLY JSON:
       }),
       signal: AbortSignal.timeout(timeoutMs()),
     });
-    if (!r.ok) return { classification: fallback, generated: false };
+    if (!r.ok) {
+      const body = await r.text().catch(() => "");
+      return {
+        classification: fallback,
+        generated: false,
+        error: `Anthropic API ${r.status}${body ? `: ${oneLine(body, 160)}` : ""}`,
+      };
+    }
     const data = (await r.json().catch(() => null)) as { content?: Array<{ type?: string; text?: string }> } | null;
     const text = data?.content
       ?.filter((b) => b?.type === "text")
@@ -293,10 +307,20 @@ Return ONLY JSON:
       .join("")
       .trim();
     const parsed = text ? validClassification(parseJsonObject(text)) : null;
-    if (!parsed) return { classification: fallback, generated: false };
+    if (!parsed) {
+      return {
+        classification: fallback,
+        generated: false,
+        error: "model response was empty or not valid classification JSON",
+      };
+    }
     return { classification: parsed, generated: true };
-  } catch {
-    return { classification: fallback, generated: false };
+  } catch (e) {
+    return {
+      classification: fallback,
+      generated: false,
+      error: `classify request failed: ${e instanceof Error ? e.message : String(e)}`,
+    };
   }
 }
 

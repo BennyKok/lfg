@@ -660,6 +660,15 @@ function sendPromptToLiveSession(
   return { ok: true, msg: enqueueMessage(sid, prompt) };
 }
 
+function liveSessionIds(sessions: Session[]): Set<string> {
+  const ids = new Set<string>();
+  for (const session of sessions) {
+    if (session.sessionId) ids.add(session.sessionId);
+    if (session.nativeSessionId) ids.add(session.nativeSessionId);
+  }
+  return ids;
+}
+
 function warmRenderedBacklogs(sessions: Session[], limit = 40): void {
   for (const session of sessions.slice(0, MESSAGE_HTML_CACHE_MAX)) {
     const path = session.transcriptPath;
@@ -2536,9 +2545,7 @@ export async function cmdServe() {
       // but every transcript survives on disk — this surfaces those so the UI
       // can offer to resume one. Excludes anything currently live.
       if (path === "/api/sessions/resumable" && req.method === "GET") {
-        const liveIds = new Set(
-          (await listSessions()).map((s) => s.sessionId).filter((x): x is string => !!x),
-        );
+        const liveIds = liveSessionIds(await listSessions());
         const limit = Number(url.searchParams.get("limit")) || 30;
         const sessions = await listResumable({ limit, excludeIds: liveIds });
         return json({ sessions });
@@ -2566,7 +2573,13 @@ export async function cmdServe() {
           (s) => s.sessionId === sessionId || s.nativeSessionId === sessionId,
         );
         if (live) {
-          const sent = sendPromptToLiveSession(live, body?.prompt ?? "");
+          const prompt = body?.prompt?.trim() ?? "";
+          const sent = prompt
+            // Resuming a session that is already live is a follow-up, not a
+            // steering action. Queue it so a status/check click does not abort
+            // the active turn or any Claude sidechain Explore agents.
+            ? sendPromptToLiveSession(live, prompt, { mode: "queue" })
+            : { ok: true as const, msg: undefined };
           if (!sent.ok) return err(409, sent.error || "couldn't send resume prompt");
           return json({
             ok: true,
@@ -2575,7 +2588,7 @@ export async function cmdServe() {
             sessionId: live.sessionId ?? sessionId,
             resumedFrom: live.nativeSessionId ?? sessionId,
             alreadyLive: true,
-            sentPrompt: !!body?.prompt?.trim(),
+            sentPrompt: !!prompt,
             msg: sent.msg,
             agent: live.agent,
           });
@@ -3179,7 +3192,7 @@ export async function cmdServe() {
         } | null;
         const limit = Math.max(1, Math.min(200, body?.limit ?? 50));
         const live = await listSessions();
-        const liveIds = new Set(live.map((s) => s.sessionId).filter((x): x is string => !!x));
+        const liveIds = liveSessionIds(live);
         const resumable = await listResumable({ limit, excludeIds: liveIds });
         const targets = [
           ...live

@@ -596,8 +596,12 @@ function shortProject(project: string): string {
 }
 
 function cycleProjectFilter(options: string[], current: string, dir: 1 | -1): string {
+  if (options.length === 0) return current;
+  const idx = options.indexOf(current);
+  // Current not in the cycle (e.g. "__all", which we no longer swipe through):
+  // enter the list at the first item going forward, or the last going back.
+  if (idx === -1) return dir === 1 ? options[0] : options[options.length - 1];
   if (options.length <= 1) return current;
-  const idx = Math.max(0, options.indexOf(current));
   return options[(idx + dir + options.length) % options.length];
 }
 
@@ -812,6 +816,13 @@ function recordingButtonStyle(level: number): CSSProperties {
   };
 }
 
+// How long to keep the mic stream open (track disabled, not stopped) after a
+// take ends before fully releasing it. Long enough that back-to-back dictation
+// reuses a single grant — avoiding the repeat permission prompt an installed PWA
+// (iOS standalone especially) shows on each fresh getUserMedia after a full
+// track.stop() — short enough that we don't sit on the mic indicator forever.
+const MIC_IDLE_RELEASE_MS = 60_000;
+
 // Push-to-talk dictation with optional hands-free auto-send. Tap to record, tap
 // to stop. Audio streams live to the server's realtime-STT bridge
 // (/api/voice/stt-stream → ElevenLabs Scribe v2 Realtime): we capture mic PCM,
@@ -883,6 +894,25 @@ function useDictation(opts: {
   const startingRef = useRef(false);
   const pendingStopRef = useRef<{ auto: boolean; discard: boolean } | null>(null);
 
+  // A single mic MediaStream is acquired lazily and then KEPT ALIVE across takes
+  // rather than being stopped after each one. Re-running getUserMedia after a
+  // full track.stop() re-triggers the browser's permission gate in an installed
+  // PWA (iOS standalone doesn't persist the grant across released streams), so
+  // repeated dictation used to re-prompt every take. We hold the track, disable
+  // it while idle, and only fully release after a spell of inactivity (or on
+  // unmount) — so tap→tap→tap reuses one grant.
+  const streamRef = useRef<MediaStream | null>(null);
+  const idleReleaseRef = useRef<number | null>(null);
+  const releaseStream = useCallback(() => {
+    if (idleReleaseRef.current !== null) {
+      clearTimeout(idleReleaseRef.current);
+      idleReleaseRef.current = null;
+    }
+    const s = streamRef.current;
+    streamRef.current = null;
+    s?.getTracks().forEach((t) => t.stop());
+  }, []);
+
   // Keep the callbacks in refs so the VAD interval / stop always see the latest
   // handlers without needing to tear down and recreate the audio session.
   const onTextRef = useRef(opts.onText);
@@ -930,7 +960,11 @@ function useDictation(opts: {
       // Stop feeding the mic first so no frame races the flush/close below.
       s.proc.disconnect();
       s.src.disconnect();
-      s.stream.getTracks().forEach((t) => t.stop());
+      // Keep the mic track alive but silenced so the next take reuses this grant
+      // instead of re-prompting; an idle timeout (or unmount) fully releases it.
+      s.stream.getAudioTracks().forEach((t) => (t.enabled = false));
+      if (idleReleaseRef.current !== null) clearTimeout(idleReleaseRef.current);
+      idleReleaseRef.current = setTimeout(releaseStream, MIC_IDLE_RELEASE_MS) as unknown as number;
       await s.ac.close().catch(() => {});
       const closeWs = () => {
         try {
@@ -1019,7 +1053,7 @@ function useDictation(opts: {
       }
       setState("idle");
     },
-    [],
+    [releaseStream],
   );
 
   // `autoStop` (default true) wires the silence-VAD that auto-submits after a
@@ -1033,7 +1067,21 @@ function useDictation(opts: {
     pendingStopRef.current = null;
     capturedBaseRef.current = baseTextRef.current;
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // A new take cancels any pending idle-release so we keep the same grant.
+      if (idleReleaseRef.current !== null) {
+        clearTimeout(idleReleaseRef.current);
+        idleReleaseRef.current = null;
+      }
+      // Reuse the held stream when its track is still live; only hit getUserMedia
+      // (the permission gate) when we have no usable stream. Re-enable the track,
+      // which stop() disabled while idle.
+      let stream = streamRef.current;
+      if (!stream || !stream.getAudioTracks().some((t) => t.readyState === "live")) {
+        stream?.getTracks().forEach((t) => t.stop());
+        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        streamRef.current = stream;
+      }
+      stream.getAudioTracks().forEach((t) => (t.enabled = true));
       const Ctor =
         window.AudioContext ||
         (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
@@ -1228,6 +1276,10 @@ function useDictation(opts: {
     if (state === "transcribing") return;
     void stop(false, true);
   }, [state, stop]);
+
+  // Fully release the held mic when the hook's owner unmounts, so we never leave
+  // a track (and its OS mic indicator) live after the UI is gone.
+  useEffect(() => releaseStream, [releaseStream]);
 
   return { state, toggle, start, stop, cancel, supported, level };
 }
@@ -2554,18 +2606,26 @@ export function App() {
       return;
     }
     const sync = () => {
-      const el = rootRef.current;
-      if (el) {
-        el.style.height = `${Math.round(vv.height)}px`;
-        // Only transform when actually offset — a translateY(0) still creates a
-        // containing block that would reparent the `fixed` nav unnecessarily.
-        el.style.transform = vv.offsetTop ? `translateY(${vv.offsetTop}px)` : "";
-      }
       // Keyboard height ≈ layout height − visual height. `innerHeight` is the
       // layout viewport (doesn't shrink for the keyboard on iOS); 120px clears
       // URL-bar jitter without missing a real keyboard (~250px+).
       const kb = Math.max(0, window.innerHeight - vv.height);
       const open = kb > 120;
+      const el = rootRef.current;
+      if (el) {
+        // Pin the root to the visual viewport height at ALL times, keyboard up or
+        // down. `vv.height` is frame-accurate; `h-dvh` is NOT — iOS updates `dvh`
+        // a frame or more *after* the keyboard dismisses (and after toolbar
+        // show/hide), so handing layout back to `dvh` leaves the root momentarily
+        // short → a strip of background shows below the app until the next event
+        // (a button toggle, a send) forces a reflow. Pinning to `vv.height`
+        // sidesteps the lag entirely. The stale-height-on-app-switch-return case
+        // that this used to cause is handled by the foreground re-sync below.
+        el.style.height = `${Math.round(vv.height)}px`;
+        // Only transform when actually offset — a translateY(0) still creates a
+        // containing block that would reparent the `fixed` nav unnecessarily.
+        el.style.transform = vv.offsetTop ? `translateY(${vv.offsetTop}px)` : "";
+      }
       // Publish the live keyboard height + a flag on <html> so toasts and the
       // dictation pill (portaled to <body>, outside rootRef) can hike up to sit
       // just above the keyboard via --lfg-orb-stack-bottom.
@@ -2579,9 +2639,26 @@ export function App() {
     sync();
     vv.addEventListener("resize", sync, { passive: true });
     vv.addEventListener("scroll", sync, { passive: true });
+    // Returning from the app switcher / backgrounding doesn't reliably fire a vv
+    // `resize` on iOS, so a stale pinned height can survive the trip. Re-sync on
+    // any foreground signal; the deferred pass catches the frame where iOS has
+    // finally settled the viewport metrics.
+    const resync = () => {
+      sync();
+      requestAnimationFrame(sync);
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") resync();
+    };
+    window.addEventListener("pageshow", resync);
+    window.addEventListener("focus", resync);
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       vv.removeEventListener("resize", sync);
       vv.removeEventListener("scroll", sync);
+      window.removeEventListener("pageshow", resync);
+      window.removeEventListener("focus", resync);
+      document.removeEventListener("visibilitychange", onVisible);
       clear();
     };
   }, [loading, tab]);
@@ -2999,7 +3076,9 @@ export function App() {
 
   const cycleMobileProjectFilter = useCallback(
     (dir: 1 | -1) => {
-      const options = ["__all", ...mobileProjectOptions];
+      // Swipe cycles only through projects, never the "All" view (still
+      // reachable via the project menu).
+      const options = mobileProjectOptions;
       if (options.length <= 1) return false;
       setProjectFilter((current) => cycleProjectFilter(options, current, dir));
       return true;
@@ -3120,7 +3199,7 @@ export function App() {
       if (e.key !== "Tab" || e.metaKey || e.ctrlKey || e.altKey) return;
       const s = projectKb.current;
       if (s.tab !== "live") return;
-      const options = ["__all", ...s.projectOptions];
+      const options = s.projectOptions;
       if (options.length <= 1) return;
       const el = document.activeElement as HTMLElement | null;
       const tag = el?.tagName;
@@ -4389,9 +4468,9 @@ function ProjectFilterMenu({
   solidSurface?: boolean;
 }) {
   const active = value !== "__all";
-  // Full ordered option list, mirroring the <option>s below, so a vertical
-  // swipe on touch devices can cycle through the same choices.
-  const options = ["__all", ...projects];
+  // Swipe cycles only through projects (not "All"); the dropdown below still
+  // lists "All projects" as a tappable option.
+  const options = projects;
   const touchStartY = useRef<number | null>(null);
   const didSwipe = useRef(false);
 
@@ -4717,9 +4796,9 @@ function LiveView({
   onOpenFinding: (f: AutoFinding) => void;
 }) {
   const isWide = useIsWide();
-  // Full-height detail sheet (mobile long-press). Held here, above every card,
+  // Full-height detail sheet (mobile tap). Held here, above every card,
   // so it can switch which session it shows without unmounting. `origin` anchors
-  // the open/close morph to the title the user long-pressed.
+  // the open/close morph to the title the user tapped.
   const [sheet, setSheet] = useState<{ sid: string; origin: DOMRect } | null>(null);
   if (!sessions.length && !findings.length) {
     return (
@@ -6354,8 +6433,8 @@ function SessionChat({
   );
 }
 
-// ── long-press session-title sheet ─────────────────────────────────────────
-// A full-height modal that morphs out of the session title you long-pressed.
+// ── tap session-title sheet ─────────────────────────────────────────────────
+// A full-height modal that morphs out of the session title you tapped.
 // The morph is a FLIP: the panel renders at full size, then we play it from a
 // transform that maps full-screen → the title's on-screen rect back to
 // identity, so it visually grows out of the title (and shrinks back into it on
@@ -7256,7 +7335,7 @@ const SessionCard = memo(function SessionCard({
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
   onBrain: (sid: string) => Promise<void>;
-  // Long-pressing the title asks the parent to open the full-height detail sheet
+  // Tapping the title asks the parent to open the full-height detail sheet
   // for this sid, anchored to the title's rect. The sheet lives at the parent so
   // it can switch between sessions; undefined → the gesture is disabled.
   onOpenSheet?: (sid: string, origin: DOMRect) => void;
@@ -7558,10 +7637,11 @@ const onTouchStart = (e: ReactTouchEvent) => {
     }
   };
 
-  // ── long-press the title → morphing full-height sheet ──────────────────────
+  // ── tap the title → morphing full-height sheet; long-press → collapse ──────
   // The sheet itself lives at the parent (so it can switch between sessions and
   // force whichever sid it shows into the live stream); the card just reports the
-  // long-press and the title's rect to anchor the morph.
+  // tap and the title's rect to anchor the morph. Long-press instead toggles the
+  // card's collapsed state, since it's the less-frequent action.
   const LONG_PRESS_MS = 420;
   const pressTimer = useRef<number | null>(null);
   const pressOrigin = useRef({ x: 0, y: 0 });
@@ -7575,16 +7655,15 @@ const onTouchStart = (e: ReactTouchEvent) => {
   };
 
   const onTitlePointerDown = (e: React.PointerEvent<HTMLElement>) => {
-    if (!isMobile || !onOpenSheet || !sid) return;
+    if (!isMobile) return;
     longPressFired.current = false;
     pressOrigin.current = { x: e.clientX, y: e.clientY };
-    const el = e.currentTarget;
     pressTimer.current = window.setTimeout(() => {
       pressTimer.current = null;
       if (openRef.current !== "none") return; // mid swipe action — ignore
       longPressFired.current = true;
       haptic("selection");
-      onOpenSheet(sid, el.getBoundingClientRect());
+      setCollapsed((v) => !v);
     }, LONG_PRESS_MS);
   };
 
@@ -7595,13 +7674,14 @@ const onTouchStart = (e: ReactTouchEvent) => {
     if (dx > 10 || dy > 10) clearLongPress(); // moved → it's a scroll/swipe
   };
 
-  const onHeaderTap = () => {
+  const onHeaderTap = (e: React.MouseEvent<HTMLElement>) => {
     if (!isMobile) return;
     if (longPressFired.current) { longPressFired.current = false; return; }
     if (drag.current.justSwiped) { drag.current.justSwiped = false; return; }
     if (openRef.current !== "none") { closeSwipe(); return; }
+    if (!onOpenSheet || !sid) return;
     haptic("selection");
-    setCollapsed((v) => !v);
+    onOpenSheet(sid, e.currentTarget.getBoundingClientRect());
   };
 
   // A collapsed mobile card is stripped to the essentials (no model chip, no

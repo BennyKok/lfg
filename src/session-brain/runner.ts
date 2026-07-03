@@ -133,6 +133,9 @@ export async function runSessionBrainForSession(
       { bypassIdleGuard: true, forceNoteForClose: true },
     );
     run.decisions.push(decision);
+    if (decision.classifierError) {
+      run.errors.push(`classifier fell back to heuristic: ${decision.classifierError}`);
+    }
   } catch (e) {
     run.errors.push(e instanceof Error ? e.message : String(e));
   } finally {
@@ -176,6 +179,14 @@ async function runSessionBrainInner(
       }
     }
 
+    // Surface silent model-classifier failures (e.g. expired OAuth token) so a
+    // brain that has degraded to the rule-based heuristic doesn't look like a
+    // clean run. Deduped: one auth failure hits every session, log it once.
+    for (const msg of new Set(run.decisions.map((d) => d.classifierError).filter(Boolean) as string[])) {
+      run.errors.push(`classifier fell back to heuristic: ${msg}`);
+      onLog(`[session-brain] classifier degraded — ${msg}`);
+    }
+
     const notes = (await listSessionNotes())
       .slice(0, 40)
       .map((n) => ({
@@ -217,7 +228,7 @@ async function processSessionForBrain(
     ? !!(await pendingToolPrompt(session.transcriptPath).catch(() => null))
     : false;
   const features = featuresForSession(session, messages, pending);
-  const { classification, generated } = await classifySession(features, config.model);
+  const { classification, generated, error: classifierError } = await classifySession(features, config.model);
 
   const isCloseAction =
     classification.action === "archive_and_close" || classification.action === "close_no_note";
@@ -304,6 +315,7 @@ async function processSessionForBrain(
     closed,
     guardrail: effectiveGuardrail ?? undefined,
     mergeFollowUp: mergeGuard.mergeFollowUp,
+    classifierError: classifierError,
   };
   onLog(
     `[session-brain] ${decision.action} ${features.title} confidence=${decision.confidence.toFixed(2)}${decision.guardrail ? ` guard=${decision.guardrail}` : ""}`,

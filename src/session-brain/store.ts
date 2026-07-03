@@ -39,6 +39,10 @@ export type SessionBrainDecision = {
   noteId?: string;
   closed?: boolean;
   guardrail?: string;
+  // Set when the model classifier could not run and we silently fell back to the
+  // rule-based heuristic (e.g. expired OAuth token, API error). Surfaced into the
+  // run's errors[] so a degraded brain doesn't masquerade as a clean run.
+  classifierError?: string;
   // Set when the merge-guard intervened on an otherwise-closeable session.
   mergeFollowUp?: {
     branch: string;

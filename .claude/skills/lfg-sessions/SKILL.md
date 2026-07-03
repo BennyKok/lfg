@@ -44,8 +44,12 @@ curl -s "$BASE/api/sessions/<id>/messages?full=1" | jq -r '.messages[] | "\(.rol
 # Quick status read only (recent tail)
 curl -s "$BASE/api/sessions/<id>/messages?limit=20" | jq -r '.messages[] | "\(.role)/\(.kind): \(.text)"'
 
-# Send an instruction / steer a session (queued; delivered when it's ready)
+# Send an instruction / steer a session. Default mode is "steer": if the session
+# is busy, it interrupts the running turn before delivering your text.
 curl -s -X POST $BASE/api/sessions/<id>/send -H 'Content-Type: application/json' -d '{"text":"run the tests and report failures"}'
+
+# Queue a non-urgent follow-up without interrupting active work.
+curl -s -X POST $BASE/api/sessions/<id>/send -H 'Content-Type: application/json' -d '{"text":"when you are done, summarize status","mode":"queue"}'
 
 # Interrupt a session's current turn (Escape — stop / redirect it)
 curl -s -X POST $BASE/api/sessions/<id>/interrupt
@@ -132,9 +136,12 @@ then POST it. Confirm briefly ("Done — told it to ship it.").
    current driveable list, treat the pointer as stale and choose from the list.
 2. **Act**: use `/messages?full=1` when answering history/context questions,
    checking what was already decided, or briefing yourself before steering a
-   session. Use `/messages?limit=20` only for a quick live status check. Use
-   `send` to instruct; `interrupt` to stop or redirect; `new`/`close` to manage
-   lifecycle.
+   session. Use `/messages?limit=20` only for a quick live status check. A status
+   check must be read-only: do not `send` "check", "resume", or "status" into a
+   busy session, because that cancels active Claude turns and sidechain Explore
+   agents. Use `send` only when the user is intentionally redirecting the
+   session; use `send` with `"mode":"queue"` for non-urgent follow-ups;
+   use `interrupt` to stop; `new`/`close` to manage lifecycle.
 3. **Confirm** in one line ("Sent. The auth session is running the tests now.").
 4. Update the focus pointer whenever the working session changes.
 
@@ -144,7 +151,8 @@ then POST it. Confirm briefly ("Done — told it to ship it.").
   too — your session runs in the lfg repo cwd and has the orchestrator brief. Never
   `send`/`interrupt`/`close` yourself. If unsure which is you, ask before closing
   anything.
-- `send` is **queued and steers** — it interrupts the running turn and feeds your
-  text as the next instruction. Use `interrupt` alone to just stop.
+- Default `send` is **steering** — it interrupts the running turn and feeds your
+  text as the next instruction. For "when you finish..." instructions, pass
+  `"mode":"queue"`. For status checks, read messages instead of sending.
 - A session with no `tmuxTarget` is a ghost (orphaned transcript) — skip it.
 - Reads are cheap; prefer a quick `/messages` check over guessing.

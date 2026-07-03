@@ -175,6 +175,11 @@ html.lfg-keyboard-open {
     height: 100dvh;
     overflow: hidden;
     -webkit-text-size-adjust: 100%;
+    /* Paint the app background on <html> too, not just <body>. When iOS retracts
+       the toolbar on return-from-background, the visible area momentarily exceeds
+       100dvh and the strip below the html box would otherwise show the browser's
+       white canvas. Backing html with --background makes that gap invisible. */
+    background: var(--background);
   }
   body {
     @apply bg-background text-foreground;
@@ -430,7 +435,10 @@ html.lfg-keyboard-open {
 
   .msg-text.markdown {
     white-space: normal;
-    font-size: 15px;
+    /* Match the composer textarea, which iOS pins to 16px to avoid focus-zoom
+       (see the (pointer: coarse) rule above). Keeping sent messages at 16px too
+       makes the transcript read at the same size the user typed. */
+    font-size: 16px;
     line-height: 1.5;
   }
 

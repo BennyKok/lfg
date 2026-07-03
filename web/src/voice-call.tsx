@@ -195,6 +195,10 @@ export function VoiceCall({
         // own TTS playback from false-triggering barge-in), noise suppression for
         // steady background noise, AGC, and Chrome's stronger neural
         // voiceIsolation when available. Left uncontrolled without this.
+        // NB: livekit-client v2 mutes the mic track on setMicrophoneEnabled(false)
+        // WITHOUT stopping the underlying MediaStreamTrack, so unmute never re-runs
+        // getUserMedia (no repeat permission prompt in an installed PWA). If you
+        // ever bump to a major that reintroduces stop-on-mute, pin it back off.
         const room = new RoomCls({
           adaptiveStream: true,
           audioCaptureDefaults: {
