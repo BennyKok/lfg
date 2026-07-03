@@ -172,7 +172,7 @@ html.lfg-keyboard-open {
   }
   html {
     @apply font-sans antialiased overscroll-none;
-    height: 100dvh;
+    height: var(--lfg-app-height, 100dvh);
     overflow: hidden;
     -webkit-text-size-adjust: 100%;
     /* Paint the app background on <html> too, not just <body>. When iOS retracts
@@ -189,6 +189,25 @@ html.lfg-keyboard-open {
     font-size: 15px;
     line-height: 1.5;
     -webkit-font-smoothing: antialiased;
+  }
+  #root {
+    height: 100%;
+    background: var(--background);
+  }
+
+  /* iOS can expose a 1px browser-canvas strip at the bottom after the app has
+     been idle/backgrounded and its dynamic viewport metrics settle late. Keep a
+     tiny fixed bleed painted in the app background so stale dvh rounding cannot
+     show the white canvas beneath bottom-fixed controls. */
+  body::after {
+    content: "";
+    position: fixed;
+    inset-inline: 0;
+    bottom: -2px;
+    z-index: 2147483647;
+    height: 4px;
+    pointer-events: none;
+    background: var(--background);
   }
 
   /* iOS Safari auto-zooms the viewport whenever a focused text-entry field has a
@@ -213,7 +232,7 @@ html.lfg-keyboard-open {
 @layer components {
   .markdown {
     color: var(--foreground);
-    font-size: 14.5px;
+    font-size: 16px;
     line-height: 1.5;
     word-break: break-word;
   }

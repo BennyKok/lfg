@@ -2563,17 +2563,19 @@ export function App() {
     localStorage.getItem("lfg_user"),
   );
 
-  // Mobile soft keyboard ↔ terminal sizing. iOS Safari (and older Androids)
-  // shrink only the *visual* viewport when the on-screen keyboard opens — the
-  // `100dvh` root and the `interactive-widget=resizes-content` hint don't shrink
-  // the *layout* viewport there, so the app (and the terminal's flex host) stay
-  // full-height behind the keyboard and FitAddon never re-fits the grid. Pin the
-  // root to the visual-viewport height: the flex column collapses, TermView's
-  // `h-full` host shrinks, and the ResizeObserver already watching it re-fits the
-  // terminal into the visible area. A no-op where `dvh` already tracks the
-  // keyboard (Chrome Android), since the two heights then match.
+  // Mobile viewport sizing. iOS can return from the app switcher with stale
+  // `dvh`/fixed-viewport metrics; a pinch zoom fixes it because WebKit is forced
+  // to recalculate the visual viewport. Do that work ourselves: pin the app
+  // shell to `visualViewport.height` whenever the keyboard is not open, and
+  // sample repeatedly for a short settle window after foreground/focus.
   //
-  // Two iOS quirks make the naive "set height = vv.height" leave dead space:
+  // The Terminal tab also needs this while the keyboard is open. iOS Safari (and
+  // older Androids) shrink only the *visual* viewport when the on-screen keyboard
+  // opens, so the terminal's flex host otherwise stays full-height behind the
+  // keyboard and FitAddon never re-fits the grid.
+  //
+  // Two iOS quirks make the naive "set height = vv.height" leave dead space in
+  // the Terminal tab:
   //   • The browser scrolls the *layout* viewport to reveal the focused field,
   //     so `vv.offsetTop` goes positive while the root stays anchored at layout
   //     top — leaving a strip of background below the app. Translate the root
@@ -2582,9 +2584,6 @@ export function App() {
   //     keyboard is open we collapse that padding (see `keyboardOpen`) so the
   //     terminal fills right up to the keyboard instead of floating above a gap.
   //
-  // Scoped to the Terminal tab only. Other pages (Live, Auto, the new-session
-  // sheet) want the default browser behavior — `dvh` plus Vaul's own field
-  // handling — so we leave the root untouched there and clear anything we set.
   useEffect(() => {
     const vv = window.visualViewport;
     const clear = () => {
@@ -2593,15 +2592,14 @@ export function App() {
         el.style.height = "";
         el.style.transform = "";
       }
+      document.documentElement.style.removeProperty("--lfg-app-height");
       // Drop the keyboard-height var + flag so the toast/pill offset falls back
       // to the full orb-stack clearance.
       document.documentElement.classList.remove("lfg-keyboard-open");
       document.documentElement.style.removeProperty("--lfg-keyboard-height");
       setKeyboardOpen(false);
     };
-    // Not the terminal, or no visualViewport (ancient browsers): fall back to
-    // the `h-dvh` class and make sure no stale inline styles linger.
-    if (!vv || tab !== "term") {
+    if (!vv) {
       clear();
       return;
     }
@@ -2612,19 +2610,21 @@ export function App() {
       const kb = Math.max(0, window.innerHeight - vv.height);
       const open = kb > 120;
       const el = rootRef.current;
+      const measuredHeight = `${Math.ceil(vv.height)}px`;
+      document.documentElement.style.setProperty("--lfg-app-height", measuredHeight);
       if (el) {
-        // Pin the root to the visual viewport height at ALL times, keyboard up or
-        // down. `vv.height` is frame-accurate; `h-dvh` is NOT — iOS updates `dvh`
-        // a frame or more *after* the keyboard dismisses (and after toolbar
-        // show/hide), so handing layout back to `dvh` leaves the root momentarily
-        // short → a strip of background shows below the app until the next event
-        // (a button toggle, a send) forces a reflow. Pinning to `vv.height`
-        // sidesteps the lag entirely. The stale-height-on-app-switch-return case
-        // that this used to cause is handled by the foreground re-sync below.
-        el.style.height = `${Math.round(vv.height)}px`;
-        // Only transform when actually offset — a translateY(0) still creates a
-        // containing block that would reparent the `fixed` nav unnecessarily.
-        el.style.transform = vv.offsetTop ? `translateY(${vv.offsetTop}px)` : "";
+        // Outside Terminal, leave keyboard-open layout to the browser/Vaul. When
+        // the keyboard is closed, always override `h-dvh` with the measured
+        // visual viewport so foreground-return stale `dvh` cannot leave a white
+        // strip until the next pinch/zoom/layout event.
+        if (tab === "term" || !open) {
+          el.style.height = measuredHeight;
+        } else {
+          el.style.height = "";
+        }
+        // Only Terminal gets translated for keyboard offset. A translateY(0)
+        // still creates a containing block that would reparent fixed nav chrome.
+        el.style.transform = tab === "term" && vv.offsetTop ? `translateY(${vv.offsetTop}px)` : "";
       }
       // Publish the live keyboard height + a flag on <html> so toasts and the
       // dictation pill (portaled to <body>, outside rootRef) can hike up to sit
@@ -2639,13 +2639,17 @@ export function App() {
     sync();
     vv.addEventListener("resize", sync, { passive: true });
     vv.addEventListener("scroll", sync, { passive: true });
-    // Returning from the app switcher / backgrounding doesn't reliably fire a vv
-    // `resize` on iOS, so a stale pinned height can survive the trip. Re-sync on
-    // any foreground signal; the deferred pass catches the frame where iOS has
-    // finally settled the viewport metrics.
+    // Returning from the app switcher / backgrounding doesn't reliably fire a
+    // visualViewport resize on iOS. Sample across the frames where WebKit settles
+    // its viewport metrics; this mimics the relayout a manual pinch/zoom caused.
     const resync = () => {
       sync();
       requestAnimationFrame(sync);
+      requestAnimationFrame(() => requestAnimationFrame(sync));
+      window.setTimeout(sync, 80);
+      window.setTimeout(sync, 250);
+      window.setTimeout(sync, 750);
+      window.setTimeout(sync, 1500);
     };
     const onVisible = () => {
       if (document.visibilityState === "visible") resync();
@@ -4400,7 +4404,7 @@ function UsageRingsButton({ provider }: { provider: ProviderUsage }) {
             type="button"
             aria-label={`${provider.label} usage`}
             title={`${provider.label} usage`}
-            className="flex shrink-0 items-center justify-center rounded-full p-1 transition active:scale-90"
+            className="flex shrink-0 items-center justify-center rounded-full p-1 pl-4 transition active:scale-90"
           >
             {windows.length ? (
               <UsageRings windows={windows} />
@@ -6352,9 +6356,11 @@ function SessionChat({
                 rows={1}
                 className={cn(
                   "lfg-gfield min-w-0 resize-none overflow-y-auto rounded-2xl border-transparent px-4 py-3 pr-10 text-base leading-5 shadow-sm placeholder:text-muted-foreground md:rounded-[1.125rem] md:px-3.5 md:py-2 md:text-sm",
-                  // Morph the field height smoothly (voice expand + auto-grow) and
-                  // keep an explicit cap in both states so it never runs away.
-                  "transition-[min-height,max-height,background-color,border-color,box-shadow] duration-300 ease-ios",
+                  // Keep the dictation height snap-to-state instead of animating
+                  // min/max-height. iOS can expose a 1px viewport/compositor gap
+                  // at the bottom of the full-height sheet while this bottom
+                  // composer is resizing through fractional layout frames.
+                  "transition-[background-color,border-color,box-shadow] duration-300 ease-ios",
                   dictating
                     ? "min-h-24 max-h-44 md:min-h-20 md:max-h-40"
                     : "min-h-11 max-h-28 md:min-h-9",
@@ -7502,14 +7508,14 @@ const SessionCard = memo(function SessionCard({
     window.dispatchEvent(new Event("lfg-collapse-change"));
   }, [collapseKey, collapsed]);
 
-  // Auto-expand a card the moment its session stops working (busy true → false),
-  // so a finished turn surfaces itself. Pairs with the auto-collapse on send
-  // below: collapse while it churns, pop back open when it's done.
+  // Auto-expand a desktop card the moment its session stops working (busy true →
+  // false), so a finished turn surfaces itself. Mobile keeps the card collapsed
+  // after sending so the live list doesn't jump open.
   const wasBusy = useRef(busy);
   useEffect(() => {
-    if (wasBusy.current && !busy) setCollapsed(false);
+    if (!isMobile && wasBusy.current && !busy) setCollapsed(false);
     wasBusy.current = busy;
-  }, [busy]);
+  }, [busy, isMobile]);
 
   const setTransform = (pxX: number, pxY: number) => {
     const el = sectionRef.current;
@@ -7884,7 +7890,10 @@ const onTouchStart = (e: ReactTouchEvent) => {
           onError={setError}
           onOptimisticMessage={onOptimisticMessage}
           onRefresh={onRefresh}
-          onCollapse={() => setCollapsed(true)}
+          onCollapse={() => {
+            setCollapsed(true);
+            if (sid) markCollapsedSid(sid);
+          }}
           onDictatingChange={setDictating}
         />
       )}
@@ -8201,7 +8210,14 @@ function MessageBubble({
         // text stays steady while the send is in flight.
         <MessageContent
           className={cn(
-            "msg-text markdown user-bubble w-fit max-w-[85%]",
+            // MessageContent's own base classes include text-sm; since it and
+            // .msg-text.markdown's font-size both land on this same element,
+            // Tailwind's utilities layer beats our @layer components rule
+            // regardless of selector specificity, so text-sm silently won and
+            // sent bubbles rendered a size smaller than assistant replies.
+            // text-base is also a utility, so it cleanly out-conflicts text-sm
+            // via the same layer instead of fighting it on specificity.
+            "msg-text markdown user-bubble text-base w-fit max-w-[85%]",
             message.pending && "is-pending",
           )}
           dangerouslySetInnerHTML={{ __html: message.html || escapeHtml(message.text || "") }}
@@ -9114,9 +9130,9 @@ function NewSessionDialog({
     if (launchUser) localStorage.setItem("lfg_user", launchUser);
     // Close only the drawer flow. The inline home composer is the fast-entry
     // path: keep it open and focused so the next session can be typed while this
-    // one boots in the background.
+    // one boots in the background. Do not auto-expand it on submit; the fixed
+    // bottom bar can expose the browser canvas while its height/position changes.
     if (variant === "inline") {
-      onExpandedChange?.(true);
       requestAnimationFrame(() => fieldRef.current?.querySelector("textarea")?.focus());
     } else {
       onClose();
@@ -9319,7 +9335,7 @@ function NewSessionDialog({
           </button>
         }
       />
-      <DropdownMenuContent side="top" align="start" sideOffset={8} alignOffset={-12} className="w-max max-w-[calc(100vw-1rem)] py-2 pr-4 pl-12">
+      <DropdownMenuContent side="top" align="start" sideOffset={8} alignOffset={-12} className="w-max max-w-[calc(100vw-1rem)] py-2 pr-4 pl-2">
         {controlsInner}
       </DropdownMenuContent>
     </DropdownMenu>
@@ -9556,14 +9572,13 @@ function NewSessionDialog({
   // Mobile home screen: anchor the shared composer inline at the bottom of the
   // viewport. `interactive-widget=resizes-content` shrinks the layout viewport
   // when the soft keyboard opens, so `bottom-0` rides just above the keyboard.
+  // Keep the fixed shell pinned in place during background launches; translating
+  // it briefly reveals the browser canvas as a white strip at the bottom on iOS.
   if (variant === "inline") {
     return (
       <div
         aria-busy={launching}
-        className={cn(
-          "pointer-events-auto fixed inset-x-0 bottom-0 z-[55] overflow-x-clip bg-background/95 pt-4 shadow-[0_-8px_24px_rgba(0,0,0,0.12)] backdrop-blur-xl",
-          launching && "lfg-composer-launching",
-        )}
+        className="pointer-events-auto fixed inset-x-0 bottom-0 z-[55] overflow-x-clip bg-background/95 pt-4 shadow-[0_-8px_24px_rgba(0,0,0,0.12)] backdrop-blur-xl"
       >
         <div ref={inlineShellRef} className="mx-auto max-w-lg will-change-transform">
           {formBody}
