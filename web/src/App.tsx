@@ -8909,7 +8909,9 @@ function NewSessionDialog({
   useEffect(() => {
     if (!open || !resumeOpen || resumable) return;
     api<{ sessions: ResumableSession[] }>("/api/sessions/resumable?limit=20")
-      .then((r) => setResumable(r.sessions))
+      // A 200 with an empty/odd body (seen on mobile Safari) parses to {} so
+      // r.sessions is undefined — never store that, or the picker below crashes.
+      .then((r) => setResumable(Array.isArray(r.sessions) ? r.sessions : []))
       .catch(() => setResumable([]));
   }, [open, resumeOpen, resumable]);
 
@@ -9642,7 +9644,7 @@ function ResumeSessionSheet({
         style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 0.5rem)" }}
       >
         <div className="mx-auto max-w-lg">
-          {sessions === null ? (
+          {sessions == null ? (
             <div className="animate-pulse space-y-1" aria-hidden>
               {Array.from({ length: 7 }).map((_, i) => (
                 <div key={i} className="flex items-center gap-3 px-3 py-3">
