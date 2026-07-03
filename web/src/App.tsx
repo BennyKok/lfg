@@ -6039,7 +6039,6 @@ function SessionChat({
   onError,
   onOptimisticMessage,
   onRefresh,
-  onCollapse,
   onDictatingChange,
 }: {
   session: Session;
@@ -6053,7 +6052,6 @@ function SessionChat({
   onError: (error: string | null) => void;
   onOptimisticMessage: (sid: string, text: string) => void;
   onRefresh: () => Promise<void>;
-  onCollapse?: () => void;
   onDictatingChange?: (recording: boolean) => void;
 }) {
   const sid = session.sessionId;
@@ -6062,22 +6060,11 @@ function SessionChat({
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [draggingFiles, setDraggingFiles] = useState(false);
   const [annotatingId, setAnnotatingId] = useState<string | null>(null);
-  // True while voice dictation is recording into this composer — morphs the
-  // field taller so the growing transcript has room. Also bubbled to the parent.
-  const [dictating, setDictating] = useState(false);
   // Brief one-shot "launch" pulse on the composer as a message is sent, so the
   // send reads as the turn springing out of the input into the transcript.
   const [launching, setLaunching] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const previewUrls = useRef<string[]>([]);
-
-  const handleDictatingChange = useCallback(
-    (recording: boolean) => {
-      setDictating(recording);
-      onDictatingChange?.(recording);
-    },
-    [onDictatingChange],
-  );
 
   useEffect(() => {
     return () => {
@@ -6168,7 +6155,6 @@ function SessionChat({
       // Pulse the composer so the send visibly launches into the transcript.
       setLaunching(true);
       window.setTimeout(() => setLaunching(false), 480);
-      onCollapse?.(); // tuck the card away while it works (auto-expands when done)
       await api(`/api/sessions/${sid}/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -6355,37 +6341,9 @@ function SessionChat({
                 disabled={sending}
                 rows={1}
                 className={cn(
-                  "lfg-gfield min-w-0 resize-none overflow-y-auto rounded-2xl border-transparent px-4 py-3 pr-10 text-base leading-5 shadow-sm placeholder:text-muted-foreground md:rounded-[1.125rem] md:px-3.5 md:py-2 md:text-sm",
-                  // Keep the dictation height snap-to-state instead of animating
-                  // min/max-height. iOS can expose a 1px viewport/compositor gap
-                  // at the bottom of the full-height sheet while this bottom
-                  // composer is resizing through fractional layout frames.
-                  "transition-[background-color,border-color,box-shadow] duration-300 ease-ios",
-                  dictating
-                    ? "min-h-24 max-h-44 md:min-h-20 md:max-h-40"
-                    : "min-h-11 max-h-28 md:min-h-9",
+                  "lfg-gfield h-11 min-h-11 max-h-11 min-w-0 resize-none overflow-y-auto rounded-2xl border-transparent px-4 py-3 text-base leading-5 shadow-sm transition-[background-color,border-color,box-shadow] duration-300 ease-ios placeholder:text-muted-foreground [field-sizing:fixed] md:h-9 md:min-h-9 md:max-h-9 md:rounded-[1.125rem] md:px-3.5 md:py-2 md:text-sm",
                 )}
               />
-              <div className="absolute bottom-1.5 right-1 block md:bottom-0.5">
-                <MicButton
-                  minimal
-                  className="size-8"
-                  silenceMs={2500}
-                  baseText={messageText}
-                  onRecordingChange={handleDictatingChange}
-                  onText={(text, base) =>
-                    setMessageText(base.trim() ? `${base.trimEnd()} ${text}` : text)
-                  }
-                  onInterim={(text, base) =>
-                    setMessageText(base.trim() ? `${base.trimEnd()} ${text}` : text)
-                  }
-                  onAutoSubmit={(text, base) => {
-                    const combined = base.trim() ? `${base.trimEnd()} ${text}` : text;
-                    void sendMessage(undefined, combined);
-                  }}
-                  onCancel={(base) => setMessageText(base)}
-                />
-              </div>
             </div>
             {busy && canDriveSession(session) ? (
               <Button
@@ -6408,7 +6366,7 @@ function SessionChat({
               baseText={messageText}
               onSend={() => void sendMessage()}
               onQueue={() => void sendMessage(undefined, undefined, "queue")}
-              onRecordingChange={handleDictatingChange}
+              onRecordingChange={onDictatingChange}
               onText={(text, base) =>
                 setMessageText(base.trim() ? `${base.trimEnd()} ${text}` : text)
               }
@@ -7508,15 +7466,6 @@ const SessionCard = memo(function SessionCard({
     window.dispatchEvent(new Event("lfg-collapse-change"));
   }, [collapseKey, collapsed]);
 
-  // Auto-expand a desktop card the moment its session stops working (busy true →
-  // false), so a finished turn surfaces itself. Mobile keeps the card collapsed
-  // after sending so the live list doesn't jump open.
-  const wasBusy = useRef(busy);
-  useEffect(() => {
-    if (!isMobile && wasBusy.current && !busy) setCollapsed(false);
-    wasBusy.current = busy;
-  }, [busy, isMobile]);
-
   const setTransform = (pxX: number, pxY: number) => {
     const el = sectionRef.current;
     if (!el) return;
@@ -7890,10 +7839,6 @@ const onTouchStart = (e: ReactTouchEvent) => {
           onError={setError}
           onOptimisticMessage={onOptimisticMessage}
           onRefresh={onRefresh}
-          onCollapse={() => {
-            setCollapsed(true);
-            if (sid) markCollapsedSid(sid);
-          }}
           onDictatingChange={setDictating}
         />
       )}
