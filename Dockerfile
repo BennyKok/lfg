@@ -25,10 +25,11 @@ RUN set -eux; \
   fi; \
   curl -fSL "$url" -o /tmp/lfg-bundle.tar.gz; \
   if curl -fsSL "$url.sha256" -o /tmp/lfg-bundle.tar.gz.sha256; then \
-    cd /tmp && sha256sum -c lfg-bundle.tar.gz.sha256; \
+    (cd /tmp && sha256sum -c lfg-bundle.tar.gz.sha256); \
   fi; \
   tar -xzf /tmp/lfg-bundle.tar.gz -C /app --strip-components=1; \
   rm -f /tmp/lfg-bundle.tar.gz /tmp/lfg-bundle.tar.gz.sha256; \
+  cd /app; \
   bun install --production; \
   mkdir -p /data/repos /data/lfg; \
   rm -rf /app/data; \
