@@ -56,6 +56,10 @@ export type Session = {
   lastUserText: string | null;
   sessionId: string | null;
   nativeSessionId?: string | null;
+  parentSessionId?: string | null;
+  parentNativeSessionId?: string | null;
+  parentAgent?: string | null;
+  spawnedBy?: string | null;
   launching?: boolean;
   startedAt: number | null;
   transcriptPath: string | null;
@@ -213,6 +217,10 @@ function managedLaunchRow(
     lastUserText: m.title ?? null,
     sessionId,
     nativeSessionId: m.nativeSessionId ?? null,
+    parentSessionId: m.parentSessionId ?? null,
+    parentNativeSessionId: m.parentNativeSessionId ?? null,
+    parentAgent: m.parentAgent ?? null,
+    spawnedBy: m.spawnedBy ?? null,
     launching: m.launchState === "launching",
     startedAt: m.createdAt,
     transcriptPath: null,
@@ -227,6 +235,18 @@ function managedLaunchRow(
         ? model
         : modelAlias(model),
     ...computeStatus(null, null),
+  };
+}
+
+function managedLineage(m: ManagedSession | undefined): Pick<
+  Session,
+  "parentSessionId" | "parentNativeSessionId" | "parentAgent" | "spawnedBy"
+> {
+  return {
+    parentSessionId: m?.parentSessionId ?? null,
+    parentNativeSessionId: m?.parentNativeSessionId ?? null,
+    parentAgent: m?.parentAgent ?? null,
+    spawnedBy: m?.spawnedBy ?? null,
   };
 }
 
@@ -1240,6 +1260,7 @@ export async function listSessions(): Promise<Session[]> {
       lastUserText: lastUser,
       sessionId: visibleSessionId,
       nativeSessionId: sessionId,
+      ...managedLineage(managedRec),
       launching: managedRec?.launchState === "launching" && !sessionId,
       startedAt: e.startedAt,
       transcriptPath,
@@ -1345,6 +1366,7 @@ export async function listSessions(): Promise<Session[]> {
       lastUserText: lastUser,
       sessionId: visibleSessionId,
       nativeSessionId: sessionId,
+      ...managedLineage(managedRec),
       launching: managedRec?.launchState === "launching" && !sessionId,
       startedAt,
       transcriptPath,
@@ -1417,6 +1439,7 @@ export async function listSessions(): Promise<Session[]> {
       lastUserText: lastUser,
       sessionId,
       nativeSessionId: grokSessionId,
+      ...managedLineage(managedRec),
       launching: managedRec?.launchState === "launching" && !transcriptPath,
       startedAt,
       transcriptPath,
@@ -1448,6 +1471,7 @@ export async function listSessions(): Promise<Session[]> {
       lastUserText: null,
       sessionId: m.sessionId!,
       nativeSessionId: m.nativeSessionId ?? null,
+      ...managedLineage(m),
       launching: m.launchState === "launching",
       startedAt: m.createdAt,
       transcriptPath: null,
@@ -1479,6 +1503,7 @@ export async function listSessions(): Promise<Session[]> {
       lastUserText: m.title ?? null,
       sessionId: m.sessionId!,
       nativeSessionId: m.nativeSessionId ?? null,
+      ...managedLineage(m),
       launching: m.launchState === "launching",
       startedAt: m.createdAt,
       transcriptPath: null,
@@ -1563,6 +1588,7 @@ export async function listSessions(): Promise<Session[]> {
       lastUserText: lastUser,
       sessionId,
       nativeSessionId,
+      ...managedLineage(managedRec),
       launching: managedRec?.launchState === "launching" && !transcriptPath,
       startedAt,
       transcriptPath,

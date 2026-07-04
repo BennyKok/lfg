@@ -1,4 +1,4 @@
-import { Component, forwardRef, memo, Suspense, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Component, type ComponentProps, forwardRef, memo, Suspense, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   DEFAULT_SCHED_TZ,
@@ -25,7 +25,9 @@ import type {
   Dispatch,
   ErrorInfo,
   FormEvent,
+  KeyboardEvent as ReactKeyboardEvent,
   MutableRefObject,
+  Ref,
   ReactNode,
   SetStateAction,
   TouchEvent as ReactTouchEvent,
@@ -190,6 +192,7 @@ type Session = {
   title?: string | null;
   lastUserText?: string | null;
   sessionId: string | null;
+  nativeSessionId?: string | null;
   startedAt?: number | null;
   lastActivityAt?: number | null;
   last?: { role?: string; kind?: string; text?: string; ts?: number };
@@ -198,6 +201,10 @@ type Session = {
   managed?: boolean;
   assignedUser?: string | null;
   model?: string | null;
+  parentSessionId?: string | null;
+  parentNativeSessionId?: string | null;
+  parentAgent?: string | null;
+  spawnedBy?: string | null;
   // Build health (from the backend). "blocked" means the session can't make
   // progress until a human acts; statusReason/statusDetail explain why.
   status?: "ok" | "blocked";
@@ -363,6 +370,88 @@ type ComposerAttachment = {
   error?: string;
 };
 
+type SkillCatalogItem = {
+  name: string;
+  trigger: string;
+  description: string;
+  keywords?: string;
+  source: "codex" | "claude" | "agent";
+  path: string;
+};
+
+type AgentBrowserTree = {
+  models: Array<{
+    key: AgentKind;
+    label: string;
+    defaultModel: string;
+    models: string[];
+    thinkingLevels: string[];
+    session: boolean;
+    auto: boolean;
+    visible?: boolean;
+    configured?: boolean;
+  }>;
+  skills: SkillCatalogItem[];
+  insightAgents: Array<{
+    name: string;
+    title: string;
+    enabled: boolean;
+    inputs: string[];
+    skills: string[];
+    path: string;
+  }>;
+  autoAgents: Array<{
+    id: string;
+    name: string;
+    enabled: boolean;
+    backend: AutoAgentBackend;
+    model?: string;
+    schedule: string;
+    cwd?: string;
+    skills: string[];
+    lastRunAt?: number;
+  }>;
+  runtimeSessions: Array<{
+    sessionId: string;
+    nativeSessionId?: string | null;
+    title: string;
+    agent: string;
+    model?: string | null;
+    project: string;
+    parentSessionId?: string | null;
+    parentNativeSessionId?: string | null;
+    parentAgent?: string | null;
+    spawnedBy?: string | null;
+    busy?: boolean;
+  }>;
+  groups: {
+    providers: Array<{
+      key: AgentKind;
+      label: string;
+      defaultModel: string;
+      models: string[];
+      autoAgents: string[];
+      insightAgents: string[];
+    }>;
+    skills: Array<{
+      trigger: string;
+      source: string;
+      autoAgents: string[];
+      insightAgents: string[];
+    }>;
+    runtimeParents: Array<{
+      parentSessionId: string;
+      children: string[];
+    }>;
+  };
+};
+
+type SlashSkillState = {
+  start: number;
+  end: number;
+  query: string;
+};
+
 const CLAUDE_MODELS = ["sonnet", "opus", "haiku", "fable"];
 const CODEX_MODELS = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"];
 // Models the one-shot AI-SDK test option supports (the provider maps these
@@ -490,6 +579,47 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(data?.error || `${res.status} ${res.statusText}`);
   }
   return data as T;
+}
+
+let skillCatalogPromise: Promise<SkillCatalogItem[]> | null = null;
+let skillCatalogLoadedAt = 0;
+let skillCatalogSnapshot: SkillCatalogItem[] = [];
+const SKILL_CATALOG_TTL_MS = 30_000;
+
+function loadSkillCatalog(): Promise<SkillCatalogItem[]> {
+  const now = Date.now();
+  if (skillCatalogSnapshot.length && now - skillCatalogLoadedAt < SKILL_CATALOG_TTL_MS) {
+    return Promise.resolve(skillCatalogSnapshot);
+  }
+  if (!skillCatalogPromise) {
+    skillCatalogPromise = api<{ skills: SkillCatalogItem[] }>("/api/skills")
+      .then((r) => {
+        const skills = Array.isArray(r.skills) ? r.skills : [];
+        skillCatalogSnapshot = skills;
+        skillCatalogLoadedAt = Date.now();
+        return skills;
+      })
+      .catch((err) => {
+        skillCatalogPromise = null;
+        throw err;
+      })
+      .finally(() => {
+        skillCatalogPromise = null;
+      });
+  }
+  return skillCatalogPromise;
+}
+
+function slashSkillAt(value: string, cursor: number | null | undefined): SlashSkillState | null {
+  if (cursor == null) return null;
+  const before = value.slice(0, cursor);
+  const match = before.match(/(^|\s)\/([A-Za-z0-9_:-]{0,80})$/);
+  if (!match) return null;
+  return {
+    start: cursor - match[2].length - 1,
+    end: cursor,
+    query: match[2].toLowerCase(),
+  };
 }
 
 function evlog(event: string, fields: Record<string, unknown> = {}) {
@@ -683,6 +813,17 @@ function escapeHtml(value: string) {
 
 function normText(value?: string) {
   return (value || "").replace(/\s+/g, " ").trim();
+}
+
+function messageNeedle(value?: string) {
+  return normText(value).slice(0, 48);
+}
+
+function sameMessageNeedle(a?: string, b?: string) {
+  const an = messageNeedle(a);
+  const bn = messageNeedle(b);
+  if (!an || !bn) return false;
+  return an.includes(bn) || bn.includes(an);
 }
 
 function seedMessageForSession(session: Session): Message | null {
@@ -2157,11 +2298,7 @@ function useLiveSessionStream(sessions: Session[], streamIds: string[]) {
         } else {
           const realUser = message.role === "user" && message.kind === "text";
           next = realUser
-            ? current.filter((item) => {
-                if (!item.pending) return true;
-                const needle = normText(message.text).slice(0, 48);
-                return !needle || !needle.includes(normText(item.text).slice(0, 48));
-              })
+            ? current.filter((item) => !item.pending || !sameMessageNeedle(message.text, item.text))
             : current.filter((item) => {
                 if (item.kind === "thinking") return false;
                 if (message.role === "assistant" && message.kind === "text" && isDraftAssistantMessage(item)) {
@@ -2280,11 +2417,11 @@ function useLiveSessionStream(sessions: Session[], streamIds: string[]) {
         const current = prev[sid] ?? [];
         const pending = current.filter((item) => {
           if (!item.pending) return false;
-          const pendingNeedle = normText(item.text).slice(0, 48);
+          const pendingNeedle = messageNeedle(item.text);
           if (!pendingNeedle) return true;
           return !messages.some((message) => {
             if (message.role !== "user" || message.kind !== "text") return false;
-            return normText(message.text).slice(0, 48).includes(pendingNeedle);
+            return sameMessageNeedle(message.text, pendingNeedle);
           });
         });
         return { ...prev, [sid]: [...messages, ...pending].slice(-80) };
@@ -2396,6 +2533,109 @@ function useLiveSessionStream(sessions: Session[], streamIds: string[]) {
     }));
   }, []);
 
+  const removeOptimisticMessage = useCallback((sid: string, text: string) => {
+    setMessagesBySid((prev) => {
+      const current = prev[sid] ?? [];
+      const next = current.filter((item) => !item.pending || !sameMessageNeedle(item.text, text));
+      return next.length === current.length ? prev : { ...prev, [sid]: next };
+    });
+  }, []);
+
+  const refreshMessagesForSid = useCallback(async (
+    sid: string,
+    text?: string,
+    opts: { dropOptimistic?: boolean } = {},
+  ) => {
+    const page = await api<{ messages: Message[] }>(
+      `/api/sessions/${encodeURIComponent(sid)}/messages?limit=80`,
+    );
+    const messages = collapseThinkingRuns(Array.isArray(page.messages) ? page.messages : []);
+    const seen = seenRef.current[sid] || (seenRef.current[sid] = new Set());
+    for (const message of messages) {
+      if (message.id && message.kind !== "thinking") seen.add(message.id);
+    }
+    if (seen.size > 800) {
+      seenRef.current[sid] = new Set(Array.from(seen).slice(-400));
+    }
+    setLoadingBySid((prev) => ({ ...prev, [sid]: false }));
+    setMessagesBySid((prev) => {
+      const current = prev[sid] ?? [];
+      const pending = current.filter((item) => {
+        if (!item.pending) return false;
+        if (opts.dropOptimistic && text && sameMessageNeedle(item.text, text)) return false;
+        return !messages.some((message) => {
+          if (message.role !== "user" || message.kind !== "text") return false;
+          return sameMessageNeedle(message.text, item.text);
+        });
+      });
+      return { ...prev, [sid]: [...messages, ...pending].slice(-80) };
+    });
+    return messages;
+  }, []);
+
+  const trackSendStatus = useCallback(
+    (sid: string, text: string, initial?: QueueMsg | null) => {
+      if (initial) {
+        setQueuesBySid((prev) => {
+          const current = prev[sid] ?? [];
+          const existing = current.find((item) => item.id === initial.id);
+          const next = existing
+            ? current.map((item) => (item.id === initial.id ? { ...item, ...initial } : item))
+            : [...current, initial];
+          return { ...prev, [sid]: next };
+        });
+      }
+      void (async () => {
+        const targetId = initial?.id;
+        for (let attempt = 0; attempt < 45; attempt++) {
+          if (attempt > 0) {
+            await new Promise((resolve) => window.setTimeout(resolve, attempt < 8 ? 500 : 1200));
+          }
+          try {
+            const page = attempt === 0 || attempt % 3 === 0
+              ? await refreshMessagesForSid(sid, text)
+              : null;
+            if (
+              page?.some(
+                (message) =>
+                  message.role === "user" &&
+                  message.kind === "text" &&
+                  sameMessageNeedle(message.text, text),
+              )
+            ) {
+              removeOptimisticMessage(sid, text);
+              return;
+            }
+
+            const res = await api<{ queue: QueueMsg[] }>(
+              `/api/sessions/${encodeURIComponent(sid)}/queue`,
+            );
+            const queue = Array.isArray(res.queue) ? res.queue : [];
+            setQueuesBySid((prev) => ({ ...prev, [sid]: queue }));
+            const item =
+              (targetId ? queue.find((candidate) => candidate.id === targetId) : null) ??
+              queue.find((candidate) => sameMessageNeedle(candidate.text, text));
+            if (!item) {
+              await refreshMessagesForSid(sid, text, { dropOptimistic: true }).catch(() => null);
+              removeOptimisticMessage(sid, text);
+              return;
+            }
+            if (item.status === "delivered" || item.status === "queued") {
+              await refreshMessagesForSid(sid, text, { dropOptimistic: true }).catch(() => null);
+              removeOptimisticMessage(sid, text);
+              return;
+            }
+            if (item.status === "failed") return;
+          } catch {
+            // Keep polling through transient stream/API restarts; EventSource does
+            // the same, and a later attempt can still reconcile the bubble.
+          }
+        }
+      })();
+    },
+    [refreshMessagesForSid, removeOptimisticMessage],
+  );
+
   const loadOlderMessages = useCallback<LoadOlderMessages>(async (sid) => {
     if (!(sid in nextBeforeRef.current)) return true;
     const before = nextBeforeRef.current[sid];
@@ -2441,6 +2681,8 @@ function useLiveSessionStream(sessions: Session[], streamIds: string[]) {
     queuesBySid,
     loadingBySid,
     addOptimisticMessage,
+    removeOptimisticMessage,
+    trackSendStatus,
     loadOlderMessages,
   };
 }
@@ -3761,6 +4003,8 @@ export function App() {
             loadingBySid={liveStream.loadingBySid}
             onLoadOlderMessages={liveStream.loadOlderMessages}
             onOptimisticMessage={liveStream.addOptimisticMessage}
+            onRemoveOptimisticMessage={liveStream.removeOptimisticMessage}
+            onTrackSendStatus={liveStream.trackSendStatus}
             onRefresh={refreshSessions}
             onRemove={removeSession}
             onBrain={sendSessionToBrain}
@@ -3809,6 +4053,12 @@ export function App() {
             onSetup={setupCodingAgent}
             onRefresh={() => void refreshCodingAgents()}
           />
+        ) : tab === "agent-browser" ? (
+          <AgentBrowserPage
+            repos={repos}
+            scopedProject={projectFilter}
+            onAutoAgentsChanged={refreshAuto}
+          />
         ) : tab === "changelog" ? (
           <ChangelogPage />
         ) : tab === "term" ? (
@@ -3829,6 +4079,7 @@ export function App() {
             onOpenTerminal={() => setTab("term")}
             onOpenBrowser={() => setTab("browser")}
             onOpenCodingAgents={() => setTab("coding-agents")}
+            onOpenAgentBrowser={() => setTab("agent-browser")}
             onOpenAuto={() => setTab("auto")}
             onOpenBrain={() => setTab("brain")}
             brainConfig={brainConfig}
@@ -3952,6 +4203,8 @@ export function App() {
 
       <FloatingSessionAudio
         onOptimisticMessage={liveStream.addOptimisticMessage}
+        onRemoveOptimisticMessage={liveStream.removeOptimisticMessage}
+        onTrackSendStatus={liveStream.trackSendStatus}
         onRefresh={refreshSessions}
       />
 
@@ -3963,9 +4216,13 @@ export function App() {
 
 function FloatingSessionAudio({
   onOptimisticMessage,
+  onRemoveOptimisticMessage,
+  onTrackSendStatus,
   onRefresh,
 }: {
   onOptimisticMessage: (sid: string, text: string) => void;
+  onRemoveOptimisticMessage: (sid: string, text: string) => void;
+  onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
   onRefresh: () => Promise<void>;
 }) {
   const playback = useSpeechPlayback();
@@ -3986,13 +4243,15 @@ function FloatingSessionAudio({
       setSending(true);
       try {
         onOptimisticMessage(sid, t);
-        await api(`/api/sessions/${sid}/send`, {
+        const sent = await api<{ msg?: QueueMsg }>(`/api/sessions/${sid}/send`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: t }),
         });
+        onTrackSendStatus(sid, t, sent.msg ?? null);
         await onRefresh();
       } catch (e) {
+        onRemoveOptimisticMessage(sid, t);
         toast.error("Could not send voice message", {
           description: e instanceof Error ? e.message : String(e),
         });
@@ -4000,7 +4259,7 @@ function FloatingSessionAudio({
         setSending(false);
       }
     },
-    [sid, sending, onOptimisticMessage, onRefresh],
+    [sid, sending, onOptimisticMessage, onRefresh, onRemoveOptimisticMessage, onTrackSendStatus],
   );
 
   const dictation = useDictation({
@@ -4394,7 +4653,13 @@ function UsageRings({
 // The composer's usage indicator: compact rings that expand into an animated
 // popover breaking down each limit window (label, %, reset time). Works for any
 // provider that reports windows; falls back to the provider note otherwise.
-function UsageRingsButton({ provider }: { provider: ProviderUsage }) {
+function UsageRingsButton({
+  provider,
+  className,
+}: {
+  provider: ProviderUsage;
+  className?: string;
+}) {
   const windows = provider.windows ?? [];
   return (
     <DropdownMenu>
@@ -4404,7 +4669,10 @@ function UsageRingsButton({ provider }: { provider: ProviderUsage }) {
             type="button"
             aria-label={`${provider.label} usage`}
             title={`${provider.label} usage`}
-            className="flex shrink-0 items-center justify-center rounded-full p-1 pl-4 transition active:scale-90"
+            className={cn(
+              "flex shrink-0 items-center justify-center rounded-full p-1 pl-4 transition active:scale-90",
+              className,
+            )}
           >
             {windows.length ? (
               <UsageRings windows={windows} />
@@ -4756,6 +5024,70 @@ function useStableBusy(busyBySid: Record<string, boolean>, delay = 2500) {
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_QUEUE: QueueMsg[] = [];
 
+type SessionTreeNode = {
+  session: Session;
+  children: SessionTreeNode[];
+};
+
+function sessionStableId(session: Session): string {
+  return session.sessionId || session.nativeSessionId || session.tmuxName || "";
+}
+
+function buildSessionTree(
+  sessions: Session[],
+  busyOrFresh: (session: Session) => boolean,
+): {
+  roots: SessionTreeNode[];
+  effectiveBusy: (node: SessionTreeNode) => boolean;
+  flatten: (nodes: SessionTreeNode[]) => Session[];
+  nodeForSessionId: (sessionId: string) => SessionTreeNode | null;
+  rootForSessionId: (sessionId: string) => SessionTreeNode | null;
+} {
+  const nodeById = new Map<string, SessionTreeNode>();
+  const keyToId = new Map<string, string>();
+  for (const session of sessions) {
+    const id = sessionStableId(session);
+    if (!id) continue;
+    const node = { session, children: [] };
+    nodeById.set(id, node);
+    if (session.sessionId) keyToId.set(session.sessionId, id);
+    if (session.nativeSessionId) keyToId.set(session.nativeSessionId, id);
+  }
+  const childIds = new Set<string>();
+  for (const [id, node] of nodeById) {
+    const parentKey = node.session.parentSessionId || node.session.parentNativeSessionId;
+    const parentId = parentKey ? keyToId.get(parentKey) : undefined;
+    if (!parentId || parentId === id) continue;
+    const parent = nodeById.get(parentId);
+    if (!parent) continue;
+    parent.children.push(node);
+    childIds.add(id);
+  }
+  const roots = sessions
+    .map((session) => sessionStableId(session))
+    .filter((id) => id && nodeById.has(id) && !childIds.has(id))
+    .map((id) => nodeById.get(id)!)
+    .filter((node, idx, arr) => arr.indexOf(node) === idx);
+  const rootById = new Map<string, SessionTreeNode>();
+  const visit = (node: SessionTreeNode, root: SessionTreeNode) => {
+    const id = sessionStableId(node.session);
+    if (id) rootById.set(id, root);
+    if (node.session.sessionId) rootById.set(node.session.sessionId, root);
+    if (node.session.nativeSessionId) rootById.set(node.session.nativeSessionId, root);
+    for (const child of node.children) visit(child, root);
+  };
+  for (const root of roots) visit(root, root);
+  const effectiveBusy = (node: SessionTreeNode): boolean =>
+    busyOrFresh(node.session) || node.children.some(effectiveBusy);
+  const flatten = (nodes: SessionTreeNode[]): Session[] =>
+    nodes.flatMap((node) => [node.session, ...flatten(node.children)]);
+  const nodeForSessionId = (sessionId: string): SessionTreeNode | null =>
+    nodeById.get(keyToId.get(sessionId) ?? sessionId) ?? null;
+  const rootForSessionId = (sessionId: string): SessionTreeNode | null =>
+    rootById.get(sessionId) ?? null;
+  return { roots, effectiveBusy, flatten, nodeForSessionId, rootForSessionId };
+}
+
 function LiveView({
   // Defense-in-depth: `sessions`/`findings`/`autoAgents` are read via `.length`
   // unconditionally below (the original `findings.length` crash site). The fetch
@@ -4772,6 +5104,8 @@ function LiveView({
   loadingBySid,
   onLoadOlderMessages,
   onOptimisticMessage,
+  onRemoveOptimisticMessage,
+  onTrackSendStatus,
   onRefresh,
   onRemove,
   onBrain,
@@ -4791,6 +5125,8 @@ function LiveView({
   loadingBySid: Record<string, boolean>;
   onLoadOlderMessages: LoadOlderMessages;
   onOptimisticMessage: (sid: string, text: string) => void;
+  onRemoveOptimisticMessage: (sid: string, text: string) => void;
+  onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
   onBrain: (sid: string) => Promise<void>;
@@ -4804,6 +5140,20 @@ function LiveView({
   // so it can switch which session it shows without unmounting. `origin` anchors
   // the open/close morph to the title the user tapped.
   const [sheet, setSheet] = useState<{ sid: string; origin: DOMRect } | null>(null);
+
+  const ownBusyOrFresh = (session: Session) =>
+    !!busyBySid[session.sessionId ?? ""] || recentlyCreatedSids.has(session.sessionId ?? "");
+  const tree = useMemo(
+    () => buildSessionTree(sessions, ownBusyOrFresh),
+    // busyBySid changes frequently; include it so a parent follows a working child.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [sessions, busyBySid],
+  );
+
+  // Empty state. Placed AFTER all hooks (useIsWide/useState/useMemo above) so the
+  // hook order stays identical whether or not sessions/findings are present —
+  // returning earlier made `useMemo` conditional and tripped React error #310
+  // ("rendered fewer hooks than expected") when the live list emptied out.
   if (!sessions.length && !findings.length) {
     return (
       <div className="flex min-h-[60dvh] flex-col items-center justify-center">
@@ -4828,15 +5178,13 @@ function LiveView({
     );
   }
 
-  // Reorder into two categories — working agents on top, idle below — while
-  // preserving the stable start-time order within each group (sessions arrives
-  // pre-sorted). A card moves between groups the moment its busy state flips.
-  const working = sessions.filter(
-    (session) => !!busyBySid[session.sessionId ?? ""] || recentlyCreatedSids.has(session.sessionId ?? ""),
-  );
-  const idle = sessions.filter(
-    (session) => !busyBySid[session.sessionId ?? ""] && !recentlyCreatedSids.has(session.sessionId ?? ""),
-  );
+  // Reorder into two categories — working roots on top, idle roots below — while
+  // preserving parent/child nesting. A parent is considered working if any child
+  // is working, keeping delegated sub-agents visually attached to their master.
+  const workingNodes = tree.roots.filter(tree.effectiveBusy);
+  const idleNodes = tree.roots.filter((node) => !tree.effectiveBusy(node));
+  const working = tree.flatten(workingNodes);
+  const idle = tree.flatten(idleNodes);
   const nameFor = (id: string) => autoAgents.find((a) => a.id === id)?.name ?? id;
 
   // Close every idle session in one tap. Each card drops immediately (onRemove)
@@ -4852,36 +5200,90 @@ function LiveView({
     await onRefresh();
   }
 
-  const renderCard = (session: Session) => (
-    <ErrorBoundary
-      key={session.sessionId}
-      fallback={(reset) => (
-        <section className="live-pane flex h-[22rem] min-w-0 md:h-[clamp(30rem,72vh,46rem)] flex-col items-center justify-center gap-2 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-center text-sm text-destructive">
-          <span>This session card hit a render error.</span>
-          <Button size="sm" variant="outline" onClick={reset}>
-            Retry
-          </Button>
-        </section>
+  const renderCard = (session: Session, depth = 0) => (
+    <div
+      key={sessionStableId(session)}
+      className={cn(
+        depth > 0 && "md:col-span-2",
       )}
     >
-      <SessionCard
-        session={session}
-        users={users}
-        messages={messagesBySid[session.sessionId ?? ""] ?? EMPTY_MESSAGES}
-        busy={!!busyBySid[session.sessionId ?? ""]}
-        loading={!!loadingBySid[session.sessionId ?? ""]}
-        prompt={promptsBySid[session.sessionId ?? ""] ?? null}
-        queue={queuesBySid[session.sessionId ?? ""] ?? EMPTY_QUEUE}
-        onLoadOlderMessages={onLoadOlderMessages}
-        onOptimisticMessage={onOptimisticMessage}
-        onRefresh={onRefresh}
-        onRemove={onRemove}
-        onBrain={onBrain}
-        onOpenSheet={(sid, origin) => setSheet({ sid, origin })}
-        entering={recentlyCreatedSids.has(session.sessionId ?? "")}
-      />
-    </ErrorBoundary>
+      <ErrorBoundary
+        fallback={(reset) => (
+          <section className="live-pane flex h-[22rem] min-w-0 md:h-[clamp(30rem,72vh,46rem)] flex-col items-center justify-center gap-2 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-center text-sm text-destructive">
+            <span>This session card hit a render error.</span>
+            <Button size="sm" variant="outline" onClick={reset}>
+              Retry
+            </Button>
+          </section>
+        )}
+      >
+        <SessionCard
+          session={session}
+          users={users}
+          messages={messagesBySid[session.sessionId ?? ""] ?? EMPTY_MESSAGES}
+          busy={!!busyBySid[session.sessionId ?? ""]}
+          loading={!!loadingBySid[session.sessionId ?? ""]}
+          prompt={promptsBySid[session.sessionId ?? ""] ?? null}
+          queue={queuesBySid[session.sessionId ?? ""] ?? EMPTY_QUEUE}
+          onLoadOlderMessages={onLoadOlderMessages}
+          onOptimisticMessage={onOptimisticMessage}
+          onRemoveOptimisticMessage={onRemoveOptimisticMessage}
+          onTrackSendStatus={onTrackSendStatus}
+          onRefresh={onRefresh}
+          onRemove={onRemove}
+          onBrain={onBrain}
+          onOpenSheet={(sid, origin) => setSheet({ sid, origin })}
+          entering={recentlyCreatedSids.has(session.sessionId ?? "")}
+        />
+      </ErrorBoundary>
+    </div>
   );
+
+  const renderChildNode = (
+    node: SessionTreeNode,
+    depth = 1,
+    isLast = true,
+  ): ReactNode[] => [
+    <div key={`child-${sessionStableId(node.session)}`} className="relative">
+      <span
+        aria-hidden
+        className={cn(
+          "absolute -left-4 -top-2 w-0.5 bg-muted-foreground/70",
+          isLast ? "h-[calc(50%+0.5rem)]" : "bottom-0",
+        )}
+      />
+      <span
+        aria-hidden
+        className="absolute -left-4 top-1/2 h-0.5 w-4 -translate-y-1/2 bg-muted-foreground/70"
+      />
+      {renderCard(node.session, depth)}
+      {node.children.length ? (
+        <div className="relative ml-5 mt-1 flex flex-col gap-1.5 pb-1 pl-4 pt-1">
+          {node.children.flatMap((child, index) =>
+            renderChildNode(child, depth + 1, index === node.children.length - 1),
+          )}
+        </div>
+      ) : null}
+    </div>,
+  ];
+  const renderNode = (node: SessionTreeNode): ReactNode[] => {
+    if (!node.children.length) return [renderCard(node.session, 0)];
+    return [
+      <div
+        key={`family-${sessionStableId(node.session)}`}
+        className="flex flex-col gap-1.5"
+      >
+      {renderCard(node.session, 0)}
+      <div
+          className="relative -mt-1 ml-5 flex flex-col gap-1.5 pb-1 pl-4 pt-2"
+        >
+          {node.children.flatMap((child, index) =>
+            renderChildNode(child, 1, index === node.children.length - 1),
+          )}
+        </div>
+      </div>,
+    ];
+  };
 
   if (isWide) {
     return (
@@ -4896,6 +5298,8 @@ function LiveView({
         loadingBySid={loadingBySid}
         onLoadOlderMessages={onLoadOlderMessages}
         onOptimisticMessage={onOptimisticMessage}
+        onRemoveOptimisticMessage={onRemoveOptimisticMessage}
+        onTrackSendStatus={onTrackSendStatus}
         onRefresh={onRefresh}
         onRemove={onRemove}
         onBrain={onBrain}
@@ -4908,7 +5312,7 @@ function LiveView({
   }
 
   // Sheet navigation follows the on-screen order: working cards first, then idle.
-  const sheetOrder = [...working, ...idle]
+  const sheetOrder = [...tree.flatten(workingNodes), ...tree.flatten(idleNodes)]
     .map((s) => s.sessionId)
     .filter((id): id is string => !!id);
   const sheetSession = sheet ? sessions.find((s) => s.sessionId === sheet.sid) : null;
@@ -4924,7 +5328,7 @@ function LiveView({
             dotClass="animate-pulse bg-warning"
           />
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-2">
-            {working.map(renderCard)}
+            {workingNodes.flatMap((node) => renderNode(node))}
           </div>
         </section>
       ) : null}
@@ -4961,7 +5365,7 @@ function LiveView({
             }
           />
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-2">
-            {idle.map(renderCard)}
+            {idleNodes.flatMap((node) => renderNode(node))}
           </div>
         </section>
       ) : null}
@@ -4981,6 +5385,8 @@ function LiveView({
         onLoadOlderMessages={onLoadOlderMessages}
         onSwitch={(nextSid) => setSheet((s) => (s ? { ...s, sid: nextSid } : s))}
         onOptimisticMessage={onOptimisticMessage}
+        onRemoveOptimisticMessage={onRemoveOptimisticMessage}
+        onTrackSendStatus={onTrackSendStatus}
         onRefresh={onRefresh}
         onRemove={onRemove}
         onClose={() => setSheet(null)}
@@ -5006,6 +5412,8 @@ function RailStage({
   loadingBySid,
   onLoadOlderMessages,
   onOptimisticMessage,
+  onRemoveOptimisticMessage,
+  onTrackSendStatus,
   onRefresh,
   onRemove,
   onBrain,
@@ -5024,6 +5432,8 @@ function RailStage({
   loadingBySid: Record<string, boolean>;
   onLoadOlderMessages: LoadOlderMessages;
   onOptimisticMessage: (sid: string, text: string) => void;
+  onRemoveOptimisticMessage: (sid: string, text: string) => void;
+  onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
   onBrain: (sid: string) => Promise<void>;
@@ -5171,31 +5581,39 @@ function RailStage({
   // Rail grouping + dots use the stabilized busy state so rows don't bounce
   // between Working/Idle on brief blips. Stage columns keep the real busyBySid.
   const stableBusy = useStableBusy(busyBySid);
-  const working = sessions.filter((s) => stableBusy[s.sessionId ?? ""]);
-  const idle = sessions.filter((s) => !stableBusy[s.sessionId ?? ""]);
+  const railTree = useMemo(
+    () => buildSessionTree(sessions, (s) => !!stableBusy[s.sessionId ?? ""]),
+    [sessions, stableBusy],
+  );
+  const workingNodes = railTree.roots.filter(railTree.effectiveBusy);
+  const idleNodes = railTree.roots.filter((node) => !railTree.effectiveBusy(node));
+  const working = railTree.flatten(workingNodes);
+  const idle = railTree.flatten(idleNodes);
 
   const projectRailGroups = useMemo(() => {
     if (projectFilter !== "__all") return [];
-    const groups = new Map<string, { label: string; sessions: Session[] }>();
-    for (const session of sessions) {
-      const project = session.project || "";
+    const groups = new Map<string, { label: string; nodes: SessionTreeNode[]; count: number }>();
+    for (const node of railTree.roots) {
+      const project = node.session.project || "";
       const key = project || "__no_project";
       const label = project ? shortProject(project) : "No project";
+      const count = railTree.flatten([node]).length;
       const group = groups.get(key);
       if (group) {
-        group.sessions.push(session);
+        group.nodes.push(node);
+        group.count += count;
       } else {
-        groups.set(key, { label, sessions: [session] });
+        groups.set(key, { label, nodes: [node], count });
       }
     }
     return Array.from(groups.entries())
       .map(([key, group]) => ({ key, ...group }))
       .sort((a, b) => a.label.localeCompare(b.label));
-  }, [projectFilter, sessions]);
+  }, [projectFilter, railTree]);
 
   const railOrderedSessions =
     projectFilter === "__all"
-      ? projectRailGroups.flatMap((group) => group.sessions)
+      ? projectRailGroups.flatMap((group) => railTree.flatten(group.nodes))
       : [...working, ...idle];
 
   // Flat rail order the keyboard cursor walks (matching the visible rail;
@@ -5443,7 +5861,7 @@ function RailStage({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const renderRailItem = (session: Session) => {
+  const renderRailItem = (session: Session, depth = 0) => {
     const sid = session.sessionId ?? "";
     return (
       <RailItem
@@ -5455,11 +5873,118 @@ function RailStage({
         cursored={cursor === sid}
         pinned={validPinned.includes(sid)}
         collapsed={railCollapsed}
+        depth={depth}
         onActivate={(shift) => activate(sid, shift)}
         onTogglePin={() => togglePin(sid)}
       />
     );
   };
+  const renderRailNode = (node: SessionTreeNode, depth = 0): ReactNode[] => [
+    renderRailItem(node.session, depth),
+    ...node.children.flatMap((child) => renderRailNode(child, depth + 1)),
+  ];
+
+  const stageColumns = useMemo(() => {
+    const seen = new Set<string>();
+    return columnIds
+      .map((sourceSid) => {
+        const root = railTree.rootForSessionId(sourceSid) ?? railTree.nodeForSessionId(sourceSid);
+        if (!root) return null;
+        const rootSid = root.session.sessionId ?? sessionStableId(root.session);
+        if (!rootSid || seen.has(rootSid)) return null;
+        seen.add(rootSid);
+        return { sourceSid, rootSid, root };
+      })
+      .filter(
+        (
+          column,
+        ): column is { sourceSid: string; rootSid: string; root: SessionTreeNode } => !!column,
+      );
+  }, [columnIds, railTree]);
+
+  const closeFamilyColumn = useCallback(
+    (root: SessionTreeNode, fallbackSid: string) => {
+      const familyIds = new Set(
+        railTree
+          .flatten([root])
+          .map((session) => session.sessionId)
+          .filter((id): id is string => !!id),
+      );
+      if (!familyIds.size) {
+        closeColumn(fallbackSid);
+        return;
+      }
+      setPinned((prev) => prev.filter((id) => !familyIds.has(id)));
+      setPreview((p) => (p && familyIds.has(p) ? null : p));
+    },
+    [closeColumn, railTree],
+  );
+
+  const renderStageCard = (
+    node: SessionTreeNode,
+    depth: number,
+    familySize: number,
+    onCloseColumn?: () => void,
+  ) => {
+    const session = node.session;
+    const sid = session.sessionId ?? "";
+    return (
+      <div
+        key={sessionStableId(session)}
+        className={cn(
+          "min-h-0 min-w-0",
+          familySize === 1
+            ? "h-full"
+            : depth === 0
+              ? "h-[min(26rem,43vh)] min-h-[16rem]"
+              : "ml-4 h-[16rem] border-l-2 border-primary/35 pl-3",
+        )}
+        onClickCapture={() => setCursor(sid)}
+        onFocusCapture={() => setCursor(sid)}
+      >
+        <ErrorBoundary
+          fallback={(reset) => (
+            <section className="live-pane flex h-full min-w-0 flex-col items-center justify-center gap-2 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-center text-sm text-destructive">
+              <span>This session column hit a render error.</span>
+              <Button size="sm" variant="outline" onClick={reset}>
+                Retry
+              </Button>
+            </section>
+          )}
+        >
+          <SessionCard
+            session={session}
+            users={users}
+            messages={messagesBySid[sid] ?? EMPTY_MESSAGES}
+            busy={!!busyBySid[sid]}
+            loading={!!loadingBySid[sid]}
+            prompt={promptsBySid[sid] ?? null}
+            queue={queuesBySid[sid] ?? EMPTY_QUEUE}
+            onLoadOlderMessages={onLoadOlderMessages}
+            onOptimisticMessage={onOptimisticMessage}
+            onRemoveOptimisticMessage={onRemoveOptimisticMessage}
+            onTrackSendStatus={onTrackSendStatus}
+            onRefresh={onRefresh}
+            onRemove={onRemove}
+            onBrain={onBrain}
+            variant="stage"
+            onClose={onCloseColumn}
+            entering={recentlyCreatedSids.has(sid)}
+          />
+        </ErrorBoundary>
+      </div>
+    );
+  };
+
+  const renderStageNode = (
+    node: SessionTreeNode,
+    depth: number,
+    familySize: number,
+    onCloseColumn?: () => void,
+  ): ReactNode[] => [
+    renderStageCard(node, depth, familySize, onCloseColumn),
+    ...node.children.flatMap((child) => renderStageNode(child, depth + 1, familySize)),
+  ];
 
   const autoRailGroup =
     findings.length && !railCollapsed ? (
@@ -5517,10 +6042,10 @@ function RailStage({
                 <RailGroup
                   key={group.key}
                   label={group.label}
-                  count={group.sessions.length}
+                  count={group.count}
                   collapsed={railCollapsed}
                 >
-                  {group.sessions.map(renderRailItem)}
+                  {group.nodes.flatMap((node) => renderRailNode(node))}
                 </RailGroup>
               ))}
               {autoRailGroup}
@@ -5529,13 +6054,13 @@ function RailStage({
             <>
               {working.length ? (
                 <RailGroup label="Working" count={working.length} collapsed={railCollapsed}>
-                  {working.map(renderRailItem)}
+                  {workingNodes.flatMap((node) => renderRailNode(node))}
                 </RailGroup>
               ) : null}
               {autoRailGroup}
               {idle.length ? (
                 <RailGroup label="Idle" count={idle.length} collapsed={railCollapsed}>
-                  {idle.map(renderRailItem)}
+                  {idleNodes.flatMap((node) => renderRailNode(node))}
                 </RailGroup>
               ) : null}
             </>
@@ -5547,53 +6072,27 @@ function RailStage({
         className={cn(
           "grid h-full min-h-0 min-w-0 flex-1 gap-3",
           // 1 pane → full; 2 → side by side; 3-4 → 2×2 (panes 1&2 top, 3&4 bottom).
-          columnIds.length <= 1
+          stageColumns.length <= 1
             ? "grid-cols-1 grid-rows-1"
-            : columnIds.length === 2
+            : stageColumns.length === 2
               ? "grid-cols-2 grid-rows-1"
               : "grid-cols-2 grid-rows-2",
         )}
       >
-        {columnIds.length ? (
-          columnIds.map((sid) => {
-            const session = bySid.get(sid);
-            if (!session) return null;
+        {stageColumns.length ? (
+          stageColumns.map(({ sourceSid, rootSid, root }) => {
+            const familySize = railTree.flatten([root]).length;
             return (
               <div
-                key={sid}
-                data-stage-sid={sid}
-                className="h-full min-h-0 min-w-0"
-                onClickCapture={() => setCursor(sid)}
-                onFocusCapture={() => setCursor(sid)}
+                key={rootSid}
+                data-stage-sid={rootSid}
+                className="h-full min-h-0 min-w-0 overflow-y-auto pr-1"
               >
-                <ErrorBoundary
-                  fallback={(reset) => (
-                    <section className="live-pane flex h-full min-w-0 flex-col items-center justify-center gap-2 rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-center text-sm text-destructive">
-                      <span>This session column hit a render error.</span>
-                      <Button size="sm" variant="outline" onClick={reset}>
-                        Retry
-                      </Button>
-                    </section>
+                <div className="flex min-h-full flex-col gap-2">
+                  {renderStageNode(root, 0, familySize, () =>
+                    closeFamilyColumn(root, sourceSid),
                   )}
-                >
-                  <SessionCard
-                    session={session}
-                    users={users}
-                    messages={messagesBySid[sid] ?? EMPTY_MESSAGES}
-                    busy={!!busyBySid[sid]}
-                    loading={!!loadingBySid[sid]}
-                    prompt={promptsBySid[sid] ?? null}
-                    queue={queuesBySid[sid] ?? EMPTY_QUEUE}
-                    onLoadOlderMessages={onLoadOlderMessages}
-                    onOptimisticMessage={onOptimisticMessage}
-                    onRefresh={onRefresh}
-                    onRemove={onRemove}
-                    onBrain={onBrain}
-                    variant="stage"
-                    onClose={() => closeColumn(sid)}
-                    entering={recentlyCreatedSids.has(sid)}
-                  />
-                </ErrorBoundary>
+                </div>
               </div>
             );
           })
@@ -5695,6 +6194,7 @@ const RailItem = memo(function RailItem({
   cursored,
   pinned,
   collapsed,
+  depth = 0,
   onActivate,
   onTogglePin,
 }: {
@@ -5705,6 +6205,7 @@ const RailItem = memo(function RailItem({
   cursored: boolean;
   pinned: boolean;
   collapsed: boolean;
+  depth?: number;
   onActivate: (shiftKey: boolean) => void;
   onTogglePin: () => void;
 }) {
@@ -5767,8 +6268,15 @@ const RailItem = memo(function RailItem({
       className={cn(
         "relative overflow-hidden rounded-lg",
         cursored && "ring-2 ring-inset ring-primary/60",
+        depth > 0 && !collapsed && "ml-6 border-l-2 border-primary/40 pl-3",
       )}
     >
+      {depth > 0 && !collapsed ? (
+        <span
+          aria-hidden
+          className="absolute left-0 top-1/2 h-px w-3 -translate-y-1/2 bg-primary/40"
+        />
+      ) : null}
       {swiping ? (
         <div
           aria-hidden
@@ -5814,6 +6322,9 @@ const RailItem = memo(function RailItem({
               : "hover:bg-muted",
         )}
       >
+        {depth > 0 && !collapsed ? (
+          <GitFork className="size-3 shrink-0 text-primary/70" />
+        ) : null}
         <span className="relative flex size-6 shrink-0 items-center justify-center">
           <img
             src={agentIconSrc(session.agent)}
@@ -6027,6 +6538,179 @@ function PausedBanner({
   );
 }
 
+function SkillSlashSuggest({
+  active,
+  onPick,
+}: {
+  active: SlashSkillState | null;
+  onPick: (skill: SkillCatalogItem) => void;
+}) {
+  const [skills, setSkills] = useState<SkillCatalogItem[]>([]);
+  const [selected, setSelected] = useState(0);
+
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    loadSkillCatalog()
+      .then((items) => {
+        if (!cancelled) setSkills(items);
+      })
+      .catch(() => {
+        if (!cancelled) setSkills([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [active]);
+
+  useEffect(() => setSelected(0), [active?.query]);
+
+  const matches = useMemo(() => {
+    if (!active) return [];
+    const q = active.query;
+    return skills
+      .filter((skill) => {
+        const haystack =
+          `${skill.trigger} ${skill.name} ${skill.description} ${skill.keywords || ""}`.toLowerCase();
+        return !q || haystack.includes(q);
+      });
+  }, [active, skills]);
+
+  if (!active || !matches.length) return null;
+
+  return (
+    <div
+      data-no-composer-swipe
+      onWheel={(event) => event.stopPropagation()}
+      onTouchStart={(event) => event.stopPropagation()}
+      onTouchMove={(event) => event.stopPropagation()}
+      onTouchEnd={(event) => event.stopPropagation()}
+      className="absolute bottom-full left-0 right-0 z-50 mb-2 overflow-hidden rounded-xl border border-border bg-popover text-popover-foreground shadow-xl"
+    >
+      <div className="max-h-[min(18rem,42dvh)] overflow-y-auto overscroll-contain p-1 touch-pan-y">
+        {matches.map((skill, idx) => (
+          <button
+            key={`${skill.source}:${skill.trigger}`}
+            type="button"
+            data-skill-suggest-option
+            onMouseDown={(event) => {
+              event.preventDefault();
+            }}
+            onClick={() => onPick(skill)}
+            onMouseEnter={() => setSelected(idx)}
+            className={cn(
+              "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm",
+              idx === selected ? "bg-accent text-accent-foreground" : "hover:bg-accent/70",
+            )}
+          >
+            <Sparkles className="size-3.5 shrink-0 text-primary" />
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-medium">${skill.trigger}</span>
+              {skill.description ? (
+                <span className="mt-0.5 block truncate text-xs leading-snug text-muted-foreground">
+                  {skill.description}
+                </span>
+              ) : null}
+            </span>
+            <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground">
+              {skill.source}
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function handleSkillSuggestKey(
+  event: ReactKeyboardEvent<HTMLTextAreaElement>,
+  active: SlashSkillState | null,
+  wrapper: HTMLElement | null,
+) {
+  if (!active) return false;
+  const buttons = Array.from(
+    wrapper?.querySelectorAll<HTMLButtonElement>("[data-skill-suggest-option]") ?? [],
+  );
+  if ((event.key === "Enter" || event.key === "Tab") && buttons[0]) {
+    event.preventDefault();
+    buttons[0].click();
+    return true;
+  }
+  if (event.key === "Escape") return true;
+  return false;
+}
+
+type SkillTextareaProps = Omit<
+  ComponentProps<typeof Textarea>,
+  "value" | "onChange" | "onKeyDown"
+> & {
+  value: string;
+  onValueChange: (value: string) => void;
+  onKeyDown?: (event: ReactKeyboardEvent<HTMLTextAreaElement>) => void;
+  textareaRef?: Ref<HTMLTextAreaElement>;
+};
+
+function SkillTextarea({
+  value,
+  onValueChange,
+  onKeyDown,
+  textareaRef,
+  ...props
+}: SkillTextareaProps) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [skillSuggest, setSkillSuggest] = useState<SlashSkillState | null>(null);
+
+  function sync(target: HTMLTextAreaElement) {
+    setSkillSuggest(slashSkillAt(target.value, target.selectionStart));
+  }
+
+  function pickSkill(skill: SkillCatalogItem) {
+    if (!skillSuggest) return;
+    const textarea = wrapRef.current?.querySelector("textarea");
+    const replacement = `$${skill.trigger} `;
+    const next =
+      value.slice(0, skillSuggest.start) +
+      replacement +
+      value.slice(skillSuggest.end);
+    const cursor = skillSuggest.start + replacement.length;
+    onValueChange(next);
+    setSkillSuggest(null);
+    requestAnimationFrame(() => {
+      textarea?.focus();
+      textarea?.setSelectionRange(cursor, cursor);
+    });
+  }
+
+  return (
+    <div ref={wrapRef} className="relative min-w-0 flex-1">
+      <SkillSlashSuggest active={skillSuggest} onPick={pickSkill} />
+      <Textarea
+        {...props}
+        ref={textareaRef}
+        value={value}
+        onChange={(event) => {
+          onValueChange(event.target.value);
+          sync(event.target);
+        }}
+        onClick={(event) => sync(event.currentTarget)}
+        onKeyUp={(event) => sync(event.currentTarget)}
+        onBlur={() => window.setTimeout(() => setSkillSuggest(null), 120)}
+        onKeyDown={(event) => {
+          if (skillSuggest) {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              setSkillSuggest(null);
+              return;
+            }
+            if (handleSkillSuggestKey(event, skillSuggest, wrapRef.current)) return;
+          }
+          onKeyDown?.(event);
+        }}
+      />
+    </div>
+  );
+}
+
 function SessionChat({
   session,
   messages,
@@ -6038,6 +6722,8 @@ function SessionChat({
   error,
   onError,
   onOptimisticMessage,
+  onRemoveOptimisticMessage,
+  onTrackSendStatus,
   onRefresh,
   onDictatingChange,
 }: {
@@ -6051,6 +6737,8 @@ function SessionChat({
   error: string | null;
   onError: (error: string | null) => void;
   onOptimisticMessage: (sid: string, text: string) => void;
+  onRemoveOptimisticMessage: (sid: string, text: string) => void;
+  onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
   onRefresh: () => Promise<void>;
   onDictatingChange?: (recording: boolean) => void;
 }) {
@@ -6148,18 +6836,21 @@ function SessionChat({
     setSending(true);
     onError(null);
     setMessageText("");
+    let optimisticText: string | null = null;
     try {
       const uploaded = files.length ? await Promise.all(files.map(uploadAttachment)) : [];
       const outgoingText = composeAttachmentMessage(text, uploaded);
+      optimisticText = outgoingText;
       onOptimisticMessage(sid, outgoingText);
       // Pulse the composer so the send visibly launches into the transcript.
       setLaunching(true);
       window.setTimeout(() => setLaunching(false), 480);
-      await api(`/api/sessions/${sid}/send`, {
+      const sent = await api<{ msg?: QueueMsg }>(`/api/sessions/${sid}/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: outgoingText, mode }),
       });
+      onTrackSendStatus(sid, outgoingText, sent.msg ?? null);
       for (const att of files) {
         if (att.previewUrl) URL.revokeObjectURL(att.previewUrl);
       }
@@ -6169,6 +6860,7 @@ function SessionChat({
         onError(err instanceof Error ? err.message : String(err));
       });
     } catch (err) {
+      if (optimisticText) onRemoveOptimisticMessage(sid, optimisticText);
       onError(err instanceof Error ? err.message : String(err));
       setMessageText(text);
       setAttachments((current) =>
@@ -6320,10 +7012,10 @@ function SessionChat({
               <Paperclip className="size-4" />
             </Button>
             <div className="relative min-w-0 flex-1">
-              <Textarea
+              <SkillTextarea
                 data-composer-sid={sid}
                 value={messageText}
-                onChange={(e) => setMessageText(e.target.value)}
+                onValueChange={setMessageText}
                 onPaste={(event) => {
                   const files = event.clipboardData?.files;
                   if (files?.length) {
@@ -6602,6 +7294,8 @@ function SessionTitleSheet({
   origin,
   onSwitch,
   onOptimisticMessage,
+  onRemoveOptimisticMessage,
+  onTrackSendStatus,
   onRefresh,
   onRemove,
   onClose,
@@ -6623,6 +7317,8 @@ function SessionTitleSheet({
   origin: DOMRect;
   onSwitch: (sid: string) => void;
   onOptimisticMessage: (sid: string, text: string) => void;
+  onRemoveOptimisticMessage: (sid: string, text: string) => void;
+  onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
   onClose: () => void;
@@ -7109,6 +7805,8 @@ function SessionTitleSheet({
             error={error}
             onError={setError}
             onOptimisticMessage={onOptimisticMessage}
+            onRemoveOptimisticMessage={onRemoveOptimisticMessage}
+            onTrackSendStatus={onTrackSendStatus}
             onRefresh={onRefresh}
           />
         </div>
@@ -7188,9 +7886,9 @@ function ForkSessionDialog({
           </div>
         </div>
 
-        <Textarea
+        <SkillTextarea
           value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
+          onValueChange={setPrompt}
           placeholder="Extra prompt for the new agent..."
           rows={5}
           className="min-h-32 resize-none rounded-xl"
@@ -7279,6 +7977,8 @@ const SessionCard = memo(function SessionCard({
   queue,
   onLoadOlderMessages,
   onOptimisticMessage,
+  onRemoveOptimisticMessage,
+  onTrackSendStatus,
   onRefresh,
   onRemove,
   onBrain,
@@ -7296,6 +7996,8 @@ const SessionCard = memo(function SessionCard({
   queue: QueueMsg[];
   onLoadOlderMessages: LoadOlderMessages;
   onOptimisticMessage: (sid: string, text: string) => void;
+  onRemoveOptimisticMessage: (sid: string, text: string) => void;
+  onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
   onBrain: (sid: string) => Promise<void>;
@@ -7838,6 +8540,8 @@ const onTouchStart = (e: ReactTouchEvent) => {
           error={error}
           onError={setError}
           onOptimisticMessage={onOptimisticMessage}
+          onRemoveOptimisticMessage={onRemoveOptimisticMessage}
+          onTrackSendStatus={onTrackSendStatus}
           onRefresh={onRefresh}
           onDictatingChange={setDictating}
         />
@@ -8308,11 +9012,11 @@ function QueuePanel({
     const needles: string[] = [];
     for (const message of messages) {
       if (message.role !== "user" || message.kind !== "text" || message.pending) continue;
-      const needle = normText(message.text).slice(0, 48);
+      const needle = messageNeedle(message.text);
       if (needle) needles.push(needle);
     }
     return (text: string) => {
-      const needle = normText(text).slice(0, 48);
+      const needle = messageNeedle(text);
       if (!needle) return false;
       return needles.some((other) => other.includes(needle) || needle.includes(other));
     };
@@ -9314,8 +10018,8 @@ function NewSessionDialog({
         addFiles(event.dataTransfer.files);
       }}
       className={cn(
-        "max-h-[70dvh] overflow-y-auto overscroll-contain px-2 pb-[max(env(safe-area-inset-bottom),0.5rem)] transition-colors",
-        variant === "inline" ? "pt-1.5" : "pt-1",
+        "max-h-[70dvh] overscroll-contain px-2 pb-[max(env(safe-area-inset-bottom),0.5rem)] transition-colors",
+        variant === "inline" ? "overflow-visible pt-1.5" : "overflow-y-auto pt-1",
         draggingFiles && "bg-primary/8",
       )}
     >
@@ -9332,19 +10036,19 @@ function NewSessionDialog({
       />
       <div
         className={cn(
-          "lfg-gfield rounded-2xl",
+          "lfg-gfield relative rounded-2xl",
           // Inline: a single row with the agent icon, field, and mic all
           // vertically centered, with a touch more breathing room.
           variant === "inline"
-            ? "flex items-center gap-1.5 overflow-hidden px-2.5 py-2"
+            ? "flex items-center gap-1.5 overflow-visible px-2.5 py-2"
             : "relative px-2 py-1",
         )}
         ref={fieldRef}
       >
         {variant === "inline" ? agentPopover : null}
-        <Textarea
+        <SkillTextarea
           value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
+          onValueChange={setPrompt}
           onPaste={(event) => {
             const files = event.clipboardData?.files;
             if (files?.length) {
@@ -9443,6 +10147,7 @@ function NewSessionDialog({
       {variant !== "inline" ? (
         <div className="mt-2 flex flex-wrap items-start gap-1.5">
           <div className="min-w-0 max-w-none">{controlsInner}</div>
+          {usage ? <UsageRingsButton provider={usage} className="pl-1" /> : null}
           {resumeButton}
         </div>
       ) : null}
@@ -9880,10 +10585,10 @@ function FindingSheet({
         </div>
 
         <div className="mt-5 flex items-end gap-2 rounded-2xl border border-border bg-background px-3 py-2">
-          <Textarea
-            ref={inputRef}
+          <SkillTextarea
+            textareaRef={inputRef}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onValueChange={setText}
             onKeyDown={(e) => {
               if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
@@ -9997,9 +10702,9 @@ function NewAutoAgentComposer({
           </Button>
         </div>
 
-        <Textarea
+        <SkillTextarea
           value={idea}
-          onChange={(e) => setIdea(e.target.value)}
+          onValueChange={setIdea}
           rows={6}
           autoFocus
           placeholder="What should this agent watch for, and roughly how often? e.g. “Every morning, check our npm dependencies for newly disclosed CVEs and flag anything we actually ship.”"
@@ -10403,9 +11108,9 @@ function AgentEditorSheet({
             {enhancing ? "Enhancing…" : "Enhance"}
           </button>
         </div>
-        <Textarea
+        <SkillTextarea
           value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
+          onValueChange={setPrompt}
           rows={5}
           disabled={enhancing}
           placeholder="Jot a rough idea of what to watch for, then hit Enhance — it rewrites it into a sharp watch-agent prompt. Runs on the selected agent provider and gathers its own context."
@@ -10701,6 +11406,537 @@ function CodingAgentsPage({
   );
 }
 
+function RuntimeSubAgentComposer({
+  repos,
+  scopedProject,
+  sessions,
+  onClose,
+  onCreate,
+}: {
+  repos: Repo[];
+  scopedProject: string;
+  sessions: AgentBrowserTree["runtimeSessions"];
+  onClose: () => void;
+  onCreate: (
+    prompt: string,
+    cwd: string | undefined,
+    opts: { agent: AgentKind; model: string; thinkingLevel?: string; parentSessionId?: string },
+  ) => void;
+}) {
+  const [prompt, setPrompt] = useState("");
+  const scopedRepo =
+    scopedProject !== "__all"
+      ? repos.find((repo) => repoProject(repo) === scopedProject)
+      : undefined;
+  const [cwd, setCwd] = useState(scopedRepo?.cwd ?? repos[0]?.cwd ?? "");
+  const [parentSessionId, setParentSessionId] = useState("");
+  const [agent, setAgent] = useState<AgentKind>("codex-aisdk");
+  const [model, setModel] = useState(AGENT_DEFAULT_MODEL["codex-aisdk"]);
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(savedThinkingLevel());
+  const models = AGENT_MODELS[agent];
+  const supportsThinking = agentSupportsThinking(agent);
+
+  useEffect(() => {
+    if (!models.includes(model)) setModel(AGENT_DEFAULT_MODEL[agent]);
+  }, [agent, model, models]);
+
+  function submit() {
+    const text = prompt.trim();
+    if (!text) return;
+    onCreate(text, cwd || undefined, {
+      agent,
+      model,
+      thinkingLevel: supportsThinking ? thinkingLevel : undefined,
+      parentSessionId: parentSessionId || undefined,
+    });
+    onClose();
+  }
+
+  return (
+    <BottomSheet onClose={onClose} title="New sub-agent">
+      <div className="px-2 pb-4 pt-1">
+        <div className="flex items-center gap-2">
+          <GitFork className="size-5 text-primary" />
+          <div className="flex-1 text-[15px] font-semibold">Create sub-agent</div>
+          <Button size="sm" variant="brand" disabled={!prompt.trim()} onClick={submit}>
+            Create
+          </Button>
+        </div>
+
+        <SkillTextarea
+          value={prompt}
+          onValueChange={setPrompt}
+          rows={6}
+          autoFocus
+          placeholder="What should this worker do?"
+          className="mt-3 resize-none text-sm leading-relaxed"
+        />
+
+        <div className="mt-2 flex items-center justify-between rounded-xl border border-border px-3 py-2">
+          <div className="flex items-center gap-2 text-sm">
+            <GitFork className="size-4 text-muted-foreground" /> Parent
+          </div>
+          <select
+            value={parentSessionId}
+            onChange={(e) => setParentSessionId(e.target.value)}
+            aria-label="Parent session"
+            className="max-w-48 appearance-none truncate bg-transparent text-right text-[13px] font-medium outline-none"
+          >
+            <option value="">None</option>
+            {sessions.map((session) => (
+              <option key={session.sessionId} value={session.sessionId}>
+                {session.title}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="mt-2 flex items-center justify-between rounded-xl border border-border px-3 py-2">
+          <div className="flex items-center gap-2 text-sm">
+            <Folder className="size-4 text-muted-foreground" /> Repo
+          </div>
+          <select
+            value={cwd}
+            onChange={(e) => setCwd(e.target.value)}
+            aria-label="Repo"
+            className="max-w-44 appearance-none truncate bg-transparent text-right text-[13px] font-medium outline-none"
+          >
+            {repos.length === 0 ? <option value="">(no repos)</option> : null}
+            {repos.map((item) => (
+              <option key={item.cwd} value={item.cwd}>
+                {item.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <div className="inline-flex h-8 items-center rounded-full bg-muted p-0.5 text-xs font-semibold">
+            {AGENT_OPTIONS.map(({ key, label }) => (
+              <button
+                key={key}
+                type="button"
+                title={label}
+                aria-label={label}
+                onClick={() => {
+                  setAgent(key);
+                  setModel(localStorage.getItem(`lfg_model_${key}`) || AGENT_DEFAULT_MODEL[key]);
+                }}
+                className={cn(
+                  "flex h-7 w-9 items-center justify-center rounded-full transition",
+                  agent === key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground",
+                )}
+              >
+                <img src={agentIconSrc(key)} alt="" className="size-5" />
+              </button>
+            ))}
+          </div>
+          <FieldPill>
+            <select
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              aria-label="Model"
+              className="max-w-36 appearance-none truncate bg-transparent pr-1 text-xs font-medium outline-none"
+            >
+              {models.map((item) => (
+                <option key={item} value={item}>
+                  {item}
+                </option>
+              ))}
+            </select>
+          </FieldPill>
+          {supportsThinking ? (
+            <FieldPill>
+              <select
+                value={thinkingLevel}
+                onChange={(e) => setThinkingLevel(e.target.value as ThinkingLevel)}
+                aria-label="Thinking level"
+                className="max-w-24 appearance-none truncate bg-transparent pr-1 text-xs font-medium outline-none"
+              >
+                {THINKING_LEVELS.map((item) => (
+                  <option key={item} value={item}>
+                    {item}
+                  </option>
+                ))}
+              </select>
+            </FieldPill>
+          ) : null}
+        </div>
+      </div>
+    </BottomSheet>
+  );
+}
+
+function AgentBrowserPage({
+  repos,
+  scopedProject,
+  onAutoAgentsChanged,
+}: {
+  repos: Repo[];
+  scopedProject: string;
+  onAutoAgentsChanged: () => Promise<void>;
+}) {
+  const [tree, setTree] = useState<AgentBrowserTree | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [creating, setCreating] = useState(false);
+
+  const load = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const payload = await api<{ browser: AgentBrowserTree }>("/api/agent-browser");
+      setTree(payload.browser);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't load agent browser");
+    } finally {
+      setRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const autoById = useMemo(
+    () => new Map((tree?.autoAgents ?? []).map((agent) => [agent.id, agent])),
+    [tree],
+  );
+  const insightByName = useMemo(
+    () => new Map((tree?.insightAgents ?? []).map((agent) => [agent.name, agent])),
+    [tree],
+  );
+  const runtimeById = useMemo(
+    () => new Map((tree?.runtimeSessions ?? []).map((session) => [session.sessionId, session])),
+    [tree],
+  );
+  const linkedSkills = tree?.groups.skills.filter(
+    (skill) => skill.autoAgents.length || skill.insightAgents.length,
+  ) ?? [];
+
+  function createSubAgent(
+    prompt: string,
+    cwd: string | undefined,
+    opts: { agent: AgentKind; model: string; thinkingLevel?: string; parentSessionId?: string },
+  ) {
+    toast.promise(
+      api("/api/sessions/new", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          prompt,
+          cwd,
+          agent: opts.agent,
+          model: opts.model,
+          thinkingLevel: opts.thinkingLevel,
+          parentSessionId: opts.parentSessionId || undefined,
+          spawnedBy: "subagent",
+        }),
+      })
+        .then(async () => {
+          await Promise.all([load(), onAutoAgentsChanged()]);
+        }),
+      {
+        loading: "Creating sub-agent...",
+        success: "Sub-agent created",
+        error: (e) => (e instanceof Error ? e.message : "Couldn't create sub-agent"),
+      },
+    );
+  }
+
+  return (
+    <div className="mx-auto max-w-3xl space-y-4 pb-10">
+      <div className="flex items-center justify-between px-4">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Agent browser
+        </h2>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setCreating(true)}
+            className="flex items-center gap-1 text-xs font-medium text-primary transition-colors hover:text-primary/80"
+          >
+            <Plus className="size-3.5" />
+            Create
+          </button>
+          <button
+            type="button"
+            onClick={() => void load()}
+            disabled={refreshing}
+            className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60"
+          >
+            <RotateCcw className={cn("size-3.5", refreshing && "animate-spin")} />
+            Refresh
+          </button>
+        </div>
+      </div>
+
+      {error ? (
+        <div className="mx-4 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </div>
+      ) : null}
+
+      {!tree ? (
+        <div className="mx-4 space-y-2">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-20 animate-pulse rounded-2xl bg-muted" />
+          ))}
+        </div>
+      ) : (
+        <>
+          <section className="overflow-hidden rounded-2xl border border-border bg-card/40">
+            <div className="border-b border-border px-4 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Providers
+            </div>
+            <div className="divide-y divide-border">
+              {tree.groups.providers.map((provider) => {
+                const modelInfo = tree.models.find((item) => item.key === provider.key);
+                const autoAgents = provider.autoAgents
+                  .map((id) => autoById.get(id))
+                  .filter((agent): agent is AgentBrowserTree["autoAgents"][number] => !!agent);
+                return (
+                  <div key={provider.key} className="px-4 py-3">
+                    <div className="flex items-start gap-3">
+                      <span className="flex size-8 shrink-0 items-center justify-center rounded-[8px] border border-border bg-background">
+                        <img
+                          src={agentIconSrc(provider.key)}
+                          alt={agentIconAlt(provider.key)}
+                          className="size-5"
+                        />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="text-sm font-semibold">{provider.label}</span>
+                          <Badge variant={modelInfo?.configured === false ? "secondary" : "default"}>
+                            {modelInfo?.configured === false ? "Needs setup" : "Ready"}
+                          </Badge>
+                          {modelInfo?.auto ? <Badge variant="secondary">Auto</Badge> : null}
+                          {modelInfo?.session ? <Badge variant="secondary">Session</Badge> : null}
+                        </div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          Default {provider.defaultModel}
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-1">
+                          {provider.models.map((model) => (
+                            <span
+                              key={model}
+                              className="max-w-full truncate rounded-lg bg-muted px-2 py-1 text-[11px] text-muted-foreground"
+                              title={model}
+                            >
+                              {model}
+                            </span>
+                          ))}
+                        </div>
+                        {modelInfo?.thinkingLevels.length ? (
+                          <div className="mt-2 text-[11px] text-muted-foreground">
+                            Thinking: {modelInfo.thinkingLevels.join(", ")}
+                          </div>
+                        ) : null}
+                        {autoAgents.length ? (
+                          <div className="mt-3 space-y-1.5">
+                            {autoAgents.map((agent) => (
+                              <div
+                                key={agent.id}
+                                className="flex min-w-0 items-center gap-2 rounded-xl bg-background/70 px-3 py-2"
+                              >
+                                <CalendarClock className="size-3.5 shrink-0 text-muted-foreground" />
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate text-xs font-medium">
+                                    {agent.name}
+                                  </span>
+                                  <span className="block truncate text-[11px] text-muted-foreground">
+                                    {agent.model || provider.defaultModel} · {agent.schedule}
+                                  </span>
+                                </span>
+                                <Badge variant={agent.enabled ? "default" : "secondary"}>
+                                  {agent.enabled ? "On" : "Off"}
+                                </Badge>
+                              </div>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          <section className="grid gap-4 lg:grid-cols-2">
+            <div className="overflow-hidden rounded-2xl border border-border bg-card/40">
+              <div className="border-b border-border px-4 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Runtime sub-agents
+              </div>
+              <div className="divide-y divide-border">
+                {tree.groups.runtimeParents.length ? (
+                  tree.groups.runtimeParents.map((group) => {
+                    const parent = runtimeById.get(group.parentSessionId);
+                    return (
+                      <div key={group.parentSessionId} className="px-4 py-3">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <GitFork className="size-3.5 shrink-0 text-primary" />
+                          <span className="min-w-0 flex-1 truncate text-sm font-semibold">
+                            {parent?.title ?? group.parentSessionId.slice(0, 8)}
+                          </span>
+                          {parent ? (
+                            <span className="shrink-0 text-[11px] text-muted-foreground">
+                              {parent.agent}
+                            </span>
+                          ) : null}
+                        </div>
+                        <div className="mt-2 space-y-1.5 pl-5">
+                          {group.children.map((id) => {
+                            const child = runtimeById.get(id);
+                            if (!child) return null;
+                            return (
+                              <div
+                                key={id}
+                                className="flex min-w-0 items-center gap-2 rounded-xl bg-background/70 px-3 py-2"
+                              >
+                                <img
+                                  src={agentIconSrc(child.agent)}
+                                  alt={agentIconAlt(child.agent)}
+                                  className="size-4 shrink-0"
+                                />
+                                <span className="min-w-0 flex-1">
+                                  <span className="block truncate text-xs font-medium">
+                                    {child.title}
+                                  </span>
+                                  <span className="block truncate text-[11px] text-muted-foreground">
+                                    {child.agent}
+                                    {child.model ? `/${child.model}` : ""} · {child.project}
+                                  </span>
+                                </span>
+                                <Badge variant={child.busy ? "default" : "secondary"}>
+                                  {child.busy ? "Busy" : "Idle"}
+                                </Badge>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+                    No runtime sub-agents
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="overflow-hidden rounded-2xl border border-border bg-card/40">
+              <div className="border-b border-border px-4 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Insight agents
+              </div>
+              <div className="divide-y divide-border">
+                {tree.insightAgents.map((agent) => (
+                  <div key={agent.name} className="px-4 py-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold">{agent.title}</div>
+                        <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                          {agent.name}
+                          {agent.inputs.length ? ` · ${agent.inputs.join(", ")}` : ""}
+                        </div>
+                      </div>
+                      <Badge variant={agent.enabled ? "default" : "secondary"}>
+                        {agent.enabled ? "On" : "Off"}
+                      </Badge>
+                    </div>
+                    {agent.skills.length ? (
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {agent.skills.map((skill) => (
+                          <span key={skill} className="rounded-lg bg-muted px-2 py-1 text-[11px]">
+                            ${skill}
+                          </span>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="overflow-hidden rounded-2xl border border-border bg-card/40">
+              <div className="border-b border-border px-4 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Skill relationships
+              </div>
+              <div className="divide-y divide-border">
+                {linkedSkills.length ? (
+                  linkedSkills.map((rel) => (
+                    <div key={`${rel.source}:${rel.trigger}`} className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <Sparkles className="size-3.5 text-primary" />
+                        <span className="text-sm font-semibold">${rel.trigger}</span>
+                        <span className="text-[11px] uppercase text-muted-foreground">{rel.source}</span>
+                      </div>
+                      <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+                        {rel.autoAgents.map((id) => (
+                          <div key={id} className="flex min-w-0 items-center gap-2">
+                            <CalendarClock className="size-3.5 shrink-0" />
+                            <span className="truncate">{autoById.get(id)?.name ?? id}</span>
+                          </div>
+                        ))}
+                        {rel.insightAgents.map((name) => (
+                          <div key={name} className="flex min-w-0 items-center gap-2">
+                            <ScrollText className="size-3.5 shrink-0" />
+                            <span className="truncate">{insightByName.get(name)?.title ?? name}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="px-4 py-8 text-center text-sm text-muted-foreground">
+                    No `$skill` references found
+                  </div>
+                )}
+              </div>
+            </div>
+          </section>
+
+          <section className="overflow-hidden rounded-2xl border border-border bg-card/40">
+            <div className="border-b border-border px-4 py-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Skills
+            </div>
+            <div className="divide-y divide-border">
+              {tree.skills.map((skill) => (
+                <div key={`${skill.source}:${skill.trigger}`} className="px-4 py-2.5">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate text-sm font-medium">
+                      ${skill.trigger}
+                    </span>
+                    <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] uppercase text-muted-foreground">
+                      {skill.source}
+                    </span>
+                  </div>
+                  {skill.description ? (
+                    <div className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+                      {skill.description}
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </section>
+        </>
+      )}
+      {creating ? (
+        <RuntimeSubAgentComposer
+          repos={repos}
+          scopedProject={scopedProject}
+          sessions={tree?.runtimeSessions ?? []}
+          onClose={() => setCreating(false)}
+          onCreate={createSubAgent}
+        />
+      ) : null}
+    </div>
+  );
+}
+
 type UsageWindow = { label: string; pct: number | null; resetsAt: number | null };
 type ProviderUsage = {
   kind: string;
@@ -10867,6 +12103,7 @@ function SettingsView({
   onOpenTerminal,
   onOpenBrowser,
   onOpenCodingAgents,
+  onOpenAgentBrowser,
   onOpenAuto,
   onOpenBrain,
   brainConfig,
@@ -10882,6 +12119,7 @@ function SettingsView({
   onOpenTerminal: () => void;
   onOpenBrowser: () => void;
   onOpenCodingAgents: () => void;
+  onOpenAgentBrowser: () => void;
   onOpenAuto: () => void;
   onOpenBrain: () => void;
   brainConfig: SessionBrainConfig | null;
@@ -10938,6 +12176,19 @@ function SettingsView({
           Automation
         </h2>
         <div className="overflow-hidden rounded-2xl border border-border bg-card/40 divide-y divide-border">
+          <button
+            type="button"
+            onClick={onOpenAgentBrowser}
+            className="flex w-full items-center justify-between gap-4 px-4 py-2.5 text-left transition-colors duration-150 ease-ios hover:bg-foreground/[0.03] active:bg-foreground/[0.06]"
+          >
+            <div className="flex items-center gap-3">
+              <span className="flex size-7 items-center justify-center rounded-[7px] bg-primary text-white">
+                <GitFork className="size-4" />
+              </span>
+              <span className="text-sm font-medium">Agent browser</span>
+            </div>
+            <ChevronRight className="size-4 text-muted-foreground/60" />
+          </button>
           <button
             type="button"
             onClick={onOpenCodingAgents}

@@ -4,6 +4,7 @@ const HELP = `lfg — run and manage your AI coding agents on your own box
 Usage:
   lfg serve                        Run the web UI + control server (default :8766)
   lfg agents [list|run|show]       Run / inspect insight agents (see 'agents help')
+  lfg subagent [create|models]      Spawn a managed worker session on any harness
   lfg whatsapp [run|sessions]      Run the optional WhatsApp control sidecar
   lfg setup                        Provision this box (Bun, tmux, Tailscale, service)
 
@@ -21,6 +22,11 @@ async function main() {
     case "agents": {
       const { cmdAgents } = await import("./commands/agents.ts");
       return await cmdAgents(rest);
+    }
+    case "subagent":
+    case "subagents": {
+      const { cmdSubagent } = await import("./commands/subagent.ts");
+      return await cmdSubagent(rest);
     }
     case "whatsapp": {
       const { cmdWhatsapp } = await import("./commands/whatsapp.ts");

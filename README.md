@@ -75,6 +75,20 @@ LFG_TAILSCALE_SERVE=1 lfg setup
 
 ## One-click Launch
 
+[![Deploy on OMG](https://img.shields.io/badge/Deploy%20on-OMG-ff5530?style=for-the-badge)](https://omg.dev/deploy?repo=https%3A%2F%2Fgithub.com%2FBennyKok%2Flfg)
+
+OMG is the fastest hosted workspace path for `lfg`. The button passes this
+GitHub repo to OMG, signs you in if needed, creates an LFG sandbox from the
+prebuilt `lfg` template, starts `lfg serve` on port `8766`, and opens the
+workspace URL.
+
+On a fresh workspace, open **Settings → Coding agents** in LFG. That screen
+checks whether Claude, Codex, OpenCode, Hermes, or Grok is installed and signed
+in, and it can run the installer for supported CLIs. OAuth-based CLIs still need
+you to complete their normal terminal/browser login once, or you can configure
+API-key based providers with environment variables such as `ANTHROPIC_API_KEY`
+or `OPENAI_API_KEY`.
+
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template?template=https://github.com/BennyKok/lfg)
 
 Railway is useful for a hosted demo, but `lfg` works best on the machine that
@@ -100,6 +114,18 @@ For Hetzner, use the cloud-init template in
 [deploy/hetzner](./deploy/hetzner/README.md). Hetzner's official deploy button
 only preselects Hetzner App images, so the repo ships a first-boot installer
 instead.
+
+OMG user requirements:
+
+- OMG account. The generic deploy route prompts for sign-in before it creates
+  anything.
+- During the preview, this deploy path is available on free accounts. Billing
+  gates may change later.
+- The hosted LFG workspace starts with no personal agent CLI sessions. Use LFG's
+  Coding agents settings to install/check CLIs, then finish the provider login
+  inside the workspace.
+- Keep secrets scoped to that workspace. Prefer provider OAuth where available,
+  or set API keys only when you intend the hosted workspace to use them.
 
 Railway user requirements:
 

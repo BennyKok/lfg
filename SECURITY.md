@@ -22,6 +22,9 @@ understand it before you run it anywhere shared.
 
 - **Never bind to a public interface.** Keep `LFG_HOST=127.0.0.1`. The provided
   systemd unit hard-sets this so a stale `.env` can't override it.
+- **Keep repro servers loopback-only.** For throwaway static servers, use
+  `python3 -m http.server --bind 127.0.0.1 <port>` and stop the process when
+  done. Never leave a `/tmp` or worktree repro server listening on `0.0.0.0`.
 - **Reach it over Tailscale, not the internet.** Use `tailscale serve` (HTTPS on
   your MagicDNS name, tailnet members only). Do **not** use `tailscale funnel`,
   and do not open `8766`/`443` in your cloud firewall. `scripts/setup.sh` sets

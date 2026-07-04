@@ -68,10 +68,18 @@ curl -s $BASE/api/sessions/<id>/queue | jq '.queue'
 # List the repos a new session can be started in (resolve the user's words → a cwd)
 curl -s $BASE/api/repos | jq '.repos[] | {name, cwd}'
 
-# Start a new worker session (see "Creating a new session" below for the full flow)
+# Start a new worker session directly (see "Creating a new session" below)
 curl -s -X POST $BASE/api/sessions/new -H 'Content-Type: application/json' \
   -d '{"prompt":"investigate the failing deploy","cwd":"<repo cwd>","agent":"aisdk","model":"opus"}' \
   | jq '{sessionId, tmuxName, cwd, agent}'
+
+# Spawn a cross-harness sub-agent under the current/focused session.
+# Prefer this for delegation: it records parent/child relationships in lfg.
+lfg subagent create --agent codex-aisdk --model gpt-5.5 --cwd "<repo cwd>" \
+  --parent "<current sessionId>" --prompt "investigate the failing deploy"
+
+# Track sub-agents spawned under the current/focused session.
+lfg subagent list --parent "<current sessionId>"
 
 # Close a session you started
 curl -s -X POST $BASE/api/sessions/<id>/close
@@ -80,9 +88,18 @@ curl -s -X POST $BASE/api/sessions/<id>/close
 ## Creating a new session
 
 When the user says "start a new session", "spin up an agent", "open a session on
-<repo>", "have something look at X" — create one with `/api/sessions/new`. Do it in
-one shot from a single spoken request; only ask back if the repo is genuinely
-ambiguous.
+<repo>", "have something look at X" — create one with `/api/sessions/new`.
+
+When YOU are delegating part of your own work to another harness, use
+`lfg subagent create` instead. It still spawns a normal managed LFG session, but
+it records the parent/child relationship so the frontend can nest it under you.
+Examples: Claude can create Codex with `--agent codex-aisdk`; Codex can create
+Claude with `--agent aisdk`; either can create OpenCode with `--agent opencode`.
+Pass `--parent <sessionId>` when you know it. If omitted, the CLI falls back to
+`LFG_SESSION_ID` or `~/.lfg/active-session`.
+
+Do it in one shot from a single spoken request; only ask back if the repo is
+genuinely ambiguous.
 
 1. **Pick the repo (cwd).** This is the part that matters most over voice: if you
    omit `cwd` the session lands in lfg's OWN repo, which is almost never what the
@@ -107,6 +124,27 @@ ambiguous.
    the auth repo — it's looking at the failing deploy now."). The `sessionId` can
    take a few seconds to come back; if it's null, the session still started —
    confirm by `tmuxName` and resolve the id from the list on the next turn.
+
+## Creating a sub-agent
+
+Use this when you need parallel help or a different harness:
+
+```bash
+lfg subagent models
+lfg subagent create \
+  --agent codex-aisdk \
+  --model gpt-5.5 \
+  --cwd "<repo cwd>" \
+  --parent "<current sessionId>" \
+  --prompt "Implement the parser refactor. Keep changes scoped and report test results."
+lfg subagent list --parent "<current sessionId>"
+```
+
+Use `--agent aisdk --model opus` for a Claude worker, `--agent opencode` for an
+OpenCode worker, or `--agent grok` / `--agent hermes` when those are configured.
+After spawning, keep track with `lfg subagent list --parent <current sessionId>`.
+Use the regular `/api/sessions/<child id>/messages` and `/send` calls above to
+read or steer each child.
 
 ## Answering an agent's question (human-in-the-loop)
 

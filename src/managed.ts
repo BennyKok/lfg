@@ -26,6 +26,10 @@ export type ManagedSession = {
   launchError?: string;
   model?: string;
   title?: string;
+  parentSessionId?: string;
+  parentNativeSessionId?: string;
+  parentAgent?: string;
+  spawnedBy?: "subagent" | "fork" | "finding" | "voice" | string;
   /** Main repo checkout when cwd is an auto-provisioned worktree. */
   repoRoot?: string;
   worktreeBranch?: string;

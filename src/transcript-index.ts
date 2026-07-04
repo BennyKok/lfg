@@ -225,11 +225,18 @@ export async function indexTranscript(path: string, sessionId: string): Promise<
   });
 
   while (committed < st.size) {
-    const end = Math.min(st.size, committed + INDEX_CHUNK_BYTES);
-    const bytes = new Uint8Array(await file.slice(committed, end).arrayBuffer());
+    let end = Math.min(st.size, committed + INDEX_CHUNK_BYTES);
+    let bytes = new Uint8Array(await file.slice(committed, end).arrayBuffer());
     let scanEnd = bytes.lastIndexOf(10);
+    while (scanEnd < 0 && end < st.size) {
+      // Some providers persist a whole turn as one very large JSONL record. If a
+      // single line is larger than INDEX_CHUNK_BYTES, stopping here wedges the
+      // cursor forever and the database never catches up for that session.
+      end = Math.min(st.size, end + INDEX_CHUNK_BYTES);
+      bytes = new Uint8Array(await file.slice(committed, end).arrayBuffer());
+      scanEnd = bytes.lastIndexOf(10);
+    }
     if (scanEnd < 0) {
-      if (end < st.size) break;
       scanEnd = bytes.length;
     } else {
       scanEnd += 1;

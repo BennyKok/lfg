@@ -152,6 +152,16 @@ import {
   runCodingAgentSetup,
   setCodingAgentVisibility,
 } from "../coding-agents.ts";
+import {
+  AISDK_MODELS,
+  AUTO_AGENT_BACKENDS,
+  CLAUDE_MODELS,
+  GROK_MODELS,
+  HERMES_MODELS,
+  buildAgentBrowserTree,
+  thinkingLevelsForAgent,
+} from "../agent-catalog.ts";
+import { listSkillCatalog } from "../skills-catalog.ts";
 
 // Where the user keeps the repos lfg can launch agents into. Scanned for git
 // repos at runtime; defaults to ~/repos. The lfg repo itself (PATHS.root) is
@@ -223,20 +233,7 @@ function uploadFilename(req: Request, url: URL): string {
   }
 }
 
-// Allowlisted Claude model aliases. They land both on a launch argv (--model)
-// and in a `/model <alias>` slash command we inject mid-session — so an unknown
-// value is a hard 400, never a silent fallback. These mirror Claude Code's own
-// `/model` aliases (same set the --model flag accepts).
-const CLAUDE_MODELS = ["fable", "opus", "sonnet", "haiku"];
-// Models the "aisdk" session kind accepts (the provider maps these aliases).
-const AISDK_MODELS = ["fable", "opus", "sonnet", "haiku"];
-const GROK_MODELS = ["grok-composer-2.5-fast", "grok-build"];
 const GROK_DEFAULT_MODEL = "grok-composer-2.5-fast";
-const HERMES_MODELS = [
-  "nousresearch/hermes-4-405b",
-  "nousresearch/hermes-4-70b",
-  "nousresearch/hermes-3-llama-3.1-405b",
-];
 const HERMES_DEFAULT_MODEL = "nousresearch/hermes-4-405b";
 const HERMES_PROVIDER = process.env.LFG_HERMES_PROVIDER?.trim() || undefined;
 const OPENCODE_DEFAULT_MODEL = "opencode-go/deepseek-v4-flash";
@@ -254,22 +251,6 @@ const OPENCODE_DISABLED_MODELS = new Set<string>([
   "novita-ai/zai-org/glm-5.2",
   "novita-ai/zai-org/glm-5.1",
 ]);
-const AUTO_AGENT_BACKENDS = ["aisdk", "codex-aisdk", "opencode", "hermes"] as const;
-// Reasoning/thinking-effort levels, per agent family. Codex (CLI + ai-sdk)
-// accepts none…xhigh; Claude (CLI + ai-sdk) accepts low…xhigh plus `max`. The
-// dashboard picker only offers the low/medium/high/xhigh overlap, but the
-// endpoint validates against the agent's own set so an out-of-range value (e.g.
-// a voice-supplied `none` for Claude, or `max` for Codex) is a clean 400 rather
-// than a session that boots into an error.
-const CODEX_THINKING_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
-const CLAUDE_THINKING_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
-// The levels a given agent kind honors, or null when the agent has no
-// thinking/reasoning knob at all (opencode's provider exposes none).
-function thinkingLevelsForAgent(agent: string): readonly string[] | null {
-  if (agent === "claude" || agent === "aisdk" || agent === "grok") return CLAUDE_THINKING_LEVELS;
-  if (agent === "codex" || agent === "codex-aisdk") return CODEX_THINKING_LEVELS;
-  return null;
-}
 import { enqueueMessage, listQueue, retryMessage, clearResolved, reconcileQueued, getMessage } from "../sendq.ts";
 import { startFleetWatcher, subscribeFleet, type FleetEvent } from "../voice-bus.ts";
 import { handleElevenLlm, handleElevenToken } from "../voice-eleven-llm.ts";
@@ -1592,6 +1573,29 @@ export async function cmdServe() {
       if (path === "/api/coding-agents" && req.method === "GET") {
         return json({ agents: await listCodingAgents() });
       }
+      if (path === "/api/skills" && req.method === "GET") {
+        const repoRoots = (await listRepos().catch(() => [])).map((repo) => repo.cwd);
+        return json({ skills: await listSkillCatalog(repoRoots) });
+      }
+      if (path === "/api/agent-browser" && req.method === "GET") {
+        const repoRoots = (await listRepos().catch(() => [])).map((repo) => repo.cwd);
+        const [skills, insightAgents, autoAgents, codingAgents, sessions] = await Promise.all([
+          listSkillCatalog(repoRoots),
+          listAgents(),
+          listAutoAgents(),
+          listCodingAgents(),
+          listSessions(),
+        ]);
+        return json({
+          browser: buildAgentBrowserTree({
+            skills,
+            insightAgents,
+            autoAgents,
+            codingAgents,
+            sessions,
+          }),
+        });
+      }
       {
         const m = path.match(/^\/api\/coding-agents\/([a-z0-9_-]+)$/);
         if (m && req.method === "POST") {
@@ -2749,6 +2753,8 @@ export async function cmdServe() {
           worktree?: boolean;
           model?: string;
           thinkingLevel?: string;
+          parentSessionId?: string;
+          spawnedBy?: string;
           agent?: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "hermes";
         } | null;
         // Default flip (Task B): with no agent specified, the default Claude path
@@ -2819,6 +2825,13 @@ export async function cmdServe() {
         const requestedCwd = body?.cwd?.trim() || SELF_REPO;
         const repo = (await listRepos()).find((r) => r.cwd === requestedCwd);
         if (!repo) return err(400, "unknown repo");
+        const parentId = body?.parentSessionId?.trim() || undefined;
+        const parent = parentId
+          ? (await listSessions()).find(
+              (s) => s.sessionId === parentId || s.nativeSessionId === parentId,
+            )
+          : undefined;
+        if (parentId && !parent) return err(404, "parent session not found");
         const tmuxName = `lfg-${randomBytes(3).toString("hex")}`;
         const cwdResolved = resolveSessionCwd(repo.cwd, tmuxName, {
           voice: !!body?.voice,
@@ -2893,12 +2906,16 @@ export async function cmdServe() {
           launchState: "launching",
           model: launchModel,
           title: prompt?.slice(0, 72),
+          parentSessionId: parent?.sessionId ?? parentId,
+          parentNativeSessionId: parent?.nativeSessionId ?? undefined,
+          parentAgent: parent?.agent,
+          spawnedBy: body?.spawnedBy?.trim() || (parent ? "subagent" : undefined),
           repoRoot: worktree?.repoRoot,
           worktreeBranch: worktree?.branch,
         });
         // Tag the new session before spawn so a concurrent /api/sessions refresh
         // can show the durable row under the right user filter immediately.
-        if (body?.user) assignUser(tmuxName, body.user);
+        if (body?.user || parent?.assignedUser) assignUser(tmuxName, body?.user || parent?.assignedUser || null);
         const r =
           agent === "codex"
             ? spawnManagedCodexSession({ name: tmuxName, cwd, prompt, model, thinkingLevel })
@@ -2968,6 +2985,7 @@ export async function cmdServe() {
           cwd,
           sessionId: launchId,
           agent,
+          parentSessionId: parent?.sessionId ?? parentId ?? null,
           worktree: worktree?.path ?? null,
         });
       }
@@ -3091,6 +3109,7 @@ export async function cmdServe() {
       {
         const m = path.match(/^\/api\/sessions\/([0-9a-fA-F-]{36})\/queue$/);
         if (m && req.method === "GET") {
+          await reconcileQueued(m[1]);
           return json({ id: m[1], queue: listQueue(m[1]) });
         }
         if (m && req.method === "DELETE") {
