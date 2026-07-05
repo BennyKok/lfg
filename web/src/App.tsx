@@ -6744,7 +6744,7 @@ function SkillTextarea({
         {...props}
         ref={textareaRef}
         value={value}
-        className={cn(props.className, showSkillButton && "pl-11", insetEnd && "pr-11")}
+        className={cn(props.className, showSkillButton && "!pl-11", insetEnd && "!pr-11")}
         onChange={(event) => {
           onValueChange(event.target.value);
           sync(event.target);
@@ -6771,7 +6771,7 @@ function SkillTextarea({
           onClick={openSkillPicker}
           aria-label="Insert skill"
           title="Insert skill command"
-          className="absolute left-1.5 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-full font-mono text-base font-semibold text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          className="absolute left-1.5 top-1/2 z-10 flex size-8 -translate-y-1/2 items-center justify-center rounded-full font-mono text-base font-semibold text-muted-foreground transition hover:bg-muted hover:text-foreground"
         >
           /
         </button>
@@ -7109,7 +7109,7 @@ function SessionChat({
               />
               <MicButton
                 minimal
-                className="absolute right-1.5 top-1/2 size-8 -translate-y-1/2"
+                className="absolute right-1.5 top-1/2 z-10 size-8 -translate-y-1/2"
                 baseText={messageText}
                 onRecordingChange={onDictatingChange}
                 onText={(text, base) =>
