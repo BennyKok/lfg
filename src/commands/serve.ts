@@ -115,6 +115,7 @@ import {
   spawnManagedCodexAisdkSession,
   spawnManagedOpencodeAisdkSession,
   dismissCodexUpdatePrompt,
+  dismissResumeSummaryGate,
   panePidForSession,
   isBusy,
 } from "../tmux.ts";
@@ -2722,6 +2723,11 @@ export async function cmdServe() {
           repoRoot: repoRootForManagedCwd(cwd),
         });
         if (body?.user) assignUser(tmuxName, body.user);
+        // Claude Code 2.1+ blocks a heavy `--resume` at a "Resume from summary /
+        // full / don't ask again" selector. Nobody is at the pane to answer it,
+        // so without this the session freezes at the menu and never forks a new
+        // id below (looks like resume is broken). Answer it before we poll.
+        await dismissResumeSummaryGate(tmuxName);
         // Claude resumes into a fresh sessionId/transcript — wait for the pidfile.
         let newId: string | null = null;
         for (let i = 0; i < 12 && !newId; i++) {
@@ -2730,6 +2736,11 @@ export async function cmdServe() {
           if (pid) newId = sessionIdForPid(pid);
         }
         if (!newId) return err(502, "session resumed, but no live session id was discovered");
+        // Anchor the live id onto the managed record so listSessions recognizes
+        // the resumed session immediately (and keeps its visible id stable)
+        // rather than depending solely on per-request pgrep/pidfile resolution
+        // during the compaction window.
+        patchManaged(tmuxName, { nativeSessionId: newId });
         return json({ ok: true, tmuxName, cwd, sessionId: newId, resumedFrom: sessionId, agent: "claude" });
       }
 
@@ -3202,6 +3213,10 @@ export async function cmdServe() {
               model,
             });
             if (!r.ok) return err(500, r.error || "relaunch failed");
+            // Same 2.1+ resume gate as /api/sessions/resume — the relaunched pane
+            // is a `--resume`, so answer the summary selector or the build freezes
+            // at the menu instead of continuing on the new model.
+            await dismissResumeSummaryGate(sess.tmuxTarget);
             return json({ ok: true, relaunched: true, model });
           }
           const msg = enqueueMessage(m[1], `/model ${model}`);

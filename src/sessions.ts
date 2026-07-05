@@ -1249,10 +1249,24 @@ export async function listSessions(): Promise<Session[]> {
     // before the first assistant turn).
     const model = modelAlias(liveModel) ?? modelAlias(e.cmd.match(/--model\s+(\S+)/)?.[1]);
     const health = computeStatus(last, liveModel);
-    const tmuxTarget =
-      isHeadless(e.cmd) || !e.authoritative ? null : tmuxTargetForPid(e.pid);
+    // Resolve the pane this pid runs in up front; the trust check below decides
+    // whether we hand it out for send-keys / prompt detection. The pane NAME is
+    // still safe to use for matching the managed record either way.
+    const rawTarget = isHeadless(e.cmd) ? null : tmuxTargetForPid(e.pid);
+    const paneName = rawTarget ? rawTarget.split(":")[0] : null;
+    const managedRec = paneName ? managedByName.get(paneName) : undefined;
+    // Trust the pane target when the pidfile is authoritative OR the pane is one
+    // lfg manages. For a managed session we ran `tmux new-session -s <name>`
+    // ourselves, so the pane→session binding is deterministic (the whole premise
+    // of managed.ts) and doesn't need claude's pidfile to have landed yet. This
+    // is what makes a heavy `--resume` sendable DURING its long compaction: the
+    // pidfile isn't authoritative for tens of seconds while it compacts, but we
+    // still own the pane — withholding the target here is exactly what produced
+    // "session is not in a tmux pane — cannot send" on every just-resumed big
+    // session. (Non-managed attached sessions still require authoritative, so the
+    // wrong-pid / ghost-pane protections are unchanged for them.)
+    const tmuxTarget = rawTarget && (e.authoritative || !!managedRec) ? rawTarget : null;
     const tmuxName = tmuxTarget ? tmuxTarget.split(":")[0] : null;
-    const managedRec = tmuxName ? managedByName.get(tmuxName) : undefined;
     rememberNativeSession(managedRec, sessionId);
     const visibleSessionId = managedVisibleId(managedRec, sessionId);
     const project = sessionProject(e.cwd, tmuxName);

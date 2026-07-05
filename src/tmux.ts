@@ -581,6 +581,41 @@ export function dismissCodexUpdatePrompt(target: string): boolean {
   return true;
 }
 
+// Claude Code 2.1+ interrupts `claude --resume` of a large/old transcript with a
+// blocking selector ("Resume from summary (recommended) / Resume full session
+// as-is / Don't ask me again") before it reaches the composer. A managed resume
+// has nobody to answer it, so the pane freezes at the menu forever and the
+// session never comes alive — every resume of a big/old session hangs, which
+// reads as "resume is completely broken". Watch the freshly-spawned pane and
+// auto-pick option 2, "Resume full session as-is", which preserves the full
+// prior history — the exact contract spawnManagedSession/relaunch document (and
+// what resume meant before this gate existed). Returns:
+//   "dismissed" — gate found and answered
+//   "ready"     — no gate; composer came up on its own (small/new session)
+//   "timeout"   — neither within the budget (caller proceeds anyway)
+export async function dismissResumeSummaryGate(
+  target: string,
+  opts: { tries?: number; delayMs?: number } = {},
+): Promise<"dismissed" | "ready" | "timeout"> {
+  const tries = opts.tries ?? 24; // ~6s at 250ms — covers a cold, heavy transcript
+  const delayMs = opts.delayMs ?? 250;
+  for (let i = 0; i < tries; i++) {
+    const pane = capturePane(target);
+    if (pane && /Resume from summary/i.test(pane) && /Resume full session as-is/i.test(pane)) {
+      // -l sends the literal "2" (numeric selection), then Enter confirms — same
+      // shape as dismissCodexUpdatePrompt.
+      Bun.spawnSync(["tmux", "send-keys", "-t", target, "-l", "2"]);
+      Bun.spawnSync(["tmux", "send-keys", "-t", target, "Enter"]);
+      return "dismissed";
+    }
+    // Composer reached without a gate → nothing to answer, bail early so small
+    // sessions don't eat the full timeout.
+    if (pane && /bypass permissions on|\? for shortcuts/i.test(pane)) return "ready";
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return "timeout";
+}
+
 export function capturePane(target: string): string | null {
   try {
     const r = Bun.spawnSync(["tmux", "capture-pane", "-t", target, "-p"]);
