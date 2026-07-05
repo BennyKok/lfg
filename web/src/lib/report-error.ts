@@ -46,12 +46,22 @@ let installed = false;
 const CHUNK_LOAD_ERROR =
   /importing a module script failed|failed to fetch dynamically imported module|error loading dynamically imported module|unable to preload css|failed to load module script|expected a javascript module script but the server responded/i;
 
-const RELOAD_LATCH = "lfg:chunk-reload:__report";
+// Key the latch by BUILD_ID so the "at most one recovery reload" guarantee is
+// scoped to the build that failed, not the whole browser session. A long-lived
+// PWA spans MANY deploys; a single session-wide latch would fire its one reload
+// on the first-ever stale chunk and then misclassify every LATER post-deploy
+// stale chunk as a durable break — escalating a transient, self-healing
+// condition into a phantom finding + auto-fix run. Per-build keying mirrors
+// lazyWithReload's per-chunk latch: a genuine break reloads onto the SAME build
+// (latch already set → stop, no loop), while a post-deploy stale chunk reloads
+// onto a NEW build id (fresh latch → recover again).
+const RELOAD_LATCH = `lfg:chunk-reload:__report:${BUILD_ID ?? "dev"}`;
 
 // Returns true if the error was a chunk-load failure we handled (the caller must
-// then NOT report it). A per-session latch forces at most ONE recovery reload:
-// if we already reloaded and the chunk STILL won't load, it's a genuine, durable
-// break (not a stale chunk) — return false so it surfaces as a real finding.
+// then NOT report it). A per-build latch forces at most ONE recovery reload per
+// build: if we already reloaded onto this same build and the chunk STILL won't
+// load, it's a genuine, durable break (not a stale chunk) — return false so it
+// surfaces as a real finding.
 function recoverFromChunkLoadError(message: string): boolean {
   if (!CHUNK_LOAD_ERROR.test(message)) return false;
   let alreadyReloaded = false;
