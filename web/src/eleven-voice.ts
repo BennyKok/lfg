@@ -17,7 +17,12 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useCallback, useRef, useState } from "react";
-import { Conversation } from "@elevenlabs/client";
+// Type-only: erased at build time. @elevenlabs/client statically pulls in the
+// entire livekit-client SDK (~1 MB), so importing it as a value here dragged
+// livekit into the first-paint bundle (and duplicated the copy voice-orb already
+// lazy-loads). We import the *value* dynamically inside startElevenVoice below,
+// so nothing voice-related loads until a call actually starts.
+import type { Conversation } from "@elevenlabs/client";
 
 export type ElevenStatus = "idle" | "connecting" | "connected" | "error";
 
@@ -58,6 +63,10 @@ export async function startElevenVoice(opts: StartOpts = {}): Promise<ElevenHand
   if (!token) throw new Error("no conversation token returned");
 
   const userId = currentUser();
+
+  // Value import happens here (dynamic) so livekit/elevenlabs only download when
+  // the user actually starts a voice session.
+  const { Conversation } = await import("@elevenlabs/client");
 
   const conversation = await Conversation.startSession({
     conversationToken: token,

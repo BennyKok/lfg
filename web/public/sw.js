@@ -2,34 +2,86 @@
 // app shell, without getting in the way of Vite's dev module graph or the
 // streaming /api endpoints.
 //
-// Strategy: network-first for navigations and built assets (so a fresh deploy
-// is picked up immediately when online, cache is only a fallback offline).
-// Everything else — dev modules (/@vite, /src, /node_modules), websockets and
-// the whole /api surface (SSE live streams!) — is passed straight through.
-const CACHE = "lfg-shell-__VERSION__";
+// Strategy:
+//   • /assets/* (content-hashed, immutable build output) → CACHE-FIRST. The URL
+//     changes whenever the bytes change, so a cache hit is always correct and a
+//     reload is instant instead of paying a network round-trip per chunk.
+//   • navigations + static shell files (icons, manifest, fonts) → NETWORK-FIRST
+//     so a fresh deploy's index.html is picked up online, with a cache fallback
+//     that keeps the installed PWA working offline.
+//   • everything else — dev modules (/@vite, /src, /node_modules), websockets,
+//     and the whole /api surface (SSE live streams!) — passes straight through.
+//
+// VERSION is stamped per build (see vite.config.ts), so each deploy ships a
+// byte-different worker: the browser runs the install/activate lifecycle, the
+// new caches replace the old ones, and every stale build's chunks are purged
+// instead of accumulating forever. We do NOT skipWaiting on our own — the page
+// shows a toast and only tells us to take over (SKIP_WAITING) when the user
+// clicks Reload, so we never swap assets out from under a live session.
+const VERSION = "__VERSION__";
+const SHELL_CACHE = `lfg-shell-${VERSION}`;
+const ASSET_CACHE = `lfg-assets-${VERSION}`;
+const KEEP = new Set([SHELL_CACHE, ASSET_CACHE]);
 
 self.addEventListener("install", () => {
-  self.skipWaiting();
+  // Stay in "waiting" until the page asks us to activate (SKIP_WAITING).
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
-      const cleanup = [];
-      for (const key of keys) {
-        if (key !== CACHE) cleanup.push(caches.delete(key));
-      }
-      await Promise.all([...cleanup, self.clients.claim()]);
+      await Promise.all(
+        keys.filter((key) => !KEEP.has(key)).map((key) => caches.delete(key)),
+      );
+      await self.clients.claim();
     })(),
   );
 });
 
-function cacheable(url, request) {
-  if (url.pathname.startsWith("/api")) return false; // never cache API / SSE
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "SKIP_WAITING") self.skipWaiting();
+});
+
+// Immutable, content-hashed build output — safe to serve from cache forever.
+function isImmutableAsset(url) {
+  return url.pathname.startsWith("/assets/");
+}
+
+// Static shell files worth an offline fallback (served network-first).
+function isShell(url, request) {
   if (request.mode === "navigate") return true;
-  if (url.pathname.startsWith("/assets/")) return true; // hashed Vite build output
   return /\.(svg|png|ico|webmanifest|woff2?)$/.test(url.pathname);
+}
+
+async function cacheFirst(request) {
+  const cached = await caches.match(request);
+  if (cached) return cached;
+  const response = await fetch(request);
+  if (response && response.ok) {
+    const copy = response.clone();
+    caches.open(ASSET_CACHE).then((c) => c.put(request, copy)).catch(() => {});
+  }
+  return response;
+}
+
+async function networkFirst(request) {
+  try {
+    const response = await fetch(request);
+    if (response && response.ok) {
+      const copy = response.clone();
+      caches.open(SHELL_CACHE).then((c) => c.put(request, copy)).catch(() => {});
+    }
+    return response;
+  } catch {
+    const cached = await caches.match(request);
+    if (cached) return cached;
+    if (request.mode === "navigate") {
+      const shell = await caches.match("/");
+      if (shell) return shell;
+    }
+    throw new Error("offline");
+  }
 }
 
 // ── Web Push ────────────────────────────────────────────────────────────────
@@ -135,26 +187,15 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
-  if (!cacheable(url, request)) return; // pass through (dev modules, etc.)
+  if (url.pathname.startsWith("/api")) return; // never cache API / SSE
 
-  event.respondWith(
-    (async () => {
-      try {
-        const response = await fetch(request);
-        if (response && response.ok) {
-          const copy = response.clone();
-          caches.open(CACHE).then((c) => c.put(request, copy)).catch(() => {});
-        }
-        return response;
-      } catch {
-        const cached = await caches.match(request);
-        if (cached) return cached;
-        if (request.mode === "navigate") {
-          const shell = await caches.match("/");
-          if (shell) return shell;
-        }
-        throw new Error("offline");
-      }
-    })(),
-  );
+  if (isImmutableAsset(url)) {
+    event.respondWith(cacheFirst(request));
+    return;
+  }
+  if (isShell(url, request)) {
+    event.respondWith(networkFirst(request));
+    return;
+  }
+  // pass through — dev modules (/@vite, /src, /node_modules), etc.
 });

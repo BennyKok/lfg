@@ -37,6 +37,34 @@ function skillSearchKeywords(text: string): string {
     .slice(0, 4000);
 }
 
+const SKILL_INDEX_TTL_MS = 60_000;
+const SKILL_INDEX_STALE_MS = 5 * 60_000;
+
+type SkillIndex = {
+  key: string;
+  builtAt: number;
+  items: SkillCatalogItem[];
+};
+
+let skillIndex: SkillIndex | null = null;
+let skillIndexRefresh: Promise<SkillCatalogItem[]> | null = null;
+let skillIndexRefreshKey = "";
+
+function cacheKey(repoRoots: string[]): string {
+  return [...new Set(repoRoots.map((root) => root.trim()).filter(Boolean))]
+    .sort()
+    .join("\n");
+}
+
+function validSkillItem(item: SkillCatalogItem): boolean {
+  return (
+    !!item.name.trim() &&
+    !!item.trigger.trim() &&
+    !/\s/.test(item.trigger) &&
+    item.path.endsWith("SKILL.md")
+  );
+}
+
 async function findSkillFiles(root: string, maxDepth = 6): Promise<string[]> {
   const out: string[] = [];
   async function walk(dir: string, depth: number) {
@@ -72,7 +100,7 @@ function pluginSkillTrigger(skillPath: string, name: string): string {
   return name;
 }
 
-export async function listSkillCatalog(repoRoots: string[] = []): Promise<SkillCatalogItem[]> {
+async function buildSkillCatalog(repoRoots: string[] = []): Promise<SkillCatalogItem[]> {
   const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
   const claudeHome = process.env.CLAUDE_HOME || join(homedir(), ".claude");
   const selfRepo = PATHS.root;
@@ -117,14 +145,52 @@ export async function listSkillCatalog(repoRoots: string[] = []): Promise<SkillC
     const key = `${file.source}:${trigger}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    items.push({
+    const item: SkillCatalogItem = {
       name,
       trigger,
       description: fm.description || skillDescriptionFallback(raw),
       keywords: skillSearchKeywords(raw),
       source: file.source,
       path: file.path,
-    });
+    };
+    if (validSkillItem(item)) items.push(item);
   }
   return items.sort((a, b) => a.trigger.localeCompare(b.trigger));
+}
+
+export async function listSkillCatalog(repoRoots: string[] = []): Promise<SkillCatalogItem[]> {
+  const key = cacheKey(repoRoots);
+  const now = Date.now();
+  if (skillIndex?.key === key) {
+    const age = now - skillIndex.builtAt;
+    if (age < SKILL_INDEX_TTL_MS) return skillIndex.items;
+    if (age < SKILL_INDEX_STALE_MS) {
+      if (!skillIndexRefresh || skillIndexRefreshKey !== key) {
+        skillIndexRefreshKey = key;
+        skillIndexRefresh = buildSkillCatalog(repoRoots)
+          .then((items) => {
+            skillIndex = { key, builtAt: Date.now(), items };
+            return items;
+          })
+          .finally(() => {
+            skillIndexRefresh = null;
+            skillIndexRefreshKey = "";
+          });
+      }
+      return skillIndex.items;
+    }
+  }
+  if (!skillIndexRefresh || skillIndexRefreshKey !== key) {
+    skillIndexRefreshKey = key;
+    skillIndexRefresh = buildSkillCatalog(repoRoots)
+      .then((items) => {
+        skillIndex = { key, builtAt: Date.now(), items };
+        return items;
+      })
+      .finally(() => {
+        skillIndexRefresh = null;
+        skillIndexRefreshKey = "";
+      });
+  }
+  return skillIndexRefresh;
 }

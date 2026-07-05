@@ -166,11 +166,19 @@ and completing OAuth, or by setting the required API key in `.env`.
 bun run serve                  # web UI + control server
 bun run agents -- list         # list markdown-defined agents
 bun run agents -- run <name>   # run an insight agent
+bun run subagent -- models     # list runtime sub-agent providers/models
+bun run subagent -- create --prompt "..." --agent codex-aisdk
+bun run mcp                    # stdio MCP server for LFG session tools
 bun run whatsapp -- run        # optional WhatsApp sidecar
 bun run setup                  # rerun provisioning/update flow
 ```
 
 Installed release builds expose the same commands through `lfg`.
+
+The MCP server talks to the local `lfg serve` API and exposes tools such as
+`lfg_list_sessions`, `lfg_get_session_messages`, `lfg_send_session_message`,
+`lfg_create_subagent`, and `lfg_list_subagents`. Use it from an MCP client with
+`lfg mcp` or `bun run mcp`.
 
 ## Configuration
 

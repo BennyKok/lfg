@@ -16,9 +16,95 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="lfg" />
     <title>lfg</title>
+    <style>
+      /* App shell splash — static markup inside #root so it paints on the very
+         first frame (no JS needed) and React replaces it the moment the app
+         mounts. Fills the blank white gap on cold loads and on the post-update
+         reload so the PWA feels native. Colours mirror the theme-color metas. */
+      #app-splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #f2f2f7;
+      }
+      @media (prefers-color-scheme: dark) {
+        #app-splash {
+          background: #000;
+        }
+      }
+      #app-splash .splash-inner {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 22px;
+        /* nudge up so it sits optically centered above the home indicator */
+        margin-bottom: env(safe-area-inset-bottom, 0px);
+      }
+      #app-splash .splash-logo {
+        width: 76px;
+        height: 76px;
+        border-radius: 18px;
+        animation: splash-pulse 1.6s ease-in-out infinite;
+      }
+      #app-splash .splash-bar {
+        position: relative;
+        width: 168px;
+        height: 4px;
+        border-radius: 999px;
+        background: rgba(120, 120, 128, 0.2);
+        overflow: hidden;
+      }
+      #app-splash .splash-bar-fill {
+        position: absolute;
+        top: 0;
+        left: 0;
+        height: 100%;
+        width: 40%;
+        border-radius: 999px;
+        background: #0a84ff;
+        animation: splash-indeterminate 1.15s ease-in-out infinite;
+      }
+      @keyframes splash-indeterminate {
+        0% {
+          transform: translateX(-130%);
+        }
+        100% {
+          transform: translateX(360%);
+        }
+      }
+      @keyframes splash-pulse {
+        0%,
+        100% {
+          opacity: 1;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 0.72;
+          transform: scale(0.96);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #app-splash .splash-logo,
+        #app-splash .splash-bar-fill {
+          animation: none;
+        }
+        #app-splash .splash-bar-fill {
+          width: 100%;
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="app-splash" aria-hidden="true">
+        <div class="splash-inner">
+          <img class="splash-logo" src="/icon.svg" alt="" width="76" height="76" />
+          <div class="splash-bar"><div class="splash-bar-fill"></div></div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

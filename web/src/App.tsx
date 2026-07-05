@@ -68,6 +68,7 @@ import {
   Radio,
   RotateCcw,
   ScrollText,
+  Search,
   Send,
   Settings,
   Sparkles,
@@ -315,6 +316,12 @@ type Message = {
   text?: string;
   html?: string;
   ts?: number;
+  url?: string;
+  name?: string;
+  mimeType?: string;
+  size?: number;
+  caption?: string;
+  alt?: string;
   pending?: boolean;
   seed?: boolean;
   // A draft assistant turn we joined mid-stream: its text was already fully
@@ -608,6 +615,12 @@ function loadSkillCatalog(): Promise<SkillCatalogItem[]> {
       });
   }
   return skillCatalogPromise;
+}
+
+function warmSkillCatalog(): void {
+  void loadSkillCatalog().catch(() => {
+    // Skill suggestions are optional; a failed warmup should not affect startup.
+  });
 }
 
 function slashSkillAt(value: string, cursor: number | null | undefined): SlashSkillState | null {
@@ -2805,6 +2818,10 @@ export function App() {
     localStorage.getItem("lfg_user"),
   );
 
+  useEffect(() => {
+    warmSkillCatalog();
+  }, []);
+
   // Mobile viewport sizing. iOS can return from the app switcher with stale
   // `dvh`/fixed-viewport metrics; a pinch zoom fixes it because WebKit is forced
   // to recalculate the visual viewport. Do that work ourselves: pin the app
@@ -3902,6 +3919,7 @@ export function App() {
     tab === "live" && !keyboardOpen
       ? "pb-[var(--lfg-above-orb)] md:pb-3"
       : "pb-3";
+  const liveDesktopWorkspace = tab === "live" && isWide;
 
   return (
     <AskProvider>
@@ -3980,7 +3998,13 @@ export function App() {
         </div>
       ) : null}
 
-      <main ref={mainRef} className={`min-h-0 flex-1 overflow-y-auto px-3 pt-3 ${mainBottomPadding}`}>
+      <main
+        ref={mainRef}
+        className={cn(
+          "min-h-0 flex-1 px-3 pt-3",
+          liveDesktopWorkspace ? "overflow-hidden pb-3" : `overflow-y-auto ${mainBottomPadding}`,
+        )}
+      >
         {tab === "live" && isMobile && projectFilter === MOBILE_NOTEPAD_FILTER ? (
           <MobileNotepadHome
             notes={brainNotes}
@@ -5029,6 +5053,68 @@ type SessionTreeNode = {
   children: SessionTreeNode[];
 };
 
+function TreeConnector({
+  className,
+  colorClassName,
+  continueAfter,
+}: {
+  className?: string;
+  colorClassName: string;
+  continueAfter?: boolean;
+}) {
+  return (
+    <span
+      aria-hidden
+      className={cn("pointer-events-none absolute", colorClassName, className)}
+    >
+      <svg
+        viewBox="0 0 2 100"
+        preserveAspectRatio="none"
+        className="absolute left-0 top-0 bottom-[calc(50%+8px)] w-0.5 overflow-visible"
+      >
+        <path
+          d="M1 0 V100"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          vectorEffect="non-scaling-stroke"
+        />
+      </svg>
+      <svg
+        viewBox="0 0 16 16"
+        className="absolute left-0 top-[calc(50%-8px)] h-4 w-4 overflow-visible"
+      >
+        <path
+          d="M1 0 V7 Q1 15 9 15 H16"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          vectorEffect="non-scaling-stroke"
+        />
+      </svg>
+      {continueAfter ? (
+        <svg
+          viewBox="0 0 2 100"
+          preserveAspectRatio="none"
+          className="absolute left-0 top-[calc(50%+8px)] bottom-0 w-0.5 overflow-visible"
+        >
+          <path
+            d="M1 0 V100"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            vectorEffect="non-scaling-stroke"
+          />
+        </svg>
+      ) : null}
+    </span>
+  );
+}
+
 function sessionStableId(session: Session): string {
   return session.sessionId || session.nativeSessionId || session.tmuxName || "";
 }
@@ -5245,16 +5331,10 @@ function LiveView({
     isLast = true,
   ): ReactNode[] => [
     <div key={`child-${sessionStableId(node.session)}`} className="relative">
-      <span
-        aria-hidden
-        className={cn(
-          "absolute -left-4 -top-2 w-0.5 bg-muted-foreground/70",
-          isLast ? "h-[calc(50%+0.5rem)]" : "bottom-0",
-        )}
-      />
-      <span
-        aria-hidden
-        className="absolute -left-4 top-1/2 h-0.5 w-4 -translate-y-1/2 bg-muted-foreground/70"
+      <TreeConnector
+        className="-left-4 -top-2 h-[calc(100%+1rem)] w-4"
+        colorClassName="text-muted-foreground/70"
+        continueAfter={!isLast}
       />
       {renderCard(node.session, depth)}
       {node.children.length ? (
@@ -5389,6 +5469,7 @@ function LiveView({
         onTrackSendStatus={onTrackSendStatus}
         onRefresh={onRefresh}
         onRemove={onRemove}
+        onBrain={onBrain}
         onClose={() => setSheet(null)}
       />
     ) : null}
@@ -5861,7 +5942,7 @@ function RailStage({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const renderRailItem = (session: Session, depth = 0) => {
+  const renderRailItem = (session: Session, depth = 0, isLast = true) => {
     const sid = session.sessionId ?? "";
     return (
       <RailItem
@@ -5874,56 +5955,36 @@ function RailStage({
         pinned={validPinned.includes(sid)}
         collapsed={railCollapsed}
         depth={depth}
+        isLast={isLast}
         onActivate={(shift) => activate(sid, shift)}
         onTogglePin={() => togglePin(sid)}
       />
     );
   };
-  const renderRailNode = (node: SessionTreeNode, depth = 0): ReactNode[] => [
-    renderRailItem(node.session, depth),
-    ...node.children.flatMap((child) => renderRailNode(child, depth + 1)),
+  const renderRailNode = (node: SessionTreeNode, depth = 0, isLast = true): ReactNode[] => [
+    renderRailItem(node.session, depth, isLast),
+    ...node.children.flatMap((child, index) =>
+      renderRailNode(child, depth + 1, index === node.children.length - 1),
+    ),
   ];
 
   const stageColumns = useMemo(() => {
-    const seen = new Set<string>();
     return columnIds
       .map((sourceSid) => {
-        const root = railTree.rootForSessionId(sourceSid) ?? railTree.nodeForSessionId(sourceSid);
-        if (!root) return null;
-        const rootSid = root.session.sessionId ?? sessionStableId(root.session);
-        if (!rootSid || seen.has(rootSid)) return null;
-        seen.add(rootSid);
-        return { sourceSid, rootSid, root };
+        const node = railTree.nodeForSessionId(sourceSid);
+        const sid = node?.session.sessionId ?? sourceSid;
+        if (!node || !sid) return null;
+        return { sid, node };
       })
       .filter(
         (
           column,
-        ): column is { sourceSid: string; rootSid: string; root: SessionTreeNode } => !!column,
+        ): column is { sid: string; node: SessionTreeNode } => !!column,
       );
   }, [columnIds, railTree]);
 
-  const closeFamilyColumn = useCallback(
-    (root: SessionTreeNode, fallbackSid: string) => {
-      const familyIds = new Set(
-        railTree
-          .flatten([root])
-          .map((session) => session.sessionId)
-          .filter((id): id is string => !!id),
-      );
-      if (!familyIds.size) {
-        closeColumn(fallbackSid);
-        return;
-      }
-      setPinned((prev) => prev.filter((id) => !familyIds.has(id)));
-      setPreview((p) => (p && familyIds.has(p) ? null : p));
-    },
-    [closeColumn, railTree],
-  );
-
   const renderStageCard = (
     node: SessionTreeNode,
-    depth: number,
-    familySize: number,
     onCloseColumn?: () => void,
   ) => {
     const session = node.session;
@@ -5931,14 +5992,7 @@ function RailStage({
     return (
       <div
         key={sessionStableId(session)}
-        className={cn(
-          "min-h-0 min-w-0",
-          familySize === 1
-            ? "h-full"
-            : depth === 0
-              ? "h-[min(26rem,43vh)] min-h-[16rem]"
-              : "ml-4 h-[16rem] border-l-2 border-primary/35 pl-3",
-        )}
+        className="h-full min-h-0 min-w-0"
         onClickCapture={() => setCursor(sid)}
         onFocusCapture={() => setCursor(sid)}
       >
@@ -5975,16 +6029,6 @@ function RailStage({
       </div>
     );
   };
-
-  const renderStageNode = (
-    node: SessionTreeNode,
-    depth: number,
-    familySize: number,
-    onCloseColumn?: () => void,
-  ): ReactNode[] => [
-    renderStageCard(node, depth, familySize, onCloseColumn),
-    ...node.children.flatMap((child) => renderStageNode(child, depth + 1, familySize)),
-  ];
 
   const autoRailGroup =
     findings.length && !railCollapsed ? (
@@ -6080,19 +6124,14 @@ function RailStage({
         )}
       >
         {stageColumns.length ? (
-          stageColumns.map(({ sourceSid, rootSid, root }) => {
-            const familySize = railTree.flatten([root]).length;
+          stageColumns.map(({ sid, node }) => {
             return (
               <div
-                key={rootSid}
-                data-stage-sid={rootSid}
-                className="h-full min-h-0 min-w-0 overflow-y-auto pr-1"
+                key={sid}
+                data-stage-sid={sid}
+                className="h-full min-h-0 min-w-0"
               >
-                <div className="flex min-h-full flex-col gap-2">
-                  {renderStageNode(root, 0, familySize, () =>
-                    closeFamilyColumn(root, sourceSid),
-                  )}
-                </div>
+                {renderStageCard(node, () => closeColumn(sid))}
               </div>
             );
           })
@@ -6195,6 +6234,7 @@ const RailItem = memo(function RailItem({
   pinned,
   collapsed,
   depth = 0,
+  isLast = true,
   onActivate,
   onTogglePin,
 }: {
@@ -6206,6 +6246,7 @@ const RailItem = memo(function RailItem({
   pinned: boolean;
   collapsed: boolean;
   depth?: number;
+  isLast?: boolean;
   onActivate: (shiftKey: boolean) => void;
   onTogglePin: () => void;
 }) {
@@ -6266,15 +6307,17 @@ const RailItem = memo(function RailItem({
     <div
       data-rail-sid={session.sessionId ?? ""}
       className={cn(
-        "relative overflow-hidden rounded-lg",
+        "relative rounded-lg",
+        swiping ? "overflow-hidden" : "overflow-visible",
         cursored && "ring-2 ring-inset ring-primary/60",
-        depth > 0 && !collapsed && "ml-6 border-l-2 border-primary/40 pl-3",
+        depth > 0 && !collapsed && "ml-6 pl-4",
       )}
     >
       {depth > 0 && !collapsed ? (
-        <span
-          aria-hidden
-          className="absolute left-0 top-1/2 h-px w-3 -translate-y-1/2 bg-primary/40"
+        <TreeConnector
+          className="-top-1 left-0 h-[calc(100%+0.5rem)] w-4"
+          colorClassName="text-muted-foreground/70"
+          continueAfter={!isLast}
         />
       ) : null}
       {swiping ? (
@@ -6322,9 +6365,6 @@ const RailItem = memo(function RailItem({
               : "hover:bg-muted",
         )}
       >
-        {depth > 0 && !collapsed ? (
-          <GitFork className="size-3 shrink-0 text-primary/70" />
-        ) : null}
         <span className="relative flex size-6 shrink-0 items-center justify-center">
           <img
             src={agentIconSrc(session.agent)}
@@ -7199,6 +7239,7 @@ function SessionActionsMenu({
   users,
   onRefresh,
   onRemove,
+  onBrain,
   onError,
   triggerClassName,
 }: {
@@ -7206,6 +7247,7 @@ function SessionActionsMenu({
   users: User[];
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
+  onBrain: (sid: string) => Promise<void>;
   onError: (error: string | null) => void;
   triggerClassName?: string;
 }) {
@@ -7250,6 +7292,16 @@ function SessionActionsMenu({
       await onRefresh().catch((err) =>
         onError(err instanceof Error ? err.message : String(err)),
       );
+    }
+  }
+
+  async function sendToBrain() {
+    if (!sid) return;
+    onError(null);
+    try {
+      await onBrain(sid);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -7309,6 +7361,10 @@ function SessionActionsMenu({
             <GitFork className="size-4" />
             Fork
           </DropdownMenuItem>
+          <DropdownMenuItem disabled={!sid} onClick={() => void sendToBrain()}>
+            <Brain className="size-4" />
+            Send to brain
+          </DropdownMenuItem>
           {canDriveSession(session) ? (
             <>
               <DropdownMenuSeparator />
@@ -7346,6 +7402,7 @@ function SessionTitleSheet({
   onTrackSendStatus,
   onRefresh,
   onRemove,
+  onBrain,
   onClose,
 }: {
   // The active session id. The sheet is a top-level modal (lifted out of any one
@@ -7369,6 +7426,7 @@ function SessionTitleSheet({
   onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
+  onBrain: (sid: string) => Promise<void>;
   onClose: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -7833,6 +7891,7 @@ function SessionTitleSheet({
             users={users}
             onRefresh={onRefresh}
             onRemove={onRemove}
+            onBrain={onBrain}
             onError={setError}
             triggerClassName="size-9"
           />
@@ -8561,6 +8620,7 @@ const onTouchStart = (e: ReactTouchEvent) => {
             users={users}
             onRefresh={onRefresh}
             onRemove={onRemove}
+            onBrain={onBrain}
             onError={setError}
           />
         )}
@@ -8885,6 +8945,34 @@ function MessageBubble({
             <ReasoningTrigger isStreaming={live} />
             <ReasoningContent>{message.text || "thinking..."}</ReasoningContent>
           </Reasoning>
+        </MessageContent>
+      </AiMessage>
+    );
+  }
+
+  if (message.kind === "image" && message.url) {
+    const label = message.caption || message.text || message.name || "Image";
+    return (
+      <AiMessage className={cn("msg", entering && "lfg-msg-in")} from="assistant">
+        <MessageContent className="not-prose w-fit max-w-[min(34rem,92vw)] overflow-hidden rounded-lg border border-border bg-card p-0 shadow-sm">
+          <a
+            href={message.url}
+            target="_blank"
+            rel="noreferrer"
+            className="block bg-muted"
+            aria-label={`Open ${label}`}
+          >
+            <img
+              src={message.url}
+              alt={message.alt || label}
+              loading="lazy"
+              className="block max-h-[24rem] w-auto max-w-full object-contain"
+            />
+          </a>
+          <div className="flex min-w-0 items-center justify-between gap-3 px-3 py-2 text-xs text-muted-foreground">
+            <span className="min-w-0 truncate">{label}</span>
+            {message.size ? <span className="shrink-0">{formatBytes(message.size)}</span> : null}
+          </div>
         </MessageContent>
       </AiMessage>
     );
@@ -9362,6 +9450,18 @@ type ResumableSession = {
   agent: "claude" | "codex";
 };
 
+// Facet counts + total returned alongside the resumable roster so the picker can
+// render agent/project filter chips with live counts (see /api/sessions/resumable).
+type ResumableFacets = {
+  agents: Array<{ agent: string; count: number }>;
+  projects: Array<{ project: string; count: number }>;
+};
+type ResumableResponse = {
+  sessions: ResumableSession[];
+  total: number;
+  facets: ResumableFacets;
+};
+
 function NewSessionDialog({
   open,
   repos,
@@ -9466,6 +9566,9 @@ function NewSessionDialog({
     const shell = inlineShellRef.current;
     if (!shell) return;
     const SWIPE_COMMIT = 64;
+    const RESUME_SWIPE_Y = 104;
+    const RESUME_SWIPE_RATIO = 1.55;
+    const RESUME_SWIPE_CANCEL_Y = RESUME_SWIPE_Y + 28;
     const st = { active: false, decided: false, horizontal: false, x0: 0, y0: 0, dx: 0 };
     const reducedMotion = () =>
       window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
@@ -9525,7 +9628,7 @@ function NewSessionDialog({
       const dx = touch.clientX - st.x0;
       const dy = touch.clientY - st.y0;
       const maybeOpenHistory = () => {
-        if (dy < -64 && Math.abs(dy) > Math.abs(dx) * 1.25) {
+        if (dy < -RESUME_SWIPE_Y && Math.abs(dy) > Math.abs(dx) * RESUME_SWIPE_RATIO) {
           event.preventDefault();
           haptic("selection");
           setResumeOpen(true);
@@ -9540,13 +9643,13 @@ function NewSessionDialog({
         st.horizontal = Math.abs(dx) > Math.abs(dy) * 1.18;
         if (!st.horizontal) {
           if (maybeOpenHistory()) return;
-          if (dy > 18 || Math.abs(dy) > 80) st.active = false;
+          if (dy > 18 || Math.abs(dy) > RESUME_SWIPE_CANCEL_Y) st.active = false;
           return;
         }
       }
       if (!st.horizontal) {
         if (maybeOpenHistory()) return;
-        if (dy > 18 || Math.abs(dy) > 80) {
+        if (dy > 18 || Math.abs(dy) > RESUME_SWIPE_CANCEL_Y) {
           st.active = false;
         }
         return;
@@ -10246,7 +10349,8 @@ function NewSessionDialog({
 
       {resumeOpen ? (
         <ResumeSessionSheet
-          sessions={resumable}
+          initial={resumable}
+          scopedProject={scopedProject}
           onPick={(session) => {
             closeResume();
             resume(session);
@@ -10312,29 +10416,246 @@ function NewSessionDialog({
 // trapped inside the bottom bar). Skeleton rows hold the list's height while the
 // fetch is in flight, so the screen never jumps when the data lands.
 function ResumeSessionSheet({
-  sessions,
+  initial,
+  scopedProject,
   onPick,
   onClose,
 }: {
-  sessions: ResumableSession[] | null;
+  // Parent prefetch (newest, unfiltered) — used only to paint the first frame
+  // without a skeleton flash before this sheet's own fetch lands.
+  initial: ResumableSession[] | null;
+  // The live view's active project filter ("__all" or a project name). When a
+  // specific project is active, the picker opens pre-scoped to it.
+  scopedProject: string;
   onPick: (session: ResumableSession) => void;
   onClose: () => void;
 }) {
+  const PAGE = 25;
+  const scoped = scopedProject && scopedProject !== "__all" ? scopedProject : "all";
+
+  const [search, setSearch] = useState("");
+  const [debounced, setDebounced] = useState("");
+  const [agent, setAgent] = useState<"all" | "claude" | "codex">("all");
+  const [project, setProject] = useState<string>(scoped);
+  // Seed from the parent prefetch only when opening unscoped — a scoped open
+  // needs its own first page, so the unfiltered seed would be wrong.
+  const [items, setItems] = useState<ResumableSession[]>(
+    scoped === "all" && initial ? initial : [],
+  );
+  const [total, setTotal] = useState<number>(scoped === "all" && initial ? initial.length : 0);
+  const [facets, setFacets] = useState<ResumableFacets>({ agents: [], projects: [] });
+  const [loading, setLoading] = useState(false); // full (reset) fetch
+  const [loadingMore, setLoadingMore] = useState(false); // next-page append
+  const searchRef = useRef<HTMLInputElement>(null);
+  const itemsRef = useRef(items);
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
+
+  // Debounce the search box so keystrokes don't hammer the endpoint.
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebounced(search.trim()), 220);
+    return () => window.clearTimeout(id);
+  }, [search]);
+
+  // A monotonic token guards against out-of-order responses. reset=true fetches
+  // page 0 and replaces the list; reset=false appends the next page.
+  const reqRef = useRef(0);
+  const fetchPage = useCallback(
+    (reset: boolean) => {
+      const token = reset ? ++reqRef.current : reqRef.current;
+      const offset = reset ? 0 : itemsRef.current.length;
+      if (reset) setLoading(true);
+      else setLoadingMore(true);
+      const params = new URLSearchParams({ limit: String(PAGE), offset: String(offset) });
+      if (debounced) params.set("search", debounced);
+      if (agent !== "all") params.set("agent", agent);
+      if (project !== "all") params.set("project", project);
+      api<ResumableResponse>(`/api/sessions/resumable?${params.toString()}`)
+        .then((r) => {
+          if (token !== reqRef.current) return;
+          const batch = Array.isArray(r.sessions) ? r.sessions : [];
+          setTotal(r.total ?? batch.length);
+          setFacets(r.facets ?? { agents: [], projects: [] });
+          setItems((prev) => (reset ? batch : [...prev, ...batch]));
+        })
+        .catch(() => {
+          if (token !== reqRef.current || !reset) return;
+          setItems([]);
+          setTotal(0);
+          setFacets({ agents: [], projects: [] });
+        })
+        .finally(() => {
+          if (token !== reqRef.current) return;
+          if (reset) setLoading(false);
+          else setLoadingMore(false);
+        });
+    },
+    [debounced, agent, project],
+  );
+
+  // Reset + refetch page 0 whenever the query / filters change (and on mount).
+  useEffect(() => {
+    fetchPage(true);
+  }, [fetchPage]);
+
+  const hasMore = items.length < total;
+  const canLoadMore = hasMore && !loading && !loadingMore;
+  // Stable ref so the mount-once IntersectionObserver always calls the latest
+  // closure (deps change every render as filters/counts move).
+  const loadMoreRef = useRef<() => void>(() => {});
+  loadMoreRef.current = () => {
+    if (canLoadMore) fetchPage(false);
+  };
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = sentinelRef.current;
+    if (!el) return;
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) loadMoreRef.current();
+      },
+      { rootMargin: "300px" },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, []);
+
+  const agentCount = (kind: "claude" | "codex") =>
+    facets.agents.find((a) => a.agent === kind)?.count ?? 0;
+  // Keep the currently-selected project visible even if the active search would
+  // otherwise drop it out of the facet list.
+  const projectChips = useMemo(() => {
+    const list = facets.projects.slice(0, 12);
+    if (project !== "all" && !list.some((p) => p.project === project)) {
+      list.unshift({ project, count: 0 });
+    }
+    return list;
+  }, [facets.projects, project]);
+  const filtersActive = agent !== "all" || project !== "all" || !!debounced;
+  const showSkeleton = loading && items.length === 0;
+
+  const agentTabs: Array<{ key: "all" | "claude" | "codex"; label: string; badge?: number }> = [
+    { key: "all", label: "All" },
+    { key: "claude", label: "Claude", badge: agentCount("claude") },
+    { key: "codex", label: "Codex", badge: agentCount("codex") },
+  ];
+
   return createPortal(
     <div className="pointer-events-auto fixed inset-0 z-[80] flex flex-col bg-background text-foreground lfg-resume-in">
       <header
-        className="flex shrink-0 items-center gap-2 border-b border-border px-2 pb-3"
+        className="flex shrink-0 flex-col gap-2 border-b border-border px-2 pb-2"
         style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 0.75rem)" }}
       >
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Back"
-          className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition hover:text-foreground active:scale-95"
-        >
-          <ChevronLeft className="size-5" />
-        </button>
-        <h2 className="text-[15px] font-semibold">Resume a session</h2>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Back"
+            className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition hover:text-foreground active:scale-95"
+          >
+            <ChevronLeft className="size-5" />
+          </button>
+          <h2 className="text-[15px] font-semibold">Resume a session</h2>
+          {!showSkeleton ? (
+            <span className="ml-auto rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
+              {total}
+            </span>
+          ) : null}
+        </div>
+
+        {/* Search */}
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground/70" />
+          <input
+            ref={searchRef}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search sessions, prompts, projects…"
+            aria-label="Search resumable sessions"
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
+            className="h-9 w-full rounded-full border border-border bg-muted/40 pl-9 pr-9 text-sm outline-none transition focus:border-ring focus:bg-background"
+          />
+          {search ? (
+            <button
+              type="button"
+              onClick={() => {
+                setSearch("");
+                searchRef.current?.focus();
+              }}
+              aria-label="Clear search"
+              className="absolute right-2.5 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground transition hover:text-foreground"
+            >
+              <X className="size-4" />
+            </button>
+          ) : null}
+        </div>
+
+        {/* Agent segmented control */}
+        <div className="flex items-center gap-1">
+          <div className="inline-flex h-8 items-center rounded-full bg-muted p-0.5 text-xs font-semibold">
+            {agentTabs.map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setAgent(t.key)}
+                className={cn(
+                  "flex h-7 items-center gap-1.5 rounded-full px-3 transition",
+                  agent === t.key
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground",
+                )}
+              >
+                {t.key !== "all" ? (
+                  <img src={agentIconSrc(t.key)} alt="" className="size-4" />
+                ) : null}
+                <span>{t.label}</span>
+                {t.badge ? (
+                  <span className="rounded-full bg-muted-foreground/15 px-1.5 text-[10px] tabular-nums">
+                    {t.badge}
+                  </span>
+                ) : null}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Project chips */}
+        {projectChips.length ? (
+          <div className="-mx-2 flex gap-1.5 overflow-x-auto px-2 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            <button
+              type="button"
+              onClick={() => setProject("all")}
+              className={cn(
+                "flex h-7 shrink-0 items-center gap-1 rounded-full border px-2.5 text-xs font-medium transition",
+                project === "all"
+                  ? "border-foreground bg-foreground text-background"
+                  : "border-border text-muted-foreground hover:text-foreground",
+              )}
+            >
+              All projects
+            </button>
+            {projectChips.map((p) => (
+              <button
+                key={p.project}
+                type="button"
+                onClick={() => setProject(p.project === project ? "all" : p.project)}
+                className={cn(
+                  "flex h-7 shrink-0 items-center gap-1 rounded-full border px-2.5 text-xs font-medium transition",
+                  project === p.project
+                    ? "border-foreground bg-foreground text-background"
+                    : "border-border text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Folder className="size-3" />
+                <span className="max-w-32 truncate">{p.project}</span>
+                {p.count ? <span className="tabular-nums opacity-70">{p.count}</span> : null}
+              </button>
+            ))}
+          </div>
+        ) : null}
       </header>
 
       <div
@@ -10342,11 +10663,11 @@ function ResumeSessionSheet({
         style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 0.5rem)" }}
       >
         <div className="mx-auto max-w-lg">
-          {sessions == null ? (
+          {showSkeleton ? (
             <div className="animate-pulse space-y-1" aria-hidden>
               {Array.from({ length: 7 }).map((_, i) => (
                 <div key={i} className="flex items-center gap-3 px-3 py-3">
-                  <div className="size-4 shrink-0 rounded-full bg-muted" />
+                  <div className="size-8 shrink-0 rounded-lg bg-muted" />
                   <div className="min-w-0 flex-1 space-y-1.5">
                     <div className="h-3 w-1/2 rounded bg-muted" />
                     <div className="h-2.5 w-3/4 rounded bg-muted/60" />
@@ -10354,34 +10675,85 @@ function ResumeSessionSheet({
                 </div>
               ))}
             </div>
-          ) : sessions.length === 0 ? (
+          ) : items.length === 0 ? (
             <div className="flex flex-col items-center justify-center gap-2 px-4 py-16 text-center text-sm text-muted-foreground">
               <RotateCcw className="size-5" />
-              <span>No recent sessions to resume</span>
+              <span>{filtersActive ? "No sessions match your filters" : "No recent sessions to resume"}</span>
+              {filtersActive ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearch("");
+                    setAgent("all");
+                    setProject("all");
+                  }}
+                  className="mt-1 rounded-full border border-border px-3 py-1 text-xs font-medium text-foreground transition hover:bg-muted"
+                >
+                  Clear filters
+                </button>
+              ) : null}
             </div>
           ) : (
-            <div className="space-y-0.5">
-              {sessions.map((s) => (
+            <>
+              <div className={cn("space-y-0.5 transition-opacity", loading && "opacity-60")}>
+              {items.map((s) => (
                 <button
                   key={s.sessionId}
                   type="button"
                   onClick={() => onPick(s)}
-                  className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left transition hover:bg-muted active:scale-[0.99]"
+                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-muted active:scale-[0.99]"
                 >
-                  <RotateCcw className="size-4 shrink-0 text-muted-foreground" />
+                  <span className="relative flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted">
+                    <img src={agentIconSrc(s.agent)} alt={agentIconAlt(s.agent)} className="size-5" />
+                  </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium text-foreground">
                       {s.title}
                     </span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {s.agent === "codex" ? "codex · " : ""}
-                      {s.project} · {timeAgo(s.lastActivityAt)}
+                    {s.lastUserText ? (
+                      <span className="mt-0.5 block truncate text-xs text-muted-foreground/90">
+                        {s.lastUserText}
+                      </span>
+                    ) : null}
+                    <span className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                      {s.project ? (
+                        <span className="inline-flex max-w-40 items-center gap-1 truncate rounded-full bg-muted px-1.5 py-0.5 font-medium">
+                          <Folder className="size-3 shrink-0" />
+                          <span className="truncate">{s.project}</span>
+                        </span>
+                      ) : null}
+                      <span className="tabular-nums">{timeAgo(s.lastActivityAt)}</span>
                     </span>
                   </span>
-                  <ChevronRight className="size-4 shrink-0 text-muted-foreground/70" />
+                  <ChevronRight className="size-4 shrink-0 self-center text-muted-foreground/70" />
                 </button>
               ))}
-            </div>
+              </div>
+
+              {/* Infinite scroll: the observer trips this sentinel ~300px early
+                  and appends the next page; the button is the tap fallback. */}
+              <div ref={sentinelRef} aria-hidden className="h-px" />
+              {hasMore ? (
+                <button
+                  type="button"
+                  onClick={() => fetchPage(false)}
+                  disabled={loadingMore}
+                  className="mt-1 flex w-full items-center justify-center gap-2 rounded-xl px-3 py-3 text-xs font-medium text-muted-foreground transition hover:bg-muted disabled:opacity-60"
+                >
+                  {loadingMore ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" /> Loading…
+                    </>
+                  ) : (
+                    `Load ${Math.min(PAGE, total - items.length)} more`
+                  )}
+                </button>
+              ) : items.length > PAGE ? (
+                <p className="py-3 text-center text-[11px] text-muted-foreground/70">
+                  All {total} shown
+                </p>
+              ) : null}
+            </>
           )}
         </div>
       </div>

@@ -4,6 +4,7 @@ import * as JsxRuntime from "react/jsx-runtime";
 import { createRoot } from "react-dom/client";
 import * as ReactDOM from "react-dom";
 import "./index.css";
+import { toast } from "sonner";
 import { App, RootErrorBoundary } from "./App";
 import { registerExtension } from "./lib/extensions";
 import { installErrorReporting } from "./lib/report-error";
@@ -30,13 +31,6 @@ declare global {
 }
 window.lfg = { React, ReactDOM, jsxRuntime: JsxRuntime, registerExtension };
 
-const UPDATE_PROBE_PARAM = "lfg_update_probe";
-const isUpdateProbe = new URLSearchParams(window.location.search).has(UPDATE_PROBE_PARAM);
-const CURRENT_BUILD =
-  document
-    .querySelector<HTMLScriptElement>('script[type="module"][src*="/assets/index-"]')
-    ?.src.match(/index-[\w-]+\.js/)?.[0] ?? null;
-
 // Mirror the OS light/dark preference onto the `.dark` class the shadcn
 // components key off (see @custom-variant dark in index.css). This is the
 // React equivalent of lfg's prefers-color-scheme media queries.
@@ -49,167 +43,79 @@ window
   .matchMedia("(prefers-color-scheme: dark)")
   .addEventListener("change", applyTheme);
 
-async function signalUpdateProbeReady() {
-  const stylesheets = Array.from(
-    document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'),
-  );
-  await Promise.all(
-    stylesheets.map(
-      (link) =>
-        link.sheet ||
-        new Promise<void>((resolve) => {
-          link.addEventListener("load", () => resolve(), { once: true });
-          link.addEventListener("error", () => resolve(), { once: true });
-        }),
-    ),
-  );
-  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  window.parent?.postMessage(
-    { type: "lfg:update-probe-ready", build: CURRENT_BUILD },
-    window.location.origin,
-  );
-}
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <RootErrorBoundary>
+      <App />
+    </RootErrorBoundary>
+  </StrictMode>,
+);
 
-if (isUpdateProbe) {
-  document.documentElement.style.background = "transparent";
-  void signalUpdateProbeReady();
-} else {
-  createRoot(document.getElementById("root")!).render(
-    <StrictMode>
-      <RootErrorBoundary>
-        <App />
-      </RootErrorBoundary>
-    </StrictMode>,
-  );
-}
-
-// Register the service worker so the app is installable and the shell works
-// offline. Network-first (see sw.js) keeps it from serving stale builds.
-if (!isUpdateProbe && "serviceWorker" in navigator) {
+// Register the service worker so the app is installable, the shell works
+// offline, and cache-first serving of the hashed /assets/* bundle makes reloads
+// instant (see sw.js). Each deploy ships a byte-different worker, so we can lean
+// on the native SW update lifecycle instead of polling for changed asset hashes:
+// when a new worker finishes installing it sits in "waiting", and we surface a
+// toast. The user clicks Reload → we tell the waiting worker to take over → the
+// resulting controllerchange reloads the page once onto the fresh bundle. We
+// never swap the running app out from under an in-progress session.
+if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch(() => {});
+    void registerServiceWorker();
   });
 }
 
-// ── auto-update ────────────────────────────────────────────────────────────
-// sw.js is byte-identical across builds, so the browser never fires a SW
-// update event — an open tab/installed PWA would otherwise sit on its old JS
-// forever. Instead we watch the hashed entry chunk: read the one this document
-// loaded, then poll the live index.html for its current hash. When they differ
-// a new build is published, so reload (the network-first SW then serves the
-// fresh shell + assets). In dev there's no hashed asset, so CURRENT stays null
-// and this whole block no-ops — Vite HMR owns that path.
-if (!isUpdateProbe && CURRENT_BUILD) {
-  let reloading = false;
-  let updateProbeFrame: HTMLIFrameElement | null = null;
-
-  type BuildSnapshot = {
-    entry: string;
-    assets: string[];
-  };
-
-  const parseBuildSnapshot = (html: string): BuildSnapshot | null => {
-    const doc = new DOMParser().parseFromString(html, "text/html");
-    const entrySrc =
-      doc
-        .querySelector<HTMLScriptElement>('script[type="module"][src*="/assets/index-"]')
-        ?.getAttribute("src") ?? "";
-    const entry = entrySrc.match(/index-[\w-]+\.js/)?.[0] ?? null;
-    if (!entry) return null;
-    const assets = [
-      entrySrc,
-      ...Array.from(doc.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"][href^="/assets/"]'))
-        .map((link) => link.getAttribute("href"))
-        .filter((href): href is string => !!href),
-    ].map((path) => new URL(path, window.location.origin).pathname);
-    return { entry, assets: Array.from(new Set(assets)) };
-  };
-
-  const latestBuild = async (): Promise<BuildSnapshot | null> => {
-    try {
-      const res = await fetch("/", { cache: "reload" });
-      if (!res.ok) return null;
-      return parseBuildSnapshot(await res.text());
-    } catch {
-      return null; // offline / transient — try again on the next tick
-    }
-  };
-
-  const freshAssetsReady = async (snapshot: BuildSnapshot): Promise<boolean> => {
-    try {
-      const results = await Promise.all(
-        snapshot.assets.map(async (path) => {
-          const res = await fetch(path, { cache: "reload" });
-          if (!res.ok) return false;
-          const contentType = res.headers.get("content-type") ?? "";
-          if (path.endsWith(".js")) return contentType.includes("javascript");
-          if (path.endsWith(".css")) return contentType.includes("text/css");
-          return true;
-        }),
-      );
-      return results.every(Boolean);
-    } catch {
-      return false;
-    }
-  };
-
-  const stagedBuildReady = async (snapshot: BuildSnapshot): Promise<boolean> => {
-    if (!document.body) return false;
-    updateProbeFrame?.remove();
-    return new Promise<boolean>((resolve) => {
-      let settled = false;
-      const cleanup = (ready: boolean) => {
-        if (settled) return;
-        settled = true;
-        window.removeEventListener("message", onMessage);
-        window.clearTimeout(timeout);
-        updateProbeFrame?.remove();
-        updateProbeFrame = null;
-        resolve(ready);
-      };
-      const onMessage = (event: MessageEvent) => {
-        if (event.origin !== window.location.origin) return;
-        const data = event.data as { type?: string; build?: string } | null;
-        if (data?.type !== "lfg:update-probe-ready") return;
-        cleanup(data.build === snapshot.entry);
-      };
-      const timeout = window.setTimeout(() => cleanup(false), 15_000);
-      window.addEventListener("message", onMessage);
-
-      const frame = document.createElement("iframe");
-      frame.tabIndex = -1;
-      frame.setAttribute("aria-hidden", "true");
-      frame.style.cssText =
-        "position:fixed;left:-1px;top:-1px;width:1px;height:1px;border:0;opacity:0;pointer-events:none;";
-      frame.src = `/?${UPDATE_PROBE_PARAM}=${encodeURIComponent(snapshot.entry)}&t=${Date.now()}`;
-      updateProbeFrame = frame;
-      document.body.appendChild(frame);
-    });
-  };
-
-  const checkForUpdate = async () => {
-    if (reloading) return;
-    const latest = await latestBuild();
-    if (!latest || latest.entry === CURRENT_BUILD) return;
-    // A deploy restart can briefly expose the new index before every hashed asset
-    // is reachable. If we reload in that window, the service worker may serve the
-    // new shell from cache but miss the entry module, leaving an installed PWA on a
-    // blank page. Prove and warm the fresh entry/CSS first; retry on the next tick.
-    if (!(await freshAssetsReady(latest))) return;
-    // Then boot that fresh bundle in a hidden probe frame. Only reload the visible
-    // PWA after the new entry has evaluated and its stylesheet has loaded.
-    if (!(await stagedBuildReady(latest))) return;
-    // Don't yank the page out from under an in-progress message — defer the
-    // reload to the next check once the composer isn't focused.
-    const el = document.activeElement;
-    if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA")) return;
-    reloading = true;
-    window.location.reload();
-  };
-
-  setInterval(() => void checkForUpdate(), 60_000);
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") void checkForUpdate();
+function promptUpdate(worker: ServiceWorker) {
+  toast("A new version of lfg is available", {
+    description: "Reload to get the latest.",
+    duration: Infinity,
+    action: {
+      label: "Reload",
+      onClick: () => worker.postMessage({ type: "SKIP_WAITING" }),
+    },
   });
-  window.addEventListener("focus", () => void checkForUpdate());
+}
+
+async function registerServiceWorker() {
+  try {
+    const reg = await navigator.serviceWorker.register("/sw.js");
+
+    // A worker updated during a previous visit may already be waiting.
+    if (reg.waiting && navigator.serviceWorker.controller) {
+      promptUpdate(reg.waiting);
+    }
+
+    reg.addEventListener("updatefound", () => {
+      const installing = reg.installing;
+      if (!installing) return;
+      installing.addEventListener("statechange", () => {
+        // "installed" while a controller already exists = an update (not the
+        // first-ever install), so it's safe to offer the reload toast.
+        if (installing.state === "installed" && navigator.serviceWorker.controller) {
+          promptUpdate(installing);
+        }
+      });
+    });
+
+    // Cheap freshness checks — reg.update() is a conditional GET on sw.js, not a
+    // full re-boot of the app. Run on an interval and when the tab refocuses.
+    const check = () => {
+      reg.update().catch(() => {});
+    };
+    setInterval(check, 60_000);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") check();
+    });
+    window.addEventListener("focus", check);
+  } catch {
+    // Registration failed — the app still runs, just without offline/update UX.
+  }
+
+  // When the freshly-activated worker takes control, reload once onto it.
+  let refreshing = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (refreshing) return;
+    refreshing = true;
+    window.location.reload();
+  });
 }

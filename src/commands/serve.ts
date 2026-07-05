@@ -83,6 +83,8 @@ import {
   sessionIdForPid,
   pendingToolPrompt,
   listResumable,
+  queryResumable,
+  refreshResumableCache,
   cwdForTranscript,
   cwdForCodexTranscript,
   type PendingPrompt,
@@ -162,6 +164,14 @@ import {
   thinkingLevelsForAgent,
 } from "../agent-catalog.ts";
 import { listSkillCatalog } from "../skills-catalog.ts";
+import {
+  createImageArtifact,
+  getImageArtifact,
+  imageArtifactMessagesSince,
+  imageArtifactToMessage,
+  listImageArtifacts,
+  type ImageArtifactMessage,
+} from "../artifacts.ts";
 
 // Where the user keeps the repos lfg can launch agents into. Scanned for git
 // repos at runtime; defaults to ~/repos. The lfg repo itself (PATHS.root) is
@@ -556,6 +566,24 @@ function visibleTranscriptMessages<T extends { kind: string }>(messages: T[]): T
   return messages.filter((message) => message.kind !== "tool_result");
 }
 
+function withImageArtifacts<T extends { text: string; ts?: number | null; id?: string | null }>(
+  sessionId: string,
+  messages: T[],
+): Array<T | ImageArtifactMessage> {
+  const artifacts = listImageArtifacts(sessionId).map(imageArtifactToMessage);
+  if (!artifacts.length) return messages;
+  const seen = new Set(messages.map((message) => message.id).filter(Boolean));
+  return [...messages, ...artifacts.filter((artifact) => !seen.has(artifact.id))]
+    .sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+}
+
+function transcriptMessagesForClient<T extends { kind: string; text: string; ts?: number | null; id?: string | null }>(
+  sessionId: string,
+  messages: T[],
+): Array<T | ImageArtifactMessage> {
+  return withImageArtifacts(sessionId, visibleTranscriptMessages(messages));
+}
+
 type DraftState = { id: string; text: string };
 
 type AiTextDeltaPart = {
@@ -650,13 +678,31 @@ function liveSessionIds(sessions: Session[]): Set<string> {
   return ids;
 }
 
+// Live-session enumeration goes through pgrep (~300ms). The resumable picker
+// only needs live ids to hide already-running sessions — a cosmetic filter that
+// tolerates a few seconds of staleness — so cache them briefly instead of
+// re-running listSessions() on every keystroke/filter change in the picker.
+let cachedLiveIds: { ids: Set<string>; at: number } | null = null;
+const LIVE_IDS_TTL_MS = 3000;
+async function liveSessionIdsCached(): Promise<Set<string>> {
+  const now = Date.now();
+  if (cachedLiveIds && now - cachedLiveIds.at < LIVE_IDS_TTL_MS) return cachedLiveIds.ids;
+  const ids = liveSessionIds(await listSessions());
+  cachedLiveIds = { ids, at: Date.now() };
+  return ids;
+}
+
 function warmRenderedBacklogs(sessions: Session[], limit = 40): void {
   for (const session of sessions.slice(0, MESSAGE_HTML_CACHE_MAX)) {
     const path = session.transcriptPath;
     if (!path) continue;
     void recentMessagesCached(path, limit)
       .then((messages) => {
-        for (const message of visibleTranscriptMessages(messages)) msgWithHtml(message);
+        if (session.sessionId) {
+          for (const message of transcriptMessagesForClient(session.sessionId, messages)) msgWithHtml(message);
+        } else {
+          for (const message of visibleTranscriptMessages(messages)) msgWithHtml(message);
+        }
       })
       .catch(() => {});
   }
@@ -2549,10 +2595,22 @@ export async function cmdServe() {
       // but every transcript survives on disk — this surfaces those so the UI
       // can offer to resume one. Excludes anything currently live.
       if (path === "/api/sessions/resumable" && req.method === "GET") {
-        const liveIds = liveSessionIds(await listSessions());
+        const liveIds = await liveSessionIdsCached();
         const limit = Number(url.searchParams.get("limit")) || 30;
-        const sessions = await listResumable({ limit, excludeIds: liveIds });
-        return json({ sessions });
+        const offset = Number(url.searchParams.get("offset")) || 0;
+        const search = url.searchParams.get("search")?.trim() || undefined;
+        const agentParam = url.searchParams.get("agent")?.trim();
+        const agent = agentParam === "claude" || agentParam === "codex" ? agentParam : undefined;
+        const project = url.searchParams.get("project")?.trim() || undefined;
+        const { sessions, total, facets } = await queryResumable({
+          limit,
+          offset,
+          search,
+          agent,
+          project,
+          excludeIds: liveIds,
+        });
+        return json({ sessions, total, facets });
       }
 
       // Resume a closed session in its original cwd as a fresh managed session,
@@ -2918,7 +2976,7 @@ export async function cmdServe() {
         if (body?.user || parent?.assignedUser) assignUser(tmuxName, body?.user || parent?.assignedUser || null);
         const r =
           agent === "codex"
-            ? spawnManagedCodexSession({ name: tmuxName, cwd, prompt, model, thinkingLevel })
+            ? spawnManagedCodexSession({ name: tmuxName, cwd, prompt, model, thinkingLevel, lfgSessionId: launchId })
             : agent === "grok"
               ? spawnManagedGrokSession({
                   name: tmuxName,
@@ -2926,6 +2984,7 @@ export async function cmdServe() {
                   prompt,
                   model: model ?? GROK_DEFAULT_MODEL,
                   thinkingLevel,
+                  lfgSessionId: launchId,
                 })
             : agent === "hermes"
               ? spawnManagedHermesSession({
@@ -2933,6 +2992,7 @@ export async function cmdServe() {
                   cwd,
                   model: model ?? HERMES_DEFAULT_MODEL,
                   provider: HERMES_PROVIDER,
+                  lfgSessionId: launchId,
                 })
             : agent === "aisdk"
               ? spawnManagedAisdkSession({
@@ -2942,6 +3002,7 @@ export async function cmdServe() {
                   model: model ?? "opus",
                   sessionId: aisdkSessionId!,
                   thinkingLevel,
+                  lfgSessionId: launchId,
                 })
               : agent === "codex-aisdk"
                 ? spawnManagedCodexAisdkSession({
@@ -2951,6 +3012,7 @@ export async function cmdServe() {
                     model: model ?? "gpt-5.5",
                     key: codexAisdkKey!,
                     thinkingLevel,
+                    lfgSessionId: launchId,
                   })
                 : agent === "opencode"
                   ? spawnManagedOpencodeAisdkSession({
@@ -2959,8 +3021,9 @@ export async function cmdServe() {
                       prompt,
                       model: model ?? OPENCODE_DEFAULT_MODEL,
                       key: opencodeKey!,
+                      lfgSessionId: launchId,
                     })
-                  : spawnManagedSession({ name: tmuxName, cwd, prompt, model, thinkingLevel });
+                  : spawnManagedSession({ name: tmuxName, cwd, prompt, model, thinkingLevel, lfgSessionId: launchId });
         if (!r.ok) {
           removeManaged(tmuxName);
           assignUser(tmuxName, null);
@@ -2988,6 +3051,46 @@ export async function cmdServe() {
           parentSessionId: parent?.sessionId ?? parentId ?? null,
           worktree: worktree?.path ?? null,
         });
+      }
+
+      {
+        const m = path.match(/^\/api\/artifacts\/([a-z0-9-]+)$/);
+        if (m && req.method === "GET") {
+          const artifact = getImageArtifact(m[1]);
+          if (!artifact) return err(404, "artifact not found");
+          const file = Bun.file(artifact.filePath);
+          if (!(await file.exists())) return err(404, "artifact file not found");
+          return new Response(file, {
+            headers: {
+              "Content-Type": artifact.mimeType,
+              "Cache-Control": "private, max-age=31536000, immutable",
+              "X-Content-Type-Options": "nosniff",
+            },
+          });
+        }
+      }
+
+      {
+        const m = path.match(/^\/api\/sessions\/([0-9a-fA-F-]{36})\/artifacts\/images$/);
+        if (m && req.method === "POST") {
+          const body = (await req.json().catch(() => null)) as {
+            path?: string;
+            caption?: string;
+            alt?: string;
+          } | null;
+          if (!body?.path?.trim()) return err(400, "path required");
+          try {
+            const artifact = createImageArtifact({
+              sessionId: m[1],
+              path: body.path,
+              caption: body.caption,
+              alt: body.alt,
+            });
+            return json({ ok: true, artifact, message: imageArtifactToMessage(artifact) });
+          } catch (e) {
+            return err(400, e instanceof Error ? e.message : "could not create image artifact");
+          }
+        }
       }
 
       {
@@ -3144,7 +3247,7 @@ export async function cmdServe() {
               id: m[1],
               total: page.total,
               nextBefore: page.nextBefore,
-              messages: visibleTranscriptMessages(page.messages).map(msgWithHtml),
+              messages: transcriptMessagesForClient(m[1], page.messages).map(msgWithHtml),
             });
           }
           const full = url.searchParams.get("full") === "1";
@@ -3157,13 +3260,14 @@ export async function cmdServe() {
             if (page) {
               return json({
                 id: m[1],
-                messages: page.messages.map(msgWithHtml),
+                messages: transcriptMessagesForClient(m[1], page.messages).map(msgWithHtml),
               });
             }
           }
           return json({
             id: m[1],
-            messages: visibleTranscriptMessages(
+            messages: transcriptMessagesForClient(
+              m[1],
               await (full ? recentMessages : recentMessagesCached)(tp, lim, {
                 maxBytes: full ? null : undefined,
               }),
@@ -3467,7 +3571,10 @@ export async function cmdServe() {
           if (!tp) return err(404, "session transcript not found");
           enqueueTranscriptIndex(tp, m[1]);
           const page = await indexedMessagePage(tp, m[1], { limit: 60 });
-          const msgs = (page?.messages ?? visibleTranscriptMessages(await recentMessagesCached(tp, 60))).map(msgWithHtml);
+          const msgs = transcriptMessagesForClient(
+            m[1],
+            page?.messages ?? await recentMessagesCached(tp, 60),
+          ).map(msgWithHtml);
           return json({ id: m[1], messages: msgs });
         }
       }
@@ -3575,6 +3682,16 @@ export async function cmdServe() {
             const offsets = new Map<string, number>();
             const bufs = new Map<string, string>();
             const lastSig = new Map<string, string>();
+            const lastArtifactAt = new Map<string, number>();
+            const artifactOne = (sid: string) => {
+              if (closed) return;
+              const after = lastArtifactAt.get(sid) ?? 0;
+              const messages = imageArtifactMessagesSince(sid, after);
+              for (const message of messages) {
+                lastArtifactAt.set(sid, Math.max(lastArtifactAt.get(sid) ?? 0, message.ts ?? 0));
+                send(`event: msg\ndata: ${JSON.stringify({ sid, m: msgWithHtml(message) })}\n\n`);
+              }
+            };
             const pumpOne = async (p: LivePane) => {
               if (closed) return;
               try {
@@ -3721,6 +3838,8 @@ export async function cmdServe() {
                     lastSig.set(p.sid, " ");
                     lastQ.set(p.sid, "[]");
                     lastBusy.set(p.sid, "?");
+                    lastArtifactAt.set(p.sid, 0);
+                    artifactOne(p.sid);
                     pollOne(p);
                     queueOne(p);
                     return;
@@ -3731,7 +3850,11 @@ export async function cmdServe() {
                     (await messagePage(p.tp, { limit: 40 }));
                   const readMs = performance.now() - backlogT0;
                   const renderT0 = performance.now();
-                  const msgs = visibleTranscriptMessages(page.messages).map(msgWithHtml);
+                  const msgs = transcriptMessagesForClient(p.sid, page.messages).map(msgWithHtml);
+                  lastArtifactAt.set(
+                    p.sid,
+                    Math.max(0, ...msgs.filter((msg) => msg.kind === "image").map((msg) => msg.ts ?? 0)),
+                  );
                   evlog("live_stream_backlog", {
                     rid,
                     sid: p.sid,
@@ -3769,6 +3892,7 @@ export async function cmdServe() {
               void hydrateTargets().then(() => {
                 for (const p of panes) {
                   pollOne(p);
+                  artifactOne(p.sid);
                   queueOne(p);
                 }
               });
@@ -3778,6 +3902,7 @@ export async function cmdServe() {
               pi = setInterval(() => {
                 for (const p of panes) {
                   pollOne(p);
+                  artifactOne(p.sid);
                   queueOne(p);
                   void reconcileQueued(p.sid).then((c) => c && queueOne(p));
                 }
@@ -3814,6 +3939,7 @@ export async function cmdServe() {
           let pi: ReturnType<typeof setInterval> | null = null;
           let di: ReturnType<typeof setInterval> | null = null;
           let qi: ReturnType<typeof setInterval> | null = null;
+          let ai: ReturnType<typeof setInterval> | null = null;
           let hb: ReturnType<typeof setInterval> | null = null;
           let closed = false;
           const stream = new ReadableStream({
@@ -3828,6 +3954,15 @@ export async function cmdServe() {
               };
               let offset = 0;
               let buf = "";
+              let lastArtifactAt = 0;
+              const pollArtifacts = () => {
+                if (closed) return;
+                const messages = imageArtifactMessagesSince(sid, lastArtifactAt);
+                for (const message of messages) {
+                  lastArtifactAt = Math.max(lastArtifactAt, message.ts ?? 0);
+                  send(`event: msg\ndata: ${JSON.stringify(msgWithHtml(message))}\n\n`);
+                }
+              };
               const pump = async () => {
                 if (closed) return;
                 try {
@@ -3852,7 +3987,14 @@ export async function cmdServe() {
               // backlog, then tail
               (async () => {
                 const page = await indexedMessagePage(tp, sid, { limit: 40 });
-                const msgs = (page?.messages ?? visibleTranscriptMessages(await recentMessagesCached(tp, 40))).map(msgWithHtml);
+                const msgs = transcriptMessagesForClient(
+                  sid,
+                  page?.messages ?? await recentMessagesCached(tp, 40),
+                ).map(msgWithHtml);
+                lastArtifactAt = Math.max(
+                  0,
+                  ...msgs.filter((msg) => msg.kind === "image").map((msg) => msg.ts ?? 0),
+                );
                 for (const msg of msgs)
                   send(`event: msg\ndata: ${JSON.stringify(msg)}\n\n`);
                 offset = Bun.file(tp).size;
@@ -3917,6 +4059,8 @@ export async function cmdServe() {
                 pi = setInterval(pollBusy, 1000);
                 di = setInterval(pollDraft, 150);
               }
+              pollArtifacts();
+              ai = setInterval(pollArtifacts, 1000);
               // Emit the outbound send-queue on change so the composer can show
               // each message's delivery status (pending/queued/delivered/failed).
               let lastQ = "[]";
@@ -3937,12 +4081,13 @@ export async function cmdServe() {
             },
             cancel() {
               closed = true;
-            if (iv) clearInterval(iv);
-            if (pi) clearInterval(pi);
-            if (di) clearInterval(di);
-            if (qi) clearInterval(qi);
-            if (hb) clearInterval(hb);
-          },
+              if (iv) clearInterval(iv);
+              if (pi) clearInterval(pi);
+              if (di) clearInterval(di);
+              if (qi) clearInterval(qi);
+              if (ai) clearInterval(ai);
+              if (hb) clearInterval(hb);
+            },
           });
           return new Response(stream, { headers: sseHeaders() });
         }
@@ -3970,6 +4115,9 @@ export async function cmdServe() {
   // Watch the fleet for busy -> idle transitions and fan "completed" events out
   // to voice subscribers (/api/voice/events). Idempotent + best-effort.
   startFleetWatcher();
+  // Warm the resumable-session cache in the background so the first time someone
+  // opens the resume picker it's already served from SQLite (no cold scan wait).
+  void refreshResumableCache({ force: true }).catch(() => {});
 
   console.log(`lfg web → http://${server.hostname}:${server.port}`);
   console.log(`  agents dir: ${AGENTS_DIR}`);

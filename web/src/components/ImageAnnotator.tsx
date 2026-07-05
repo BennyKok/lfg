@@ -282,7 +282,11 @@ export function ImageAnnotator({
         onOpenChange(next);
       }}
     >
-      <DialogContent className="max-w-[min(94vw,64rem)] sm:max-w-[min(94vw,64rem)]" showCloseButton>
+      <DialogContent
+        className="z-[130] max-w-[min(94vw,64rem)] sm:max-w-[min(94vw,64rem)]"
+        overlayClassName="z-[130]"
+        showCloseButton
+      >
         <DialogHeader>
           <DialogTitle>Annotate image</DialogTitle>
         </DialogHeader>

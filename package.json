@@ -9,6 +9,8 @@
     "lfg": "bun run src/cli.ts",
     "serve": "bun run src/cli.ts serve",
     "agents": "bun run src/cli.ts agents",
+    "subagent": "bun run src/cli.ts subagent",
+    "mcp": "bun run src/cli.ts mcp",
     "whatsapp": "bun run src/cli.ts whatsapp",
     "setup": "bun run src/cli.ts setup"
   },

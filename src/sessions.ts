@@ -17,6 +17,15 @@ import { userAssignments } from "./users";
 import { PATHS } from "./config";
 import { homedir } from "node:os";
 import { projectName } from "./projects";
+import {
+  cachedFingerprints,
+  upsertResumableRows,
+  pruneResumableExcept,
+  queryResumableCache,
+  type ResumableCacheRow,
+  type ResumableQuery,
+  type ResumableQueryResult,
+} from "./resume-cache";
 
 const HOME = process.env.HOME ?? homedir();
 const PROJECTS_DIR = join(HOME, ".claude", "projects");
@@ -34,7 +43,7 @@ export type SessionMsg = {
   // whole chunk again.
   id: string | null;
   role: string;
-  kind: "text" | "thinking" | "tool_use" | "tool_result";
+  kind: "text" | "thinking" | "tool_use" | "tool_result" | "image";
   text: string;
   ts: number | null;
   // True only for a genuine upstream API-error turn (Claude Code stamps the
@@ -1791,26 +1800,35 @@ export async function cwdForCodexTranscript(path: string): Promise<string | null
   return null;
 }
 
-// Recently-active claude sessions that are NOT currently live — the closed /
-// rebooted-away conversations a user can bring back with `claude --resume`.
+// Incrementally refresh the durable resumable cache (src/resume-cache.ts).
+//
 // pgrep-based listSessions() only ever shows running procs, so after the box
 // reboots (tmux server + every claude proc gone) the live list is empty even
-// though all the transcripts survive on disk. This reads those transcripts so
-// the UI can offer to resume one. Newest first, capped — enriching every
-// historical transcript would be needlessly slow.
-export async function listResumable(
-  opts: { limit?: number; excludeIds?: Set<string> } = {},
-): Promise<ResumableSession[]> {
-  const limit = Math.max(1, Math.min(100, opts.limit ?? 30));
-  const exclude = opts.excludeIds ?? new Set<string>();
-  let dirs: string[];
+// though every transcript survives on disk. We scan those transcripts (plus the
+// codex rollouts) so the UI can offer to resume one — but re-reading each file's
+// title/cwd/last-message on every request is wasteful, so the enriched roster is
+// cached in SQLite and only files whose mtime changed since the last scan are
+// re-enriched. Repeat loads (and search/filter keystrokes) then run as cheap SQL.
+let resumableRefreshAt = 0;
+let resumableRefreshing: Promise<void> | null = null;
+const RESUMABLE_REFRESH_THROTTLE_MS = 1500;
+// Cap NEW enrich work per pass so the very first scan of a huge history returns
+// a usable (newest-first) page fast; the tail backfills over later refreshes.
+const RESUMABLE_ENRICH_BUDGET = 600;
+
+async function refreshResumableCacheOnce(): Promise<void> {
+  const fingerprints = cachedFingerprints();
+  const overrides = await readTitleOverrides();
+  const managedByCwd = new Map(listManaged().map((m) => [m.cwd, m]));
+  const seen = new Set<string>();
+  const changed: ResumableCacheRow[] = [];
+
+  // Claude transcripts: cheap pass collects (id, path, mtime), newest first, so
+  // the enrich budget is spent on the most recent unindexed files.
+  let dirs: string[] = [];
   try {
     dirs = await readdir(PROJECTS_DIR);
-  } catch {
-    return [];
-  }
-  // Cheap first pass: collect (id, path, mtime) for every transcript, skipping
-  // live ones, so we only pay the title/cwd read cost for the newest `limit`.
+  } catch {}
   const candidates: { id: string; path: string; mtime: number }[] = [];
   for (const d of dirs) {
     let files: string[];
@@ -1822,7 +1840,7 @@ export async function listResumable(
     for (const f of files) {
       if (!f.endsWith(".jsonl")) continue;
       const id = f.replace(/\.jsonl$/, "");
-      if (!UUID.test(id) || exclude.has(id)) continue;
+      if (!UUID.test(id)) continue;
       const path = join(PROJECTS_DIR, d, f);
       let mtime = 0;
       try {
@@ -1830,20 +1848,22 @@ export async function listResumable(
       } catch {
         continue;
       }
+      seen.add(id);
       candidates.push({ id, path, mtime });
     }
   }
   candidates.sort((a, b) => b.mtime - a.mtime);
-  const overrides = await readTitleOverrides();
-  const managedByCwd = new Map(listManaged().map((m) => [m.cwd, m]));
-  const out: ResumableSession[] = [];
-  for (const c of candidates.slice(0, limit)) {
+  let budget = RESUMABLE_ENRICH_BUDGET;
+  for (const c of candidates) {
+    const prev = fingerprints.get(c.id);
+    if (prev && prev.mtimeMs === c.mtime) continue; // unchanged -> keep cached row
+    if (budget-- <= 0) break; // remainder backfills on the next refresh
     const cwd = await cwdForTranscript(c.path).catch(() => null);
     const managedRec = cwd ? managedByCwd.get(cwd) : undefined;
     let title = overrides[c.id] || null;
     if (!title) title = await firstPromptTitle(c.path).catch(() => null);
     if (!title) title = cwd ? basename(cwd) : "—";
-    out.push({
+    changed.push({
       sessionId: c.id,
       cwd,
       project: projectName(cwd, { repoRoot: managedRec?.repoRoot }),
@@ -1851,16 +1871,20 @@ export async function listResumable(
       lastActivityAt: c.mtime,
       lastUserText: await lastUserText(c.path).catch(() => null),
       agent: "claude",
+      path: c.path,
+      mtimeMs: c.mtime,
     });
   }
 
-  // Codex rollouts (~/.codex/sessions) are resumable too — surface the
-  // not-currently-live ones alongside claude transcripts. codexThreads() already
-  // parses each rollout's session_meta (id/cwd/title), so we just filter+map.
+  // Codex rollouts (~/.codex/sessions): codexThreads() already parses each
+  // rollout's session_meta (id/cwd/title), so re-enriching is cheap — no budget.
   for (const t of await codexThreads().catch(() => [] as Awaited<ReturnType<typeof codexThreads>>)) {
-    if (exclude.has(t.id)) continue;
+    seen.add(t.id);
+    const mtime = t.updatedAt ?? t.createdAt ?? 0;
+    const prev = fingerprints.get(t.id);
+    if (prev && prev.mtimeMs === mtime) continue;
     const managedRec = t.cwd ? managedByCwd.get(t.cwd) : undefined;
-    out.push({
+    changed.push({
       sessionId: t.id,
       cwd: t.cwd,
       project: projectName(t.cwd, { repoRoot: managedRec?.repoRoot }),
@@ -1868,13 +1892,63 @@ export async function listResumable(
       lastActivityAt: t.updatedAt ?? t.createdAt,
       lastUserText: t.firstUserText,
       agent: "codex",
+      path: t.path,
+      mtimeMs: mtime,
     });
   }
 
-  // Merge both sources newest-first and cap to the requested limit so the UI
-  // sees a single ranked list (claude + codex interleaved by recency).
-  out.sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0));
-  return out.slice(0, limit);
+  upsertResumableRows(changed);
+  pruneResumableExcept(seen);
+}
+
+// Refresh at most once per throttle window (unless forced); concurrent callers
+// share the in-flight scan. Awaited by queryResumable so the first-ever request
+// still populates the cache before it reads.
+export async function refreshResumableCache(opts: { force?: boolean } = {}): Promise<void> {
+  const now = Date.now();
+  if (resumableRefreshing) return resumableRefreshing;
+  if (!opts.force && now - resumableRefreshAt < RESUMABLE_REFRESH_THROTTLE_MS) return;
+  resumableRefreshing = refreshResumableCacheOnce()
+    .catch((err) => {
+      console.warn(
+        `[resume-cache] refresh failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    })
+    .finally(() => {
+      resumableRefreshAt = Date.now();
+      resumableRefreshing = null;
+    });
+  return resumableRefreshing;
+}
+
+// The rich query the picker uses: search + agent/project filters + facet counts,
+// all served from the SQLite cache.
+//
+// The scan is kept OFF the hot path: we only block on a refresh when the cache
+// is completely cold (first ever call), so the first open populates. Otherwise
+// the query is served immediately from SQLite (sub-ms) and a refresh is kicked
+// off in the background — the roster is at most one throttle window stale, which
+// is fine for a "recent sessions" list.
+export async function queryResumable(opts: ResumableQuery = {}): Promise<ResumableQueryResult> {
+  if (resumableRefreshAt === 0) {
+    // Cold cache: block once so the first open returns a populated list. If a
+    // startup warm is already in flight, refreshResumableCache() joins it rather
+    // than starting a second scan.
+    await refreshResumableCache({ force: true });
+  } else {
+    // Warm: serve from SQLite immediately, refresh in the background (throttled).
+    void refreshResumableCache();
+  }
+  return queryResumableCache(opts);
+}
+
+// Back-compat thin wrapper: newest-first array only (used by the transcript
+// indexer). Same shape listResumable has always returned.
+export async function listResumable(
+  opts: { limit?: number; excludeIds?: Set<string> } = {},
+): Promise<ResumableSession[]> {
+  const { sessions } = await queryResumable(opts);
+  return sessions;
 }
 
 // Recent normalized messages for an initial render (tail of the file).

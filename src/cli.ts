@@ -5,6 +5,7 @@ Usage:
   lfg serve                        Run the web UI + control server (default :8766)
   lfg agents [list|run|show]       Run / inspect insight agents (see 'agents help')
   lfg subagent [create|models]      Spawn a managed worker session on any harness
+  lfg mcp                          Run the LFG MCP stdio server
   lfg whatsapp [run|sessions]      Run the optional WhatsApp control sidecar
   lfg setup                        Provision this box (Bun, tmux, Tailscale, service)
 
@@ -27,6 +28,10 @@ async function main() {
     case "subagents": {
       const { cmdSubagent } = await import("./commands/subagent.ts");
       return await cmdSubagent(rest);
+    }
+    case "mcp": {
+      const { cmdMcp } = await import("./commands/mcp.ts");
+      return await cmdMcp();
     }
     case "whatsapp": {
       const { cmdWhatsapp } = await import("./commands/whatsapp.ts");

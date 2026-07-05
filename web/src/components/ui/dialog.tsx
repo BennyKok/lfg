@@ -91,16 +91,18 @@ function DialogContent({
   children,
   showCloseButton = true,
   innerClassName,
+  overlayClassName,
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean
   innerClassName?: string
+  overlayClassName?: string
 }) {
   const { popupRef, innerRef } = useAnimatedHeight()
 
   return (
     <DialogPortal>
-      <DialogOverlay />
+      <DialogOverlay className={overlayClassName} />
       <DialogPrimitive.Popup
         ref={popupRef}
         data-slot="dialog-content"

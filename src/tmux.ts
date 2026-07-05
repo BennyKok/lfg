@@ -35,6 +35,13 @@ export function ensureFolderTrusted(cwd: string): void {
   }
 }
 
+function addSessionEnv(argv: string[], sessionId?: string | null): void {
+  if (!sessionId) return;
+  const i = argv.indexOf("new-session");
+  if (i < 0) return;
+  argv.splice(i + 1, 0, "-e", `LFG_SESSION_ID=${sessionId}`);
+}
+
 // Resolve the `claude` executable to an absolute path. We must NOT rely on a
 // bare `claude` in the spawn: when lfg runs as a systemd service its PATH
 // often lacks ~/.local/bin, so `tmux new-session … claude` can't exec claude
@@ -277,6 +284,7 @@ export function spawnManagedSession(opts: {
   // sessionId/transcript, so the caller resolves the live id from the pidfile
   // afterwards (same as a fresh spawn). The full prior history is preserved.
   resume?: string;
+  lfgSessionId?: string;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   ensureFolderTrusted(opts.cwd);
@@ -301,6 +309,7 @@ export function spawnManagedSession(opts: {
   // positional prompt as a second directory (which strands the new session at
   // an empty composer — the first message never gets submitted).
   if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
+  addSessionEnv(argv, opts.lfgSessionId);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -341,6 +350,7 @@ export function spawnManagedCodexSession(opts: {
   prompt?: string;
   model?: string;
   thinkingLevel?: string;
+  lfgSessionId?: string;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   const argv = [
@@ -364,6 +374,7 @@ export function spawnManagedCodexSession(opts: {
   if (opts.model) argv.push("--model", opts.model);
   if (opts.thinkingLevel) argv.push("-c", `reasoning_effort=${JSON.stringify(opts.thinkingLevel)}`);
   if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
+  addSessionEnv(argv, opts.lfgSessionId);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -376,6 +387,7 @@ export function spawnManagedGrokSession(opts: {
   prompt?: string;
   model?: string;
   thinkingLevel?: string;
+  lfgSessionId?: string;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   const argv = [
@@ -397,6 +409,7 @@ export function spawnManagedGrokSession(opts: {
   const effort = claudeEffortFor(opts.thinkingLevel);
   if (effort) argv.push("--effort", effort);
   if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
+  addSessionEnv(argv, opts.lfgSessionId);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -408,6 +421,7 @@ export function spawnManagedHermesSession(opts: {
   cwd: string;
   model?: string;
   provider?: string;
+  lfgSessionId?: string;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   const argv = [
@@ -425,6 +439,7 @@ export function spawnManagedHermesSession(opts: {
   ];
   if (opts.model) argv.push("--model", opts.model);
   if (opts.provider) argv.push("--provider", opts.provider);
+  addSessionEnv(argv, opts.lfgSessionId);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -443,6 +458,7 @@ export function spawnManagedAisdkSession(opts: {
   model: string;
   sessionId: string;
   thinkingLevel?: string;
+  lfgSessionId?: string;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   // The provider drives the bundled claude binary, which still honors the trust
@@ -463,6 +479,7 @@ export function spawnManagedAisdkSession(opts: {
   // claude-code provider's `effort` option (see aisdk-session.ts).
   if (opts.thinkingLevel) argv.push("--thinking-level", opts.thinkingLevel);
   if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
+  addSessionEnv(argv, opts.lfgSessionId ?? opts.sessionId);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -481,6 +498,7 @@ export function spawnManagedCodexAisdkSession(opts: {
   model: string;
   key: string;
   thinkingLevel?: string;
+  lfgSessionId?: string;
   // When set, resume this existing codex rollout/thread instead of starting a
   // fresh persistent thread — the harness seeds its threadId with it.
   resume?: string;
@@ -505,6 +523,7 @@ export function spawnManagedCodexAisdkSession(opts: {
   if (opts.thinkingLevel) argv.push("--thinking-level", opts.thinkingLevel);
   if (opts.resume) argv.push("--resume", opts.resume);
   if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
+  addSessionEnv(argv, opts.lfgSessionId ?? opts.key);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -523,6 +542,7 @@ export function spawnManagedOpencodeAisdkSession(opts: {
   prompt?: string;
   model: string;
   key: string;
+  lfgSessionId?: string;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   // Harmless for opencode: ensureFolderTrusted only patches ~/.claude.json and
@@ -541,6 +561,7 @@ export function spawnManagedOpencodeAisdkSession(opts: {
     "--tmux", opts.name,
   ];
   if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
+  addSessionEnv(argv, opts.lfgSessionId ?? opts.key);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };

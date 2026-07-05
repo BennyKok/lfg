@@ -4,11 +4,17 @@
 // aka diffs.com) — Shiki-highlighted, split/unified, rendered fully client-side
 // (nothing leaves the box). Data comes from GET /api/sessions/:id/diff* .
 
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { PatchDiff } from "@pierre/diffs/react";
 import { ChevronDown, Columns2, FileDiff, GitBranch, Loader2, Minus, Plus, Rows3, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+
+// Pierre's diff renderer (@pierre/diffs, ~380 KB) is only needed once a user
+// expands a file in the diff viewer — which most sessions never do. Load it
+// lazily so it stays out of the first-paint bundle.
+const PatchDiff = lazy(() =>
+  import("@pierre/diffs/react").then((m) => ({ default: m.PatchDiff })),
+);
 
 type DiffFileStatus = "added" | "modified" | "deleted" | "renamed" | "untracked";
 type DiffFile = {
@@ -152,7 +158,15 @@ const DiffFileCard = memo(function DiffFileCard({
           </div>
         ) : (
           <div className="overflow-x-auto border-t border-border text-[12px]">
-            <PatchDiff patch={patch.patch} options={options} disableWorkerPool />
+            <Suspense
+              fallback={
+                <div className="flex items-center gap-2 px-3 py-3 text-[12px] text-muted-foreground">
+                  <Loader2 className="size-3.5 animate-spin" /> Rendering diff…
+                </div>
+              }
+            >
+              <PatchDiff patch={patch.patch} options={options} disableWorkerPool />
+            </Suspense>
             {patch.truncated ? (
               <div className="px-3 py-1.5 text-[11px] text-[var(--warning)]">Diff truncated (file too large).</div>
             ) : null}
