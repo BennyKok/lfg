@@ -66,6 +66,9 @@ curl -fsSL https://raw.githubusercontent.com/BennyKok/lfg/main/scripts/setup.sh 
 
 The setup script downloads the latest release, installs production dependencies,
 writes `.env`, and starts the server as a user service bound to loopback.
+When Claude or Codex is already installed, setup also registers the local LFG MCP
+server with that CLI. You can verify or re-run this later in **Settings →
+Coding agents**.
 
 To expose the UI over your private tailnet, opt in to Tailscale Serve:
 

@@ -54,6 +54,7 @@ LFG_INSTALL_CLAUDE="${LFG_INSTALL_CLAUDE:-0}"
 LFG_INSTALL_CODEX="${LFG_INSTALL_CODEX:-0}"
 LFG_INSTALL_OPENCODE="${LFG_INSTALL_OPENCODE:-0}"
 LFG_INSTALL_HERMES="${LFG_INSTALL_HERMES:-0}"
+LFG_INSTALL_MCP="${LFG_INSTALL_MCP:-1}"
 LFG_TAILSCALE_SERVE="${LFG_TAILSCALE_SERVE:-0}"
 LFG_TAILSCALE_SERVE_OVERWRITE="${LFG_TAILSCALE_SERVE_OVERWRITE:-0}"
 LFG_TAILSCALE_HTTPS_PORT="${LFG_TAILSCALE_HTTPS_PORT:-443}"
@@ -311,6 +312,35 @@ fi
 mkdir -p "$HOME/.local/bin"
 ln -sf "$LFG_DIR/src/cli.ts" "$HOME/.local/bin/lfg"
 chmod +x "$LFG_DIR/src/cli.ts" 2>/dev/null || true
+
+install_lfg_mcp() {
+  [ "$LFG_INSTALL_MCP" = "1" ] || return 0
+  local mcp_args=("$BUN_BIN" "$LFG_DIR/src/cli.ts" "mcp")
+  local installed=0
+  if command -v claude >/dev/null 2>&1; then
+    say "Registering LFG MCP with Claude..."
+    claude mcp remove lfg -s user >/dev/null 2>&1 || true
+    if claude mcp add -s user lfg -- "${mcp_args[@]}" >/dev/null 2>&1; then
+      installed=1
+    else
+      warn "Could not register LFG MCP with Claude. Open Settings -> Coding agents in LFG and run Install MCP after Claude is authenticated."
+    fi
+  fi
+  if command -v codex >/dev/null 2>&1; then
+    say "Registering LFG MCP with Codex..."
+    codex mcp remove lfg >/dev/null 2>&1 || true
+    if codex mcp add lfg -- "${mcp_args[@]}" >/dev/null 2>&1; then
+      installed=1
+    else
+      warn "Could not register LFG MCP with Codex. Open Settings -> Coding agents in LFG and run Install MCP after Codex is authenticated."
+    fi
+  fi
+  if [ "$installed" != "1" ]; then
+    warn "No Claude/Codex MCP registration completed. Install or authenticate a supported CLI, then use Settings -> Coding agents -> Install MCP."
+  fi
+}
+
+install_lfg_mcp
 
 # ---- 7. .env (never overwrite an existing one) ----
 if [ ! -f "$LFG_DIR/.env" ]; then

@@ -172,6 +172,18 @@ export function pruneResumableExcept(keep: Set<string>): void {
   })(stale);
 }
 
+export function getCachedResumableSession(sessionId: string): ResumableSession | null {
+  const d = init();
+  const row = d
+    .query<Row, [string]>(`
+      SELECT session_id, cwd, project, title, last_user_text, last_activity_at, agent, path, mtime_ms
+      FROM resumable_sessions
+      WHERE session_id = ?
+    `)
+    .get(sessionId);
+  return row ? toSession(row) : null;
+}
+
 // Turn "foo bar" into an AND of case-insensitive substring predicates over the
 // searchable columns, plus the bound params. Empty query -> no predicate.
 function searchClause(search: string | undefined): { sql: string; params: string[] } {

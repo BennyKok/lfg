@@ -1,6 +1,6 @@
 {
   "name": "lfg-web",
-  "version": "0.1.1",
+  "version": "0.1.16",
   "private": true,
   "type": "module",
   "scripts": {

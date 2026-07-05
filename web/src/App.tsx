@@ -163,6 +163,17 @@ type CodingAgentInfo = {
   };
 };
 
+type SetupCheckGroup = {
+  key: string;
+  label: string;
+  configured: boolean;
+  running: boolean;
+  checks: { label: string; ok: boolean; detail?: string }[];
+  instructions: string[];
+  canAutoSetup: boolean;
+  actionLabel: string;
+};
+
 type ReportRef = {
   date: string;
   bytes: number;
@@ -2761,6 +2772,7 @@ export function App() {
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [codingAgents, setCodingAgents] = useState<CodingAgentInfo[]>([]);
+  const [setupChecks, setSetupChecks] = useState<SetupCheckGroup[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [repos, setRepos] = useState<Repo[]>([]);
@@ -2938,6 +2950,9 @@ export function App() {
       api<{ agents: CodingAgentInfo[] }>("/api/coding-agents")
         .then((payload) => setCodingAgents(payload.agents ?? []))
         .catch(() => setCodingAgents([])),
+      api<{ checks: SetupCheckGroup[] }>("/api/setup/checks")
+        .then((payload) => setSetupChecks(payload.checks ?? []))
+        .catch(() => setSetupChecks([])),
       api<{ sessions: Session[] }>("/api/sessions").then((payload) => {
         // Guard sessions to [] — it feeds `allLiveSessions`/`liveSessions` which
         // call `.filter()` unconditionally on render, so a malformed/empty
@@ -3854,9 +3869,32 @@ export function App() {
   }
 
   const refreshCodingAgents = useCallback(async () => {
-    const payload = await api<{ agents: CodingAgentInfo[] }>("/api/coding-agents");
-    setCodingAgents(payload.agents ?? []);
+    const [agentsPayload, checksPayload] = await Promise.all([
+      api<{ agents: CodingAgentInfo[] }>("/api/coding-agents"),
+      api<{ checks: SetupCheckGroup[] }>("/api/setup/checks").catch(() => ({ checks: [] })),
+    ]);
+    setCodingAgents(agentsPayload.agents ?? []);
+    setSetupChecks(checksPayload.checks ?? []);
   }, []);
+
+  function runSetupCheck(key: string) {
+    setSetupChecks((current) =>
+      current.map((item) => (item.key === key ? { ...item, running: true } : item)),
+    );
+    toast.promise(
+      api<{ checks: SetupCheckGroup[] }>(`/api/setup/checks/${key}/run`, {
+        method: "POST",
+      }).then((payload) => {
+        setSetupChecks(payload.checks ?? []);
+        window.setTimeout(() => void refreshCodingAgents(), 2000);
+      }),
+      {
+        loading: "Starting setup…",
+        success: "Setup complete",
+        error: (e) => (e instanceof Error ? e.message : "Couldn't start setup"),
+      },
+    );
+  }
 
   async function setCodingAgentVisible(kind: AgentKind, visible: boolean) {
     const previous = codingAgents;
@@ -4072,9 +4110,11 @@ export function App() {
           <UsagePage />
         ) : tab === "coding-agents" ? (
           <CodingAgentsPage
+            setupChecks={setupChecks}
             agents={codingAgents}
             onVisibleChange={(kind, visible) => void setCodingAgentVisible(kind, visible)}
             onSetup={setupCodingAgent}
+            onSetupCheck={runSetupCheck}
             onRefresh={() => void refreshCodingAgents()}
           />
         ) : tab === "agent-browser" ? (
@@ -5057,60 +5097,42 @@ function TreeConnector({
   className,
   colorClassName,
   continueAfter,
+  subtle = false,
 }: {
   className?: string;
   colorClassName: string;
   continueAfter?: boolean;
+  subtle?: boolean;
 }) {
+  // Solid (fully opaque) color so any segment overlap can't composite darker.
+  const lineClass = "bg-current";
+  const borderClass = "border-current";
   return (
     <span
       aria-hidden
       className={cn("pointer-events-none absolute", colorClassName, className)}
     >
-      <svg
-        viewBox="0 0 2 100"
-        preserveAspectRatio="none"
-        className="absolute left-0 top-0 bottom-[calc(50%+8px)] w-0.5 overflow-visible"
-      >
-        <path
-          d="M1 0 V100"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          vectorEffect="non-scaling-stroke"
-        />
-      </svg>
-      <svg
-        viewBox="0 0 16 16"
-        className="absolute left-0 top-[calc(50%-8px)] h-4 w-4 overflow-visible"
-      >
-        <path
-          d="M1 0 V7 Q1 15 9 15 H16"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          vectorEffect="non-scaling-stroke"
-        />
-      </svg>
       {continueAfter ? (
-        <svg
-          viewBox="0 0 2 100"
-          preserveAspectRatio="none"
-          className="absolute left-0 top-[calc(50%+8px)] bottom-0 w-0.5 overflow-visible"
-        >
-          <path
-            d="M1 0 V100"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            vectorEffect="non-scaling-stroke"
+        <>
+          {/* one continuous vertical spine — no mid-point seam */}
+          <span className={cn("absolute left-0 top-0 bottom-0 w-[1.5px]", lineClass)} />
+          {/* horizontal branch to the child (T-junction) */}
+          <span
+            className={cn(
+              "absolute left-0 top-1/2 -translate-y-1/2 h-[1.5px] w-3",
+              lineClass,
+            )}
           />
-        </svg>
-      ) : null}
+        </>
+      ) : (
+        /* last child — rounded elbow drawn as a single bordered box */
+        <span
+          className={cn(
+            "absolute left-0 top-0 bottom-1/2 w-3 rounded-bl-lg border-b-[1.5px] border-l-[1.5px]",
+            borderClass,
+          )}
+        />
+      )}
     </span>
   );
 }
@@ -5333,7 +5355,7 @@ function LiveView({
     <div key={`child-${sessionStableId(node.session)}`} className="relative">
       <TreeConnector
         className="-left-4 -top-2 h-[calc(100%+1rem)] w-4"
-        colorClassName="text-muted-foreground/70"
+        colorClassName="text-zinc-500"
         continueAfter={!isLast}
       />
       {renderCard(node.session, depth)}
@@ -6316,8 +6338,9 @@ const RailItem = memo(function RailItem({
       {depth > 0 && !collapsed ? (
         <TreeConnector
           className="-top-1 left-0 h-[calc(100%+0.5rem)] w-4"
-          colorClassName="text-muted-foreground/70"
+          colorClassName="text-zinc-500"
           continueAfter={!isLast}
+          subtle
         />
       ) : null}
       {swiping ? (
@@ -8546,8 +8569,10 @@ const onTouchStart = (e: ReactTouchEvent) => {
             onPointerMove={onTitlePointerMove}
             onPointerUp={clearLongPress}
             onPointerCancel={clearLongPress}
+            onDragStart={(e) => e.preventDefault()}
+            onSelect={(e) => e.preventDefault()}
             onContextMenu={(e) => e.preventDefault()}
-            className="flex min-w-0 flex-1 select-none items-center gap-2 text-left outline-none [-webkit-touch-callout:none] md:pointer-events-none"
+            className="flex min-w-0 flex-1 touch-manipulation select-none items-center gap-2 text-left outline-none [-webkit-touch-callout:none] [-webkit-user-drag:none] [-webkit-user-select:none] [user-select:none] md:pointer-events-none"
           >
             <div className="flex min-w-0 flex-1 flex-col">
               <div className="truncate text-[15px] font-semibold leading-tight">
@@ -9767,6 +9792,15 @@ function NewSessionDialog({
   const selectedRepo = scopedRepo?.cwd || repo || repos[0]?.cwd || "";
   const selectedIsCustom = repos.some((r) => r.cwd === selectedRepo && r.custom);
   const launching = pendingCreates > 0;
+  // The project the resume picker should open scoped to: the composer's currently
+  // selected repo (which already folds in the live-view filter via `scopedRepo`),
+  // falling back to the live filter, then "all". Matches the backend `project`
+  // field on resumable rows (both derive from the repo's top-folder name).
+  const composerProject = (() => {
+    const r = repos.find((x) => x.cwd === selectedRepo);
+    if (r) return repoProject(r);
+    return scopedProject !== "__all" ? scopedProject : "__all";
+  })();
 
   // Pin an arbitrary git repo on the box (outside LFG_REPOS_ROOT) into the
   // picker. The path is resolved/validated server-side; on success we refresh
@@ -10350,7 +10384,7 @@ function NewSessionDialog({
       {resumeOpen ? (
         <ResumeSessionSheet
           initial={resumable}
-          scopedProject={scopedProject}
+          scopedProject={composerProject}
           onPick={(session) => {
             closeResume();
             resume(session);
@@ -11717,14 +11751,18 @@ function VoiceSettingsSection() {
 }
 
 function CodingAgentsPage({
+  setupChecks,
   agents,
   onVisibleChange,
   onSetup,
+  onSetupCheck,
   onRefresh,
 }: {
+  setupChecks: SetupCheckGroup[];
   agents: CodingAgentInfo[];
   onVisibleChange: (kind: AgentKind, visible: boolean) => void;
   onSetup: (kind: AgentKind) => void;
+  onSetupCheck: (key: string) => void;
   onRefresh: () => void;
 }) {
   return (
@@ -11742,6 +11780,76 @@ function CodingAgentsPage({
           Refresh
         </button>
       </div>
+
+      {setupChecks.length ? (
+        <div className="overflow-hidden rounded-2xl border border-border bg-card/40 divide-y divide-border">
+          {setupChecks.map((group) => (
+            <div key={group.key} className="px-4 py-3">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex min-w-0 items-start gap-3">
+                  <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-[8px] border border-border bg-background">
+                    <TerminalSquare className="size-4 text-muted-foreground" />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-sm font-semibold">{group.label}</span>
+                      <Badge variant={group.configured ? "default" : "secondary"}>
+                        {group.configured ? "Ready" : "Needs setup"}
+                      </Badge>
+                    </div>
+                    <div className="mt-1 space-y-1">
+                      {group.checks.map((check) => (
+                        <div
+                          key={check.label}
+                          className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"
+                        >
+                          {check.ok ? (
+                            <Check className="size-3.5 shrink-0 text-success" />
+                          ) : (
+                            <X className="size-3.5 shrink-0 text-destructive" />
+                          )}
+                          <span className="shrink-0">{check.label}</span>
+                          {check.detail ? (
+                            <span className="min-w-0 truncate text-muted-foreground/70">
+                              {check.detail}
+                            </span>
+                          ) : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-3 flex flex-wrap items-center gap-2 pl-11">
+                {group.instructions.map((instruction) => (
+                  <span key={instruction} className="min-w-0 flex-1 text-xs text-muted-foreground">
+                    {instruction}
+                  </span>
+                ))}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!group.canAutoSetup || group.running}
+                  onClick={() => onSetupCheck(group.key)}
+                  title={
+                    group.canAutoSetup
+                      ? group.actionLabel
+                      : "Install Claude or Codex first"
+                  }
+                >
+                  {group.running ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <Play className="size-4" />
+                  )}
+                  {group.running ? "Running…" : group.actionLabel}
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       <div className="overflow-hidden rounded-2xl border border-border bg-card/40 divide-y divide-border">
         {agents.map((agent) => {

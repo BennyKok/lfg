@@ -2,6 +2,21 @@
 
 Recent product updates and deployment notes.
 
+## July 5, 2026 - Setup checks & steadier resumes
+
+LFG now exposes setup checks for local MCP registration and keeps resumed
+sessions tied to the project they came from.
+
+- Added an LFG MCP setup check in Settings -> Coding agents, including one-click
+  registration for Claude and Codex when those CLIs are available.
+- Registers the LFG MCP server during setup by default for local Claude/Codex
+  installs.
+- Preserves project labels across resumed and managed sessions, even when the
+  underlying agent reports a stale cwd.
+- Makes resumed Claude sessions stay open for follow-up instructions when no
+  prompt is provided.
+- Tightened recent-session close guards and fixed several mobile UI edge cases.
+
 ## July 2, 2026 - Configurable session brain & refreshed UI edges
 
 The session brain can now run on the model you choose, and the interface picks up a consistent gradient-glass edge across buttons, inputs, and surfaces.
@@ -43,4 +58,3 @@ Container deploys and hosted setup docs are now part of the project workflow.
 - Added Docker-backed targets for Railway, Fly, Render, Koyeb, DigitalOcean, and Hetzner.
 - Published bundled-release flow for cloud installs.
 - Documented operational scripts for voice and GPU STT deployments.
-

@@ -47,7 +47,7 @@ type ImageArtifactResponse = {
   };
 };
 
-const VERSION = "0.1.1";
+const VERSION = "0.1.16";
 
 function baseUrl(): string {
   if (process.env.LFG_BASE) return process.env.LFG_BASE.replace(/\/$/, "");

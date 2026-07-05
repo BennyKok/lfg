@@ -5,6 +5,7 @@ import { dirname, extname, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { marked } from "marked";
 import { PATHS, installInfo } from "../config.ts";
+import { getCachedResumableSession } from "../resume-cache.ts";
 import {
   AGENTS_DIR,
   listAgents,
@@ -152,7 +153,9 @@ import {
 import {
   isCodingAgentKind,
   listCodingAgents,
+  listSetupChecks,
   runCodingAgentSetup,
+  runSetupAction,
   setCodingAgentVisibility,
 } from "../coding-agents.ts";
 import {
@@ -1620,6 +1623,17 @@ export async function cmdServe() {
       if (path === "/api/coding-agents" && req.method === "GET") {
         return json({ agents: await listCodingAgents() });
       }
+      if (path === "/api/setup/checks" && req.method === "GET") {
+        return json({ checks: await listSetupChecks() });
+      }
+      {
+        const m = path.match(/^\/api\/setup\/checks\/([a-z0-9_-]+)\/run$/);
+        if (m && req.method === "POST") {
+          const key = m[1];
+          await runSetupAction(key);
+          return json({ ok: true, checks: await listSetupChecks() });
+        }
+      }
       if (path === "/api/skills" && req.method === "GET") {
         const repoRoots = (await listRepos().catch(() => [])).map((repo) => repo.cwd);
         return json({ skills: await listSkillCatalog(repoRoots) });
@@ -2636,6 +2650,7 @@ export async function cmdServe() {
           (s) => s.sessionId === sessionId || s.nativeSessionId === sessionId,
         );
         if (live) {
+          if (body?.user && live.tmuxName) assignUser(live.tmuxName, body.user);
           const prompt = body?.prompt?.trim() ?? "";
           const sent = prompt
             // Resuming a session that is already live is a follow-up, not a
@@ -2658,6 +2673,7 @@ export async function cmdServe() {
         }
         const transcript = await resolveTranscript(sessionId);
         if (!transcript) return err(404, "no transcript found for that session");
+        const cachedResume = getCachedResumableSession(sessionId);
 
         // Codex rollouts live under ~/.codex/sessions — resume them through a
         // codex-aisdk harness keyed to the rollout's threadId rather than the
@@ -2685,6 +2701,7 @@ export async function cmdServe() {
             launchState: "running",
             model: model ?? "gpt-5.5",
             title: body?.prompt?.slice(0, 72),
+            project: cachedResume?.project || undefined,
             repoRoot: repoRootForManagedCwd(cwd),
           });
           if (body?.user) assignUser(tmuxName, body.user);
@@ -2707,12 +2724,15 @@ export async function cmdServe() {
           return err(400, `unknown model "${model}" (expected one of ${CLAUDE_MODELS.join(", ")})`);
         const cwd = (await cwdForTranscript(transcript)) ?? SELF_REPO;
         const tmuxName = `lfg-${randomBytes(3).toString("hex")}`;
+        const resumePrompt =
+          body?.prompt?.trim() ||
+          "Resume this session and stay open. Do not start new work yet; wait for my next instruction.";
         const r = spawnManagedSession({
           name: tmuxName,
           cwd,
           model,
           resume: sessionId,
-          prompt: body?.prompt,
+          prompt: resumePrompt,
         });
         if (!r.ok) return err(502, r.error || "failed to resume session");
         addManaged({
@@ -2720,6 +2740,7 @@ export async function cmdServe() {
           cwd,
           createdAt: Date.now(),
           agent: "claude",
+          project: cachedResume?.project || undefined,
           repoRoot: repoRootForManagedCwd(cwd),
         });
         if (body?.user) assignUser(tmuxName, body.user);
@@ -2735,7 +2756,14 @@ export async function cmdServe() {
           const pid = panePidForSession(tmuxName);
           if (pid) newId = sessionIdForPid(pid);
         }
-        if (!newId) return err(502, "session resumed, but no live session id was discovered");
+        if (!newId) {
+          const resumed = (await listSessions()).find(
+            (s) => s.tmuxName === tmuxName || s.sessionId === sessionId || s.nativeSessionId === sessionId,
+          );
+          if (!resumed?.sessionId)
+            return err(502, "session resumed, but no live session id was discovered");
+          newId = resumed.sessionId;
+        }
         // Anchor the live id onto the managed record so listSessions recognizes
         // the resumed session immediately (and keeps its visible id stable)
         // rather than depending solely on per-request pgrep/pidfile resolution
@@ -2975,6 +3003,7 @@ export async function cmdServe() {
           launchState: "launching",
           model: launchModel,
           title: prompt?.slice(0, 72),
+          project: repo.project,
           parentSessionId: parent?.sessionId ?? parentId,
           parentNativeSessionId: parent?.nativeSessionId ?? undefined,
           parentAgent: parent?.agent,

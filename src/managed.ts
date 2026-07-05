@@ -26,6 +26,8 @@ export type ManagedSession = {
   launchError?: string;
   model?: string;
   title?: string;
+  /** Stable UI project label. Kept because resumed sessions can report a stale cwd. */
+  project?: string;
   parentSessionId?: string;
   parentNativeSessionId?: string;
   parentAgent?: string;

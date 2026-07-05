@@ -42,6 +42,17 @@ export type CodingAgentInfo = {
   status: CodingAgentStatus;
 };
 
+export type SetupCheck = {
+  key: string;
+  label: string;
+  configured: boolean;
+  running: boolean;
+  checks: CodingAgentCheck[];
+  instructions: string[];
+  canAutoSetup: boolean;
+  actionLabel: string;
+};
+
 export const CODING_AGENT_KINDS: CodingAgentKind[] = [
   "aisdk",
   "codex-aisdk",
@@ -62,6 +73,7 @@ export const CODING_AGENT_LABELS: Record<CodingAgentKind, string> = {
 
 const CONFIG_PATH = join(PATHS.data, "coding-agents.json");
 const setupRuns = new Map<CodingAgentKind, Promise<void>>();
+const systemSetupRuns = new Map<string, Promise<void>>();
 
 function readJson<T>(path: string): T | null {
   try {
@@ -96,6 +108,14 @@ function which(name: string, extra: string[] = []): string | null {
     if (p && existsSync(p)) return p;
   }
   return null;
+}
+
+function bunPath(): string | null {
+  try {
+    return Bun.which("bun") ?? process.execPath ?? null;
+  } catch {
+    return process.execPath ?? null;
+  }
 }
 
 function userHome(): string {
@@ -167,6 +187,44 @@ function hasCodexAuth(): boolean {
   );
 }
 
+function commandOutput(argv: string[]): { ok: boolean; text: string } {
+  try {
+    const proc = Bun.spawnSync(argv, {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: { ...process.env },
+    });
+    const text = `${new TextDecoder().decode(proc.stdout)}${new TextDecoder().decode(proc.stderr)}`;
+    return { ok: proc.exitCode === 0, text };
+  } catch (e) {
+    return { ok: false, text: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+function mcpCommandArgs(): string[] | null {
+  const bun = bunPath();
+  if (!bun) return null;
+  return [bun, join(PATHS.root, "src", "cli.ts"), "mcp"];
+}
+
+function hasClaudeLfgMcp(): boolean {
+  const claude = claudePath();
+  const args = mcpCommandArgs();
+  if (!claude || !args) return false;
+  const out = commandOutput([claude, "mcp", "get", "lfg"]);
+  if (!out.ok) return false;
+  return args.every((part) => out.text.includes(part));
+}
+
+function hasCodexLfgMcp(): boolean {
+  const codex = codexPath();
+  const args = mcpCommandArgs();
+  if (!codex || !args) return false;
+  const out = commandOutput([codex, "mcp", "get", "lfg"]);
+  if (!out.ok) return false;
+  return args.every((part) => out.text.includes(part));
+}
+
 function hasGrokAuth(): boolean {
   const home = userHome();
   return !!process.env.XAI_API_KEY || existsSync(`${home}/.grok`);
@@ -228,6 +286,82 @@ export async function listCodingAgents(): Promise<CodingAgentInfo[]> {
     visible: cfg.agents[key]?.visible !== false,
     status: statusFor(key),
   }));
+}
+
+export async function listSetupChecks(): Promise<SetupCheck[]> {
+  const args = mcpCommandArgs();
+  const claude = claudePath();
+  const codex = codexPath();
+  const checks: CodingAgentCheck[] = [
+    { label: "Bun", ok: !!bunPath(), detail: bunPath() ?? "not found" },
+    { label: "tmux", ok: !!which("tmux"), detail: which("tmux") ?? "not found" },
+    { label: "git", ok: !!which("git"), detail: which("git") ?? "not found" },
+    { label: "LFG MCP command", ok: !!args, detail: args?.join(" ") ?? "not available" },
+  ];
+  if (claude) {
+    checks.push({
+      label: "Claude MCP",
+      ok: hasClaudeLfgMcp(),
+      detail: hasClaudeLfgMcp() ? "registered" : "not registered",
+    });
+  } else {
+    checks.push({ label: "Claude MCP", ok: true, detail: "Claude CLI not installed" });
+  }
+  if (codex) {
+    checks.push({
+      label: "Codex MCP",
+      ok: hasCodexLfgMcp(),
+      detail: hasCodexLfgMcp() ? "registered" : "not registered",
+    });
+  } else {
+    checks.push({ label: "Codex MCP", ok: true, detail: "Codex CLI not installed" });
+  }
+  return [
+    {
+      key: "lfg-mcp",
+      label: "LFG MCP",
+      configured: checks.every((check) => check.ok),
+      running: systemSetupRuns.has("lfg-mcp"),
+      checks,
+      instructions: [
+        "Registers the local LFG MCP server with Claude and Codex when those CLIs are installed.",
+      ],
+      canAutoSetup: !!args && (!!claude || !!codex),
+      actionLabel: "Install MCP",
+    },
+  ];
+}
+
+function installClaudeMcp(claude: string, args: string[]): void {
+  commandOutput([claude, "mcp", "remove", "lfg", "-s", "user"]);
+  const out = commandOutput([claude, "mcp", "add", "-s", "user", "lfg", "--", ...args]);
+  if (!out.ok) throw new Error(out.text.trim() || "Claude MCP install failed");
+}
+
+function installCodexMcp(codex: string, args: string[]): void {
+  commandOutput([codex, "mcp", "remove", "lfg"]);
+  const out = commandOutput([codex, "mcp", "add", "lfg", "--", ...args]);
+  if (!out.ok) throw new Error(out.text.trim() || "Codex MCP install failed");
+}
+
+export async function runSetupAction(key: string): Promise<void> {
+  if (key !== "lfg-mcp") throw new Error(`unknown setup action "${key}"`);
+  if (systemSetupRuns.has(key)) throw new Error(`${key} setup is already running`);
+  const run = (async () => {
+    const args = mcpCommandArgs();
+    if (!args) throw new Error("Bun is required to register the LFG MCP server");
+    const claude = claudePath();
+    const codex = codexPath();
+    if (!claude && !codex) throw new Error("Install Claude or Codex first, then register the LFG MCP server");
+    if (claude) installClaudeMcp(claude, args);
+    if (codex) installCodexMcp(codex, args);
+  })();
+  systemSetupRuns.set(key, run);
+  try {
+    await run;
+  } finally {
+    systemSetupRuns.delete(key);
+  }
 }
 
 function setupEnvFor(kind: CodingAgentKind): Record<string, string> | null {

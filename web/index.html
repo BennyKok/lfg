@@ -17,6 +17,23 @@
     <meta name="apple-mobile-web-app-title" content="lfg" />
     <title>lfg</title>
     <style>
+      /* Paint the shell background on html/body too, not just the splash. A
+         fixed element only covers the layout viewport, so on mobile the bottom
+         safe-area / overscroll region would otherwise show the browser's default
+         white — the "white border at the bottom". Match the theme-color metas so
+         every pixel is the same colour before, during, and after the splash. */
+      html,
+      body {
+        margin: 0;
+        background: #f2f2f7;
+      }
+      @media (prefers-color-scheme: dark) {
+        html,
+        body {
+          background: #000;
+        }
+      }
+
       /* App shell splash — static markup inside #root so it paints on the very
          first frame (no JS needed) and React replaces it the moment the app
          mounts. Fills the blank white gap on cold loads and on the post-update

@@ -38,6 +38,7 @@ import {
 } from "./merge-guard.ts";
 
 let activeRun: Promise<SessionBrainRun> | null = null;
+const RECENT_SESSION_CLOSE_GRACE_MS = 15 * 60_000;
 
 function canClose(
   session: Session,
@@ -50,6 +51,8 @@ function canClose(
   if (session.busy) return "session is busy";
   if (session.launching) return "session is still launching";
   if (session.status === "blocked") return "session is blocked and needs input";
+  if (session.startedAt && Date.now() - session.startedAt < RECENT_SESSION_CLOSE_GRACE_MS)
+    return "session was started or resumed recently";
   if (action !== "archive_and_close" && action !== "close_no_note") return "decision is not a close action";
   if (confidence < 0.72) return "decision confidence is below close threshold";
   if (!opts.bypassIdleGuard && session.lastActivityAt && Date.now() - session.lastActivityAt < minIdleMin * 60_000) {

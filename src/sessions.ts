@@ -199,7 +199,7 @@ function managedLaunchRow(
   const pid = panePidForSession(m.tmuxName) ?? 0;
   if (pid && isClosing(pid)) return null;
   const tmuxTarget = pid ? tmuxTargetForPid(pid) ?? `${m.tmuxName}:0.0` : `${m.tmuxName}:0.0`;
-  const project = projectName(m.cwd, { repoRoot: m.repoRoot });
+  const project = m.project || projectName(m.cwd, { repoRoot: m.repoRoot });
   const title =
     managedTitle(m, sessionId, m.nativeSessionId, overrides) ||
     (m.cwd ? basename(m.cwd) : project);
@@ -1211,8 +1211,10 @@ export async function listSessions(): Promise<Session[]> {
   const assigns = userAssignments();
   const managedSessions = listManaged();
   const managedByName = new Map(managedSessions.map((m) => [m.tmuxName, m]));
-  const sessionProject = (cwd: string | null, tmuxName: string | null | undefined) =>
-    projectName(cwd, { repoRoot: tmuxName ? managedByName.get(tmuxName)?.repoRoot : null });
+  const sessionProject = (cwd: string | null, tmuxName: string | null | undefined) => {
+    const managed = tmuxName ? managedByName.get(tmuxName) : undefined;
+    return managed?.project || projectName(cwd, { repoRoot: managed?.repoRoot });
+  };
   const out: Session[] = [];
   for (const e of enriched) {
     let transcriptPath: string | null = null;
@@ -1269,15 +1271,16 @@ export async function listSessions(): Promise<Session[]> {
     const tmuxName = tmuxTarget ? tmuxTarget.split(":")[0] : null;
     rememberNativeSession(managedRec, sessionId);
     const visibleSessionId = managedVisibleId(managedRec, sessionId);
-    const project = sessionProject(e.cwd, tmuxName);
+    const cwd = managedRec?.cwd ?? e.cwd;
+    const project = sessionProject(cwd, tmuxName);
     let title = managedTitle(managedRec, visibleSessionId, sessionId, overrides);
     if (!title && transcriptPath) title = await cachedFirstTitle(transcriptPath);
-    if (!title) title = e.cwd ? basename(e.cwd) : project;
+    if (!title) title = cwd ? basename(cwd) : project;
     out.push({
       agent: "claude",
       pid: e.pid,
       cmd: e.cmd,
-      cwd: e.cwd,
+      cwd,
       project,
       title,
       lastUserText: lastUser,
@@ -1445,7 +1448,7 @@ export async function listSessions(): Promise<Session[]> {
       lastUser = meta.lastUser;
     }
 
-    const project = projectName(cwd, { repoRoot: managedRec?.repoRoot });
+    const project = managedRec?.project || projectName(cwd, { repoRoot: managedRec?.repoRoot });
     let title = overrides[sessionId] || overrides[grokSessionId] || null;
     if (!title && summary?.generated_title) title = summary.generated_title;
     if (!title && transcriptPath) title = await cachedFirstTitle(transcriptPath);
@@ -1483,7 +1486,7 @@ export async function listSessions(): Promise<Session[]> {
     if (!pid || isClosing(pid)) continue;
     const tmuxTarget = tmuxTargetForPid(pid) ?? `${m.tmuxName}:0.0`;
     const cmd = readProcCmd(pid, "grok");
-    const project = projectName(m.cwd, { repoRoot: m.repoRoot });
+    const project = m.project || projectName(m.cwd, { repoRoot: m.repoRoot });
     out.push({
       agent: "grok",
       pid,
@@ -1515,7 +1518,7 @@ export async function listSessions(): Promise<Session[]> {
     if (!pid || isClosing(pid)) continue;
     const tmuxTarget = tmuxTargetForPid(pid) ?? `${m.tmuxName}:0.0`;
     const cmd = readProcCmd(pid, "hermes");
-    const project = projectName(m.cwd, { repoRoot: m.repoRoot });
+    const project = m.project || projectName(m.cwd, { repoRoot: m.repoRoot });
     out.push({
       agent: "hermes",
       pid,
@@ -1589,7 +1592,7 @@ export async function listSessions(): Promise<Session[]> {
       last = meta.last;
       lastUser = meta.lastUser;
     }
-    const project = projectName(e.cwd, { repoRoot: managedRec?.repoRoot });
+    const project = managedRec?.project || projectName(e.cwd, { repoRoot: managedRec?.repoRoot });
     let title = managedTitle(managedRec, sessionId, nativeSessionId, overrides);
     if (!title && transcriptPath) title = await cachedFirstTitle(transcriptPath);
     if (!title) title = e.title || (e.cwd ? basename(e.cwd) : project);
@@ -1880,7 +1883,7 @@ async function refreshResumableCacheOnce(): Promise<void> {
     changed.push({
       sessionId: c.id,
       cwd,
-      project: projectName(cwd, { repoRoot: managedRec?.repoRoot }),
+      project: managedRec?.project || projectName(cwd, { repoRoot: managedRec?.repoRoot }),
       title,
       lastActivityAt: c.mtime,
       lastUserText: await lastUserText(c.path).catch(() => null),
@@ -1901,7 +1904,7 @@ async function refreshResumableCacheOnce(): Promise<void> {
     changed.push({
       sessionId: t.id,
       cwd: t.cwd,
-      project: projectName(t.cwd, { repoRoot: managedRec?.repoRoot }),
+      project: managedRec?.project || projectName(t.cwd, { repoRoot: managedRec?.repoRoot }),
       title: overrides[t.id] || t.firstUserText || (t.cwd ? basename(t.cwd) : "—"),
       lastActivityAt: t.updatedAt ?? t.createdAt,
       lastUserText: t.firstUserText,
