@@ -6603,9 +6603,11 @@ function SkillSlashSuggest({
               idx === selected ? "bg-accent text-accent-foreground" : "hover:bg-accent/70",
             )}
           >
-            <Sparkles className="size-3.5 shrink-0 text-primary" />
+            <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/10 font-mono text-sm font-semibold text-primary">
+              /
+            </span>
             <span className="min-w-0 flex-1">
-              <span className="block truncate font-medium">${skill.trigger}</span>
+              <span className="block truncate font-medium">/{skill.trigger}</span>
               {skill.description ? (
                 <span className="mt-0.5 block truncate text-xs leading-snug text-muted-foreground">
                   {skill.description}
@@ -6613,7 +6615,7 @@ function SkillSlashSuggest({
               ) : null}
             </span>
             <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[10px] uppercase text-muted-foreground">
-              {skill.source}
+              {skill.source} skill
             </span>
           </button>
         ))}
@@ -6648,6 +6650,8 @@ type SkillTextareaProps = Omit<
   onValueChange: (value: string) => void;
   onKeyDown?: (event: ReactKeyboardEvent<HTMLTextAreaElement>) => void;
   textareaRef?: Ref<HTMLTextAreaElement>;
+  showSkillButton?: boolean;
+  insetEnd?: boolean;
 };
 
 function SkillTextarea({
@@ -6655,6 +6659,8 @@ function SkillTextarea({
   onValueChange,
   onKeyDown,
   textareaRef,
+  showSkillButton = false,
+  insetEnd = false,
   ...props
 }: SkillTextareaProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -6681,6 +6687,16 @@ function SkillTextarea({
     });
   }
 
+  function openSkillPicker() {
+    const textarea = wrapRef.current?.querySelector("textarea");
+    const cursor = textarea?.selectionStart ?? value.length;
+    setSkillSuggest({ start: cursor, end: cursor, query: "" });
+    requestAnimationFrame(() => {
+      textarea?.focus();
+      textarea?.setSelectionRange(cursor, cursor);
+    });
+  }
+
   return (
     <div ref={wrapRef} className="relative min-w-0 flex-1">
       <SkillSlashSuggest active={skillSuggest} onPick={pickSkill} />
@@ -6688,6 +6704,7 @@ function SkillTextarea({
         {...props}
         ref={textareaRef}
         value={value}
+        className={cn(props.className, showSkillButton && "pl-11", insetEnd && "pr-11")}
         onChange={(event) => {
           onValueChange(event.target.value);
           sync(event.target);
@@ -6707,6 +6724,18 @@ function SkillTextarea({
           onKeyDown?.(event);
         }}
       />
+      {showSkillButton ? (
+        <button
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={openSkillPicker}
+          aria-label="Insert skill"
+          title="Insert skill command"
+          className="absolute left-1.5 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-full font-mono text-base font-semibold text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        >
+          /
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -7016,6 +7045,8 @@ function SessionChat({
                 data-composer-sid={sid}
                 value={messageText}
                 onValueChange={setMessageText}
+                showSkillButton
+                insetEnd
                 onPaste={(event) => {
                   const files = event.clipboardData?.files;
                   if (files?.length) {
@@ -7035,6 +7066,23 @@ function SessionChat({
                 className={cn(
                   "lfg-gfield h-11 min-h-11 max-h-11 min-w-0 resize-none overflow-y-auto rounded-2xl border-transparent px-4 py-3 text-base leading-5 shadow-sm transition-[background-color,border-color,box-shadow] duration-300 ease-ios placeholder:text-muted-foreground [field-sizing:fixed] md:h-9 md:min-h-9 md:max-h-9 md:rounded-[1.125rem] md:px-3.5 md:py-2 md:text-sm",
                 )}
+              />
+              <MicButton
+                minimal
+                className="absolute right-1.5 top-1/2 size-8 -translate-y-1/2"
+                baseText={messageText}
+                onRecordingChange={onDictatingChange}
+                onText={(text, base) =>
+                  setMessageText(base.trim() ? `${base.trimEnd()} ${text}` : text)
+                }
+                onInterim={(text, base) =>
+                  setMessageText(base.trim() ? `${base.trimEnd()} ${text}` : text)
+                }
+                onAutoSubmit={(text, base) => {
+                  const combined = base.trim() ? `${base.trimEnd()} ${text}` : text;
+                  void sendMessage(undefined, combined);
+                }}
+                onCancel={(base) => setMessageText(base)}
               />
             </div>
             {busy && canDriveSession(session) ? (
