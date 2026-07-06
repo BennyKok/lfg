@@ -5,7 +5,7 @@ Run AI coding agents on your own machine, from anywhere.
 [![Deploy on omg](https://omg.dev/deploy-badge.svg?v=2)](https://omg.dev/deploy?repo=github.com/BennyKok/lfg)
 
 <a href="https://lfg.apps.omg.dev">
-  <img src="./docs/images/lfg-icon.png" alt="lfg icon" width="96" />
+  <img src="https://raw.githubusercontent.com/BennyKok/lfg/main/docs/images/lfg-icon.png" alt="lfg icon" width="96" />
 </a>
 
 `lfg` turns a Linux box or macOS workstation into a private control plane for
@@ -29,9 +29,9 @@ work from your phone or laptop.
 ## Screenshots
 
 <p>
-  <img src="./docs/images/lfg-screenshot-1.jpg" alt="lfg web UI screenshot" width="31%" />
-  <img src="./docs/images/lfg-screenshot-2.jpg" alt="lfg session view screenshot" width="31%" />
-  <img src="./docs/images/lfg-screenshot-3.jpg" alt="lfg mobile control screenshot" width="31%" />
+  <img src="https://raw.githubusercontent.com/BennyKok/lfg/main/docs/images/lfg-screenshot-1.jpg" alt="lfg web UI screenshot" width="31%" />
+  <img src="https://raw.githubusercontent.com/BennyKok/lfg/main/docs/images/lfg-screenshot-2.jpg" alt="lfg session view screenshot" width="31%" />
+  <img src="https://raw.githubusercontent.com/BennyKok/lfg/main/docs/images/lfg-screenshot-3.jpg" alt="lfg mobile control screenshot" width="31%" />
 </p>
 
 The images are stored in this repo instead of hotlinked, so the README renders
