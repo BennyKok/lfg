@@ -78,7 +78,7 @@ LFG_TAILSCALE_SERVE=1 lfg setup
 
 ## One-click Launch
 
-[![Deploy on OMG](https://img.shields.io/badge/Deploy%20on-OMG-ff5530?style=for-the-badge)](https://omg.dev/deploy?repo=https%3A%2F%2Fgithub.com%2FBennyKok%2Flfg)
+[![Deploy on omg](https://omg.dev/deploy-badge.svg)](https://omg.dev/deploy?repo=github.com/BennyKok/lfg)
 
 OMG is the fastest hosted workspace path for `lfg`. The button passes this
 GitHub repo to OMG, signs you in if needed, creates an LFG sandbox from the
