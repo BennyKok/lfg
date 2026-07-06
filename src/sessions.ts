@@ -35,6 +35,148 @@ const GROK_ACTIVE_SESSIONS = join(HOME, ".grok", "active_sessions.json");
 const TITLE_MAX = 72;
 const TOOL_USE_TEXT_MAX = 4_000;
 const TOOL_RESULT_TEXT_MAX = 8_000;
+const PROFILE_LIST_SESSIONS = process.env.LFG_PROFILE_LIST_SESSIONS === "1";
+
+type SessionProfile = {
+  t0: number;
+  fields: Record<string, number>;
+  count(name: string, n?: number): void;
+  add(name: string, ms: number): void;
+  end(count: number): void;
+};
+
+function listSessionsProfile(): SessionProfile | null {
+  if (!PROFILE_LIST_SESSIONS) return null;
+  const fields: Record<string, number> = {};
+  return {
+    t0: performance.now(),
+    fields,
+    count(name, n = 1) {
+      fields[name] = (fields[name] ?? 0) + n;
+    },
+    add(name, ms) {
+      fields[name] = (fields[name] ?? 0) + ms;
+    },
+    end(count) {
+      fields.total_ms = performance.now() - this.t0;
+      fields.sessions = count;
+      const rounded = Object.fromEntries(
+        Object.entries(fields).map(([k, v]) => [k, Number(v.toFixed(2))]),
+      );
+      console.error(`[listSessions.profile] ${JSON.stringify(rounded)}`);
+    },
+  };
+}
+
+async function profileAsync<T>(
+  profile: SessionProfile | null,
+  name: string,
+  fn: () => Promise<T>,
+): Promise<T> {
+  if (!profile) return fn();
+  const t0 = performance.now();
+  try {
+    return await fn();
+  } finally {
+    profile.add(name, performance.now() - t0);
+  }
+}
+
+function profileSync<T>(profile: SessionProfile | null, name: string, fn: () => T): T {
+  if (!profile) return fn();
+  const t0 = performance.now();
+  try {
+    return fn();
+  } finally {
+    profile.add(name, performance.now() - t0);
+  }
+}
+
+type TmuxProbe = {
+  targetForPid(pid: number | null): string | null;
+  hasSession(name: string): boolean;
+  panePid(name: string): number | null;
+};
+
+const defaultTmuxProbe: TmuxProbe = {
+  targetForPid: tmuxTargetForPid,
+  hasSession: tmuxHasSession,
+  panePid: panePidForSession,
+};
+
+function makeTmuxProbe(profile: SessionProfile | null): TmuxProbe {
+  let panes: Map<number, string> | null = null;
+  const has = new Map<string, boolean>();
+  const panePids = new Map<string, number | null>();
+  const targets = new Map<number, string | null>();
+
+  const paneMap = () => {
+    if (panes) return panes;
+    return profileSync(profile, "tmuxPaneMap_ms", () => {
+      const m = new Map<number, string>();
+      try {
+        const r = Bun.spawnSync([
+          "tmux",
+          "list-panes",
+          "-a",
+          "-F",
+          "#{pane_pid} #{session_name}:#{window_index}.#{pane_index}",
+        ]);
+        const out = new TextDecoder().decode(r.stdout);
+        for (const line of out.split("\n")) {
+          const sp = line.indexOf(" ");
+          if (sp < 0) continue;
+          const pid = Number(line.slice(0, sp));
+          const target = line.slice(sp + 1).trim();
+          if (pid && target) m.set(pid, target);
+        }
+      } catch {}
+      panes = m;
+      return m;
+    });
+  };
+
+  return {
+    targetForPid(pid) {
+      if (!pid) return null;
+      if (targets.has(pid)) return targets.get(pid) ?? null;
+      const target = profileSync(profile, "tmuxTargetForPid_ms", () => {
+        const map = paneMap();
+        let cur: number | null = pid;
+        for (let i = 0; i < 12 && cur && cur > 1; i++) {
+          const hit = map.get(cur);
+          if (hit) return hit;
+          cur = ppidOf(cur);
+        }
+        return null;
+      });
+      targets.set(pid, target);
+      return target;
+    },
+    hasSession(name) {
+      if (has.has(name)) return has.get(name) ?? false;
+      const ok = profileSync(profile, "tmuxHasSession_ms", () => {
+        for (const target of paneMap().values()) {
+          if (target.startsWith(`${name}:`)) return true;
+        }
+        return false;
+      });
+      has.set(name, ok);
+      return ok;
+    },
+    panePid(name) {
+      if (panePids.has(name)) return panePids.get(name) ?? null;
+      const pid = profileSync(profile, "panePidForSession_ms", () => {
+        for (const [panePid, target] of paneMap()) {
+          if (target.startsWith(`${name}:`)) return panePid;
+        }
+        return null;
+      });
+      panePids.set(name, pid);
+      return pid;
+    },
+  };
+}
 
 export type SessionMsg = {
   // Stable per-line id (the transcript `uuid`). Lets the client dedup messages
@@ -193,12 +335,13 @@ function managedLaunchRow(
   m: ManagedSession,
   overrides: Record<string, string>,
   assigns: Record<string, string>,
+  tmux: TmuxProbe = defaultTmuxProbe,
 ): Session | null {
   const sessionId = m.sessionId ?? m.nativeSessionId ?? null;
-  if (!sessionId || !tmuxHasSession(m.tmuxName)) return null;
-  const pid = panePidForSession(m.tmuxName) ?? 0;
+  if (!sessionId || !tmux.hasSession(m.tmuxName)) return null;
+  const pid = tmux.panePid(m.tmuxName) ?? 0;
   if (pid && isClosing(pid)) return null;
-  const tmuxTarget = pid ? tmuxTargetForPid(pid) ?? `${m.tmuxName}:0.0` : `${m.tmuxName}:0.0`;
+  const tmuxTarget = pid ? tmux.targetForPid(pid) ?? `${m.tmuxName}:0.0` : `${m.tmuxName}:0.0`;
   const project = m.project || projectName(m.cwd, { repoRoot: m.repoRoot });
   const title =
     managedTitle(m, sessionId, m.nativeSessionId, overrides) ||
@@ -450,21 +593,96 @@ function candidateDirs(cwd: string): string[] {
   return [...new Set([slash, dots])];
 }
 
-async function findTranscriptById(id: string): Promise<string | null> {
-  let dirs: string[];
+type TranscriptDirEntry = { id: string; path: string; mtime: number };
+const TRANSCRIPT_SCAN_CACHE_MS = 800;
+const transcriptPathById = new Map<string, string>();
+const transcriptMissById = new Map<string, number>();
+const transcriptDirCache = new Map<string, { at: number; entries: TranscriptDirEntry[] }>();
+let transcriptAllScanAt = 0;
+let transcriptAllScanInflight: Promise<void> | null = null;
+
+async function scanTranscriptDir(dir: string): Promise<TranscriptDirEntry[]> {
+  const now = Date.now();
+  const cached = transcriptDirCache.get(dir);
+  if (cached && now - cached.at < TRANSCRIPT_SCAN_CACHE_MS) return cached.entries;
+  const abs = join(PROJECTS_DIR, dir);
+  let files: string[];
   try {
-    dirs = await readdir(PROJECTS_DIR);
+    files = await readdir(abs);
   } catch {
-    return null;
+    transcriptDirCache.set(dir, { at: now, entries: [] });
+    return [];
   }
-  for (const d of dirs) {
-    const p = join(PROJECTS_DIR, d, `${id}.jsonl`);
-    if (await Bun.file(p).exists()) return p;
+  const entries: TranscriptDirEntry[] = [];
+  for (const f of files) {
+    if (!f.endsWith(".jsonl")) continue;
+    const id = f.replace(/\.jsonl$/, "");
+    if (!UUID.test(id)) continue;
+    const path = join(abs, f);
+    let mtime = 0;
+    try {
+      mtime = statSync(path).mtimeMs;
+    } catch {
+      continue;
+    }
+    entries.push({ id, path, mtime });
+    transcriptPathById.set(id, path);
+    transcriptMissById.delete(id);
   }
-  return null;
+  transcriptDirCache.set(dir, { at: Date.now(), entries });
+  return entries;
 }
 
+async function scanAllTranscriptDirs(): Promise<void> {
+  const now = Date.now();
+  if (now - transcriptAllScanAt < TRANSCRIPT_SCAN_CACHE_MS) return;
+  if (transcriptAllScanInflight) return transcriptAllScanInflight;
+  transcriptAllScanInflight = (async () => {
+    let dirs: string[];
+    try {
+      dirs = await readdir(PROJECTS_DIR);
+    } catch {
+      transcriptAllScanAt = Date.now();
+      return;
+    }
+    await Promise.all(dirs.map((dir) => scanTranscriptDir(dir)));
+    transcriptAllScanAt = Date.now();
+  })().finally(() => {
+    transcriptAllScanInflight = null;
+  });
+  return transcriptAllScanInflight;
+}
+
+async function findTranscriptById(id: string): Promise<string | null> {
+  const hit = transcriptPathById.get(id);
+  if (hit) return hit;
+  const missAt = transcriptMissById.get(id);
+  if (missAt && Date.now() - missAt < TRANSCRIPT_SCAN_CACHE_MS) return null;
+  await scanAllTranscriptDirs();
+  const found = transcriptPathById.get(id) ?? null;
+  if (!found) transcriptMissById.set(id, Date.now());
+  return found;
+}
+
+const CODEX_ROLLOUT_FILES_CACHE_MS = 800;
+let codexFilesCache: { at: number; files: string[] } | null = null;
+let codexFilesInflight: Promise<string[]> | null = null;
+const codexPathById = new Map<string, string>();
+const codexMissById = new Map<string, number>();
+
 async function codexRolloutFiles(): Promise<string[]> {
+  const now = Date.now();
+  if (codexFilesCache && now - codexFilesCache.at < CODEX_ROLLOUT_FILES_CACHE_MS) {
+    return codexFilesCache.files;
+  }
+  if (codexFilesInflight) return codexFilesInflight;
+  codexFilesInflight = scanCodexRolloutFiles().finally(() => {
+    codexFilesInflight = null;
+  });
+  return codexFilesInflight;
+}
+
+async function scanCodexRolloutFiles(): Promise<string[]> {
   const out: string[] = [];
   let years: string[];
   try {
@@ -494,20 +712,33 @@ async function codexRolloutFiles(): Promise<string[]> {
           continue;
         }
         for (const f of files) {
-          if (f.endsWith(".jsonl")) out.push(join(CODEX_SESSIONS_DIR, y, m, d, f));
+          if (f.endsWith(".jsonl")) {
+            const path = join(CODEX_SESSIONS_DIR, y, m, d, f);
+            out.push(path);
+            const id = path.match(UUID)?.[0];
+            if (id) {
+              codexPathById.set(id, path);
+              codexMissById.delete(id);
+            }
+          }
         }
       }
     }
   }
+  codexFilesCache = { at: Date.now(), files: out };
   return out;
 }
 
 async function findCodexTranscriptById(id: string): Promise<string | null> {
   if (!UUID.test(id)) return null;
-  for (const p of await codexRolloutFiles()) {
-    if (p.includes(id)) return p;
-  }
-  return null;
+  const hit = codexPathById.get(id);
+  if (hit) return hit;
+  const missAt = codexMissById.get(id);
+  if (missAt && Date.now() - missAt < CODEX_ROLLOUT_FILES_CACHE_MS) return null;
+  await codexRolloutFiles();
+  const found = codexPathById.get(id) ?? null;
+  if (!found) codexMissById.set(id, Date.now());
+  return found;
 }
 
 async function findGrokTranscriptById(id: string): Promise<string | null> {
@@ -651,25 +882,11 @@ async function newestUnclaimedInCwd(
   let best: { path: string; id: string; mtime: number } | null = null;
   let newestAny = 0; // freshest transcript regardless of claim status
   for (const dir of candidateDirs(cwd)) {
-    const abs = join(PROJECTS_DIR, dir);
-    let files: string[];
-    try {
-      files = await readdir(abs);
-    } catch {
-      continue;
-    }
-    for (const f of files) {
-      if (!f.endsWith(".jsonl")) continue;
-      let mtime = 0;
-      try {
-        mtime = statSync(join(abs, f)).mtimeMs;
-      } catch {
-        continue;
-      }
+    for (const entry of await scanTranscriptDir(dir)) {
+      const { id, path, mtime } = entry;
       if (mtime > newestAny) newestAny = mtime;
-      const id = f.replace(/\.jsonl$/, "");
       if (claimed.has(id)) continue;
-      if (!best || mtime > best.mtime) best = { path: join(abs, f), id, mtime };
+      if (!best || mtime > best.mtime) best = { path, id, mtime };
     }
   }
   if (!best) return null;
@@ -1152,6 +1369,8 @@ async function cachedFirstTitle(path: string): Promise<string | null> {
 }
 
 export async function listSessions(): Promise<Session[]> {
+  const profile = listSessionsProfile();
+  const tmux = makeTmuxProbe(profile);
   // Drop just-closed sessions up front (see closing.ts): /close kills the
   // process but it lingers for a poll or two, so without this a stopped session
   // flickers back into the list until pgrep stops seeing it.
@@ -1159,14 +1378,20 @@ export async function listSessions(): Promise<Session[]> {
   // child `claude` process via the SDK, which pgrep would otherwise surface as a
   // phantom duplicate session — filter those out by parent pid (and, as a
   // backstop, by the aisdk sessionId) so only the single aisdk session shows.
-  const aisdkEntries = listAisdkEntries().filter((e) => isPidAlive(e.harnessPid));
+  const aisdkEntries = profileSync(profile, "aisdk_registry_ms", () =>
+    listAisdkEntries().filter((e) => isPidAlive(e.harnessPid)),
+  );
   const harnessPids = new Set(aisdkEntries.map((e) => e.harnessPid));
   const aisdkSessionIds = new Set(aisdkEntries.map((e) => e.sessionId));
-  const claudeProcs = listClaudeProcs().filter(
-    (p) => !isClosing(p.pid) && !harnessPids.has(ppidOf(p.pid) ?? -1),
+  const claudeProcs = profileSync(profile, "listClaudeProcs_pgrep_ms", () =>
+    listClaudeProcs().filter(
+      (p) => !isClosing(p.pid) && !harnessPids.has(ppidOf(p.pid) ?? -1),
+    ),
   );
-  const enriched = await Promise.all(
+  profile?.count("claude_procs", claudeProcs.length);
+  const enriched = await profileAsync(profile, "claude_proc_enrich_wall_ms", () => Promise.all(
     claudeProcs.map(async (p) => {
+      const procT0 = performance.now();
       let cwd: string | null = null;
       let startedAt: number | null = null;
       try {
@@ -1194,9 +1419,10 @@ export async function listSessions(): Promise<Session[]> {
         sessionId = sm ? sm[1] : null;
       }
       if (ps?.cwd) cwd = ps.cwd;
+      profile?.add("claude_proc_reads_sum_ms", performance.now() - procT0);
       return { ...p, cwd, startedAt, sessionId, authoritative };
     }),
-  );
+  ));
 
   const claimed = new Set<string>(
     enriched.filter((e) => e.sessionId).map((e) => e.sessionId as string),
@@ -1207,9 +1433,9 @@ export async function listSessions(): Promise<Session[]> {
   // duplicate of the aisdk session.
   for (const id of aisdkSessionIds) claimed.add(id);
 
-  const overrides = await readTitleOverrides();
-  const assigns = userAssignments();
-  const managedSessions = listManaged();
+  const overrides = await profileAsync(profile, "readTitleOverrides_ms", () => readTitleOverrides());
+  const assigns = profileSync(profile, "userAssignments_ms", () => userAssignments());
+  const managedSessions = profileSync(profile, "listManaged_ms", () => listManaged());
   const managedByName = new Map(managedSessions.map((m) => [m.tmuxName, m]));
   const sessionProject = (cwd: string | null, tmuxName: string | null | undefined) => {
     const managed = tmuxName ? managedByName.get(tmuxName) : undefined;
@@ -1224,9 +1450,11 @@ export async function listSessions(): Promise<Session[]> {
     // session is added separately with its own control plane).
     if (sessionId && aisdkSessionIds.has(sessionId)) continue;
     if (sessionId) {
-      transcriptPath = await findTranscriptById(sessionId);
+      const id = sessionId;
+      transcriptPath = await profileAsync(profile, "findTranscriptById_ms", () => findTranscriptById(id));
     } else if (e.cwd) {
-      const r = await newestUnclaimedInCwd(e.cwd, claimed);
+      const cwd = e.cwd;
+      const r = await profileAsync(profile, "newestUnclaimedInCwd_ms", () => newestUnclaimedInCwd(cwd, claimed));
       if (r) {
         transcriptPath = r.path;
         sessionId = r.id;
@@ -1241,10 +1469,13 @@ export async function listSessions(): Promise<Session[]> {
       try {
         lastActivityAt = statSync(transcriptPath).mtimeMs;
       } catch {}
-      const meta = await transcriptTailMeta(transcriptPath, lastActivityAt ?? 0);
+      const [meta, model] = await Promise.all([
+        profileAsync(profile, "transcriptTailMeta_ms", () => transcriptTailMeta(transcriptPath, lastActivityAt ?? 0)),
+        profileAsync(profile, "cachedLiveModel_ms", () => cachedLiveModel(transcriptPath, lastActivityAt ?? 0)),
+      ]);
       last = meta.last;
       lastUser = meta.lastUser;
-      liveModel = await cachedLiveModel(transcriptPath, lastActivityAt ?? 0);
+      liveModel = model;
     }
     // Prefer the transcript's live model; fall back to the launch `--model` arg
     // (always present on a lfg-managed session, so the badge shows instantly
@@ -1254,7 +1485,7 @@ export async function listSessions(): Promise<Session[]> {
     // Resolve the pane this pid runs in up front; the trust check below decides
     // whether we hand it out for send-keys / prompt detection. The pane NAME is
     // still safe to use for matching the managed record either way.
-    const rawTarget = isHeadless(e.cmd) ? null : tmuxTargetForPid(e.pid);
+    const rawTarget = isHeadless(e.cmd) ? null : tmux.targetForPid(e.pid);
     const paneName = rawTarget ? rawTarget.split(":")[0] : null;
     const managedRec = paneName ? managedByName.get(paneName) : undefined;
     // Trust the pane target when the pidfile is authoritative OR the pane is one
@@ -1274,7 +1505,8 @@ export async function listSessions(): Promise<Session[]> {
     const cwd = managedRec?.cwd ?? e.cwd;
     const project = sessionProject(cwd, tmuxName);
     let title = managedTitle(managedRec, visibleSessionId, sessionId, overrides);
-    if (!title && transcriptPath) title = await cachedFirstTitle(transcriptPath);
+    if (!title && transcriptPath)
+      title = await profileAsync(profile, "cachedFirstTitle_ms", () => cachedFirstTitle(transcriptPath));
     if (!title) title = cwd ? basename(cwd) : project;
     out.push({
       agent: "claude",
@@ -1311,7 +1543,21 @@ export async function listSessions(): Promise<Session[]> {
     });
   }
 
-  const codex = await codexThreads();
+  const codexProcs = profileSync(profile, "listCodexProcs_pgrep_ms", () => listCodexProcs());
+  profile?.count("codex_procs", codexProcs.length);
+  const needsCodexThreads =
+    aisdkEntries.some((e) => e.agent === "codex" && !e.threadId) ||
+    codexProcs.some(
+      (p) =>
+        !isClosing(p.pid) &&
+        !/\bapp-server\b/.test(p.cmd) &&
+        !p.cmd.match(new RegExp(`(?:resume|fork)\\s+(${UUID.source})`)) &&
+        !!codexPromptFromCmd(p.cmd),
+    );
+  profile?.count("codexThreads_skipped", needsCodexThreads ? 0 : 1);
+  const codex = needsCodexThreads
+    ? await profileAsync(profile, "codexThreads_ms", () => codexThreads())
+    : [];
   const claimedCodex = new Set<string>();
   // codex-aisdk harnesses each spawn a `codex app-server --listen stdio://`
   // child that pgrep WILL surface (basename is `codex`). It's the AI-SDK
@@ -1323,7 +1569,7 @@ export async function listSessions(): Promise<Session[]> {
   for (const e of aisdkEntries) {
     if (e.agent === "codex" && e.threadId) claimedCodex.add(e.threadId);
   }
-  for (const p of listCodexProcs()) {
+  for (const p of codexProcs) {
     if (isClosing(p.pid)) continue; // just-closed — keep it out of the list
     // The app-server child of a codex-aisdk harness — not a user-facing codex
     // session. Its argv is `codex app-server --listen stdio://` (no resume id,
@@ -1333,12 +1579,14 @@ export async function listSessions(): Promise<Session[]> {
 
     let cwd: string | null = null;
     let startedAt: number | null = null;
+    const procT0 = performance.now();
     try {
       cwd = await readlink(`/proc/${p.pid}/cwd`);
     } catch {}
     try {
       startedAt = statSync(`/proc/${p.pid}`).ctimeMs;
     } catch {}
+    profile?.add("codex_proc_reads_sum_ms", performance.now() - procT0);
     let sessionId = p.cmd.match(new RegExp(`(?:resume|fork)\\s+(${UUID.source})`))?.[1] ?? null;
     let thread = sessionId ? codex.find((t) => t.id === sessionId) : null;
     const prompt = codexPromptFromCmd(p.cmd);
@@ -1361,7 +1609,7 @@ export async function listSessions(): Promise<Session[]> {
       if (thread.cwd) cwd = thread.cwd;
     }
 
-    const transcriptPath = thread?.path ?? (sessionId ? await findCodexTranscriptById(sessionId) : null);
+    const transcriptPath = thread?.path ?? (sessionId ? await profileAsync(profile, "findCodexTranscriptById_ms", () => findCodexTranscriptById(sessionId)) : null);
     let last: SessionMsg | null = null;
     let lastActivityAt: number | null = null;
     let lastUser: string | null = null;
@@ -1369,18 +1617,19 @@ export async function listSessions(): Promise<Session[]> {
       try {
         lastActivityAt = statSync(transcriptPath).mtimeMs;
       } catch {}
-      const meta = await transcriptTailMeta(transcriptPath, lastActivityAt ?? 0);
+      const meta = await profileAsync(profile, "transcriptTailMeta_ms", () => transcriptTailMeta(transcriptPath, lastActivityAt ?? 0));
       last = meta.last;
       lastUser = meta.lastUser;
     }
-    const tmuxTarget = tmuxTargetForPid(p.pid);
+    const tmuxTarget = tmux.targetForPid(p.pid);
     const tmuxName = tmuxTarget ? tmuxTarget.split(":")[0] : null;
     const managedRec = tmuxName ? managedByName.get(tmuxName) : undefined;
     rememberNativeSession(managedRec, sessionId);
     const visibleSessionId = managedVisibleId(managedRec, sessionId);
     const project = sessionProject(cwd, tmuxName);
     let title = managedTitle(managedRec, visibleSessionId, sessionId, overrides);
-    if (!title && transcriptPath) title = await cachedFirstTitle(transcriptPath);
+    if (!title && transcriptPath)
+      title = await profileAsync(profile, "cachedFirstTitle_ms", () => cachedFirstTitle(transcriptPath));
     if (!title) title = cwd ? basename(cwd) : project;
     out.push({
       agent: "codex",
@@ -1412,7 +1661,9 @@ export async function listSessions(): Promise<Session[]> {
   const managedGrok = managedSessions.filter((m) => m.agent === "grok" && m.sessionId);
   const managedGrokByName = new Map(managedGrok.map((m) => [m.tmuxName, m]));
   const activeGrokTmux = new Set<string>();
-  for (const g of readGrokActiveSessions()) {
+  const grokActive = profileSync(profile, "readGrokActiveSessions_ms", () => readGrokActiveSessions());
+  profile?.count("grok_active_entries", grokActive.length);
+  for (const g of grokActive) {
     const grokSessionId = typeof g.session_id === "string" && UUID.test(g.session_id)
       ? g.session_id
       : null;
@@ -1421,21 +1672,25 @@ export async function listSessions(): Promise<Session[]> {
 
     let cwd: string | null = g.cwd ?? null;
     let startedAt: number | null = g.opened_at ? Date.parse(g.opened_at) : null;
+    const procT0 = performance.now();
     try {
       cwd = await readlink(`/proc/${pid}/cwd`);
     } catch {}
     try {
       startedAt = statSync(`/proc/${pid}`).ctimeMs;
     } catch {}
+    profile?.add("grok_proc_reads_sum_ms", performance.now() - procT0);
 
-    const tmuxTarget = tmuxTargetForPid(pid);
+    const tmuxTarget = tmux.targetForPid(pid);
     const tmuxName = tmuxTarget ? tmuxTarget.split(":")[0] : null;
     if (tmuxName) activeGrokTmux.add(tmuxName);
     const managedRec = tmuxName ? managedGrokByName.get(tmuxName) : undefined;
     rememberNativeSession(managedRec, grokSessionId);
     const sessionId = managedRec?.sessionId ?? grokSessionId;
-    const transcriptPath = await findGrokTranscriptById(grokSessionId);
-    const summary = await grokSummaryById(grokSessionId);
+    const [transcriptPath, summary] = await Promise.all([
+      profileAsync(profile, "findGrokTranscriptById_ms", () => findGrokTranscriptById(grokSessionId)),
+      profileAsync(profile, "grokSummaryById_ms", () => grokSummaryById(grokSessionId)),
+    ]);
     let last: SessionMsg | null = null;
     let lastActivityAt: number | null = summary?.updated_at ? Date.parse(summary.updated_at) : null;
     let lastUser: string | null = null;
@@ -1443,7 +1698,7 @@ export async function listSessions(): Promise<Session[]> {
       try {
         lastActivityAt = statSync(transcriptPath).mtimeMs;
       } catch {}
-      const meta = await transcriptTailMeta(transcriptPath, lastActivityAt ?? 0);
+      const meta = await profileAsync(profile, "transcriptTailMeta_ms", () => transcriptTailMeta(transcriptPath, lastActivityAt ?? 0));
       last = meta.last;
       lastUser = meta.lastUser;
     }
@@ -1451,7 +1706,8 @@ export async function listSessions(): Promise<Session[]> {
     const project = managedRec?.project || projectName(cwd, { repoRoot: managedRec?.repoRoot });
     let title = overrides[sessionId] || overrides[grokSessionId] || null;
     if (!title && summary?.generated_title) title = summary.generated_title;
-    if (!title && transcriptPath) title = await cachedFirstTitle(transcriptPath);
+    if (!title && transcriptPath)
+      title = await profileAsync(profile, "cachedFirstTitle_ms", () => cachedFirstTitle(transcriptPath));
     if (!title) title = cwd ? basename(cwd) : project;
     const cmd = readProcCmd(pid, `grok --model ${summary?.current_model_id ?? "grok-composer-2.5-fast"}`);
 
@@ -1481,10 +1737,10 @@ export async function listSessions(): Promise<Session[]> {
   }
 
   for (const m of managedGrok) {
-    if (activeGrokTmux.has(m.tmuxName) || !tmuxHasSession(m.tmuxName)) continue;
-    const pid = panePidForSession(m.tmuxName);
+    if (activeGrokTmux.has(m.tmuxName) || !tmux.hasSession(m.tmuxName)) continue;
+    const pid = tmux.panePid(m.tmuxName);
     if (!pid || isClosing(pid)) continue;
-    const tmuxTarget = tmuxTargetForPid(pid) ?? `${m.tmuxName}:0.0`;
+    const tmuxTarget = tmux.targetForPid(pid) ?? `${m.tmuxName}:0.0`;
     const cmd = readProcCmd(pid, "grok");
     const project = m.project || projectName(m.cwd, { repoRoot: m.repoRoot });
     out.push({
@@ -1512,11 +1768,11 @@ export async function listSessions(): Promise<Session[]> {
     });
   }
 
-  for (const m of listManaged().filter((row) => row.agent === "hermes" && row.sessionId)) {
-    if (!tmuxHasSession(m.tmuxName)) continue;
-    const pid = panePidForSession(m.tmuxName);
+  for (const m of managedSessions.filter((row) => row.agent === "hermes" && row.sessionId)) {
+    if (!tmux.hasSession(m.tmuxName)) continue;
+    const pid = tmux.panePid(m.tmuxName);
     if (!pid || isClosing(pid)) continue;
-    const tmuxTarget = tmuxTargetForPid(pid) ?? `${m.tmuxName}:0.0`;
+    const tmuxTarget = tmux.targetForPid(pid) ?? `${m.tmuxName}:0.0`;
     const cmd = readProcCmd(pid, "hermes");
     const project = m.project || projectName(m.cwd, { repoRoot: m.repoRoot });
     out.push({
@@ -1571,9 +1827,9 @@ export async function listSessions(): Promise<Session[]> {
     }
     const transcriptPath = isCodex
       ? codexThreadId
-        ? await findCodexTranscriptById(codexThreadId)
+        ? await profileAsync(profile, "findCodexTranscriptById_ms", () => findCodexTranscriptById(codexThreadId))
         : null
-      : await findTranscriptById(e.sessionId);
+      : await profileAsync(profile, "findTranscriptById_ms", () => findTranscriptById(e.sessionId));
     const nativeSessionId = isCodex ? codexThreadId : e.sessionId;
     const managedRec = e.tmuxName ? managedByName.get(e.tmuxName) : undefined;
     rememberNativeSession(managedRec, nativeSessionId);
@@ -1588,13 +1844,14 @@ export async function listSessions(): Promise<Session[]> {
       // The transcript helpers handle BOTH claude JSONL and codex rollouts
       // (normalizeCodexLine is tried first inside each), so they're safe for a
       // codex rollout path too. Guarded with .catch — never throw out of here.
-      const meta = await transcriptTailMeta(transcriptPath, lastActivityAt ?? 0);
+      const meta = await profileAsync(profile, "transcriptTailMeta_ms", () => transcriptTailMeta(transcriptPath, lastActivityAt ?? 0));
       last = meta.last;
       lastUser = meta.lastUser;
     }
     const project = managedRec?.project || projectName(e.cwd, { repoRoot: managedRec?.repoRoot });
     let title = managedTitle(managedRec, sessionId, nativeSessionId, overrides);
-    if (!title && transcriptPath) title = await cachedFirstTitle(transcriptPath);
+    if (!title && transcriptPath)
+      title = await profileAsync(profile, "cachedFirstTitle_ms", () => cachedFirstTitle(transcriptPath));
     if (!title) title = e.title || (e.cwd ? basename(e.cwd) : project);
     let startedAt: number | null = e.createdAt;
     try {
@@ -1638,7 +1895,7 @@ export async function listSessions(): Promise<Session[]> {
   );
   for (const m of managedSessions) {
     if (representedManaged.has(m.tmuxName)) continue;
-    const row = managedLaunchRow(m, overrides, assigns);
+    const row = managedLaunchRow(m, overrides, assigns, tmux);
     if (row) out.push(row);
   }
 
@@ -1674,7 +1931,10 @@ export async function listSessions(): Promise<Session[]> {
   // self-sufficient: the client can render which sessions are busy without
   // opening a transcript stream. Cheap — a tmux pane capture (a few ms each) or
   // an in-memory registry lookup — and it replaces N eager SSE connections.
-  for (const s of out) s.busy = sessionBusy(s);
+  profileSync(profile, "sessionBusy_ms", () => {
+    for (const s of out) s.busy = sessionBusy(s);
+  });
+  profile?.end(out.length);
   return out;
 }
 

@@ -91,7 +91,11 @@ import {
   type PendingPrompt,
   type Session,
 } from "../sessions.ts";
-import { invalidateListSessionsCache, listSessionsCached } from "../session-cache.ts";
+import {
+  invalidateListSessionsCache,
+  listSessionsCached,
+  noteListSessionsClientActivity,
+} from "../session-cache.ts";
 import {
   enqueueTranscriptIndex,
   indexedMessagePage,
@@ -1699,6 +1703,7 @@ export async function cmdServe() {
         return json({ skills: await listSkillCatalog(repoRoots) });
       }
       if (path === "/api/agent-browser" && req.method === "GET") {
+        noteListSessionsClientActivity();
         const repoRoots = (await listRepos().catch(() => [])).map((repo) => repo.cwd);
         const [skills, insightAgents, autoAgents, codingAgents, sessions] = await Promise.all([
           listSkillCatalog(repoRoots),
@@ -2589,6 +2594,7 @@ export async function cmdServe() {
       }
 
       if (path === "/api/sessions") {
+        noteListSessionsClientActivity();
         const sessions = await listSessionsCached();
         warmRecentMessages(
           sessions
@@ -3687,6 +3693,7 @@ export async function cmdServe() {
       }
 
       if (path === "/api/live/status") {
+        noteListSessionsClientActivity();
         const ids = (url.searchParams.get("ids") ?? "")
           .split(",")
           .map((s) => s.trim())
@@ -3757,6 +3764,7 @@ export async function cmdServe() {
       // folds them into a single SSE; events carry a `sid` so the client can
       // route them to the right pane.
       if (path === "/api/live/stream") {
+        noteListSessionsClientActivity();
         const rid =
           (url.searchParams.get("rid") || "").replace(/[^a-zA-Z0-9._-]/g, "").slice(0, 80) ||
           randomBytes(6).toString("hex");
