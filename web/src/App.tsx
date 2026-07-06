@@ -20,6 +20,7 @@ import {
   stopSpeaking,
   useSpeechPlayback,
 } from "./voice-tts";
+import { liveTransportMode, useLiveSocket } from "./useLiveSocket";
 import type {
   CSSProperties,
   Dispatch,
@@ -3306,8 +3307,47 @@ export function App() {
     [allLiveSessions],
   );
   const liveStatusKey = liveStatusIds.join(",");
+  const liveTransport = useMemo(() => liveTransportMode(), []);
+  const useWsLive = liveTransport === "ws";
+  const applyLiveStatusRows = useCallback((rows: Array<
+    Pick<
+      Session,
+      | "sessionId"
+      | "busy"
+      | "title"
+      | "lastUserText"
+      | "lastActivityAt"
+      | "status"
+      | "statusReason"
+      | "statusDetail"
+      | "model"
+    >
+  >) => {
+    if (!rows.length) return;
+    const bySid = new Map(rows.map((row) => [row.sessionId, row]));
+    setSessions((prev) => {
+      let changed = false;
+      const next = prev.map((session) => {
+        const sid = session.sessionId;
+        const patch = sid ? bySid.get(sid) : undefined;
+        if (!patch) return session;
+        const merged = { ...session, ...patch };
+        let rowChanged = false;
+        for (const key of Object.keys(patch) as Array<keyof typeof patch>) {
+          if (session[key] !== merged[key]) {
+            rowChanged = true;
+            break;
+          }
+        }
+        if (!rowChanged) return session;
+        changed = true;
+        return merged;
+      });
+      return changed ? next : prev;
+    });
+  }, []);
   useEffect(() => {
-    if (tab !== "live" || !liveStatusKey) return;
+    if (useWsLive || tab !== "live" || !liveStatusKey) return;
     const es = new EventSource(`/api/live/status?ids=${liveStatusKey}`);
     es.addEventListener("status", (event) => {
       const rows = parseLiveEvent<
@@ -3326,31 +3366,10 @@ export function App() {
           >
         >
       >(event.data);
-      if (!rows?.length) return;
-      const bySid = new Map(rows.map((row) => [row.sessionId, row]));
-      setSessions((prev) => {
-        let changed = false;
-        const next = prev.map((session) => {
-          const sid = session.sessionId;
-          const patch = sid ? bySid.get(sid) : undefined;
-          if (!patch) return session;
-          const merged = { ...session, ...patch };
-          let rowChanged = false;
-          for (const key of Object.keys(patch) as Array<keyof typeof patch>) {
-            if (session[key] !== merged[key]) {
-              rowChanged = true;
-              break;
-            }
-          }
-          if (!rowChanged) return session;
-          changed = true;
-          return merged;
-        });
-        return changed ? next : prev;
-      });
+      if (rows?.length) applyLiveStatusRows(rows);
     });
     return () => es.close();
-  }, [liveStatusKey, tab]);
+  }, [applyLiveStatusRows, liveStatusKey, tab, useWsLive]);
 
   const cycleMobileProjectFilter = useCallback(
     (dir: 1 | -1) => {
@@ -3493,7 +3512,12 @@ export function App() {
   // Wide-screen stage columns mark their session as expanded when previewed or
   // pinned; rail-only rows keep using lightweight list/status data.
   const expandedIds = useExpandedIds(liveSessions, false);
-  const liveStream = useLiveSessionStream(liveSessions, expandedIds);
+  const sseLiveStream = useLiveSessionStream(liveSessions, useWsLive ? [] : expandedIds);
+  const wsLiveStream = useLiveSocket(liveSessions, expandedIds, {
+    enabled: useWsLive,
+    onStatusRows: applyLiveStatusRows,
+  });
+  const liveStream = useWsLive ? wsLiveStream : sseLiveStream;
 
   function toggleTheme() {
     const next = !document.documentElement.classList.contains("dark");

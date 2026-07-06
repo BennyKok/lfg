@@ -125,6 +125,13 @@ import { PtyBridge, termSessionName } from "../pty.ts";
 import { capturePaneScroll, capturePaneEscaped, paneWidth } from "../tmux.ts";
 import { detectUrls } from "../links.ts";
 import type { ServerWebSocket } from "bun";
+import {
+  createLiveWsSupport,
+  isLiveWsEnabled,
+  liveTransportMode,
+  liveWsUpgradeAuthenticated,
+  type LiveWsSocketData,
+} from "../live-ws.ts";
 import { appendCmd as appendAisdkCmd, removeEntry as removeAisdkEntry, readEntry as readAisdkEntry, findEntryByAnyId as findAisdkEntryByAnyId, isEntryBusy as isAisdkEntryBusy } from "../aisdk-registry.ts";
 import { markClosed } from "../closing.ts";
 import { assignUser, userRoster } from "../users.ts";
@@ -505,6 +512,10 @@ async function webIndexResponse() {
   // window.lfg (host React + registerExtension) exists and contributes UI
   // (e.g. a private tab). Open-source forks set nothing → clean core.
   let html = await Bun.file(INDEX_PATH).text();
+  const runtimeConfig = `<script>window.__LFG_CONFIG__=${JSON.stringify({ liveTransport: liveTransportMode() })}</script>`;
+  html = html.includes("</head>")
+    ? html.replace("</head>", `${runtimeConfig}</head>`)
+    : runtimeConfig + html;
   const exts = (process.env.LFG_EXTENSIONS || "")
     .split(",")
     .map((s) => s.trim())
@@ -1191,7 +1202,7 @@ const sttBridges = new WeakMap<object, SttStreamBridge>();
 // as the terminal; we tag their data with browserSessionId and bridge them to the
 // WSLike transport that ../browser/session.ts expects.
 type BrowserSocketData = { browserSessionId: string };
-type AppSocketData = TermSocketData | SttStreamSocketData | BrowserSocketData;
+type AppSocketData = TermSocketData | SttStreamSocketData | BrowserSocketData | LiveWsSocketData;
 const browserSocketCbs = new WeakMap<
   object,
   { onMessage?: (d: string) => void; onClose?: () => void }
@@ -1229,6 +1240,7 @@ function clampDim(raw: string | null, fallback: number): number {
 }
 
 export async function cmdServe() {
+  const liveWs = createLiveWsSupport({ evlog });
   const server = Bun.serve<AppSocketData>({
     port: PORT,
     hostname: HOST,
@@ -1240,6 +1252,10 @@ export async function cmdServe() {
       // as binary frames — the full raw VT byte stream a faithful renderer wants.
       idleTimeout: 600,
       open(ws: ServerWebSocket<AppSocketData>) {
+        if (liveWs.isLiveSocket(ws as unknown as ServerWebSocket<unknown>)) {
+          liveWs.open(ws as unknown as ServerWebSocket<unknown>);
+          return;
+        }
         // Streaming-STT bridge socket: open the upstream realtime-STT bridge and
         // pipe its results back as {partial,final} text frames. Built synchronously
         // (the bridge queues outbound audio until its upstream connects), so the
@@ -1305,6 +1321,10 @@ export async function cmdServe() {
         }
       },
       message(ws: ServerWebSocket<AppSocketData>, message) {
+        if (liveWs.isLiveSocket(ws as unknown as ServerWebSocket<unknown>)) {
+          liveWs.message(ws as unknown as ServerWebSocket<unknown>, message);
+          return;
+        }
         // Streaming-STT bridge: binary frames are raw 16 kHz PCM; text frames are
         // the worker's {"type":"flush"|"eof"} control messages.
         const sttBridge = sttBridges.get(ws);
@@ -1344,6 +1364,10 @@ export async function cmdServe() {
         bridge.write(message as Uint8Array);
       },
       close(ws: ServerWebSocket<AppSocketData>) {
+        if (liveWs.isLiveSocket(ws as unknown as ServerWebSocket<unknown>)) {
+          liveWs.close(ws as unknown as ServerWebSocket<unknown>);
+          return;
+        }
         // Streaming-STT bridge: tear the upstream realtime-STT socket down.
         const sttBridge = sttBridges.get(ws);
         if (sttBridge) {
@@ -1397,6 +1421,17 @@ export async function cmdServe() {
           return json({ path: file, lines });
         }
         return err(405, "method not allowed");
+      }
+
+      // ---- live view stream (websocket upgrade) ----
+      if (path === "/api/live/ws") {
+        if (!isLiveWsEnabled()) return err(404, "live websocket disabled");
+        if (!liveWsUpgradeAuthenticated(req)) return err(401, "unauthorized");
+        const ok = server.upgrade(req, {
+          data: liveWs.dataForRequest(),
+        });
+        if (ok) return undefined; // upgraded — Bun takes over the socket
+        return err(400, "expected a websocket upgrade");
       }
 
       // ---- browser terminal (websocket upgrade) ----
