@@ -41,10 +41,18 @@ export function shouldAutoWorktree(
   repoRoot: string,
   opts?: { voice?: boolean; worktree?: boolean; selfRepo?: string },
 ): boolean {
-  if (!sessionWorktreeEnabled()) return false;
   if (opts?.worktree === false) return false;
-  if (opts?.voice) return false;
   const abs = resolve(repoRoot);
+  // Explicit `worktree: true` is a hard opt-in: it overrides the default-off
+  // guards (global disable, voice, and the self-repo skip) so an agent asked to
+  // isolate ALWAYS lands in /tmp/lfg-wt instead of editing a shared checkout in
+  // place. This is what lets an lfg subagent safely rewrite serve.ts/App.tsx
+  // without colliding with the ~15 sessions live in the shared tree.
+  if (opts?.worktree === true) return isGitRepo(abs);
+  // Otherwise fall back to the auto policy: on by default, but skip lfg-self
+  // and the voice orchestrator.
+  if (!sessionWorktreeEnabled()) return false;
+  if (opts?.voice) return false;
   if (opts?.selfRepo && resolve(opts.selfRepo) === abs) return false;
   return isGitRepo(abs);
 }
