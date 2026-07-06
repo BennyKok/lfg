@@ -91,6 +91,7 @@ import {
   type PendingPrompt,
   type Session,
 } from "../sessions.ts";
+import { invalidateListSessionsCache, listSessionsCached } from "../session-cache.ts";
 import {
   enqueueTranscriptIndex,
   indexedMessagePage,
@@ -207,6 +208,28 @@ function evlog(event: string, fields: Record<string, unknown> = {}) {
   } catch {
     // Diagnostics must never affect the app path being measured.
   }
+}
+
+const BOOT_API_TIMING_ENDPOINTS = new Set([
+  "/api/sessions",
+  "/api/skills",
+  "/api/agents",
+  "/api/repos",
+  "/api/users",
+  "/api/checks",
+  "/api/setup/checks",
+  "/api/coding-agents",
+  "/api/findings",
+  "/api/auto/findings",
+  "/api/notes",
+  "/api/session-brain/notes",
+  "/api/config",
+  "/api/session-brain/config",
+  "/api/agent-browser",
+]);
+
+function apiDurationMs(start: number): number {
+  return Math.round((performance.now() - start) * 1000) / 1000;
 }
 
 function uploadExt(contentType: string, filename: string): string {
@@ -702,7 +725,7 @@ const LIVE_IDS_TTL_MS = 3000;
 async function liveSessionIdsCached(): Promise<Set<string>> {
   const now = Date.now();
   if (cachedLiveIds && now - cachedLiveIds.at < LIVE_IDS_TTL_MS) return cachedLiveIds.ids;
-  const ids = liveSessionIds(await listSessions());
+  const ids = liveSessionIds(await listSessionsCached());
   cachedLiveIds = { ids, at: Date.now() };
   return ids;
 }
@@ -797,7 +820,7 @@ async function sessionSummaryContext(sessionId: string, transcriptPath: string):
 }> {
   const [msgs, live] = await Promise.all([
     recentMessages(transcriptPath, 64, { maxBytes: 192 * 1024 }),
-    listSessions().catch(() => []),
+    listSessionsCached().catch(() => []),
   ]);
   const session = live.find((s) => s.sessionId === sessionId) ?? null;
   const relevant = msgs
@@ -947,7 +970,7 @@ function plannedSessionAction(answer: string): {
 async function voiceStatusSnapshot(user?: string | null): Promise<string> {
   let sessions;
   try {
-    sessions = await listSessions();
+    sessions = await listSessionsCached();
   } catch {
     return "(session list unavailable)";
   }
@@ -1086,7 +1109,7 @@ async function voiceConsult(
   question: string,
   cwd: string = SELF_REPO,
 ): Promise<string> {
-  const live = await listSessions();
+  const live = await listSessionsCached();
   let id = voiceAdvisorId;
   // Reuse the advisor only if it's still alive AND already scoped to the repo we
   // want to explore — a different repo means its loaded working tree is wrong, so
@@ -1395,7 +1418,9 @@ export async function cmdServe() {
     async fetch(req, server) {
       const url = new URL(req.url);
       const path = url.pathname;
+      const apiTimingStart = BOOT_API_TIMING_ENDPOINTS.has(path) ? performance.now() : 0;
 
+      try {
       if (path === "/api/evlog") {
         if (req.method === "POST") {
           const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
@@ -1680,7 +1705,7 @@ export async function cmdServe() {
           listAgents(),
           listAutoAgents(),
           listCodingAgents(),
-          listSessions(),
+          listSessionsCached(),
         ]);
         return json({
           browser: buildAgentBrowserTree({
@@ -2564,7 +2589,7 @@ export async function cmdServe() {
       }
 
       if (path === "/api/sessions") {
-        const sessions = await listSessions();
+        const sessions = await listSessionsCached();
         warmRecentMessages(
           sessions
             .map((session) => session.transcriptPath)
@@ -3046,6 +3071,7 @@ export async function cmdServe() {
           repoRoot: worktree?.repoRoot,
           worktreeBranch: worktree?.branch,
         });
+        invalidateListSessionsCache();
         // Tag the new session before spawn so a concurrent /api/sessions refresh
         // can show the durable row under the right user filter immediately.
         if (body?.user || parent?.assignedUser) assignUser(tmuxName, body?.user || parent?.assignedUser || null);
@@ -3615,6 +3641,7 @@ export async function cmdServe() {
               assignUser(sess.tmuxName, null);
             }
             clearResolved(m[1]);
+            invalidateListSessionsCache();
             return json({ ok: true });
           }
           if (!sess.tmuxTarget)
@@ -3637,6 +3664,7 @@ export async function cmdServe() {
             assignUser(sess.tmuxName, null); // a managed name is unique + now gone
           }
           clearResolved(m[1]);
+          invalidateListSessionsCache();
           return json({ ok: true });
         }
       }
@@ -4182,6 +4210,9 @@ export async function cmdServe() {
       }
 
       return err(404, "not found");
+      } finally {
+        if (apiTimingStart) evlog("api_timing", { endpoint: path, durationMs: apiDurationMs(apiTimingStart) });
+      }
     },
   });
 
