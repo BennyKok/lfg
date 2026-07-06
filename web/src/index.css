@@ -1180,12 +1180,12 @@ html.lfg-keyboard-open {
      Lives on the row wrapper (not the bubble) because the pending bubble already
      runs the shimmer animation on its own element. */
   @keyframes lfg-user-send {
-    0% { opacity: 0; transform: translateY(20px) scale(0.92); }
+    0% { opacity: 0; transform: translateY(10px) scale(0.975); }
     100% { opacity: 1; transform: translateY(0) scale(1); }
   }
   .lfg-user-send {
     transform-origin: bottom right;
-    animation: lfg-user-send 340ms cubic-bezier(0.32, 0.72, 0, 1) both;
+    animation: lfg-user-send 260ms cubic-bezier(0.32, 0.72, 0, 1) both;
     will-change: transform, opacity;
   }
   @media (prefers-reduced-motion: reduce) {

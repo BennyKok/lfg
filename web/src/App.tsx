@@ -10408,15 +10408,23 @@ function NewSessionDialog({
   );
 
   // Mobile home screen: anchor the shared composer inline at the bottom of the
-  // viewport. `interactive-widget=resizes-content` shrinks the layout viewport
-  // when the soft keyboard opens, so `bottom-0` rides just above the keyboard.
+  // viewport. On Android, `interactive-widget=resizes-content` shrinks the layout
+  // viewport when the keyboard opens, so the bottom edge already rides above it.
+  // iOS Safari ignores `interactive-widget`, so the layout viewport stays full
+  // height and a plain `bottom-0` would leave the composer floating mid-screen
+  // above a dead band (the split you'd see with the keyboard up). Offset the
+  // bottom by the live `--lfg-keyboard-height` (published from visualViewport in
+  // the App shell) so the shell sits just above the keyboard on both platforms —
+  // the var is 0 when the keyboard is closed and on Android where the layout
+  // viewport already shrank.
   // Keep the fixed shell pinned in place during background launches; translating
   // it briefly reveals the browser canvas as a white strip at the bottom on iOS.
   if (variant === "inline") {
     return (
       <div
         aria-busy={launching}
-        className="pointer-events-auto fixed inset-x-0 bottom-0 z-[55] overflow-x-clip bg-background/95 pt-4 shadow-[0_-8px_24px_rgba(0,0,0,0.12)] backdrop-blur-xl"
+        style={{ bottom: "var(--lfg-keyboard-height, 0px)" }}
+        className="pointer-events-auto fixed inset-x-0 z-[55] overflow-x-clip bg-background/95 pt-4 shadow-[0_-8px_24px_rgba(0,0,0,0.12)] backdrop-blur-xl"
       >
         <div ref={inlineShellRef} className="mx-auto max-w-lg will-change-transform">
           {formBody}
