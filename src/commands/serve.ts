@@ -177,7 +177,6 @@ import {
   CLAUDE_MODELS,
   GROK_MODELS,
   HERMES_MODELS,
-  buildAgentBrowserTree,
   thinkingLevelsForAgent,
 } from "../agent-catalog.ts";
 import { listSkillCatalog } from "../skills-catalog.ts";
@@ -231,7 +230,6 @@ const BOOT_API_TIMING_ENDPOINTS = new Set([
   "/api/session-brain/notes",
   "/api/config",
   "/api/session-brain/config",
-  "/api/agent-browser",
 ]);
 
 function apiDurationMs(start: number): number {
@@ -1879,26 +1877,6 @@ export async function cmdServe() {
       if (path === "/api/skills" && req.method === "GET") {
         const repoRoots = (await listRepos().catch(() => [])).map((repo) => repo.cwd);
         return json({ skills: await listSkillCatalog(repoRoots) });
-      }
-      if (path === "/api/agent-browser" && req.method === "GET") {
-        noteListSessionsClientActivity();
-        const repoRoots = (await listRepos().catch(() => [])).map((repo) => repo.cwd);
-        const [skills, insightAgents, autoAgents, codingAgents, sessions] = await Promise.all([
-          listSkillCatalog(repoRoots),
-          listAgents(),
-          listAutoAgents(),
-          listCodingAgents(),
-          listSessionsCached(),
-        ]);
-        return json({
-          browser: buildAgentBrowserTree({
-            skills,
-            insightAgents,
-            autoAgents,
-            codingAgents,
-            sessions,
-          }),
-        });
       }
       {
         const m = path.match(/^\/api\/coding-agents\/([a-z0-9_-]+)$/);
