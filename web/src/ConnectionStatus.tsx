@@ -4,10 +4,9 @@ import type { ConnectionState } from "./useLiveSocket";
 
 const WS_TOAST_ID = "ws-conn";
 
-function reconnectingLabel(connection: ConnectionState): string {
-  const code = connection.lastCloseCode != null ? ` (code ${connection.lastCloseCode})` : "";
-  return `Reconnecting… (attempt ${connection.attempt})${code}`;
-}
+// User-facing copy only — deliberately no raw WebSocket close codes or attempt
+// counts. Those are captured in evlog for debugging; users just need to know
+// we're working on it.
 
 // Headless: no persistent pill in the UI. Connectivity blips are surfaced as
 // toasts (via the app's existing sonner Toaster) that update in place rather
@@ -27,12 +26,12 @@ export function ConnectionStatusToasts({
     prevStatusRef.current = status;
 
     if (status === "reconnecting") {
-      toast.loading(reconnectingLabel(connection), { id: WS_TOAST_ID });
+      toast.loading("Reconnecting…", { id: WS_TOAST_ID });
       return;
     }
 
     if (status === "offline") {
-      toast.error("Offline — retrying", {
+      toast.error("You're offline — we'll reconnect automatically", {
         id: WS_TOAST_ID,
         duration: Infinity,
         action: { label: "Retry now", onClick: onRetry },
