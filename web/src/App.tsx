@@ -84,6 +84,7 @@ import { toast } from "sonner";
 import { haptic } from "@/lib/haptics";
 import { reportError } from "./lib/report-error";
 import { lazyWithReload } from "./lib/lazy-with-reload";
+import { fetchBootstrap } from "./bootstrap";
 import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
@@ -116,7 +117,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { Streamdown } from "streamdown";
 import changelogMarkdown from "../../CHANGELOG.md?raw";
 import { useExtensionNavTabs } from "./lib/extensions";
 import type { ExtensionNavTab } from "./lib/extensions";
@@ -399,6 +399,23 @@ type SkillCatalogItem = {
   path: string;
 };
 
+type BootstrapPayload = {
+  agents?: Agent[];
+  codingAgents?: CodingAgentInfo[];
+  setupChecks?: SetupCheckGroup[];
+  sessions?: Session[];
+  users?: User[];
+  repos?: Repo[];
+  skills?: SkillCatalogItem[];
+  auto?: { agents?: AutoAgent[]; tz?: string; findings?: AutoFinding[] };
+  sessionBrain?: {
+    config?: SessionBrainConfig;
+    notes?: SessionNote[];
+    suggestions?: PatternSuggestion[];
+    runs?: SessionBrainRun[];
+  };
+};
+
 type AgentBrowserTree = {
   models: Array<{
     key: AgentKind;
@@ -628,6 +645,12 @@ function loadSkillCatalog(): Promise<SkillCatalogItem[]> {
       });
   }
   return skillCatalogPromise;
+}
+
+function seedSkillCatalog(skills: SkillCatalogItem[] | undefined): void {
+  if (!Array.isArray(skills)) return;
+  skillCatalogSnapshot = skills;
+  skillCatalogLoadedAt = Date.now();
 }
 
 function warmSkillCatalog(): void {
@@ -2908,10 +2931,6 @@ export function App() {
     localStorage.getItem("lfg_user"),
   );
 
-  useEffect(() => {
-    warmSkillCatalog();
-  }, []);
-
   // Mobile viewport sizing. iOS can return from the app switcher with stale
   // `dvh`/fixed-viewport metrics; a pinch zoom fixes it because WebKit is forced
   // to recalculate the visual viewport. Do that work ourselves: pin the app
@@ -3017,36 +3036,27 @@ export function App() {
   }, [loading, tab]);
 
   const loadCore = useCallback(async () => {
-    const tasks = [
-      // These power secondary/legacy settings surfaces. During a rolling deploy
-      // the browser can briefly run newer JS against the previous backend, where
-      // /api/coding-agents may not exist yet. Do not let optional settings
-      // endpoints block the live session list from painting.
-      api<{ agents: Agent[] }>("/api/agents")
-        .then((payload) => setAgents(payload.agents ?? []))
-        .catch(() => setAgents([])),
-      api<{ agents: CodingAgentInfo[] }>("/api/coding-agents")
-        .then((payload) => setCodingAgents(payload.agents ?? []))
-        .catch(() => setCodingAgents([])),
-      api<{ checks: SetupCheckGroup[] }>("/api/setup/checks")
-        .then((payload) => setSetupChecks(payload.checks ?? []))
-        .catch(() => setSetupChecks([])),
-      api<{ sessions: Session[] }>("/api/sessions").then((payload) => {
-        // Guard sessions to [] — it feeds `allLiveSessions`/`liveSessions` which
-        // call `.filter()` unconditionally on render, so a malformed/empty
-        // payload must degrade to an empty live view rather than crash.
-        setSessions(payload.sessions ?? []);
-      }),
-      api<{ users: User[] }>("/api/users").then((payload) =>
-        setUsers(payload.users ?? []),
-      ),
-      api<{ repos: Repo[] }>("/api/repos").then((payload) =>
-        setRepos(payload.repos ?? []),
-      ),
-    ];
-    const results = await Promise.allSettled(tasks);
-    const failed = results.find((result) => result.status === "rejected");
-    if (failed?.status === "rejected") throw failed.reason;
+    const payload = await fetchBootstrap<BootstrapPayload>();
+    setAgents(payload.agents ?? []);
+    setCodingAgents(payload.codingAgents ?? []);
+    setSetupChecks(payload.setupChecks ?? []);
+    // Guard sessions to [] — it feeds `allLiveSessions`/`liveSessions` which
+    // call `.filter()` unconditionally on render, so a malformed/empty payload
+    // must degrade to an empty live view rather than crash.
+    setSessions(payload.sessions ?? []);
+    setUsers(payload.users ?? []);
+    setRepos(payload.repos ?? []);
+    seedSkillCatalog(payload.skills);
+    setAutoAgents(payload.auto?.agents ?? []);
+    if (payload.auto?.tz) setSchedTz(payload.auto.tz);
+    const findingList = payload.auto?.findings ?? [];
+    setFindings(findingList);
+    findingList.forEach((f) => seenFindings.current.add(f.id));
+    seededAuto.current = true;
+    setBrainConfig(payload.sessionBrain?.config ?? null);
+    setBrainNotes(payload.sessionBrain?.notes ?? []);
+    setBrainSuggestions(payload.sessionBrain?.suggestions ?? []);
+    setBrainRuns(payload.sessionBrain?.runs ?? []);
   }, []);
 
   // Sessions the user just deleted. The server's list can lag a beat (tmux pane
@@ -3190,12 +3200,10 @@ export function App() {
       .finally(() => {
         if (!cancelled) setLoading(false);
       });
-    refreshAuto().catch(() => {});
-    refreshBrain().catch(() => {});
     return () => {
       cancelled = true;
     };
-  }, [loadCore, refreshAuto, refreshBrain]);
+  }, [loadCore]);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -9495,7 +9503,7 @@ function AgentView({
         <>
           <ActionsPanel report={report} agent={agent.name} onRefresh={onRefreshReport} />
           <article className="markdown report-markdown rounded-xl border border-border bg-card p-3">
-            <Streamdown>{report.raw}</Streamdown>
+            <MessageResponse>{report.raw}</MessageResponse>
           </article>
         </>
       ) : (
@@ -12822,7 +12830,7 @@ function ChangelogPage() {
   return (
     <div className="mx-auto max-w-xl space-y-5 pb-10">
       <article className="markdown rounded-2xl border border-border bg-card/40 px-4 py-4">
-        <Streamdown>{changelogMarkdown}</Streamdown>
+        <MessageResponse>{changelogMarkdown}</MessageResponse>
       </article>
     </div>
   );

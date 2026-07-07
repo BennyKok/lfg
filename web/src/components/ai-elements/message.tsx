@@ -1,60 +1,12 @@
 "use client";
 
-import { memo, useEffect, useState, type ComponentProps, type HTMLAttributes } from "react";
-import { Streamdown } from "streamdown";
-import { cjk } from "@streamdown/cjk";
-import { code } from "@streamdown/code";
+import { lazy, memo, Suspense, type ComponentProps, type HTMLAttributes } from "react";
 
 import { cn } from "@/lib/utils";
 
-// Math (katex, ~585 KB) and mermaid (~712 KB) are heavy and only matter when a
-// message actually contains math or a diagram. Keeping them in the first-paint
-// bundle roughly doubled it, so we start every message with the lightweight
-// cjk+code plugins and dynamically load math+mermaid once, swapping them in when
-// ready. A shared module-level promise means all messages trigger a single
-// load, and a tiny listener set re-renders mounted messages once it resolves.
-// Until then a math/diagram block just renders as its raw fenced source for a
-// beat — an acceptable trade for a much faster launch.
-type StreamdownPlugins = NonNullable<ComponentProps<typeof Streamdown>["plugins"]>;
-
-let extraPlugins: Partial<StreamdownPlugins> | null = null;
-let extraPluginsPromise: Promise<void> | null = null;
-const extraPluginsListeners = new Set<() => void>();
-
-function loadExtraPlugins(): Promise<void> {
-  if (!extraPluginsPromise) {
-    extraPluginsPromise = Promise.all([
-      import("@streamdown/math"),
-      import("@streamdown/mermaid"),
-    ])
-      .then(([mathMod, mermaidMod]) => {
-        extraPlugins = { math: mathMod.math, mermaid: mermaidMod.mermaid };
-        for (const notify of extraPluginsListeners) notify();
-      })
-      .catch(() => {
-        // Load failed (offline / transient) — let a later mount retry.
-        extraPluginsPromise = null;
-      });
-  }
-  return extraPluginsPromise;
-}
-
-function useStreamdownPlugins(): StreamdownPlugins {
-  const [extra, setExtra] = useState<Partial<StreamdownPlugins> | null>(extraPlugins);
-  useEffect(() => {
-    if (extraPlugins) {
-      setExtra(extraPlugins);
-      return;
-    }
-    const notify = () => setExtra(extraPlugins);
-    extraPluginsListeners.add(notify);
-    void loadExtraPlugins();
-    return () => {
-      extraPluginsListeners.delete(notify);
-    };
-  }, []);
-  return { cjk, code, ...(extra ?? {}) };
-}
+const StreamdownResponse = lazy(() =>
+  import("./streamdown-response").then((m) => ({ default: m.StreamdownResponse })),
+);
 
 type MessageRole = "user" | "assistant" | "system" | "data" | string;
 
@@ -90,18 +42,20 @@ export function MessageContent({ className, ...props }: MessageContentProps) {
   );
 }
 
-export type MessageResponseProps = ComponentProps<typeof Streamdown>;
+export type MessageResponseProps = ComponentProps<typeof StreamdownResponse>;
 
 export const MessageResponse = memo(
   ({ className, mode = "static", ...props }: MessageResponseProps) => {
-    const plugins = useStreamdownPlugins();
     return (
-      <Streamdown
-        className={cn("markdown msg-text size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", className)}
-        mode={mode}
-        plugins={plugins}
-        {...props}
-      />
+      <Suspense
+        fallback={
+          <div className={cn("markdown msg-text size-full whitespace-pre-wrap", className)}>
+            {typeof props.children === "string" ? props.children : null}
+          </div>
+        }
+      >
+        <StreamdownResponse className={className} mode={mode} {...props} />
+      </Suspense>
     );
   },
   (prev, next) =>

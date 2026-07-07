@@ -215,6 +215,7 @@ function evlog(event: string, fields: Record<string, unknown> = {}) {
 }
 
 const BOOT_API_TIMING_ENDPOINTS = new Set([
+  "/api/bootstrap",
   "/api/sessions",
   "/api/skills",
   "/api/agents",
@@ -422,6 +423,24 @@ async function listAgentReports(agent: string) {
       }),
   );
   return entries.sort((a, b) => b.date.localeCompare(a.date));
+}
+
+async function listAgentSummaries() {
+  const agents = await listAgents();
+  return Promise.all(
+    agents.map(async (a) => {
+      const reps = await listAgentReports(a.name);
+      return {
+        name: a.name,
+        title: a.frontmatter.title ?? a.name,
+        enabled: a.frontmatter.enabled !== false,
+        inputCount: a.frontmatter.inputs?.length ?? 0,
+        lastReport: reps[0]
+          ? { date: reps[0].date, bytes: reps[0].bytes, mtime: reps[0].mtime }
+          : null,
+      };
+    }),
+  );
 }
 
 async function readAgentReport(agent: string, date: string) {
@@ -1690,6 +1709,72 @@ export async function cmdServe() {
       if (path === "/api/setup/checks" && req.method === "GET") {
         return json({ checks: await listSetupChecks() });
       }
+      if (path === "/api/bootstrap" && req.method === "GET") {
+        noteListSessionsClientActivity();
+        const sessions = await listSessionsCached();
+        warmRecentMessages(
+          sessions
+            .map((session) => session.transcriptPath)
+            .filter((path): path is string => !!path),
+          40,
+        );
+        warmRenderedBacklogs(sessions, 40);
+        const repos = await listRepos();
+        const repoRoots = repos.map((repo) => repo.cwd);
+        const safe = async <T,>(promise: Promise<T>, fallback: T): Promise<T> => {
+          try {
+            return await promise;
+          } catch {
+            return fallback;
+          }
+        };
+        const [
+          agents,
+          codingAgents,
+          setupChecks,
+          skills,
+          autoAgents,
+          findings,
+          brainConfig,
+          brainNotes,
+          brainSuggestions,
+          brainRuns,
+        ] = await Promise.all([
+          safe(listAgentSummaries(), []),
+          safe(listCodingAgents(), []),
+          safe(listSetupChecks(), []),
+          safe(listSkillCatalog(repoRoots), []),
+          safe(listAutoAgents(), []),
+          safe(listFindings("open"), []),
+          safe(readSessionBrainConfig(), null),
+          safe(listSessionNotes("open"), []),
+          safe(listPatternSuggestions("open"), []),
+          safe(listSessionBrainRuns(12), []),
+        ]);
+        return json(
+          {
+            agents,
+            codingAgents,
+            setupChecks,
+            sessions,
+            users: userRoster(),
+            repos,
+            skills,
+            auto: {
+              agents: autoAgents.map((a) => ({ ...a, running: isRunning(a.id) })),
+              tz: process.env.LFG_SCHED_TZ ?? "Asia/Hong_Kong",
+              findings,
+            },
+            sessionBrain: {
+              config: brainConfig,
+              notes: brainNotes,
+              suggestions: brainSuggestions,
+              runs: brainRuns,
+            },
+          },
+          { headers: { "Content-Type": "application/json", "Cache-Control": "no-cache" } },
+        );
+      }
       {
         const m = path.match(/^\/api\/setup\/checks\/([a-z0-9_-]+)\/run$/);
         if (m && req.method === "POST") {
@@ -1896,22 +1981,7 @@ export async function cmdServe() {
 
       // ---- agents ----
       if (path === "/api/agents") {
-        const agents = await listAgents();
-        const out = await Promise.all(
-          agents.map(async (a) => {
-            const reps = await listAgentReports(a.name);
-            return {
-              name: a.name,
-              title: a.frontmatter.title ?? a.name,
-              enabled: a.frontmatter.enabled !== false,
-              inputCount: a.frontmatter.inputs?.length ?? 0,
-              lastReport: reps[0]
-                ? { date: reps[0].date, bytes: reps[0].bytes, mtime: reps[0].mtime }
-                : null,
-            };
-          }),
-        );
-        return json({ agents: out });
+        return json({ agents: await listAgentSummaries() });
       }
 
       {
