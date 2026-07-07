@@ -21,6 +21,7 @@ import {
   useSpeechPlayback,
 } from "./voice-tts";
 import { liveTransportMode, useLiveSocket } from "./useLiveSocket";
+import { ConnectionStatusToasts } from "./ConnectionStatus";
 import type {
   CSSProperties,
   Dispatch,
@@ -4425,6 +4426,9 @@ export function App() {
         onRefresh={refreshSessions}
       />
 
+      {useWsLive ? (
+        <ConnectionStatusToasts connection={wsLiveStream.connection} onRetry={wsLiveStream.reconnectNow} />
+      ) : null}
       <Toaster position="bottom-center" />
     </div>
     </AskProvider>

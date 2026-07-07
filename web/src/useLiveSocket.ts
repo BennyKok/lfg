@@ -193,6 +193,29 @@ function jitter(ms: number): number {
   return Math.round(ms * (0.75 + Math.random() * 0.5));
 }
 
+const BACKOFF_MIN_MS = 250;
+const BACKOFF_MAX_MS = 10_000;
+// Consecutive failed reconnect attempts after which we stop calling it a brief
+// "reconnecting" blip and surface the more alarming "offline" state instead.
+const OFFLINE_AFTER_ATTEMPTS = 5;
+
+export type ConnectionStatus = "connecting" | "live" | "reconnecting" | "offline";
+export type ConnectionState = {
+  status: ConnectionStatus;
+  attempt: number;
+  lastCloseCode: number | null;
+  lastCloseReason: string | null;
+  lastMessageAt: number | null;
+};
+
+const INITIAL_CONNECTION_STATE: ConnectionState = {
+  status: "connecting",
+  attempt: 0,
+  lastCloseCode: null,
+  lastCloseReason: null,
+  lastMessageAt: null,
+};
+
 export function useLiveSocket(
   sessions: Session[],
   streamIds: string[],
@@ -239,7 +262,13 @@ export function useLiveSocket(
   const openAtRef = useRef(0);
   const reconnectsRef = useRef(0);
   const closedByHookRef = useRef(false);
-  const backoffRef = useRef(250);
+  const backoffRef = useRef(BACKOFF_MIN_MS);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingReconnectRef = useRef(false);
+  const lastMessageFlushRef = useRef(0);
+  const connectRef = useRef<() => void>(() => {});
+
+  const [connection, setConnection] = useState<ConnectionState>(INITIAL_CONNECTION_STATE);
 
   useEffect(() => {
     messagesRef.current = messagesBySid;
@@ -394,19 +423,45 @@ export function useLiveSocket(
   useEffect(() => {
     if (!enabled) return;
     closedByHookRef.current = false;
-    let reconnectTimer: number | null = null;
+    pendingReconnectRef.current = false;
+
+    const noteMessage = () => {
+      const now = Date.now();
+      if (now - lastMessageFlushRef.current < 2000) return;
+      lastMessageFlushRef.current = now;
+      setConnection((prev) => ({ ...prev, lastMessageAt: now }));
+    };
 
     const connect = () => {
       if (closedByHookRef.current) return;
-      if (reconnectsRef.current) evlog("ws_client_reconnect", { attempt: reconnectsRef.current, backoffMs: backoffRef.current });
+      const existing = wsRef.current;
+      // A timer fire, a manual retry, and an online/visibility trigger can all
+      // race to call connect() around the same moment; never open a second
+      // socket on top of one that's already live or in flight.
+      if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) return;
+      if (reconnectTimerRef.current != null) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      pendingReconnectRef.current = false;
+      // Once we've crossed into "offline", a silent background retry attempt
+      // shouldn't flash the label back to "reconnecting" only to flip back to
+      // "offline" a moment later if it fails again — keep it pinned to
+      // "offline" until a connection actually succeeds.
+      setConnection((prev) => ({
+        ...prev,
+        status: prev.status === "offline" ? "offline" : prev.attempt > 0 ? "reconnecting" : "connecting",
+      }));
       const ws = new WebSocket(wsUrl("/api/live/ws"));
       wsRef.current = ws;
       openAtRef.current = performance.now();
       firstMsgRef.current = new Set();
       draftSeenRef.current = new Set();
       ws.onopen = () => {
-        backoffRef.current = 250;
+        backoffRef.current = BACKOFF_MIN_MS;
         evlog("ws_client_open", { reconnects: reconnectsRef.current });
+        reconnectsRef.current = 0;
+        setConnection((prev) => ({ ...prev, status: "live", attempt: 0 }));
         const ids = [...desiredRef.current];
         if (ids.length) {
           ws.send(JSON.stringify({ t: "subscribe", ids }));
@@ -416,16 +471,36 @@ export function useLiveSocket(
       ws.onmessage = (event) => {
         if (typeof event.data !== "string") return;
         const payload = parseJson<LiveWsMessage>(event.data);
-        if (payload) handleMessage(payload);
+        if (!payload) return;
+        noteMessage();
+        handleMessage(payload);
       };
-      ws.onclose = () => {
+      ws.onclose = (event) => {
         if (wsRef.current === ws) wsRef.current = null;
         subscribedRef.current = new Set();
         if (closedByHookRef.current) return;
+        const attempt = (reconnectsRef.current += 1);
+        const code = event.code;
+        const reason = event.reason || null;
+        evlog("ws_client_reconnect", { attempt, backoffMs: backoffRef.current, code, reason });
+        const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+        setConnection((prev) => ({
+          ...prev,
+          status: offline || attempt >= OFFLINE_AFTER_ATTEMPTS ? "offline" : "reconnecting",
+          attempt,
+          lastCloseCode: code,
+          lastCloseReason: reason,
+        }));
+        // While the tab is hidden, don't keep hammering retries in the
+        // background — pause and let the visibilitychange listener below
+        // reconnect immediately once the tab is visible again.
+        if (typeof document !== "undefined" && document.hidden) {
+          pendingReconnectRef.current = true;
+          return;
+        }
         const delay = jitter(backoffRef.current);
-        backoffRef.current = Math.min(4000, backoffRef.current * 2);
-        reconnectsRef.current += 1;
-        reconnectTimer = window.setTimeout(connect, delay);
+        backoffRef.current = Math.min(BACKOFF_MAX_MS, backoffRef.current * 2);
+        reconnectTimerRef.current = setTimeout(connect, delay);
       };
       ws.onerror = () => {
         try {
@@ -434,10 +509,29 @@ export function useLiveSocket(
       };
     };
 
+    connectRef.current = connect;
+
+    const onVisible = () => {
+      if (typeof document === "undefined" || document.visibilityState !== "visible") return;
+      if (pendingReconnectRef.current) connect();
+    };
+    const onOnline = () => {
+      pendingReconnectRef.current = false;
+      connect();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("online", onOnline);
+
     connect();
     return () => {
       closedByHookRef.current = true;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("online", onOnline);
+      if (reconnectTimerRef.current != null) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      pendingReconnectRef.current = false;
       try {
         wsRef.current?.close();
       } catch {}
@@ -449,6 +543,16 @@ export function useLiveSocket(
       }
     };
   }, [enabled, handleMessage]);
+
+  const reconnectNow = useCallback(() => {
+    pendingReconnectRef.current = false;
+    if (reconnectTimerRef.current != null) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    backoffRef.current = BACKOFF_MIN_MS;
+    connectRef.current();
+  }, []);
 
   useEffect(() => {
     const active = new Set(ids);
@@ -606,5 +710,7 @@ export function useLiveSocket(
     removeOptimisticMessage,
     trackSendStatus,
     loadOlderMessages,
+    connection,
+    reconnectNow,
   };
 }
