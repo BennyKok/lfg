@@ -443,6 +443,29 @@ async function listAgentSummaries() {
   );
 }
 
+const SETUP_CHECKS_CACHE_TTL_MS = 45_000;
+let setupChecksCache:
+  | { expiresAt: number; checks: Awaited<ReturnType<typeof listSetupChecks>> }
+  | null = null;
+let setupChecksInFlight: Promise<Awaited<ReturnType<typeof listSetupChecks>>> | null = null;
+
+async function listSetupChecksCached(opts: { refresh?: boolean } = {}) {
+  const now = Date.now();
+  if (!opts.refresh && setupChecksCache && setupChecksCache.expiresAt > now) {
+    return setupChecksCache.checks;
+  }
+  if (!opts.refresh && setupChecksInFlight) return setupChecksInFlight;
+  setupChecksInFlight = listSetupChecks()
+    .then((checks) => {
+      setupChecksCache = { checks, expiresAt: Date.now() + SETUP_CHECKS_CACHE_TTL_MS };
+      return checks;
+    })
+    .finally(() => {
+      setupChecksInFlight = null;
+    });
+  return setupChecksInFlight;
+}
+
 async function readAgentReport(agent: string, date: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
   if (!/^[a-z0-9_-]+$/.test(agent)) return null;
@@ -1707,69 +1730,76 @@ export async function cmdServe() {
         return json({ agents: await listCodingAgents() });
       }
       if (path === "/api/setup/checks" && req.method === "GET") {
-        return json({ checks: await listSetupChecks() });
+        return json({ checks: await listSetupChecksCached() });
       }
       if (path === "/api/bootstrap" && req.method === "GET") {
         noteListSessionsClientActivity();
-        const sessions = await listSessionsCached();
-        warmRecentMessages(
-          sessions
-            .map((session) => session.transcriptPath)
-            .filter((path): path is string => !!path),
-          40,
-        );
-        warmRenderedBacklogs(sessions, 40);
-        const repos = await listRepos();
-        const repoRoots = repos.map((repo) => repo.cwd);
-        const safe = async <T,>(promise: Promise<T>, fallback: T): Promise<T> => {
-          try {
-            return await promise;
-          } catch {
-            return fallback;
-          }
+        const sessionsTask = listSessionsCached().then((sessions) => {
+          warmRecentMessages(
+            sessions
+              .map((session) => session.transcriptPath)
+              .filter((path): path is string => !!path),
+            40,
+          );
+          warmRenderedBacklogs(sessions, 40);
+          return sessions;
+        });
+        const reposTask = listRepos();
+        const tasks = {
+          agents: listAgentSummaries(),
+          codingAgents: listCodingAgents(),
+          sessions: sessionsTask,
+          users: Promise.resolve(userRoster()),
+          repos: reposTask,
+          skills: reposTask.then((repos) => listSkillCatalog(repos.map((repo) => repo.cwd))),
+          autoAgents: listAutoAgents(),
+          findings: listFindings("open"),
+          brainConfig: readSessionBrainConfig(),
+          brainNotes: listSessionNotes("open"),
+          brainSuggestions: listPatternSuggestions("open"),
+          brainRuns: listSessionBrainRuns(12),
         };
-        const [
-          agents,
-          codingAgents,
-          setupChecks,
-          skills,
-          autoAgents,
-          findings,
-          brainConfig,
-          brainNotes,
-          brainSuggestions,
-          brainRuns,
-        ] = await Promise.all([
-          safe(listAgentSummaries(), []),
-          safe(listCodingAgents(), []),
-          safe(listSetupChecks(), []),
-          safe(listSkillCatalog(repoRoots), []),
-          safe(listAutoAgents(), []),
-          safe(listFindings("open"), []),
-          safe(readSessionBrainConfig(), null),
-          safe(listSessionNotes("open"), []),
-          safe(listPatternSuggestions("open"), []),
-          safe(listSessionBrainRuns(12), []),
-        ]);
+        const taskEntries = Object.entries(tasks);
+        const settled = await Promise.allSettled(taskEntries.map(([, task]) => task));
+        const boot = Object.fromEntries(
+          settled.map((entry, index) => [
+            taskEntries[index]![0],
+            entry.status === "fulfilled" ? entry.value : null,
+          ]),
+        ) as {
+          agents?: Awaited<ReturnType<typeof listAgentSummaries>> | null;
+          codingAgents?: Awaited<ReturnType<typeof listCodingAgents>> | null;
+          sessions?: Awaited<ReturnType<typeof listSessionsCached>> | null;
+          users?: ReturnType<typeof userRoster> | null;
+          repos?: Awaited<ReturnType<typeof listRepos>> | null;
+          skills?: Awaited<ReturnType<typeof listSkillCatalog>> | null;
+          autoAgents?: Awaited<ReturnType<typeof listAutoAgents>> | null;
+          findings?: Awaited<ReturnType<typeof listFindings>> | null;
+          brainConfig?: Awaited<ReturnType<typeof readSessionBrainConfig>> | null;
+          brainNotes?: Awaited<ReturnType<typeof listSessionNotes>> | null;
+          brainSuggestions?: Awaited<ReturnType<typeof listPatternSuggestions>> | null;
+          brainRuns?: Awaited<ReturnType<typeof listSessionBrainRuns>> | null;
+        };
         return json(
           {
-            agents,
-            codingAgents,
-            setupChecks,
-            sessions,
-            users: userRoster(),
-            repos,
-            skills,
+            agents: boot.agents ?? null,
+            codingAgents: boot.codingAgents ?? null,
+            sessions: boot.sessions ?? null,
+            users: boot.users ?? null,
+            repos: boot.repos ?? null,
+            skills: boot.skills ?? null,
             auto: {
-              agents: autoAgents.map((a) => ({ ...a, running: isRunning(a.id) })),
+              agents: boot.autoAgents
+                ? boot.autoAgents.map((a) => ({ ...a, running: isRunning(a.id) }))
+                : null,
               tz: process.env.LFG_SCHED_TZ ?? "Asia/Hong_Kong",
-              findings,
+              findings: boot.findings ?? null,
             },
             sessionBrain: {
-              config: brainConfig,
-              notes: brainNotes,
-              suggestions: brainSuggestions,
-              runs: brainRuns,
+              config: boot.brainConfig ?? null,
+              notes: boot.brainNotes ?? null,
+              suggestions: boot.brainSuggestions ?? null,
+              runs: boot.brainRuns ?? null,
             },
           },
           { headers: { "Content-Type": "application/json", "Cache-Control": "no-cache" } },
@@ -1780,7 +1810,7 @@ export async function cmdServe() {
         if (m && req.method === "POST") {
           const key = m[1];
           await runSetupAction(key);
-          return json({ ok: true, checks: await listSetupChecks() });
+          return json({ ok: true, checks: await listSetupChecksCached({ refresh: true }) });
         }
       }
       if (path === "/api/skills" && req.method === "GET") {

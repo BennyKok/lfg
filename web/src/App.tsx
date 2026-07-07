@@ -401,19 +401,18 @@ type SkillCatalogItem = {
 };
 
 type BootstrapPayload = {
-  agents?: Agent[];
-  codingAgents?: CodingAgentInfo[];
-  setupChecks?: SetupCheckGroup[];
-  sessions?: Session[];
-  users?: User[];
-  repos?: Repo[];
-  skills?: SkillCatalogItem[];
-  auto?: { agents?: AutoAgent[]; tz?: string; findings?: AutoFinding[] };
+  agents?: Agent[] | null;
+  codingAgents?: CodingAgentInfo[] | null;
+  sessions?: Session[] | null;
+  users?: User[] | null;
+  repos?: Repo[] | null;
+  skills?: SkillCatalogItem[] | null;
+  auto?: { agents?: AutoAgent[] | null; tz?: string; findings?: AutoFinding[] | null };
   sessionBrain?: {
-    config?: SessionBrainConfig;
-    notes?: SessionNote[];
-    suggestions?: PatternSuggestion[];
-    runs?: SessionBrainRun[];
+    config?: SessionBrainConfig | null;
+    notes?: SessionNote[] | null;
+    suggestions?: PatternSuggestion[] | null;
+    runs?: SessionBrainRun[] | null;
   };
 };
 
@@ -648,7 +647,7 @@ function loadSkillCatalog(): Promise<SkillCatalogItem[]> {
   return skillCatalogPromise;
 }
 
-function seedSkillCatalog(skills: SkillCatalogItem[] | undefined): void {
+function seedSkillCatalog(skills: SkillCatalogItem[] | null | undefined): void {
   if (!Array.isArray(skills)) return;
   skillCatalogSnapshot = skills;
   skillCatalogLoadedAt = Date.now();
@@ -3040,7 +3039,6 @@ export function App() {
     const payload = await fetchBootstrap<BootstrapPayload>();
     setAgents(payload.agents ?? []);
     setCodingAgents(payload.codingAgents ?? []);
-    setSetupChecks(payload.setupChecks ?? []);
     // Guard sessions to [] — it feeds `allLiveSessions`/`liveSessions` which
     // call `.filter()` unconditionally on render, so a malformed/empty payload
     // must degrade to an empty live view rather than crash.
@@ -3205,6 +3203,28 @@ export function App() {
       cancelled = true;
     };
   }, [loadCore]);
+
+  useEffect(() => {
+    if (loading) return;
+    let cancelled = false;
+    let timer: number | null = null;
+    const frame = requestAnimationFrame(() => {
+      timer = window.setTimeout(() => {
+        api<{ checks: SetupCheckGroup[] }>("/api/setup/checks")
+          .then((payload) => {
+            if (!cancelled) setSetupChecks(payload.checks ?? []);
+          })
+          .catch(() => {
+            if (!cancelled) setSetupChecks([]);
+          });
+      }, 0);
+    });
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(frame);
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [loading]);
 
   useEffect(() => {
     const id = setInterval(() => {
