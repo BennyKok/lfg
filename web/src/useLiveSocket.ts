@@ -23,6 +23,7 @@ type Message = {
   html?: string;
   ts?: number;
   url?: string;
+  artifactId?: string;
   name?: string;
   mimeType?: string;
   size?: number;
@@ -63,6 +64,20 @@ type StatusRow = Pick<
   | "statusDetail"
   | "model"
 >;
+type ChannelKind = "transcript" | "status" | "agent_run" | "summary" | "resumable";
+type LiveChannel = { kind: ChannelKind; key: string; resumeFromSeq?: number };
+type AgentRunSnapshot = {
+  id: string;
+  agent: string;
+  date?: string;
+  status: "running" | "done" | "failed";
+  logs: string[];
+  result?: unknown;
+  error?: string;
+};
+type AgentRunEvent =
+  | { type: "log"; line: string }
+  | { type: "done" | "failed"; status: "done" | "failed"; result?: unknown; error?: string };
 
 type LiveWsMessage =
   | { t: "batch"; sid: string; messages?: Message[]; nextBefore?: number | null }
@@ -72,9 +87,26 @@ type LiveWsMessage =
   | { t: "prompt"; sid: string; prompt?: SessionPrompt | null }
   | { t: "queue"; sid: string; queue?: QueueMsg[] }
   | { t: "page"; sid: string; messages?: Message[]; nextBefore?: number | null; hasMore?: boolean }
-  | { t: "status"; rows?: StatusRow[] }
+  | { t: "snapshot"; kind: ChannelKind; key: string; sid?: string; seq?: number; messages?: Message[]; nextBefore?: number | null; run?: AgentRunSnapshot; text?: string; done?: boolean; error?: string | null }
+  | { t: "delta"; kind: ChannelKind; key: string; seq?: number; delta?: { t?: string; sid?: string; message?: Message; m?: Message; part?: AiStreamPart; busy?: boolean; prompt?: SessionPrompt | null; queue?: QueueMsg[]; event?: AgentRunEvent; chunk?: string; done?: boolean; error?: string | null } }
+  | { t: "resumed"; kind: ChannelKind; key: string; seq?: number; fromSeq?: number; toSeq?: number; replayed?: number }
+  | { t: "gap"; kind: ChannelKind; key: string; seq?: number }
+  | { t: "status"; rows?: StatusRow[]; kind?: ChannelKind; key?: string; seq?: number }
   | { t: "ping" }
-  | { t: "error"; sid?: string; message?: string };
+  | { t: "error"; sid?: string; kind?: ChannelKind; key?: string; seq?: number; message?: string; code?: string };
+
+type AgentRunHandler = {
+  onSnapshot?: (run: AgentRunSnapshot) => void;
+  onEvent?: (event: AgentRunEvent) => void;
+  onError?: (message: string) => void;
+};
+type SummaryHandler = {
+  delivered: number;
+  full: string;
+  resolve: (text: string) => void;
+  reject: (error: Error) => void;
+  onChunk: (chunk: string) => void;
+};
 
 const DRAFT_CATCHUP_MIN_CHARS = 160;
 
@@ -193,6 +225,88 @@ function jitter(ms: number): number {
   return Math.round(ms * (0.75 + Math.random() * 0.5));
 }
 
+function channelId(channel: Pick<LiveChannel, "kind" | "key">): string {
+  return `${channel.kind}:${channel.key}`;
+}
+
+function transcriptChannel(sid: string): LiveChannel {
+  return { kind: "transcript", key: sid };
+}
+
+function artifactIdFromUrl(url?: string): string | null {
+  if (!url) return null;
+  const match = url.match(/\/api\/artifacts\/([^/?#]+)/);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+}
+
+function mediaIdentity(message: Message): string | null {
+  if (message.kind !== "image" && message.kind !== "video") return message.id ?? null;
+  const artifactId = message.artifactId || artifactIdFromUrl(message.url);
+  if (artifactId) return `artifact-${artifactId}`;
+  if (message.url) return `media-${message.kind}-${message.url}`;
+  if (message.id) return message.id;
+  return `media-${message.kind}-${message.ts ?? "no-ts"}-${message.name ?? ""}-${message.size ?? ""}-${message.text ?? ""}`;
+}
+
+function normalizeMessageIdentity(message: Message): Message {
+  const id = mediaIdentity(message);
+  if (!id || id === message.id) return message;
+  return { ...message, id };
+}
+
+function normalizeMessageList(messages: Message[]): Message[] {
+  return messages.map(normalizeMessageIdentity);
+}
+
+function upsertMessageById(current: Message[], message: Message): Message[] {
+  const normalized = normalizeMessageIdentity(message);
+  const id = mediaIdentity(normalized);
+  if (!id || normalized.kind === "thinking") return [...current.filter((item) => item.kind !== "thinking"), normalized];
+  const existingIndex = current.findIndex((item) => mediaIdentity(item) === id);
+  const withoutTransient = current.filter((item, index) => {
+    if (index === existingIndex) return false;
+    if (item.kind === "thinking") return false;
+    if (normalized.role === "user" && normalized.kind === "text") {
+      return !item.pending || !sameMessageNeedle(normalized.text, item.text);
+    }
+    if (normalized.role === "assistant" && normalized.kind === "text" && isDraftAssistantMessage(item)) return false;
+    return true;
+  });
+  if (existingIndex >= 0) {
+    const insertAt = Math.min(existingIndex, withoutTransient.length);
+    return [...withoutTransient.slice(0, insertAt), normalized, ...withoutTransient.slice(insertAt)];
+  }
+  return [...withoutTransient, normalized];
+}
+
+function reconcileSnapshotMessages(current: Message[], incoming: Message[]): Message[] {
+  const authoritative = collapseThinkingRuns(normalizeMessageList(incoming));
+  const next = authoritative.filter((message) => !message.seed);
+  const incomingIds = new Set(next.map(mediaIdentity).filter(Boolean));
+  const incomingUserText = next.filter((message) => message.role === "user" && message.kind === "text");
+  const latestIncomingTs = next.reduce((max, message) => Math.max(max, message.ts ?? 0), 0);
+  for (const local of current) {
+    const normalized = normalizeMessageIdentity(local);
+    if (normalized.seed || normalized.kind === "thinking") continue;
+    const id = mediaIdentity(normalized);
+    if (id && incomingIds.has(id)) continue;
+    if (
+      normalized.pending &&
+      incomingUserText.some((message) => sameMessageNeedle(message.text, normalized.text))
+    ) {
+      continue;
+    }
+    const localTs = normalized.ts ?? (normalized.pending ? Date.now() : 0);
+    if (normalized.pending || !latestIncomingTs || localTs >= latestIncomingTs) next.push(normalized);
+  }
+  return collapseThinkingRuns(next).slice(-80);
+}
+
 const BACKOFF_MIN_MS = 250;
 const BACKOFF_MAX_MS = 10_000;
 // Consecutive failed reconnect attempts after which we stop calling it a brief
@@ -253,6 +367,11 @@ export function useLiveSocket(
   const wsRef = useRef<WebSocket | null>(null);
   const desiredRef = useRef<Set<string>>(new Set());
   const subscribedRef = useRef<Set<string>>(new Set());
+  const desiredChannelsRef = useRef<Map<string, LiveChannel>>(new Map());
+  const subscribedChannelsRef = useRef<Set<string>>(new Set());
+  const lastSeqRef = useRef<Record<string, number>>({});
+  const agentRunHandlersRef = useRef<Record<string, AgentRunHandler>>({});
+  const summaryHandlersRef = useRef<Record<string, SummaryHandler>>({});
   const seenRef = useRef<Record<string, Set<string>>>({});
   const messagesRef = useRef(messagesBySid);
   const nextBeforeRef = useRef(nextBeforeBySid);
@@ -284,6 +403,21 @@ export function useLiveSocket(
     return true;
   }, []);
 
+  const channelWithResume = useCallback((channel: LiveChannel): LiveChannel => {
+    const seq = lastSeqRef.current[channelId(channel)];
+    return seq ? { ...channel, resumeFromSeq: seq } : channel;
+  }, []);
+
+  const subscribeChannels = useCallback((channels: LiveChannel[]) => {
+    if (!channels.length) return false;
+    return send({ t: "subscribe", channels: channels.map(channelWithResume) });
+  }, [channelWithResume, send]);
+
+  const unsubscribeChannels = useCallback((channels: LiveChannel[]) => {
+    if (!channels.length) return false;
+    return send({ t: "unsubscribe", channels });
+  }, [send]);
+
   const markFirst = useCallback((sid: string, message: Message, batch = false, count?: number) => {
     if (firstMsgRef.current.has(sid)) return;
     firstMsgRef.current.add(sid);
@@ -302,6 +436,89 @@ export function useLiveSocket(
       send({ t: "pong" });
       return;
     }
+    if ("kind" in payload && payload.kind && "key" in payload && typeof payload.key === "string") {
+      const cid = channelId({ kind: payload.kind, key: payload.key });
+      if (typeof payload.seq === "number" && Number.isFinite(payload.seq)) {
+        const previous = lastSeqRef.current[cid] ?? 0;
+        if (payload.seq <= previous) return;
+        lastSeqRef.current[cid] = payload.seq;
+      }
+      if (payload.t === "error") {
+        const message = payload.message || payload.code || "live socket error";
+        if (payload.kind === "agent_run") agentRunHandlersRef.current[payload.key]?.onError?.(message);
+        if (payload.kind === "summary") {
+          const handler = summaryHandlersRef.current[payload.key];
+          if (handler) {
+            handler.reject(new Error(message));
+            delete summaryHandlersRef.current[payload.key];
+          }
+        }
+        return;
+      }
+      if (payload.t === "gap" || payload.t === "resumed") return;
+      if (payload.t === "snapshot") {
+        if (payload.kind === "transcript") {
+          handleMessage({
+            t: "batch",
+            sid: payload.sid ?? payload.key,
+            messages: payload.messages,
+            nextBefore: payload.nextBefore,
+          });
+          return;
+        }
+        if (payload.kind === "agent_run" && payload.run) {
+          agentRunHandlersRef.current[payload.key]?.onSnapshot?.(payload.run);
+          return;
+        }
+        if (payload.kind === "summary") {
+          const handler = summaryHandlersRef.current[payload.key];
+          if (!handler) return;
+          const text = payload.text ?? "";
+          handler.full = text;
+          if (text.length > handler.delivered) {
+            handler.onChunk(text.slice(handler.delivered));
+            handler.delivered = text.length;
+          }
+          if (payload.error) {
+            handler.reject(new Error(payload.error));
+            delete summaryHandlersRef.current[payload.key];
+          } else if (payload.done) {
+            handler.resolve(handler.full);
+            delete summaryHandlersRef.current[payload.key];
+          }
+          return;
+        }
+      }
+      if (payload.t === "delta") {
+        const delta = payload.delta;
+        if (!delta) return;
+        if (payload.kind === "transcript" && delta.t) {
+          handleMessage({ ...delta, t: delta.t, sid: delta.sid ?? payload.key } as LiveWsMessage);
+          return;
+        }
+        if (payload.kind === "agent_run" && delta.event) {
+          agentRunHandlersRef.current[payload.key]?.onEvent?.(delta.event);
+          return;
+        }
+        if (payload.kind === "summary") {
+          const handler = summaryHandlersRef.current[payload.key];
+          if (!handler) return;
+          if (delta.chunk) {
+            handler.full += delta.chunk;
+            handler.delivered += delta.chunk.length;
+            handler.onChunk(delta.chunk);
+          }
+          if (delta.error) {
+            handler.reject(new Error(delta.error));
+            delete summaryHandlersRef.current[payload.key];
+          } else if (delta.done) {
+            handler.resolve(handler.full);
+            delete summaryHandlersRef.current[payload.key];
+          }
+          return;
+        }
+      }
+    }
     if (payload.t === "status") {
       if (Array.isArray(payload.rows)) onStatusRowsRef.current?.(payload.rows);
       return;
@@ -311,52 +528,38 @@ export function useLiveSocket(
     if (!sid || !desiredRef.current.has(sid)) return;
 
     if (payload.t === "batch") {
-      const messages = collapseThinkingRuns(Array.isArray(payload.messages) ? payload.messages : []);
+      const messages = collapseThinkingRuns(normalizeMessageList(Array.isArray(payload.messages) ? payload.messages : []));
       if (messages.length) markFirst(sid, messages[0], true, messages.length);
       setLoadingBySid((prev) => ({ ...prev, [sid]: false }));
       const seen = seenRef.current[sid] || (seenRef.current[sid] = new Set());
-      for (const message of messages) if (message.id && message.kind !== "thinking") seen.add(message.id);
+      for (const message of messages) {
+        const id = mediaIdentity(message);
+        if (id && message.kind !== "thinking") seen.add(id);
+      }
       if (seen.size > 800) seenRef.current[sid] = new Set(Array.from(seen).slice(-400));
       setNextBeforeBySid((prev) => ({ ...prev, [sid]: payload.nextBefore ?? null }));
       setMessagesBySid((prev) => {
         const current = prev[sid] ?? [];
-        const pending = current.filter((item) => {
-          if (!item.pending) return false;
-          const pendingNeedle = messageNeedle(item.text);
-          if (!pendingNeedle) return true;
-          return !messages.some((message) => message.role === "user" && message.kind === "text" && sameMessageNeedle(message.text, pendingNeedle));
-        });
-        return { ...prev, [sid]: [...messages, ...pending].slice(-80) };
+        return { ...prev, [sid]: reconcileSnapshotMessages(current, messages) };
       });
       return;
     }
 
     if (payload.t === "msg") {
-      const message = payload.message ?? payload.m;
-      if (!message) return;
+      const rawMessage = payload.message ?? payload.m;
+      if (!rawMessage) return;
+      const message = normalizeMessageIdentity(rawMessage);
       markFirst(sid, message);
       setLoadingBySid((prev) => ({ ...prev, [sid]: false }));
-      if (message.id && message.kind !== "thinking") {
+      const id = mediaIdentity(message);
+      if (id && message.kind !== "thinking") {
         const seen = seenRef.current[sid] || (seenRef.current[sid] = new Set());
-        if (seen.has(message.id)) return;
-        seen.add(message.id);
+        seen.add(id);
         if (seen.size > 800) seenRef.current[sid] = new Set(Array.from(seen).slice(-400));
       }
       setMessagesBySid((prev) => {
         const current = prev[sid] ?? [];
-        const next = message.kind === "thinking"
-          ? [...current.filter((item) => item.kind !== "thinking"), message]
-          : [
-              ...current.filter((item) => {
-                if (message.role === "user" && message.kind === "text") {
-                  return !item.pending || !sameMessageNeedle(message.text, item.text);
-                }
-                if (item.kind === "thinking") return false;
-                if (message.role === "assistant" && message.kind === "text" && isDraftAssistantMessage(item)) return false;
-                return true;
-              }),
-              message,
-            ];
+        const next = upsertMessageById(current, message);
         return { ...prev, [sid]: next.slice(-80) };
       });
       const timers = thinkTimerRef.current;
@@ -462,10 +665,11 @@ export function useLiveSocket(
         evlog("ws_client_open", { reconnects: reconnectsRef.current });
         reconnectsRef.current = 0;
         setConnection((prev) => ({ ...prev, status: "live", attempt: 0 }));
-        const ids = [...desiredRef.current];
-        if (ids.length) {
-          ws.send(JSON.stringify({ t: "subscribe", ids }));
-          subscribedRef.current = new Set(ids);
+        const channels = [...desiredChannelsRef.current.values()];
+        if (channels.length) {
+          ws.send(JSON.stringify({ t: "subscribe", channels: channels.map(channelWithResume) }));
+          subscribedChannelsRef.current = new Set(channels.map(channelId));
+          subscribedRef.current = new Set(channels.filter((channel) => channel.kind === "transcript").map((channel) => channel.key));
         }
       };
       ws.onmessage = (event) => {
@@ -478,6 +682,7 @@ export function useLiveSocket(
       ws.onclose = (event) => {
         if (wsRef.current === ws) wsRef.current = null;
         subscribedRef.current = new Set();
+        subscribedChannelsRef.current = new Set();
         if (closedByHookRef.current) return;
         const attempt = (reconnectsRef.current += 1);
         const code = event.code;
@@ -537,6 +742,7 @@ export function useLiveSocket(
       } catch {}
       wsRef.current = null;
       subscribedRef.current = new Set();
+      subscribedChannelsRef.current = new Set();
       for (const id of Object.keys(thinkTimerRef.current)) {
         clearTimeout(thinkTimerRef.current[id]);
         delete thinkTimerRef.current[id];
@@ -577,18 +783,39 @@ export function useLiveSocket(
       return next;
     });
 
-    if (!enabled) return;
-    const subscribed = subscribedRef.current;
-    const toAdd = [...active].filter((sid) => !subscribed.has(sid));
-    const toDrop = [...subscribed].filter((sid) => !active.has(sid));
-    if (toDrop.length && send({ t: "unsubscribe", ids: toDrop })) {
-      for (const sid of toDrop) subscribed.delete(sid);
+    const nextDesired = new Map(desiredChannelsRef.current);
+    for (const [id, channel] of nextDesired) {
+      if (channel.kind === "transcript") nextDesired.delete(id);
     }
-    if (toAdd.length && send({ t: "subscribe", ids: toAdd })) {
-      for (const sid of toAdd) subscribed.add(sid);
+    for (const sid of active) {
+      const channel = transcriptChannel(sid);
+      nextDesired.set(channelId(channel), channel);
+    }
+    desiredChannelsRef.current = nextDesired;
+
+    if (!enabled) return;
+    const subscribed = subscribedChannelsRef.current;
+    const desiredTranscriptIds = new Set([...active].map((sid) => channelId(transcriptChannel(sid))));
+    const toAdd = [...active]
+      .map(transcriptChannel)
+      .filter((channel) => !subscribed.has(channelId(channel)));
+    const toDrop = [...subscribed]
+      .map((id) => desiredChannelsRef.current.get(id) ?? (id.startsWith("transcript:") ? { kind: "transcript" as const, key: id.slice("transcript:".length) } : null))
+      .filter((channel): channel is LiveChannel => !!channel && channel.kind === "transcript" && !desiredTranscriptIds.has(channelId(channel)));
+    if (toDrop.length && unsubscribeChannels(toDrop)) {
+      for (const channel of toDrop) {
+        subscribed.delete(channelId(channel));
+        subscribedRef.current.delete(channel.key);
+      }
+    }
+    if (toAdd.length && subscribeChannels(toAdd)) {
+      for (const channel of toAdd) {
+        subscribed.add(channelId(channel));
+        subscribedRef.current.add(channel.key);
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [streamKey, listBusy, seedBySid, enabled, send]);
+  }, [streamKey, listBusy, seedBySid, enabled, subscribeChannels, unsubscribeChannels]);
 
   const addOptimisticMessage = useCallback((sid: string, text: string) => {
     const message: Message = {
@@ -604,6 +831,7 @@ export function useLiveSocket(
       ...prev,
       [sid]: [...(prev[sid] ?? []).filter((item) => item.kind !== "thinking"), message].slice(-80),
     }));
+    setBusyBySid((prev) => ({ ...prev, [sid]: true }));
   }, []);
 
   const removeOptimisticMessage = useCallback((sid: string, text: string) => {
@@ -620,19 +848,22 @@ export function useLiveSocket(
     opts: { dropOptimistic?: boolean } = {},
   ) => {
     const page = await api<{ messages: Message[] }>(`/api/sessions/${encodeURIComponent(sid)}/messages?limit=80`);
-    const messages = collapseThinkingRuns(Array.isArray(page.messages) ? page.messages : []);
+    const messages = collapseThinkingRuns(normalizeMessageList(Array.isArray(page.messages) ? page.messages : []));
     const seen = seenRef.current[sid] || (seenRef.current[sid] = new Set());
-    for (const message of messages) if (message.id && message.kind !== "thinking") seen.add(message.id);
+    for (const message of messages) {
+      const id = mediaIdentity(message);
+      if (id && message.kind !== "thinking") seen.add(id);
+    }
     if (seen.size > 800) seenRef.current[sid] = new Set(Array.from(seen).slice(-400));
     setLoadingBySid((prev) => ({ ...prev, [sid]: false }));
     setMessagesBySid((prev) => {
       const current = prev[sid] ?? [];
-      const pending = current.filter((item) => {
-        if (!item.pending) return false;
-        if (opts.dropOptimistic && text && sameMessageNeedle(item.text, text)) return false;
-        return !messages.some((message) => message.role === "user" && message.kind === "text" && sameMessageNeedle(message.text, item.text));
-      });
-      return { ...prev, [sid]: [...messages, ...pending].slice(-80) };
+      const reconciled = reconcileSnapshotMessages(current, messages);
+      if (!opts.dropOptimistic || !text) return { ...prev, [sid]: reconciled };
+      return {
+        ...prev,
+        [sid]: reconciled.filter((item) => !item.pending || !sameMessageNeedle(item.text, text)),
+      };
     });
     return messages;
   }, []);
@@ -683,20 +914,68 @@ export function useLiveSocket(
     const page = await api<{ messages: Message[]; nextBefore: number | null }>(
       `/api/sessions/${encodeURIComponent(sid)}/messages?page=backward&before=${before}&limit=80`,
     );
-    const older = collapseThinkingRuns(Array.isArray(page.messages) ? page.messages : []);
+    const older = collapseThinkingRuns(normalizeMessageList(Array.isArray(page.messages) ? page.messages : []));
     setNextBeforeBySid((prev) => ({ ...prev, [sid]: page.nextBefore ?? null }));
     if (!older.length) return (page.nextBefore ?? null) !== null;
     const seen = seenRef.current[sid] || (seenRef.current[sid] = new Set());
-    for (const message of older) if (message.id && message.kind !== "thinking") seen.add(message.id);
+    for (const message of older) {
+      const id = mediaIdentity(message);
+      if (id && message.kind !== "thinking") seen.add(id);
+    }
     setMessagesBySid((prev) => {
       const current = prev[sid] ?? [];
-      const existing = new Set(current.map((message) => message.id).filter(Boolean));
-      const prepend = older.filter((message) => !message.id || !existing.has(message.id));
+      const existing = new Set(current.map(mediaIdentity).filter(Boolean));
+      const prepend = older.filter((message) => {
+        const id = mediaIdentity(message);
+        return !id || !existing.has(id);
+      });
       if (!prepend.length) return prev;
       return { ...prev, [sid]: [...prepend, ...current.filter((message) => !message.seed)] };
     });
     return (page.nextBefore ?? null) !== null;
   }, []);
+
+  const watchAgentRun = useCallback((runId: string, handler: AgentRunHandler) => {
+    const channel: LiveChannel = { kind: "agent_run", key: runId };
+    const id = channelId(channel);
+    agentRunHandlersRef.current[runId] = handler;
+    desiredChannelsRef.current.set(id, channel);
+    if (enabled && subscribeChannels([channel])) subscribedChannelsRef.current.add(id);
+    return () => {
+      delete agentRunHandlersRef.current[runId];
+      desiredChannelsRef.current.delete(id);
+      if (enabled && unsubscribeChannels([channel])) subscribedChannelsRef.current.delete(id);
+    };
+  }, [enabled, subscribeChannels, unsubscribeChannels]);
+
+  const streamSummary = useCallback((sid: string, onChunk: (chunk: string) => void) => {
+    const channel: LiveChannel = { kind: "summary", key: sid };
+    const id = channelId(channel);
+    delete lastSeqRef.current[id];
+    desiredChannelsRef.current.set(id, channel);
+    const cleanup = () => {
+      delete summaryHandlersRef.current[sid];
+      desiredChannelsRef.current.delete(id);
+      if (enabled && unsubscribeChannels([channel])) subscribedChannelsRef.current.delete(id);
+    };
+    const promise = new Promise<string>((resolve, reject) => {
+      summaryHandlersRef.current[sid] = {
+        delivered: 0,
+        full: "",
+        onChunk,
+        resolve: (text) => {
+          cleanup();
+          resolve(text);
+        },
+        reject: (error) => {
+          cleanup();
+          reject(error);
+        },
+      };
+    });
+    if (enabled && subscribeChannels([channel])) subscribedChannelsRef.current.add(id);
+    return promise;
+  }, [enabled, subscribeChannels, unsubscribeChannels]);
 
   const mergedBusy = useMemo(() => ({ ...listBusy, ...busyBySid }), [listBusy, busyBySid]);
 
@@ -712,5 +991,7 @@ export function useLiveSocket(
     loadOlderMessages,
     connection,
     reconnectNow,
+    watchAgentRun,
+    streamSummary,
   };
 }

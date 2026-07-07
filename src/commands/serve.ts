@@ -549,6 +549,39 @@ async function startRun(agent: string): Promise<RunState> {
   return state;
 }
 
+function agentRunSnapshot(runId: string) {
+  const state = RUNS.get(runId);
+  if (!state) return null;
+  return {
+    id: state.id,
+    agent: state.agent,
+    date: state.date,
+    status: state.status,
+    logs: state.logs,
+    result: state.result,
+    error: state.error,
+  };
+}
+
+function subscribeAgentRun(runId: string, cb: (event: { type: "log"; line: string } | { type: "done" | "failed"; status: "done" | "failed"; result?: unknown; error?: string }) => void) {
+  const state = RUNS.get(runId);
+  if (!state) return () => {};
+  const send = (ev: { line?: string; final?: RunState }) => {
+    if (ev.line) cb({ type: "log", line: ev.line });
+    if (ev.final) {
+      const status = ev.final.status === "failed" ? "failed" : "done";
+      cb({
+        type: status,
+        status,
+        result: ev.final.result,
+        error: ev.final.error,
+      });
+    }
+  };
+  state.subscribers.add(send);
+  return () => state.subscribers.delete(send);
+}
+
 // ---------- HTTP helpers ----------
 
 // v2 frontend: the Vite-built React app at <repo>/web/dist. (v1, the hand-written
@@ -977,6 +1010,24 @@ async function streamSessionSummaryForSpeech(sessionId: string, transcriptPath: 
   });
 }
 
+async function streamSessionSummaryChunksForSpeech(sessionId: string, onChunk: (chunk: string) => void): Promise<void> {
+  const tp = await resolveTranscript(sessionId);
+  if (!tp) throw new Error("session transcript not found");
+  const res = await streamSessionSummaryForSpeech(sessionId, tp);
+  if (!res.ok) throw new Error(`summary failed (${res.status})`);
+  if (!res.body) throw new Error("No summary stream returned");
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = decoder.decode(value, { stream: true });
+    if (chunk) onChunk(chunk);
+  }
+  const rest = decoder.decode();
+  if (rest) onChunk(rest);
+}
+
 function titleForSessionLike(session: { title?: string | null; lastUserText?: string | null; tmuxName?: string | null; project?: string | null; sessionId?: string | null }) {
   return (
     session.title ||
@@ -1310,7 +1361,12 @@ function clampDim(raw: string | null, fallback: number): number {
 }
 
 export async function cmdServe() {
-  const liveWs = createLiveWsSupport({ evlog });
+  const liveWs = createLiveWsSupport({
+    evlog,
+    getAgentRun: agentRunSnapshot,
+    subscribeAgentRun,
+    streamSummary: streamSessionSummaryChunksForSpeech,
+  });
   const server = Bun.serve<AppSocketData>({
     port: PORT,
     hostname: HOST,

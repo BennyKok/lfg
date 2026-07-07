@@ -379,6 +379,7 @@ type QueueMsg = {
 };
 
 type LoadOlderMessages = (sid: string) => Promise<boolean>;
+type StreamSummary = (sid: string, onChunk: (chunk: string) => void) => Promise<string>;
 
 type ComposerAttachment = {
   id: string;
@@ -923,6 +924,27 @@ function collapseThinkingRuns(messages: Message[]) {
     }
   }
   return out;
+}
+
+function reconcileSnapshotMessages(current: Message[], incoming: Message[]): Message[] {
+  const authoritative = collapseThinkingRuns(incoming);
+  const next = authoritative.filter((message) => !message.seed);
+  const incomingIds = new Set(next.map((message) => message.id).filter(Boolean));
+  const incomingUserText = next.filter((message) => message.role === "user" && message.kind === "text");
+  const latestIncomingTs = next.reduce((max, message) => Math.max(max, message.ts ?? 0), 0);
+  for (const local of current) {
+    if (local.seed || local.kind === "thinking") continue;
+    if (local.id && incomingIds.has(local.id)) continue;
+    if (
+      local.pending &&
+      incomingUserText.some((message) => sameMessageNeedle(message.text, local.text))
+    ) {
+      continue;
+    }
+    const localTs = local.ts ?? (local.pending ? Date.now() : 0);
+    if (local.pending || !latestIncomingTs || localTs >= latestIncomingTs) next.push(local);
+  }
+  return collapseThinkingRuns(next).slice(-80);
 }
 
 // A settled (non-draft) assistant text turn. These arrive whole — either
@@ -2101,9 +2123,11 @@ function ComposerSendButton({
   );
 }
 
+const APP_SHELL_CLASS = "flex h-dvh flex-col overflow-hidden bg-background text-foreground";
+
 function AppShellSkeleton() {
   return (
-    <div className="flex h-dvh items-center justify-center bg-background text-muted-foreground">
+    <div className={cn(APP_SHELL_CLASS, "items-center justify-center text-muted-foreground")}>
       <div className="flex items-center gap-2 text-sm">
         <Loader2 className="size-4 animate-spin" />
         Loading lfg v2
@@ -2540,16 +2564,7 @@ function useLiveSessionStream(sessions: Session[], streamIds: string[]) {
       setNextBeforeBySid((prev) => ({ ...prev, [sid]: payload.nextBefore ?? null }));
       setMessagesBySid((prev) => {
         const current = prev[sid] ?? [];
-        const pending = current.filter((item) => {
-          if (!item.pending) return false;
-          const pendingNeedle = messageNeedle(item.text);
-          if (!pendingNeedle) return true;
-          return !messages.some((message) => {
-            if (message.role !== "user" || message.kind !== "text") return false;
-            return sameMessageNeedle(message.text, pendingNeedle);
-          });
-        });
-        return { ...prev, [sid]: [...messages, ...pending].slice(-80) };
+        return { ...prev, [sid]: reconcileSnapshotMessages(current, messages) };
       });
     });
 
@@ -2656,6 +2671,7 @@ function useLiveSessionStream(sessions: Session[], streamIds: string[]) {
       ...prev,
       [sid]: [...(prev[sid] ?? []).filter((item) => item.kind !== "thinking"), message].slice(-80),
     }));
+    setBusyBySid((prev) => ({ ...prev, [sid]: true }));
   }, []);
 
   const removeOptimisticMessage = useCallback((sid: string, text: string) => {
@@ -2685,15 +2701,12 @@ function useLiveSessionStream(sessions: Session[], streamIds: string[]) {
     setLoadingBySid((prev) => ({ ...prev, [sid]: false }));
     setMessagesBySid((prev) => {
       const current = prev[sid] ?? [];
-      const pending = current.filter((item) => {
-        if (!item.pending) return false;
-        if (opts.dropOptimistic && text && sameMessageNeedle(item.text, text)) return false;
-        return !messages.some((message) => {
-          if (message.role !== "user" || message.kind !== "text") return false;
-          return sameMessageNeedle(message.text, item.text);
-        });
-      });
-      return { ...prev, [sid]: [...messages, ...pending].slice(-80) };
+      const reconciled = reconcileSnapshotMessages(current, messages);
+      if (!opts.dropOptimistic || !text) return { ...prev, [sid]: reconciled };
+      return {
+        ...prev,
+        [sid]: reconciled.filter((item) => !item.pending || !sameMessageNeedle(item.text, text)),
+      };
     });
     return messages;
   }, []);
@@ -3637,6 +3650,42 @@ export function App() {
       const start = await api<{ runId: string }>(`/api/agents/${agent}/run`, {
         method: "POST",
       });
+      if (useWsLive) {
+        const finalStatus = await new Promise<"done" | "failed">((resolve) => {
+          let stop: (() => void) | null = null;
+          const finish = (status: "done" | "failed", error?: string) => {
+            stop?.();
+            stop = null;
+            if (status === "done") setRunLog("Run finished.");
+            else setRunLog(`Run failed: ${error || "unknown error"}`);
+            resolve(status);
+          };
+          stop = wsLiveStream.watchAgentRun(start.runId, {
+            onSnapshot: (run) => {
+              if (run.logs.length) setRunLog(run.logs.join("\n"));
+              if (run.status !== "running") finish(run.status, run.error);
+            },
+            onEvent: (event) => {
+              if (event.type === "log") {
+                setRunLog((prev) => `${prev ?? ""}\n${event.line}`.trim());
+                return;
+              }
+              finish(event.status, event.error);
+            },
+            onError: (message) => {
+              finish("failed", message);
+            },
+          });
+        });
+        if (finalStatus === "done") {
+          const payload = await api<{ agent: string; reports: ReportRef[] }>(
+            `/api/agents/${agent}/reports`,
+          );
+          setReports(payload.reports);
+          if (payload.reports[0]) setSelectedReportDate(payload.reports[0].date);
+        }
+        return;
+      }
       const events = new EventSource(`/api/agents/${agent}/runs/${start.runId}`);
       events.addEventListener("log", (event) => {
         setRunLog((prev) => `${prev ?? ""}\n${JSON.parse(event.data)}`.trim());
@@ -4238,6 +4287,7 @@ export function App() {
             queuesBySid={liveStream.queuesBySid}
             loadingBySid={liveStream.loadingBySid}
             onLoadOlderMessages={liveStream.loadOlderMessages}
+            onStreamSummary={useWsLive ? wsLiveStream.streamSummary : undefined}
             onOptimisticMessage={liveStream.addOptimisticMessage}
             onRemoveOptimisticMessage={liveStream.removeOptimisticMessage}
             onTrackSendStatus={liveStream.trackSendStatus}
@@ -5439,6 +5489,7 @@ function LiveView({
   queuesBySid,
   loadingBySid,
   onLoadOlderMessages,
+  onStreamSummary,
   onOptimisticMessage,
   onRemoveOptimisticMessage,
   onTrackSendStatus,
@@ -5460,6 +5511,7 @@ function LiveView({
   queuesBySid: Record<string, QueueMsg[]>;
   loadingBySid: Record<string, boolean>;
   onLoadOlderMessages: LoadOlderMessages;
+  onStreamSummary?: StreamSummary;
   onOptimisticMessage: (sid: string, text: string) => void;
   onRemoveOptimisticMessage: (sid: string, text: string) => void;
   onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
@@ -5562,6 +5614,7 @@ function LiveView({
           prompt={promptsBySid[session.sessionId ?? ""] ?? null}
           queue={queuesBySid[session.sessionId ?? ""] ?? EMPTY_QUEUE}
           onLoadOlderMessages={onLoadOlderMessages}
+          onStreamSummary={onStreamSummary}
           onOptimisticMessage={onOptimisticMessage}
           onRemoveOptimisticMessage={onRemoveOptimisticMessage}
           onTrackSendStatus={onTrackSendStatus}
@@ -5627,6 +5680,7 @@ function LiveView({
         queuesBySid={queuesBySid}
         loadingBySid={loadingBySid}
         onLoadOlderMessages={onLoadOlderMessages}
+        onStreamSummary={onStreamSummary}
         onOptimisticMessage={onOptimisticMessage}
         onRemoveOptimisticMessage={onRemoveOptimisticMessage}
         onTrackSendStatus={onTrackSendStatus}
@@ -5742,6 +5796,7 @@ function RailStage({
   queuesBySid,
   loadingBySid,
   onLoadOlderMessages,
+  onStreamSummary,
   onOptimisticMessage,
   onRemoveOptimisticMessage,
   onTrackSendStatus,
@@ -5762,6 +5817,7 @@ function RailStage({
   queuesBySid: Record<string, QueueMsg[]>;
   loadingBySid: Record<string, boolean>;
   onLoadOlderMessages: LoadOlderMessages;
+  onStreamSummary?: StreamSummary;
   onOptimisticMessage: (sid: string, text: string) => void;
   onRemoveOptimisticMessage: (sid: string, text: string) => void;
   onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
@@ -5909,12 +5965,9 @@ function RailStage({
     setPreview((p) => (p === sid ? null : p));
   }, []);
 
-  // Rail grouping + dots use the stabilized busy state so rows don't bounce
-  // between Working/Idle on brief blips. Stage columns keep the real busyBySid.
-  const stableBusy = useStableBusy(busyBySid);
   const railTree = useMemo(
-    () => buildSessionTree(sessions, (s) => !!stableBusy[s.sessionId ?? ""]),
-    [sessions, stableBusy],
+    () => buildSessionTree(sessions, (s) => !!busyBySid[s.sessionId ?? ""]),
+    [sessions, busyBySid],
   );
   const workingNodes = railTree.roots.filter(railTree.effectiveBusy);
   const idleNodes = railTree.roots.filter((node) => !railTree.effectiveBusy(node));
@@ -6198,7 +6251,7 @@ function RailStage({
       <RailItem
         key={sid}
         session={session}
-        busy={!!stableBusy[sid]}
+        busy={!!busyBySid[sid]}
         latest={latestLine(messagesBySid[sid] ?? EMPTY_MESSAGES)}
         active={columnIds.includes(sid)}
         cursored={cursor === sid}
@@ -6265,6 +6318,7 @@ function RailStage({
             prompt={promptsBySid[sid] ?? null}
             queue={queuesBySid[sid] ?? EMPTY_QUEUE}
             onLoadOlderMessages={onLoadOlderMessages}
+            onStreamSummary={onStreamSummary}
             onOptimisticMessage={onOptimisticMessage}
             onRemoveOptimisticMessage={onRemoveOptimisticMessage}
             onTrackSendStatus={onTrackSendStatus}
@@ -8334,6 +8388,7 @@ const SessionCard = memo(function SessionCard({
   prompt,
   queue,
   onLoadOlderMessages,
+  onStreamSummary,
   onOptimisticMessage,
   onRemoveOptimisticMessage,
   onTrackSendStatus,
@@ -8353,6 +8408,7 @@ const SessionCard = memo(function SessionCard({
   prompt: SessionPrompt | null;
   queue: QueueMsg[];
   onLoadOlderMessages: LoadOlderMessages;
+  onStreamSummary?: StreamSummary;
   onOptimisticMessage: (sid: string, text: string) => void;
   onRemoveOptimisticMessage: (sid: string, text: string) => void;
   onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
@@ -8399,18 +8455,8 @@ const SessionCard = memo(function SessionCard({
     haptic("selection");
     try {
       stopSpeaking();
-      const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/summary/stream`, {
-        method: "POST",
-      });
-      if (!res.ok) {
-        const body = (await res.json().catch(() => null)) as { error?: string } | null;
-        throw new Error(body?.error || `summary failed (${res.status})`);
-      }
-      if (!res.body) throw new Error("No summary stream returned");
 
       toast.message("Speaking session summary");
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
       let pending = "";
       let full = "";
       let spoken = false;
@@ -8446,17 +8492,33 @@ const SessionCard = memo(function SessionCard({
           pending = "";
         }
       };
-
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        if (!chunk) continue;
+      const acceptChunk = (chunk: string) => {
+        if (!chunk) return;
         full += chunk;
         pending += chunk;
         drainSentences();
+      };
+
+      if (onStreamSummary) {
+        full = await onStreamSummary(sid, acceptChunk);
+      } else {
+        const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/summary/stream`, {
+          method: "POST",
+        });
+        if (!res.ok) {
+          const body = (await res.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(body?.error || `summary failed (${res.status})`);
+        }
+        if (!res.body) throw new Error("No summary stream returned");
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          acceptChunk(decoder.decode(value, { stream: true }));
+        }
+        acceptChunk(decoder.decode());
       }
-      pending += decoder.decode();
       drainSentences(true);
       if (!spoken || !full.trim()) throw new Error("No summary returned");
       await speech;
