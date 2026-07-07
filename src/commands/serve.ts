@@ -5,6 +5,7 @@ import { dirname, extname, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { marked } from "marked";
 import { PATHS, installInfo } from "../config.ts";
+import { compressedAssetResponse, maybeCompressResponse } from "../http-compress.ts";
 import { getCachedResumableSession } from "../resume-cache.ts";
 import {
   AGENTS_DIR,
@@ -1466,6 +1467,7 @@ export async function cmdServe() {
       const path = url.pathname;
       const apiTimingStart = BOOT_API_TIMING_ENDPOINTS.has(path) ? performance.now() : 0;
 
+      const response = await (async () => {
       try {
       if (path === "/api/evlog") {
         if (req.method === "POST") {
@@ -1590,18 +1592,23 @@ export async function cmdServe() {
       // Hashed, content-addressed Vite bundles from the v2 build. Filenames
       // change on every build, so they're safe to cache immutably.
       if (path.startsWith("/assets/") && !path.includes("..")) {
-        const f = Bun.file(join(WEB_DIR, "assets", path.slice("/assets/".length)));
+        const filePath = join(WEB_DIR, "assets", path.slice("/assets/".length));
+        const f = Bun.file(filePath);
         if (await f.exists()) {
           const type = path.endsWith(".css")
             ? "text/css; charset=utf-8"
             : path.endsWith(".js")
               ? "application/javascript; charset=utf-8"
               : "application/octet-stream";
+          const headers = {
+            "Content-Type": type,
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "Vary": "Accept-Encoding",
+          };
+          const compressed = await compressedAssetResponse(req, filePath, headers);
+          if (compressed) return compressed;
           return new Response(f, {
-            headers: {
-              "Content-Type": type,
-              "Cache-Control": "public, max-age=31536000, immutable",
-            },
+            headers,
           });
         }
       }
@@ -4321,6 +4328,8 @@ export async function cmdServe() {
       } finally {
         if (apiTimingStart) evlog("api_timing", { endpoint: path, durationMs: apiDurationMs(apiTimingStart) });
       }
+      })();
+      return maybeCompressResponse(req, path, response);
     },
   });
 
