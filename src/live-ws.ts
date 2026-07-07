@@ -301,6 +301,7 @@ export function createLiveWsSupport(opts: { evlog?: Evlog } = {}) {
         if (!tp) return;
         tail.pane.tp = tp;
         enqueueTranscriptIndex(tp, tail.sid);
+        await publishCurrentBatch(tail);
         tail.offset = Bun.file(tp).size;
         return;
       }
@@ -359,6 +360,7 @@ export function createLiveWsSupport(opts: { evlog?: Evlog } = {}) {
       if (bsig !== tail.lastBusy) {
         tail.lastBusy = bsig;
         publishSid(tail.sid, "busy", { busy });
+        if (!busy) void publishCurrentBatch(tail);
       }
       if (!busy) tail.lastDraft.delete(tail.sid);
       return;
@@ -375,6 +377,7 @@ export function createLiveWsSupport(opts: { evlog?: Evlog } = {}) {
     if (bsig !== tail.lastBusy) {
       tail.lastBusy = bsig;
       publishSid(tail.sid, "busy", { busy });
+      if (!busy) void publishCurrentBatch(tail);
     }
   };
 
@@ -437,6 +440,29 @@ export function createLiveWsSupport(opts: { evlog?: Evlog } = {}) {
     return { messages: rendered, nextBefore: page?.nextBefore ?? null, readMs, renderMs };
   };
 
+  async function publishCurrentBatch(tail: SidTail): Promise<void> {
+    let tp = tail.pane.tp;
+    if (!tp) {
+      tp = await resolveTranscript(tail.sid);
+      if (!tp) return;
+      tail.pane.tp = tp;
+      enqueueTranscriptIndex(tp, tail.sid);
+    }
+    const backlog = await readBacklog(tail.sid, tp);
+    publishSid(tail.sid, "batch", {
+      messages: backlog.messages,
+      nextBefore: backlog.nextBefore,
+    });
+    if (backlog.messages.length) {
+      tail.lastArtifactAt = Math.max(
+        tail.lastArtifactAt,
+        ...backlog.messages
+          .filter((msg) => msg.kind === "image" || msg.kind === "video")
+          .map((msg) => msg.ts ?? 0),
+      );
+    }
+  }
+
   const subscribeOne = async (state: SocketState, sid: string, resync: boolean) => {
     const first = !state.subscribed.has(sid);
     if (!first && !resync) return;
@@ -451,6 +477,8 @@ export function createLiveWsSupport(opts: { evlog?: Evlog } = {}) {
     if (!tp && !entry) {
       sendSid(state, "batch", sid, { messages: [], nextBefore: null });
       evlog("ws_subscribe", { rid: state.rid, sid, missing: true, durationMs: roundMs(performance.now() - t0) });
+      const tail = await ensureSidTail(sid, null);
+      tail.sockets.add(state.ws);
       return;
     }
     let batchMessages: unknown[] = [];
