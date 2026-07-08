@@ -244,6 +244,7 @@ type AutoAgent = {
   schedule: string;
   enabled: boolean;
   cwd?: string;
+  project?: string; // server-computed, worktree-aware (cwd in a git worktree collapses to the owning repo)
   agent?: AutoAgentBackend;
   model?: string;
   thinkingLevel?: string;
@@ -809,6 +810,10 @@ function buildManageSessionsPrompt(template: ManageSessionPromptTemplate, projec
 }
 
 function autoAgentProject(agent: AutoAgent, repos: Repo[]): string {
+  // Prefer the server-computed project: it is worktree-aware, so an agent whose
+  // cwd is a git worktree (e.g. ~/repos/vibes-auto-main) still groups under the
+  // owning repo instead of surfacing the worktree folder as its own project.
+  if (agent.project) return agent.project;
   const fallbackCwd = repos.find((repo) => repo.name === "lfg")?.cwd || repos[0]?.cwd || "";
   const cwd = agent.cwd || fallbackCwd;
   if (!cwd) return "-";

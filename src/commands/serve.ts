@@ -384,6 +384,14 @@ async function listRepos() {
   return repos;
 }
 
+// Auto agents may run in a git worktree (or any nested checkout); the UI must
+// still group them under the owning repo's project. projectName() collapses
+// worktree cwds back to the main checkout, so compute it server-side — the
+// browser cannot read .git files to do this itself.
+function withAutoAgentMeta<T extends { id: string; cwd?: string }>(a: T) {
+  return { ...a, project: projectName(a.cwd || SELF_REPO), running: isRunning(a.id) };
+}
+
 function repoRootForManagedCwd(cwd: string): string | undefined {
   const top = Bun.spawnSync({
     cmd: ["git", "-C", cwd, "rev-parse", "--show-toplevel"],
@@ -1851,7 +1859,7 @@ export async function cmdServe() {
             skills: boot.skills ?? null,
             auto: {
               agents: boot.autoAgents
-                ? boot.autoAgents.map((a) => ({ ...a, running: isRunning(a.id) }))
+                ? boot.autoAgents.map(withAutoAgentMeta)
                 : null,
               tz: process.env.LFG_SCHED_TZ ?? "Asia/Hong_Kong",
               findings: boot.findings ?? null,
@@ -2112,7 +2120,7 @@ export async function cmdServe() {
         if (req.method === "GET") {
           const agents = await listAutoAgents();
           return json({
-            agents: agents.map((a) => ({ ...a, running: isRunning(a.id) })),
+            agents: agents.map(withAutoAgentMeta),
             tz: process.env.LFG_SCHED_TZ ?? "Asia/Hong_Kong",
           });
         }
@@ -2166,7 +2174,7 @@ export async function cmdServe() {
             thinkingLevel,
             tools: Array.isArray(b.tools) ? b.tools : undefined,
           });
-          return json({ agent });
+          return json({ agent: withAutoAgentMeta(agent) });
         }
       }
       // Resolve a client-supplied cwd to a KNOWN repo before we ever chdir into
