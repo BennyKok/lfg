@@ -42,6 +42,7 @@ import {
   Boxes,
   Braces,
   CalendarClock,
+  ClipboardList,
   Flag,
   AlertTriangle,
   Check,
@@ -772,6 +773,82 @@ function projectName(cwd: string): string {
 
 function repoProject(repo: Repo): string {
   return repo.project || projectName(repo.cwd);
+}
+
+type ManageSessionPromptId = "review" | "clean" | "follow-up" | "blockers" | "manage-scope";
+
+type ManageSessionPromptTemplate = {
+  id: ManageSessionPromptId;
+  label: string;
+  description: string;
+  task: string;
+};
+
+const MANAGE_SESSION_PROMPTS: ManageSessionPromptTemplate[] = [
+  {
+    id: "review",
+    label: "Review current sessions",
+    description: "Inventory live work and recommend next actions.",
+    task:
+      "Review all current live sessions in scope. Summarize each session's status, likely owner action, and whether it appears completed, blocked, waiting, or still actively working. Do not change session state unless the user explicitly follows up asking you to.",
+  },
+  {
+    id: "clean",
+    label: "Clean completed",
+    description: "Review first, then close only clearly done sessions.",
+    task:
+      "Review current live sessions in scope, identify sessions that are clearly completed, summarize what you plan to close, then close only sessions that are unambiguously complete. Leave active, uncertain, errored, or blocked sessions open and explain why.",
+  },
+  {
+    id: "follow-up",
+    label: "Follow up commits/PRs",
+    description: "Nudge sessions with local commits or PRs.",
+    task:
+      "Review current live sessions in scope for local commits, unpushed work, pushed branches, or open pull requests. Send concise follow-up nudges to those sessions asking for status and the next needed action. Do not merge, deploy, delete, or close sessions as part of this pass.",
+  },
+  {
+    id: "blockers",
+    label: "Summarize blockers",
+    description: "Find stuck sessions and explain what is needed.",
+    task:
+      "Review current live sessions in scope and summarize blockers first. For each blocked or risky session, identify the blocker, the evidence you used, and the smallest explicit user decision needed to unblock it. Do not take destructive or irreversible action.",
+  },
+  {
+    id: "manage-scope",
+    label: "Manage selected scope",
+    description: "Review, clean completed work, and nudge follow-ups.",
+    task:
+      "Manage the selected session scope end to end: review current live sessions, summarize the plan, close only sessions that are clearly completed, send concise follow-up nudges for sessions with local commits or open PRs, and report remaining blockers. Leave anything uncertain open.",
+  },
+];
+
+function manageSessionsScopeText(projectFilter: string): string {
+  if (projectFilter === "__all") {
+    return "All projects. This was explicitly selected in the UI; include every live project visible to the current user filter.";
+  }
+  if (projectFilter === MOBILE_NOTEPAD_FILTER) {
+    return "Notepad. There is no repository-backed project scope here; review only notepad/session-brain items visible in the current view.";
+  }
+  return `Project "${shortProject(projectFilter)}" (project key: ${projectFilter}). Manage only sessions whose project matches this selected project scope.`;
+}
+
+function buildManageSessionsPrompt(template: ManageSessionPromptTemplate, projectFilter: string): string {
+  return [
+    `Manage Sessions: ${template.label}`,
+    "",
+    `Selected project scope: ${manageSessionsScopeText(projectFilter)}`,
+    "",
+    `Task: ${template.task}`,
+    "",
+    "Safety rules:",
+    "- Review first and summarize what you found before making changes.",
+    "- Close only sessions that are clearly completed.",
+    "- For sessions with local commits, unpushed work, pushed branches, or open PRs, send follow-up nudges asking for status or the next action.",
+    "- Do not merge PRs, deploy, delete branches, delete files, delete repos, or perform other destructive actions without explicit user instruction.",
+    "- Do not manage sessions outside the selected project scope unless the user explicitly asks.",
+    "",
+    "Use the existing lfg session tools, CLI, or local API helpers available in this environment. Keep the final report concise and include actions taken plus anything left open.",
+  ].join("\n");
 }
 
 function autoAgentProject(agent: AutoAgent, repos: Repo[]): string {
@@ -3892,6 +3969,46 @@ export function App() {
     }
   }
 
+  async function launchManageSessions(template: ManageSessionPromptTemplate) {
+    const scopedRepo =
+      projectFilter !== "__all" && projectFilter !== MOBILE_NOTEPAD_FILTER
+        ? repos.find((repo) => repoProject(repo) === projectFilter)
+        : undefined;
+    const launchAgent = (localStorage.getItem("lfg_v2_agent") as AgentKind | null) || "aisdk";
+    const launchModel =
+      localStorage.getItem(`lfg_model_${launchAgent}`) ||
+      localStorage.getItem("lfg_model") ||
+      AGENT_DEFAULT_MODEL[launchAgent];
+    const owner =
+      userFilter !== "__all" && userFilter !== "__unassigned"
+        ? userFilter
+        : userFilter === "__unassigned"
+          ? ""
+          : localStorage.getItem("lfg_user") || users[0]?.email || "";
+    const prompt = buildManageSessionsPrompt(template, projectFilter);
+
+    try {
+      const res = await api<{ sessionId?: string }>("/api/sessions/new", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          cwd: scopedRepo?.cwd,
+          prompt,
+          user: owner || undefined,
+          agent: launchAgent,
+          model: launchModel,
+          thinkingLevel: agentSupportsThinking(launchAgent) ? savedThinkingLevel() : undefined,
+        }),
+      });
+      if (res.sessionId) markCreatedSid(res.sessionId);
+      setTab("live");
+      await refreshSessions();
+      toast.success(`Started ${template.label.toLowerCase()}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not start management session");
+    }
+  }
+
   const refreshCodingAgents = useCallback(async () => {
     const [agentsPayload, checksPayload] = await Promise.all([
       api<{ agents: CodingAgentInfo[] }>("/api/coding-agents"),
@@ -4030,6 +4147,10 @@ export function App() {
                     onChange={setProjectFilter}
                   />
                 ) : null}
+                <ManageSessionsMenu
+                  projectFilter={projectFilter}
+                  onSelect={(template) => void launchManageSessions(template)}
+                />
                 <UserFilterMenu
                   value={userFilter}
                   users={users}
@@ -4811,6 +4932,57 @@ function UsageRingsButton({
             {windows.find((w) => w.resetsAt) ? fmtReset(windows.find((w) => w.resetsAt)!.resetsAt) : ""}
           </p>
         ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function ManageSessionsMenu({
+  projectFilter,
+  onSelect,
+}: {
+  projectFilter: string;
+  onSelect: (template: ManageSessionPromptTemplate) => void;
+}) {
+  const scopeLabel =
+    projectFilter === "__all"
+      ? "All projects"
+      : projectFilter === MOBILE_NOTEPAD_FILTER
+        ? "Notepad"
+        : shortProject(projectFilter);
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <button
+            type="button"
+            aria-label="Manage sessions"
+            title={`Manage sessions: ${scopeLabel}`}
+            className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors duration-200 ease-out hover:text-foreground active:scale-[0.96]"
+          />
+        }
+      >
+        <ClipboardList className="size-[18px]" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-72">
+        <DropdownMenuLabel className="space-y-1">
+          <span className="block text-xs font-semibold">Manage Sessions</span>
+          <span className="block truncate text-[11px] font-normal text-muted-foreground">
+            Scope: {scopeLabel}
+          </span>
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {MANAGE_SESSION_PROMPTS.map((template) => (
+          <DropdownMenuItem
+            key={template.id}
+            className="flex cursor-pointer flex-col items-start gap-0.5 py-2"
+            onClick={() => onSelect(template)}
+          >
+            <span className="text-sm font-medium">{template.label}</span>
+            <span className="text-xs text-muted-foreground">{template.description}</span>
+          </DropdownMenuItem>
+        ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );
