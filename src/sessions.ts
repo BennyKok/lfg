@@ -32,6 +32,13 @@ const PROJECTS_DIR = join(HOME, ".claude", "projects");
 const CODEX_SESSIONS_DIR = join(HOME, ".codex", "sessions");
 const GROK_SESSIONS_DIR = join(HOME, ".grok", "sessions");
 const GROK_ACTIVE_SESSIONS = join(HOME, ".grok", "active_sessions.json");
+// cursor-agent persists a per-turn transcript at
+// ~/.cursor/projects/<enc-cwd>/agent-transcripts/<chatId>/<chatId>.jsonl where
+// <enc-cwd> is the absolute cwd with the leading slash dropped and remaining
+// slashes turned into dashes (e.g. /tmp/foo → tmp-foo). Unlike grok there is no
+// active_sessions.json mapping id→pid, so we discover cursor's native chat id
+// from the transcript dir under the session's cwd.
+const CURSOR_PROJECTS_DIR = join(HOME, ".cursor", "projects");
 const TITLE_MAX = 72;
 const TOOL_USE_TEXT_MAX = 4_000;
 const TOOL_RESULT_TEXT_MAX = 8_000;
@@ -185,7 +192,7 @@ export type SessionMsg = {
   // whole chunk again.
   id: string | null;
   role: string;
-  kind: "text" | "thinking" | "tool_use" | "tool_result" | "image";
+  kind: "text" | "thinking" | "tool_use" | "tool_result" | "image" | "video";
   text: string;
   ts: number | null;
   // True only for a genuine upstream API-error turn (Claude Code stamps the
@@ -198,7 +205,7 @@ export type SessionMsg = {
 };
 
 export type Session = {
-  agent: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "hermes";
+  agent: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "hermes";
   pid: number;
   cmd: string;
   cwd: string | null;
@@ -352,7 +359,9 @@ function managedLaunchRow(
       ? `lfg ${agent} --model ${m.model ?? ""}`.trim()
       : agent === "grok"
         ? `grok --model ${m.model ?? ""}`.trim()
-        : agent === "hermes"
+        : agent === "cursor"
+          ? `agent --model ${m.model ?? ""}`.trim()
+          : agent === "hermes"
           ? `hermes --model ${m.model ?? ""}`.trim()
           : agent === "opencode"
             ? `lfg opencode-aisdk-session --model ${m.model ?? ""}`.trim()
@@ -383,7 +392,7 @@ function managedLaunchRow(
     managed: true,
     assignedUser: assigns[m.tmuxName] ?? null,
     model:
-      agent === "codex" || agent === "codex-aisdk" || agent === "opencode" || agent === "grok" || agent === "hermes"
+      agent === "codex" || agent === "codex-aisdk" || agent === "opencode" || agent === "grok" || agent === "cursor" || agent === "hermes"
         ? model
         : modelAlias(model),
     ...computeStatus(null, null),
@@ -782,6 +791,56 @@ async function grokSummaryById(id: string): Promise<{
   return null;
 }
 
+// Encode an absolute cwd the way cursor-agent names its project dir: drop the
+// leading slash(es), turn the rest into dash-separated segments.
+export function encodeCursorCwd(cwd: string): string {
+  return cwd.replace(/^\/+/, "").replace(/\//g, "-");
+}
+
+// Locate a cursor transcript by its native chat id (a UUID). The id is unique
+// across projects, so scan every project dir for a matching agent-transcript.
+async function findCursorTranscriptById(id: string): Promise<string | null> {
+  if (!UUID.test(id)) return null;
+  let projects: string[];
+  try {
+    projects = await readdir(CURSOR_PROJECTS_DIR);
+  } catch {
+    return null;
+  }
+  for (const proj of projects) {
+    const p = join(CURSOR_PROJECTS_DIR, proj, "agent-transcripts", id, `${id}.jsonl`);
+    if (await Bun.file(p).exists()) return p;
+  }
+  return null;
+}
+
+// Locate the live cursor transcript for a session by its cwd: cursor names the
+// project dir after the cwd, then keeps one agent-transcripts/<chatId> dir per
+// chat. lfg spawns a fresh cursor-agent per session, so the newest transcript in
+// the cwd is this session's. Returns both the path and the chat id (so callers
+// can remember the native id for deep-links/title).
+async function findCursorTranscriptByCwd(
+  cwd: string,
+): Promise<{ path: string; id: string } | null> {
+  const base = join(CURSOR_PROJECTS_DIR, encodeCursorCwd(cwd), "agent-transcripts");
+  let dirs: string[];
+  try {
+    dirs = await readdir(base);
+  } catch {
+    return null;
+  }
+  let best: { path: string; id: string; mtime: number } | null = null;
+  for (const d of dirs) {
+    if (!UUID.test(d)) continue;
+    const p = join(base, d, `${d}.jsonl`);
+    try {
+      const st = statSync(p);
+      if (!best || st.mtimeMs > best.mtime) best = { path: p, id: d, mtime: st.mtimeMs };
+    } catch {}
+  }
+  return best ? { path: best.path, id: best.id } : null;
+}
+
 type CodexThread = {
   id: string;
   path: string;
@@ -1135,6 +1194,66 @@ function normalizeGrokLineMessages(line: string): SessionMsg[] {
   return [];
 }
 
+// cursor-agent transcript lines are Claude-ish but carry `role` at the top level
+// with no `type` (user/assistant), plus bare `{type:"turn_ended"}` markers — so
+// neither the generic claude path (keys off top-level `type`) nor the grok path
+// (keys off `type:"user"|"assistant"`) matches them. Normalize them here.
+//   user:      {"role":"user","message":{"content":[{type:"text",text:"<timestamp>…</timestamp>\n<user_query>\n…\n</user_query>"}]}}
+//   assistant: {"role":"assistant","message":{"content":[{type:"text",text},{type:"tool_use",name,input},…]}}
+// cursor appends a "[REDACTED]" trailer to assistant text (elided internal
+// content); strip it so the reveal reads clean.
+function stripCursorRedactions(text: string): string {
+  return text.replace(/\n*\[REDACTED\]\s*$/g, "").trimEnd();
+}
+
+function normalizeCursorLineMessages(line: string): SessionMsg[] {
+  let x: {
+    type?: string;
+    role?: string;
+    message?: { role?: string; content?: unknown };
+  };
+  try {
+    x = JSON.parse(line);
+  } catch {
+    return [];
+  }
+  // Only cursor lines: role at the top level, no top-level `type`, a message
+  // envelope. turn_ended and other typed markers are not messages.
+  if (x.type !== undefined || !x.message) return [];
+  const role = x.role ?? x.message.role;
+  if (role !== "user" && role !== "assistant") return [];
+  const content = x.message.content;
+
+  if (role === "user") {
+    const text = stripGrokUserQuery(grokTextContent(content));
+    return text ? [{ id: null, role: "user", kind: "text", text, ts: null }] : [];
+  }
+
+  const arr = Array.isArray(content)
+    ? (content as Array<{ type?: string; text?: string; thinking?: string; name?: string; input?: unknown }>)
+    : [];
+  const msgs: SessionMsg[] = [];
+  for (const c of arr) {
+    if (c.type === "text" && typeof c.text === "string") {
+      const text = stripCursorRedactions(c.text);
+      if (text) msgs.push({ id: null, role: "assistant", kind: "text", text, ts: null });
+    } else if (c.type === "thinking") {
+      const text = (c.thinking ?? c.text ?? "").trim();
+      if (text) msgs.push({ id: null, role: "assistant", kind: "thinking", text, ts: null });
+    } else if (c.type === "tool_use") {
+      const input = compactToolText(describeInput(c.input), TOOL_USE_TEXT_MAX);
+      msgs.push({
+        id: null,
+        role: "assistant",
+        kind: "tool_use",
+        text: input ? `${c.name ?? "tool"}: ${input}` : `${c.name ?? "tool"}`,
+        ts: null,
+      });
+    }
+  }
+  return msgs;
+}
+
 export function normalizeLine(line: string): SessionMsg | null {
   return normalizeLineMessages(line)[0] ?? null;
 }
@@ -1152,6 +1271,8 @@ function normalizeLineUnsafe(line: string): SessionMsg[] {
   if (codex) return [codex];
   const grok = normalizeGrokLineMessages(line);
   if (grok.length) return grok;
+  const cursor = normalizeCursorLineMessages(line);
+  if (cursor.length) return cursor;
 
   let x: {
     type?: string;
@@ -1800,6 +1921,65 @@ export async function listSessions(): Promise<Session[]> {
     });
   }
 
+  // "cursor" sessions: cursor-agent runs in a tmux pane (like grok) but writes a
+  // Claude-ish transcript under ~/.cursor/projects/<enc-cwd>/agent-transcripts.
+  // Unlike grok there's no active_sessions.json id→pid map, so we discover the
+  // live chat by newest transcript in the session's cwd, which also yields the
+  // native chat id. Resolving the transcript here lets the live-view SSE backfill
+  // + tail it and gives the card its last message / busy state.
+  for (const m of managedSessions.filter((row) => row.agent === "cursor" && row.sessionId)) {
+    if (!tmux.hasSession(m.tmuxName)) continue;
+    const pid = tmux.panePid(m.tmuxName);
+    if (!pid || isClosing(pid)) continue;
+    const tmuxTarget = tmux.targetForPid(pid) ?? `${m.tmuxName}:0.0`;
+    const cmd = readProcCmd(pid, `cursor-agent --model ${m.model ?? ""}`.trim());
+    const project = m.project || projectName(m.cwd, { repoRoot: m.repoRoot });
+    const found = m.cwd
+      ? await profileAsync(profile, "findCursorTranscript_ms", () => findCursorTranscriptByCwd(m.cwd))
+      : null;
+    const transcriptPath = found?.path ?? null;
+    const nativeSessionId = found?.id ?? m.nativeSessionId ?? null;
+    if (found?.id) rememberNativeSession(m, found.id);
+    let last: SessionMsg | null = null;
+    let lastActivityAt: number | null = m.createdAt;
+    let lastUser: string | null = null;
+    if (transcriptPath) {
+      try {
+        lastActivityAt = statSync(transcriptPath).mtimeMs;
+      } catch {}
+      const meta = await profileAsync(profile, "transcriptTailMeta_ms", () => transcriptTailMeta(transcriptPath, lastActivityAt ?? 0));
+      last = meta.last;
+      lastUser = meta.lastUser;
+    }
+    let title = managedTitle(m, m.sessionId!, nativeSessionId, overrides);
+    if (!title && transcriptPath)
+      title = await profileAsync(profile, "cachedFirstTitle_ms", () => cachedFirstTitle(transcriptPath));
+    if (!title) title = m.title || (m.cwd ? basename(m.cwd) : project);
+    out.push({
+      agent: "cursor",
+      pid,
+      cmd,
+      cwd: m.cwd,
+      project,
+      title,
+      lastUserText: lastUser ?? m.title ?? null,
+      sessionId: m.sessionId!,
+      nativeSessionId,
+      ...managedLineage(m),
+      launching: m.launchState === "launching" && !transcriptPath,
+      startedAt: m.createdAt,
+      transcriptPath,
+      lastActivityAt,
+      last,
+      tmuxTarget,
+      tmuxName: m.tmuxName,
+      managed: true,
+      assignedUser: assigns[m.tmuxName] ?? null,
+      model: m.model ?? cmd.match(/--model\s+(\S+)/)?.[1] ?? null,
+      ...computeStatus(last, null),
+    });
+  }
+
   // "aisdk" sessions: headless AI-SDK harnesses. Discovery is registry-driven
   // (not pgrep) — the harness owns the control plane and the SDK writes the same
   // transcript JSONL as a normal claude session, so the live view reads it as-is.
@@ -1981,6 +2161,18 @@ export async function resolveTranscript(sessionId: string): Promise<string | nul
   const managed = listManaged().find(
     (m) => m.sessionId === sessionId || m.nativeSessionId === sessionId,
   );
+  // cursor: the transcript lives under ~/.cursor/projects/<enc-cwd>/… named by
+  // cursor's own chat id (not lfg's id). Resolve by remembered native id first,
+  // else by the newest transcript in the session's cwd. Handle it here so the
+  // claude-oriented cwd fallback below (which assumes ~/.claude/projects) never
+  // fires for cursor.
+  if (managed?.agent === "cursor") {
+    if (managed.nativeSessionId) {
+      const byId = await findCursorTranscriptById(managed.nativeSessionId);
+      if (byId) return byId;
+    }
+    return managed.cwd ? (await findCursorTranscriptByCwd(managed.cwd))?.path ?? null : null;
+  }
   if (managed?.nativeSessionId && managed.nativeSessionId !== sessionId) {
     const native =
       (managed.agent === "grok"
@@ -2237,19 +2429,47 @@ export async function recentMessages(
   const file = Bun.file(path);
   const size = file.size;
   const maxBytes = opts.maxBytes === undefined ? 256 * 1024 : opts.maxBytes;
-  const start = maxBytes == null ? 0 : Math.max(0, size - maxBytes);
-  const text = await file.slice(start).text();
-  const lines = text.split("\n").filter(Boolean);
-  if (limit > 0) {
-    const out: SessionMsg[] = [];
-    for (let i = lines.length - 1; i >= 0 && out.length < limit; i--) {
-      const msgs = normalizeLineMessages(lines[i]);
-      for (let j = msgs.length - 1; j >= 0 && out.length < limit; j--) {
-        out.push(msgs[j]);
-      }
+  const decoder = new TextDecoder();
+
+  const parseWindow = async (start: number, end: number) => {
+    const bytes = new Uint8Array(await file.slice(start, end).arrayBuffer());
+    let firstComplete = 0;
+    if (start > 0) {
+      const newline = bytes.indexOf(10);
+      firstComplete = newline >= 0 ? newline + 1 : bytes.length;
     }
-    return out.reverse();
+
+    const lines: string[] = [];
+    for (let lineStart = firstComplete; lineStart < bytes.length; ) {
+      let lineEnd = lineStart;
+      while (lineEnd < bytes.length && bytes[lineEnd] !== 10) lineEnd++;
+      if (lineEnd > lineStart) lines.push(decoder.decode(bytes.subarray(lineStart, lineEnd)));
+      lineStart = lineEnd + 1;
+    }
+    return lines;
+  };
+
+  if (limit > 0) {
+    let windowBytes = maxBytes == null ? size : Math.min(size, maxBytes);
+    while (true) {
+      const start = Math.max(0, size - windowBytes);
+      const lines = await parseWindow(start, size);
+      const out: SessionMsg[] = [];
+      for (let i = lines.length - 1; i >= 0 && out.length < limit; i--) {
+        const msgs = normalizeLineMessages(lines[i]);
+        for (let j = msgs.length - 1; j >= 0 && out.length < limit; j--) {
+          out.push(msgs[j]);
+        }
+      }
+      if (out.length >= limit || start === 0) return out.reverse();
+      const nextWindow = Math.min(size, Math.max(windowBytes * 2, windowBytes + 1));
+      if (nextWindow === windowBytes) return out.reverse();
+      windowBytes = nextWindow;
+    }
   }
+
+  const start = maxBytes == null ? 0 : Math.max(0, size - maxBytes);
+  const lines = await parseWindow(start, size);
   const msgs: SessionMsg[] = [];
   for (const l of lines) {
     msgs.push(...normalizeLineMessages(l));

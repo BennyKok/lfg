@@ -5,7 +5,7 @@ understand it before you run it anywhere shared.
 
 ## What lfg can do
 
-- **Spawns AI coding agents with shell access.** Sessions run `claude` / `codex`
+- **Spawns AI coding agents with shell access.** Sessions run `claude` / `codex` / `agent`
   on your box (often with permissions skipped so they don't block), so an agent
   can read, write, and execute within the repos it's launched into.
 - **Exposes an unauthenticated HTTP API** on `LFG_PORT` (default `8766`). Anyone

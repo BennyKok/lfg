@@ -1,25 +1,33 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// One-shot TTS playback for the launcher orb's push-to-talk flow.
+// Streaming TTS playback.
 //
-// `/api/voice/tts` returns raw 24 kHz mono int16 PCM with no container (the API
-// key stays server-side). The rest of the app only ever hears the voice agent
-// through LiveKit WebRTC tracks, so there's no existing way to just "say this
-// sentence" — this is that: POST text, decode the PCM, and play it via the Web
-// Audio API. Must be kicked off from a user gesture (the orb release) so the
-// AudioContext is allowed to start.
+// `/api/voice/tts` returns raw 24 kHz mono int16 PCM with no container, and the
+// server streams it as it synthesizes (see elevenLabsStreamInputPcm). So we do
+// ONE call with the whole text and play the audio progressively: each PCM chunk
+// is decoded and scheduled back-to-back on a shared AudioContext clock, so sound
+// starts as soon as the first bytes land and plays gaplessly — no waiting for the
+// full clip, no per-sentence chopping.
+//
+// Pause/resume just suspend/resume the AudioContext (there's only ever one active
+// playback), which freezes ctx.currentTime and therefore the position clock too.
+// Must be kicked off from a user gesture so the AudioContext is allowed to start.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useSyncExternalStore } from "react";
 
 const TTS_SAMPLE_RATE = 24000; // matches synthesizeTts() output on the server
+const START_LEAD = 0.06; // small lead so the first chunk schedules cleanly
 
 let sharedCtx: AudioContext | null = null;
-let currentSource: AudioBufferSourceNode | null = null;
-let currentBuffer: AudioBuffer | null = null;
-let startedAt = 0;
-let pausedAt = 0;
+
+// Active-playback state. Only one playback runs at a time.
+let scheduled = new Set<AudioBufferSourceNode>();
+let activeReader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+let startClock = 0; // ctx.currentTime at position 0 (frozen while suspended)
+let nextStartTime = 0; // ctx time the next chunk should start at
+let streamEnded = false; // upstream body fully read
 let currentResolve: (() => void) | null = null;
-let suppressEnded = false;
+let generation = 0; // bumped on every stop so stale async work bails
 
 export type SpeechPlayback = {
   status: "idle" | "loading" | "playing" | "paused";
@@ -56,13 +64,9 @@ function subscribe(listener: () => void) {
   return () => listeners.delete(listener);
 }
 
-// `getSnapshot` for useSyncExternalStore MUST return a referentially-stable
-// value while the store is unchanged — returning a freshly-spread object on
-// every call (as an earlier version did to interpolate `position` live) makes
-// React believe the store mutates on every read and re-renders forever, which
-// surfaces in prod as "Maximum update depth exceeded" (React error #185). So
-// the snapshot is just the stored object; live position interpolation lives in
-// `livePosition()`, which consumers read on their own render cadence.
+// getSnapshot for useSyncExternalStore MUST be referentially stable while the
+// store is unchanged — see React error #185. Live position interpolation lives in
+// livePosition(), read by consumers on their own render cadence.
 function snapshot() {
   return playback;
 }
@@ -71,47 +75,63 @@ export function useSpeechPlayback(): SpeechPlayback {
   return useSyncExternalStore(subscribe, snapshot, () => IDLE);
 }
 
-/**
- * Current playback position in seconds, interpolated from the AudioContext
- * clock while playing. Not part of the external-store snapshot (that must stay
- * stable) — call this from a component that re-renders on its own timer.
- */
+/** Current playback position in seconds, interpolated from the (suspend-frozen)
+ *  AudioContext clock while playing. */
 export function livePosition(): number {
   if (playback.status !== "playing") return playback.position;
   const ctx = getCtx();
-  const elapsed = ctx ? Math.max(0, ctx.currentTime - startedAt) : 0;
-  return Math.min(playback.duration, pausedAt + elapsed);
+  if (!ctx) return playback.position;
+  return Math.min(playback.duration, Math.max(0, ctx.currentTime - startClock));
 }
 
 function getCtx(): AudioContext | null {
   if (typeof window === "undefined") return null;
   const Ctor =
     window.AudioContext ||
-    (window as unknown as { webkitAudioContext?: typeof AudioContext })
-      .webkitAudioContext;
+    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!Ctor) return null;
   if (!sharedCtx) sharedCtx = new Ctor();
   return sharedCtx;
 }
 
-/** Stop any sentence currently playing (e.g. a new hold interrupts the last one). */
+/** Stop playback: cancel the stream, kill scheduled audio, reset to idle. */
 export function stopSpeaking(): void {
+  generation++;
   const resolve = currentResolve;
   currentResolve = null;
-  if (currentSource) {
+
+  const reader = activeReader;
+  activeReader = null;
+  if (reader) {
     try {
-      currentSource.onended = null;
-      suppressEnded = true;
-      currentSource.stop();
+      void reader.cancel();
+    } catch {
+      /* already closed */
+    }
+  }
+
+  for (const src of scheduled) {
+    try {
+      src.onended = null;
+      src.stop();
     } catch {
       /* already stopped */
     }
-    currentSource = null;
   }
-  currentBuffer = null;
-  startedAt = 0;
-  pausedAt = 0;
-  suppressEnded = false;
+  scheduled = new Set();
+
+  // If we were paused (ctx suspended), resume the context so it's usable next
+  // time — otherwise a fresh playback would schedule into a frozen clock.
+  const ctx = sharedCtx;
+  if (ctx && ctx.state === "suspended") {
+    try {
+      void ctx.resume();
+    } catch {}
+  }
+
+  streamEnded = false;
+  startClock = 0;
+  nextStartTime = 0;
   playback = IDLE;
   emit();
   resolve?.();
@@ -119,79 +139,55 @@ export function stopSpeaking(): void {
 
 export function pauseSpeaking(): void {
   const ctx = getCtx();
-  if (!ctx || playback.status !== "playing" || !currentSource) return;
-  pausedAt = Math.min(playback.duration, pausedAt + Math.max(0, ctx.currentTime - startedAt));
+  if (!ctx || playback.status !== "playing") return;
+  // Freeze everything scheduled; ctx.currentTime stops advancing while suspended.
+  setPlayback({ status: "paused", position: livePosition() });
   try {
-    currentSource.onended = null;
-    suppressEnded = true;
-    currentSource.stop();
-  } catch {
-    /* already stopped */
-  }
-  currentSource = null;
-  suppressEnded = false;
-  setPlayback({ status: "paused", position: pausedAt });
+    void ctx.suspend();
+  } catch {}
 }
 
 export async function resumeSpeaking(): Promise<void> {
-  if (playback.status !== "paused" || !currentBuffer) return;
   const ctx = getCtx();
-  if (!ctx) return;
-  if (ctx.state === "suspended") {
-    try {
-      await ctx.resume();
-    } catch {
-      return;
-    }
+  if (!ctx || playback.status !== "paused") return;
+  try {
+    await ctx.resume();
+  } catch {
+    return;
   }
-  startBufferAt(pausedAt);
+  setPlayback({ status: "playing" });
 }
 
-function startBufferAt(offset: number) {
-  const ctx = getCtx();
-  if (!ctx || !currentBuffer) return;
-  if (currentSource) {
-    try {
-      currentSource.onended = null;
-      suppressEnded = true;
-      currentSource.stop();
-    } catch {}
-  }
-  suppressEnded = false;
-  const src = ctx.createBufferSource();
-  src.buffer = currentBuffer;
-  src.connect(ctx.destination);
-  startedAt = ctx.currentTime;
-  pausedAt = Math.max(0, Math.min(offset, currentBuffer.duration));
-  src.onended = () => {
-    if (suppressEnded || currentSource !== src) return;
-    currentSource = null;
-    currentBuffer = null;
-    pausedAt = 0;
-    startedAt = 0;
-    const resolve = currentResolve;
-    currentResolve = null;
-    playback = IDLE;
-    emit();
-    resolve?.();
-  };
-  currentSource = src;
-  setPlayback({
-    status: "playing",
-    duration: currentBuffer.duration,
-    position: pausedAt,
-  });
-  try {
-    src.start(0, pausedAt);
-  } catch {
-    stopSpeaking();
-  }
+function finish() {
+  const resolve = currentResolve;
+  currentResolve = null;
+  activeReader = null;
+  scheduled = new Set();
+  streamEnded = false;
+  startClock = 0;
+  nextStartTime = 0;
+  playback = IDLE;
+  emit();
+  resolve?.();
+}
+
+// Decode a run of int16 LE PCM bytes → an AudioBuffer. Copies into a fresh buffer
+// so Int16Array alignment is guaranteed regardless of the chunk's byteOffset.
+function pcmToBuffer(ctx: AudioContext, bytes: Uint8Array): AudioBuffer {
+  const copy = new Uint8Array(bytes.length);
+  copy.set(bytes);
+  const i16 = new Int16Array(copy.buffer);
+  const f32 = new Float32Array(i16.length);
+  for (let i = 0; i < i16.length; i++) f32[i] = i16[i] / 32768;
+  const buf = ctx.createBuffer(1, f32.length, TTS_SAMPLE_RATE);
+  buf.getChannelData(0).set(f32);
+  return buf;
 }
 
 /**
- * Speak `text` aloud and resolve when playback finishes. Best-effort: returns
- * (resolves) quietly if TTS is unavailable rather than throwing into the caller's
- * one-shot flow — the session has already been created by the time we speak.
+ * Speak `text` aloud, streaming: one request, audio starts as soon as the first
+ * PCM bytes arrive and plays gaplessly to the end. Resolves when playback
+ * finishes. Best-effort — resolves quietly if TTS is unavailable.
  */
 export async function speakText(
   text: string,
@@ -202,7 +198,9 @@ export async function speakText(
   const ctx = getCtx();
   if (!ctx) return;
 
-  stopSpeaking(); // never overlap two confirmations
+  stopSpeaking(); // never overlap two playbacks
+  const gen = ++generation;
+
   playback = {
     status: "loading",
     text: t,
@@ -213,33 +211,23 @@ export async function speakText(
   };
   emit();
 
-  let buf: ArrayBuffer;
+  let res: Response;
   try {
-    const res = await fetch("/api/voice/tts", {
+    res = await fetch("/api/voice/tts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: t, voice: opts?.voice }),
       signal: opts?.signal,
     });
-    if (!res.ok) {
-      stopSpeaking();
-      return;
-    }
-    buf = await res.arrayBuffer();
   } catch {
-    stopSpeaking();
-    return; // network/abort — nothing to play
-  }
-  if (buf.byteLength < 2) {
-    stopSpeaking();
+    if (gen === generation) finish();
     return;
   }
-
-  // int16 LE → float32 [-1, 1]. Int16Array needs an even byte length.
-  const evenLen = buf.byteLength - (buf.byteLength % 2);
-  const pcm = new Int16Array(buf, 0, evenLen / 2);
-  const f32 = new Float32Array(pcm.length);
-  for (let i = 0; i < pcm.length; i++) f32[i] = pcm[i] / 32768;
+  if (gen !== generation) return; // superseded while awaiting
+  if (!res.ok || !res.body) {
+    finish();
+    return;
+  }
 
   if (ctx.state === "suspended") {
     try {
@@ -248,13 +236,76 @@ export async function speakText(
       /* user-gesture rules may still block it — give up quietly */
     }
   }
+  if (gen !== generation) return;
 
-  const audioBuf = ctx.createBuffer(1, f32.length, TTS_SAMPLE_RATE);
-  audioBuf.getChannelData(0).set(f32);
-  currentBuffer = audioBuf;
+  const reader = res.body.getReader();
+  activeReader = reader;
+  streamEnded = false;
+  startClock = ctx.currentTime + START_LEAD;
+  nextStartTime = startClock;
+  let leftover = new Uint8Array(0);
+  let started = false;
 
   await new Promise<void>((resolve) => {
     currentResolve = resolve;
-    startBufferAt(0);
+
+    const maybeDone = () => {
+      if (gen === generation && streamEnded && scheduled.size === 0) finish();
+    };
+
+    const scheduleChunk = (bytes: Uint8Array) => {
+      // Carry an odd trailing byte to the next chunk (int16 needs even length).
+      let merged = bytes;
+      if (leftover.length) {
+        merged = new Uint8Array(leftover.length + bytes.length);
+        merged.set(leftover);
+        merged.set(bytes, leftover.length);
+        leftover = new Uint8Array(0);
+      }
+      const usable = merged.length - (merged.length % 2);
+      if (usable < merged.length) leftover = merged.slice(usable);
+      if (usable === 0) return;
+
+      const buf = pcmToBuffer(ctx, merged.subarray(0, usable));
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.connect(ctx.destination);
+      // Never schedule in the past (first-audio jitter / underrun).
+      if (nextStartTime < ctx.currentTime) nextStartTime = ctx.currentTime + 0.02;
+      const at = nextStartTime;
+      nextStartTime += buf.duration;
+      src.onended = () => {
+        scheduled.delete(src);
+        maybeDone();
+      };
+      scheduled.add(src);
+      try {
+        src.start(at);
+      } catch {
+        scheduled.delete(src);
+      }
+      if (!started) {
+        started = true;
+        setPlayback({ status: "playing", position: 0 });
+      }
+      setPlayback({ duration: Math.max(0, nextStartTime - startClock) });
+    };
+
+    const pump = async () => {
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (gen !== generation) return; // stopped/superseded
+          if (done) break;
+          if (value && value.length) scheduleChunk(value);
+        }
+      } catch {
+        /* network/abort — fall through to finish what's scheduled */
+      }
+      streamEnded = true;
+      if (gen === generation) maybeDone();
+    };
+
+    void pump();
   });
 }

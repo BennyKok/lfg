@@ -18,9 +18,10 @@
 // already streams: a tmux pane via isBusy(), a pane-less aisdk/codex/opencode
 // session via the registry's isEntryBusy().
 
-import { listSessions, type Session } from "./sessions.ts";
+import { listSessions, resolveTranscript, type Session } from "./sessions.ts";
 import { capturePane, isBusy } from "./tmux.ts";
 import { findEntryByAnyId, isEntryBusy } from "./aisdk-registry.ts";
+import { enqueueTranscriptIndex } from "./transcript-index.ts";
 
 export type FleetEvent = {
   type: "completed";
@@ -134,6 +135,21 @@ async function tick(): Promise<void> {
     }
 
     // Currently idle.
+    if (prev.busy) {
+      // Busy -> idle edge: the session just landed a turn, so its transcript
+      // grew. Kick an incremental index catch-up now (deduped, background) so
+      // the next transcript load serves straight from SQLite — even for
+      // sessions nobody has open in the live view. Fires on the raw edge, not
+      // the settled one: mid-episode idle gaps just mean we index sooner.
+      void (async () => {
+        try {
+          const tp = s.transcriptPath ?? (await resolveTranscript(id));
+          if (tp) enqueueTranscriptIndex(tp, id);
+        } catch {
+          // indexing is best-effort; never disturb the watcher loop
+        }
+      })();
+    }
     prev.busy = false;
     prev.idleStreak += 1;
     if (prev.pendingComplete && prev.idleStreak >= SETTLE_TICKS) {

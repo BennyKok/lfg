@@ -15,6 +15,9 @@ const FILES_DIR = join(ROOT, "files");
 const INDEX_PATH = join(ROOT, "index.json");
 const UUID = /^[0-9a-fA-F-]{36}$/;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
+const MAX_VIDEO_BYTES = 250 * 1024 * 1024;
+
+export type MediaKind = "image" | "video";
 
 const IMAGE_TYPES: Record<string, string> = {
   ".gif": "image/gif",
@@ -24,10 +27,20 @@ const IMAGE_TYPES: Record<string, string> = {
   ".webp": "image/webp",
 };
 
+const VIDEO_TYPES: Record<string, string> = {
+  ".mp4": "video/mp4",
+  ".m4v": "video/mp4",
+  ".webm": "video/webm",
+  ".mov": "video/quicktime",
+  ".ogv": "video/ogg",
+};
+
 export type ImageArtifact = {
   id: string;
   sessionId: string;
   createdAt: number;
+  // "image" (default for legacy entries that predate video support) or "video".
+  media?: MediaKind;
   sourcePath: string;
   filePath: string;
   name: string;
@@ -38,7 +51,7 @@ export type ImageArtifact = {
 };
 
 export type ImageArtifactMessage = SessionMsg & {
-  kind: "image";
+  kind: MediaKind;
   artifactId: string;
   url: string;
   name: string;
@@ -70,24 +83,40 @@ function imageMimeFor(path: string): string | null {
   return IMAGE_TYPES[extname(path).toLowerCase()] ?? null;
 }
 
-export function createImageArtifact(input: {
-  sessionId: string;
-  path: string;
-  caption?: string;
-  alt?: string;
-}): ImageArtifact {
+function videoMimeFor(path: string): string | null {
+  return VIDEO_TYPES[extname(path).toLowerCase()] ?? null;
+}
+
+function createMediaArtifact(
+  input: {
+    sessionId: string;
+    path: string;
+    caption?: string;
+    alt?: string;
+  },
+  media: MediaKind,
+): ImageArtifact {
   const sessionId = input.sessionId.trim();
   if (!UUID.test(sessionId)) throw new Error("sessionId must be a UUID");
 
-  if (!isAbsolute(input.path)) throw new Error("image path must be absolute");
+  if (!isAbsolute(input.path)) throw new Error(`${media} path must be absolute`);
   const sourcePath = resolve(input.path);
-  const mimeType = imageMimeFor(sourcePath);
-  if (!mimeType) throw new Error("only png, jpg, jpeg, webp, and gif images can be displayed");
+  const mimeType = media === "video" ? videoMimeFor(sourcePath) : imageMimeFor(sourcePath);
+  if (!mimeType) {
+    throw new Error(
+      media === "video"
+        ? "only mp4, m4v, webm, mov, and ogv videos can be displayed"
+        : "only png, jpg, jpeg, webp, and gif images can be displayed",
+    );
+  }
 
+  const maxBytes = media === "video" ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES;
   const st = statSync(sourcePath);
-  if (!st.isFile()) throw new Error("image path is not a file");
-  if (st.size <= 0) throw new Error("image file is empty");
-  if (st.size > MAX_IMAGE_BYTES) throw new Error("image file is larger than 25 MB");
+  if (!st.isFile()) throw new Error(`${media} path is not a file`);
+  if (st.size <= 0) throw new Error(`${media} file is empty`);
+  if (st.size > maxBytes) {
+    throw new Error(`${media} file is larger than ${Math.round(maxBytes / (1024 * 1024))} MB`);
+  }
 
   mkdirSync(FILES_DIR, { recursive: true });
   const id = `${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;
@@ -99,6 +128,7 @@ export function createImageArtifact(input: {
     id,
     sessionId,
     createdAt: Date.now(),
+    media,
     sourcePath,
     filePath,
     name: basename(sourcePath),
@@ -111,6 +141,24 @@ export function createImageArtifact(input: {
   index[id] = artifact;
   writeIndex(index);
   return artifact;
+}
+
+export function createImageArtifact(input: {
+  sessionId: string;
+  path: string;
+  caption?: string;
+  alt?: string;
+}): ImageArtifact {
+  return createMediaArtifact(input, "image");
+}
+
+export function createVideoArtifact(input: {
+  sessionId: string;
+  path: string;
+  caption?: string;
+  alt?: string;
+}): ImageArtifact {
+  return createMediaArtifact(input, "video");
 }
 
 export function getImageArtifact(id: string): ImageArtifact | null {
@@ -128,7 +176,7 @@ export function imageArtifactToMessage(artifact: ImageArtifact): ImageArtifactMe
   return {
     id: `artifact-${artifact.id}`,
     role: "assistant",
-    kind: "image",
+    kind: artifact.media ?? "image",
     text: label,
     ts: artifact.createdAt,
     artifactId: artifact.id,

@@ -210,7 +210,9 @@ async function cmdCreate(args: string[]) {
     thinkingLevel,
     parentSessionId,
     spawnedBy: "subagent",
-    user: option(args, "--user"),
+    // Default to the calling session's user (LFG_USER is injected at spawn) so
+    // chained subagents stay visible under the right person's session filter.
+    user: option(args, "--user")?.trim() || process.env.LFG_USER?.trim() || undefined,
     worktree: hasFlag(args, "--worktree") ? true : undefined,
   };
   const created = await api<SessionCreateResponse>("/api/sessions/new", {

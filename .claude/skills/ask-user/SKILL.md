@@ -1,17 +1,15 @@
 ---
 name: ask-user
-description: Ask the human a question and block until they answer. Use when a decision genuinely needs the user's call (irreversible actions, ambiguous intent, competing trade-offs, anything risky) and you cannot reasonably decide alone. Raises a push notification; the user replies by typing in the app or by talking to the voice agent.
+description: Ask the human a question without blocking. Use when a decision genuinely needs the user's call (irreversible actions, ambiguous intent, competing trade-offs, anything risky) and you cannot reasonably decide alone. Raises a push notification; the answer is pushed back into your session as a new user message whenever the user replies.
 ---
 
 # Asking the user (human-in-the-loop)
 
-You run headless on a schedule, but some calls are not yours to make. When you
-hit one, ask the human instead of guessing. This sends them a push notification
-and **blocks until they answer** (or it times out), then hands you their reply.
-
-```
-BASE=http://localhost:8766
-```
+You run headless, but some calls are not yours to make. When you hit one, ask
+the human instead of guessing. Asking is **fire-and-forget**: you send the
+question, get an id back immediately, and carry on (or end your turn). There is
+no waiting, no polling, no timeout — the user may answer hours later, and their
+reply is injected into your session as a new user message.
 
 ## When to ask
 
@@ -26,33 +24,28 @@ than one question per run. Silence is still the default — most runs ask nothin
 
 ## How to ask
 
-Send the question and wait. The call returns when the user answers, or after the
-timeout with `status: "open"` and a null answer.
+Call the MCP tool `lfg_ask_user`:
+
+- `question` — plain concise prose. Lead with the decision in one sentence;
+  at most a couple of short context lines after. **No markdown headings, no
+  walls of text** — this renders on a small card.
+- `options` — optional short one-tap suggestions (the user may still type
+  free text, so handle any answer).
+- `sessionId` / `user` — usually omit; they default to your session and its
+  assigned user.
+
+Fallback without MCP (rare):
 
 ```bash
-RESP=$(curl -s -X POST $BASE/api/ask -H 'Content-Type: application/json' -d '{
-  "question": "The billing migration will drop the legacy table. Run it now?",
-  "options": ["Run it", "Skip for now"],
-  "agentId": "<your agent id, if known>",
-  "sessionId": "<related session id, if any>",
-  "user": "<user email to notify, if known>",
-  "timeoutMs": 180000
-}')
-
-echo "$RESP" | jq -r '.status'   # "answered" or "open"
-echo "$RESP" | jq -r '.answer'   # the user's reply (free text), when answered
+curl -s -X POST http://localhost:8766/api/ask \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"…","options":["…"],"sessionId":"<your session id>","pushback":true,"wait":false}'
 ```
 
-- `options` are optional one-tap suggestions; the user may also type free text,
-  so handle any answer, not just the options you offered.
-- `user` scopes the push notification and the UI surface to that person. Set it
-  from the related session's `assignedUser` when you know it.
-- Default block is generous but bounded. If you must ask without waiting, pass
-  `"wait": false` to get just `{id}`, then later poll `GET $BASE/api/ask/<id>`.
+## After asking
 
-## After the answer
-
-- If `status` is `answered`, act on `answer` — it's the user's decision in their
-  own words. Honour it even when it differs from your recommendation.
-- If `status` is `open` (timed out), do **not** take the risky action. Either
-  surface a finding noting it's still pending, or leave it for the next run.
+- **Do not block, poll, or sleep.** Continue other safe work or end your turn.
+- Do **not** take the action you asked about until the answer arrives.
+- The answer arrives as a user message starting with `[ask-user answer <id>]`.
+  It is the user's decision in their own words — honour it even when it differs
+  from your recommendation.

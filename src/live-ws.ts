@@ -435,6 +435,11 @@ export function createLiveWsSupport(opts: {
       const bytes = size - tail.offset;
       const chunk = await f.slice(tail.offset, size).text();
       tail.offset = size;
+      // Keep the SQLite index continuously caught up for live sessions: the
+      // pump already knows the file grew, and enqueueTranscriptIndex is
+      // incremental (cursor-based) + deduped per path, so this only parses
+      // the new bytes in the background.
+      enqueueTranscriptIndex(tail.pane.tp, tail.sid);
       tail.buf += chunk;
       const lines = tail.buf.split("\n");
       tail.buf = lines.pop() ?? "";

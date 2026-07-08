@@ -13,7 +13,12 @@ export type SkillCatalogItem = {
 };
 
 export const CLAUDE_MODELS: string[] = ["fable", "opus", "sonnet", "haiku"];
-export const CODEX_MODELS: string[] = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"];
+export const CODEX_MODELS: string[] = [
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5.3-codex-spark",
+];
 export const AISDK_MODELS: string[] = ["fable", "opus", "sonnet", "haiku"];
 export const CODEX_AISDK_MODELS: string[] = [
   "gpt-5.5",
@@ -22,6 +27,15 @@ export const CODEX_AISDK_MODELS: string[] = [
   "gpt-5.3-codex-spark",
 ];
 export const GROK_MODELS: string[] = ["grok-composer-2.5-fast", "grok-build"];
+export const CURSOR_MODELS: string[] = [
+  "auto",
+  "composer-2.5",
+  "gpt-5",
+  "gpt-5.5",
+  "claude-opus-4.8",
+  "gemini-3.1-pro",
+  "grok-4.3",
+];
 export const HERMES_MODELS: string[] = [
   "nousresearch/hermes-4-405b",
   "nousresearch/hermes-4-70b",
@@ -74,6 +88,7 @@ const LABELS: Record<CodingAgentKind, string> = {
   "codex-aisdk": "codex",
   opencode: "opencode",
   grok: "grok",
+  cursor: "cursor",
   hermes: "hermes",
 };
 
@@ -83,6 +98,7 @@ export const MODEL_OPTIONS: Record<CodingAgentKind, { defaultModel: string; mode
   codex: { defaultModel: "gpt-5.5", models: CODEX_MODELS },
   "codex-aisdk": { defaultModel: "gpt-5.5", models: CODEX_AISDK_MODELS },
   grok: { defaultModel: "grok-composer-2.5-fast", models: GROK_MODELS },
+  cursor: { defaultModel: "auto", models: CURSOR_MODELS },
   hermes: { defaultModel: "nousresearch/hermes-4-405b", models: HERMES_MODELS },
   opencode: { defaultModel: "opencode-go/deepseek-v4-flash", models: OPENCODE_MODELS },
 };

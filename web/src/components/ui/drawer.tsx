@@ -4,16 +4,79 @@ import * as React from "react"
 import { Drawer as DrawerPrimitive } from "vaul"
 
 import { cn } from "@/lib/utils"
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog"
+
+// On desktop we present these surfaces as a centered dialog instead of a
+// bottom-sheet drawer — a slide-up sheet reads as a mobile affordance and
+// wastes horizontal space on wide viewports. On mobile (coarse pointer /
+// narrow width) we keep the vaul drawer with its drag handle. All callers use
+// the same <Drawer>/<DrawerContent>/<DrawerTitle> API, so switching here flips
+// every "app drawer" (new session, finding sheet, notepad) at once.
+function useIsDesktopDrawer() {
+  const query = "(min-width: 768px)"
+  const [isDesktop, setIsDesktop] = React.useState(
+    () => typeof window !== "undefined" && window.matchMedia(query).matches
+  )
+  React.useEffect(() => {
+    const mq = window.matchMedia(query)
+    const onChange = () => setIsDesktop(mq.matches)
+    onChange()
+    mq.addEventListener("change", onChange)
+    return () => mq.removeEventListener("change", onChange)
+  }, [])
+  return isDesktop
+}
+
+const DrawerDesktopContext = React.createContext(false)
 
 function Drawer({
+  // vaul-only props that base-ui's Dialog root doesn't understand — pull them
+  // off so they don't leak onto the dialog path.
+  repositionInputs: _repositionInputs,
+  shouldScaleBackground: _shouldScaleBackground,
+  snapPoints: _snapPoints,
+  fadeFromIndex: _fadeFromIndex,
+  direction: _direction,
+  handleOnly: _handleOnly,
   ...props
 }: React.ComponentProps<typeof DrawerPrimitive.Root>) {
-  return <DrawerPrimitive.Root data-slot="drawer" {...props} />
+  const isDesktop = useIsDesktopDrawer()
+
+  if (isDesktop) {
+    const { open, defaultOpen, onOpenChange, modal, children } = props
+    return (
+      <DrawerDesktopContext.Provider value={true}>
+        <Dialog
+          open={open}
+          defaultOpen={defaultOpen}
+          onOpenChange={onOpenChange}
+          modal={modal}
+        >
+          {children}
+        </Dialog>
+      </DrawerDesktopContext.Provider>
+    )
+  }
+
+  return (
+    <DrawerDesktopContext.Provider value={false}>
+      <DrawerPrimitive.Root data-slot="drawer" {...props} />
+    </DrawerDesktopContext.Provider>
+  )
 }
 
 function DrawerTrigger({
   ...props
 }: React.ComponentProps<typeof DrawerPrimitive.Trigger>) {
+  const isDesktop = React.useContext(DrawerDesktopContext)
+  if (isDesktop) return <DialogTrigger data-slot="drawer-trigger" {...props} />
   return <DrawerPrimitive.Trigger data-slot="drawer-trigger" {...props} />
 }
 
@@ -26,6 +89,8 @@ function DrawerPortal({
 function DrawerClose({
   ...props
 }: React.ComponentProps<typeof DrawerPrimitive.Close>) {
+  const isDesktop = React.useContext(DrawerDesktopContext)
+  if (isDesktop) return <DialogClose data-slot="drawer-close" {...props} />
   return <DrawerPrimitive.Close data-slot="drawer-close" {...props} />
 }
 
@@ -50,6 +115,25 @@ function DrawerContent({
   children,
   ...props
 }: React.ComponentProps<typeof DrawerPrimitive.Content>) {
+  const isDesktop = React.useContext(DrawerDesktopContext)
+
+  if (isDesktop) {
+    return (
+      <DialogContent
+        data-slot="drawer-content"
+        showCloseButton={false}
+        // Cap height so tall content scrolls inside the dialog instead of
+        // overflowing the viewport; callers already carry their own inner
+        // scroll containers.
+        className={cn("max-h-[85dvh] overflow-hidden", className)}
+        innerClassName="block max-h-[85dvh] overflow-y-auto p-4"
+        {...(props as React.ComponentProps<typeof DialogContent>)}
+      >
+        {children}
+      </DialogContent>
+    )
+  }
+
   return (
     <DrawerPortal data-slot="drawer-portal">
       <DrawerOverlay />
@@ -95,6 +179,19 @@ function DrawerTitle({
   className,
   ...props
 }: React.ComponentProps<typeof DrawerPrimitive.Title>) {
+  const isDesktop = React.useContext(DrawerDesktopContext)
+  if (isDesktop) {
+    return (
+      <DialogTitle
+        data-slot="drawer-title"
+        className={cn(
+          "font-heading text-base font-medium text-foreground",
+          className
+        )}
+        {...(props as React.ComponentProps<typeof DialogTitle>)}
+      />
+    )
+  }
   return (
     <DrawerPrimitive.Title
       data-slot="drawer-title"
@@ -111,6 +208,16 @@ function DrawerDescription({
   className,
   ...props
 }: React.ComponentProps<typeof DrawerPrimitive.Description>) {
+  const isDesktop = React.useContext(DrawerDesktopContext)
+  if (isDesktop) {
+    return (
+      <DialogDescription
+        data-slot="drawer-description"
+        className={cn("text-sm text-muted-foreground", className)}
+        {...(props as React.ComponentProps<typeof DialogDescription>)}
+      />
+    )
+  }
   return (
     <DrawerPrimitive.Description
       data-slot="drawer-description"

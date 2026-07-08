@@ -46,6 +46,8 @@ reliably on GitHub.
   - `claude`
   - `codex`
   - `opencode`
+  - `cursor-agent` (Cursor CLI)
+  - `grok`
   - `hermes`
 - Optional: [Tailscale](https://tailscale.com) for private remote access
 
@@ -145,7 +147,7 @@ Hetzner user requirements:
 - Tailscale account plus an ephemeral/preauthorized auth key for unattended
   setup. The installer joins the server with `tailscale up --authkey ...` and
   exposes the loopback-only UI through `tailscale serve`.
-- After boot, authenticate `claude`, `codex`, `opencode`, or `hermes` on the server, or
+- After boot, authenticate `claude`, `codex`, `opencode`, Cursor CLI, or `hermes` on the server, or
   configure API-key based providers in `.env`.
 
 ## Local Development
@@ -197,6 +199,7 @@ Common settings:
 | `LFG_CLAUDE_PATH` | Override the `claude` binary path. |
 | `LFG_CODEX_PATH` | Override the `codex` binary path. |
 | `LFG_OPENCODE_PATH` | Override the `opencode` binary path. |
+| `LFG_CURSOR_PATH` | Override the Cursor CLI binary path (`cursor-agent`, or a non-Grok `agent`). |
 | `LFG_HERMES_PATH` | Override the `hermes` binary path. |
 | `LFG_HERMES_PROVIDER` | Optional provider override passed to `hermes chat --provider`; empty uses Hermes' configured/default provider. |
 | `ANTHROPIC_API_KEY` | Optional API key for Claude SDK-backed flows. |

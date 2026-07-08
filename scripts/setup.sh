@@ -53,6 +53,8 @@ fi
 LFG_INSTALL_CLAUDE="${LFG_INSTALL_CLAUDE:-0}"
 LFG_INSTALL_CODEX="${LFG_INSTALL_CODEX:-0}"
 LFG_INSTALL_OPENCODE="${LFG_INSTALL_OPENCODE:-0}"
+LFG_INSTALL_GROK="${LFG_INSTALL_GROK:-0}"
+LFG_INSTALL_CURSOR="${LFG_INSTALL_CURSOR:-0}"
 LFG_INSTALL_HERMES="${LFG_INSTALL_HERMES:-0}"
 LFG_INSTALL_MCP="${LFG_INSTALL_MCP:-1}"
 LFG_TAILSCALE_SERVE="${LFG_TAILSCALE_SERVE:-0}"
@@ -196,9 +198,9 @@ BUN_BIN="$(command -v bun || true)"
 [ -n "$BUN_BIN" ] || die "Bun is required but was not found on PATH."
 BUN_BIN="$(cd "$(dirname "$BUN_BIN")" && pwd)/$(basename "$BUN_BIN")"
 
-# ---- 3. agent CLIs (claude / codex / opencode / hermes) ----
+# ---- 3. agent CLIs (claude / codex / opencode / grok / cursor / hermes) ----
 # The release bundle ships NO vendored agent binaries - lfg drives whatever
-# `claude` / `codex` / `opencode` / `hermes` it finds on PATH (override via LFG_*_PATH).
+# `claude` / `codex` / `opencode` / `grok` / `agent` / `hermes` it finds on PATH (override via LFG_*_PATH).
 # Never install or upgrade these by default: they own user auth/config.
 if ! command -v claude >/dev/null 2>&1; then
   if [ "$LFG_INSTALL_CLAUDE" = "1" ]; then
@@ -227,6 +229,41 @@ if ! command -v opencode >/dev/null 2>&1; then
     "$BUN_BIN" add -g opencode-ai >/dev/null 2>&1 || warn "opencode install failed - the 'opencode' agent kind will be unavailable."
   else
     warn "OpenCode CLI not found. OpenCode sessions will be unavailable until you install/authenticate opencode. Re-run with LFG_INSTALL_OPENCODE=1 only if you want setup to install it with Bun."
+  fi
+fi
+if ! command -v grok >/dev/null 2>&1; then
+  if [ "$LFG_INSTALL_GROK" = "1" ]; then
+    say "Installing Grok CLI (optional)..."
+    curl -fsSL https://x.ai/cli/install.sh | bash || warn "Grok CLI install failed - the 'grok' agent kind will be unavailable."
+  else
+    warn "Grok CLI not found. Grok sessions will be unavailable until you install/authenticate grok. Re-run with LFG_INSTALL_GROK=1 only if you want setup to install it with Bun."
+  fi
+fi
+is_grok_agent() {
+  local bin="$1"
+  local real
+  real="$(readlink -f "$bin" 2>/dev/null || printf '%s' "$bin")"
+  case "$real" in
+    "$HOME"/.grok/*|*/grok-linux-x86_64) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+has_cursor_cli() {
+  if command -v cursor-agent >/dev/null 2>&1; then
+    return 0
+  fi
+  local agent_bin
+  agent_bin="$(command -v agent 2>/dev/null || true)"
+  [ -n "$agent_bin" ] && ! is_grok_agent "$agent_bin"
+}
+
+if ! has_cursor_cli; then
+  if [ "$LFG_INSTALL_CURSOR" = "1" ]; then
+    say "Installing Cursor CLI (optional)..."
+    curl -fsSL https://cursor.com/install | bash || warn "Cursor CLI install failed - the 'cursor' agent kind will be unavailable."
+  else
+    warn "Cursor CLI not found. Cursor sessions will be unavailable until you install/authenticate cursor-agent. Re-run with LFG_INSTALL_CURSOR=1 only if you want setup to run Cursor's installer."
   fi
 fi
 if ! command -v hermes >/dev/null 2>&1; then

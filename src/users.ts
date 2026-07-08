@@ -11,6 +11,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { dirname } from "node:path";
 import { PATHS } from "./config.ts";
+import { onboardingProfilesSync } from "./onboarding.ts";
 
 // Roster config. Each LFG_USERS entry is `email` or `email:displayname` — the
 // optional name is what the UI shows (raw emails are hard to scan). Parse once
@@ -34,10 +35,20 @@ const NAMES: Record<string, string> = Object.fromEntries(
   ROSTER.map((u) => [u.email, u.name]),
 );
 
-// Friendly display name for an email — the configured name, else the local-part
-// of the address (everything before the @).
+// Full roster: env-configured users plus profiles created through onboarding
+// (data/onboarding.json). Env wins on order so USERS[0]-style defaults keep
+// pointing at the configured primary user. Read per-call, not cached — the
+// onboarding flow adds profiles at runtime.
+export function rosterEmails(): string[] {
+  return [...new Set([...USERS, ...onboardingProfilesSync().map((p) => p.email)])];
+}
+
+// Friendly display name for an email — the configured name, else the
+// onboarding-profile name, else the local-part of the address.
 export function displayName(email: string): string {
-  return NAMES[email] || email.split("@")[0];
+  if (NAMES[email]) return NAMES[email];
+  const stored = onboardingProfilesSync().find((p) => p.email === email)?.name;
+  return stored || email.split("@")[0];
 }
 
 // Gravatar avatar URL for an email — shows the user's real photo if they have a
@@ -55,10 +66,17 @@ export function gravatar(email: string): string {
 }
 
 export function userRoster(): { email: string; name: string; avatar: string }[] {
-  return USERS.map((email) => ({
+  // Photo uploaded during onboarding beats Gravatar; served by
+  // GET /api/avatars/<file> out of data/avatars/.
+  const uploaded = new Map(
+    onboardingProfilesSync()
+      .filter((p) => p.avatar)
+      .map((p) => [p.email, `/api/avatars/${p.avatar}`]),
+  );
+  return rosterEmails().map((email) => ({
     email,
     name: displayName(email),
-    avatar: gravatar(email),
+    avatar: uploaded.get(email) ?? gravatar(email),
   }));
 }
 
@@ -85,7 +103,7 @@ export function userAssignments(): Record<string, string> {
 // Assign (or, with user=null, clear) the tag for a tmux session name. Unknown
 // emails are rejected so a typo can't strand a session under a phantom user.
 export function assignUser(tmuxName: string, user: string | null): boolean {
-  if (user && !USERS.includes(user)) return false;
+  if (user && !rosterEmails().includes(user)) return false;
   const all = readAll();
   if (user) all[tmuxName] = user;
   else delete all[tmuxName];

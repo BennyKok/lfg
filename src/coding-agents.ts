@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,7 @@ export type CodingAgentKind =
   | "codex-aisdk"
   | "opencode"
   | "grok"
+  | "cursor"
   | "hermes";
 
 export type CodingAgentSetting = {
@@ -32,7 +33,10 @@ export type CodingAgentStatus = {
   checks: CodingAgentCheck[];
   instructions: string[];
   canAutoSetup: boolean;
+  canLoginInTerminal: boolean;
   setupRunning: boolean;
+  installCommand?: string;
+  loginCommand?: string;
 };
 
 export type CodingAgentInfo = {
@@ -57,6 +61,7 @@ export const CODING_AGENT_KINDS: CodingAgentKind[] = [
   "aisdk",
   "codex-aisdk",
   "grok",
+  "cursor",
   "hermes",
   "opencode",
 ];
@@ -68,12 +73,17 @@ export const CODING_AGENT_LABELS: Record<CodingAgentKind, string> = {
   "codex-aisdk": "codex",
   opencode: "opencode",
   grok: "grok",
+  cursor: "cursor",
   hermes: "hermes",
 };
 
 const CONFIG_PATH = join(PATHS.data, "coding-agents.json");
 const setupRuns = new Map<CodingAgentKind, Promise<void>>();
 const systemSetupRuns = new Map<string, Promise<void>>();
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
 
 function readJson<T>(path: string): T | null {
   try {
@@ -163,6 +173,36 @@ function grokPath(): string | null {
   ]);
 }
 
+function isGrokAgentPath(path: string): boolean {
+  try {
+    const real = realpathSync(path);
+    return real.includes("/.grok/") || real.endsWith("/grok-linux-x86_64");
+  } catch {
+    return path.includes("/.grok/");
+  }
+}
+
+function cursorPath(): string | null {
+  const home = userHome();
+  const cursorAgent = rejectGrokAgent(which("cursor-agent", [
+    process.env.LFG_CURSOR_PATH ?? "",
+    `${home}/.local/bin/cursor-agent`,
+    `${home}/.bun/bin/cursor-agent`,
+    "/usr/local/bin/cursor-agent",
+  ]));
+  if (cursorAgent) return cursorAgent;
+  return rejectGrokAgent(which("agent", [
+    `${home}/.local/bin/agent`,
+    `${home}/.bun/bin/agent`,
+    "/usr/local/bin/agent",
+  ]));
+}
+
+function rejectGrokAgent(path: string | null): string | null {
+  if (!path) return null;
+  return isGrokAgentPath(path) ? null : path;
+}
+
 function hermesPath(): string | null {
   const home = userHome();
   return which("hermes", [
@@ -230,15 +270,46 @@ function hasGrokAuth(): boolean {
   return !!process.env.XAI_API_KEY || existsSync(`${home}/.grok`);
 }
 
+function hasCursorAuth(): boolean {
+  const home = userHome();
+  return !!process.env.CURSOR_API_KEY || existsSync(`${home}/.cursor`);
+}
+
 function hasHermesConfig(): boolean {
   const home = userHome();
   return !!process.env.LFG_HERMES_PROVIDER || existsSync(`${home}/.hermes`);
+}
+
+function installCommandFor(kind: CodingAgentKind): string | null {
+  if (kind === "claude" || kind === "aisdk") return "curl -fsSL https://claude.ai/install.sh | bash";
+  if (kind === "codex" || kind === "codex-aisdk") return "bun add -g @openai/codex";
+  if (kind === "opencode") return "bun add -g opencode-ai";
+  if (kind === "grok") return "curl -fsSL https://x.ai/cli/install.sh | bash";
+  if (kind === "cursor") return "curl -fsSL https://cursor.com/install | bash";
+  if (kind === "hermes") return "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash";
+  return null;
+}
+
+function loginCommandPartsFor(kind: CodingAgentKind): string[] | null {
+  if (kind === "claude" || kind === "aisdk") return [claudePath() ?? "claude"];
+  if (kind === "codex" || kind === "codex-aisdk") return [codexPath() ?? "codex"];
+  if (kind === "opencode") return [opencodePath() ?? "opencode"];
+  if (kind === "grok") return [grokPath() ?? "grok"];
+  if (kind === "cursor") return [cursorPath() ?? "cursor-agent", "login"];
+  if (kind === "hermes") return [hermesPath() ?? "hermes"];
+  return null;
+}
+
+export function loginCommandFor(kind: CodingAgentKind): string | null {
+  const parts = loginCommandPartsFor(kind);
+  return parts ? parts.map(shellQuote).join(" ") : null;
 }
 
 function statusFor(kind: CodingAgentKind): CodingAgentStatus {
   const checks: CodingAgentCheck[] = [];
   const instructions: string[] = [];
   let canAutoSetup = true;
+  let canLoginInTerminal = true;
 
   const addBinary = (label: string, path: string | null) => {
     checks.push({ label, ok: !!path, detail: path ?? "not found" });
@@ -258,6 +329,10 @@ function statusFor(kind: CodingAgentKind): CodingAgentStatus {
   } else if (kind === "opencode") {
     addBinary("OpenCode CLI", opencodePath());
     instructions.push("Install/authenticate OpenCode, then verify `opencode` works from this user.");
+  } else if (kind === "cursor") {
+    addBinary("Cursor CLI", cursorPath());
+    addAuth("Cursor auth", hasCursorAuth(), "run `cursor-agent login` once or set CURSOR_API_KEY");
+    instructions.push("Install Cursor CLI, then run `cursor-agent login` and sign in, or set CURSOR_API_KEY.");
   } else if (kind === "hermes") {
     addBinary("Hermes CLI", hermesPath());
     addAuth("Hermes config", hasHermesConfig(), "set LFG_HERMES_PROVIDER if your install needs it");
@@ -266,7 +341,6 @@ function statusFor(kind: CodingAgentKind): CodingAgentStatus {
     addBinary("Grok CLI", grokPath());
     addAuth("Grok auth", hasGrokAuth(), "run `grok` once or set XAI_API_KEY");
     instructions.push("Install Grok, then run `grok` once and sign in, or set XAI_API_KEY.");
-    canAutoSetup = false;
   }
 
   return {
@@ -274,7 +348,10 @@ function statusFor(kind: CodingAgentKind): CodingAgentStatus {
     checks,
     instructions,
     canAutoSetup,
+    canLoginInTerminal,
     setupRunning: setupRuns.has(kind),
+    installCommand: installCommandFor(kind) ?? undefined,
+    loginCommand: loginCommandFor(kind) ?? undefined,
   };
 }
 
@@ -368,6 +445,8 @@ function setupEnvFor(kind: CodingAgentKind): Record<string, string> | null {
   if (kind === "claude" || kind === "aisdk") return { LFG_INSTALL_CLAUDE: "1" };
   if (kind === "codex" || kind === "codex-aisdk") return { LFG_INSTALL_CODEX: "1" };
   if (kind === "opencode") return { LFG_INSTALL_OPENCODE: "1" };
+  if (kind === "grok") return { LFG_INSTALL_GROK: "1" };
+  if (kind === "cursor") return { LFG_INSTALL_CURSOR: "1" };
   if (kind === "hermes") return { LFG_INSTALL_HERMES: "1" };
   return null;
 }

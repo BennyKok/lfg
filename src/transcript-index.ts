@@ -302,45 +302,85 @@ export async function indexedMessagePage(
   init();
   const d = database();
   const st = statSync(path);
-  let cursor = cursorFor(path);
-  if (!cursor) return null;
+  const cursor = cursorFor(path);
+  if (!cursor) {
+    enqueueTranscriptIndex(path, sessionId);
+    return null;
+  }
   const lag = st.size - cursor.offset;
   const catchUpBytes = opts.catchUpBytes ?? 256 * 1024;
   if (lag > 0) {
-    if (lag > catchUpBytes) {
-      enqueueTranscriptIndex(path, sessionId);
-      return null;
-    }
-    await indexTranscript(path, sessionId);
-    cursor = cursorFor(path);
-    if (!cursor || cursor.offset < st.size) return null;
+    // Never index inline on the read path: an FTS write here can stall the
+    // page for seconds behind the background indexer's write lock. Serve the
+    // indexed rows and parse the small un-indexed tail read-only below; the
+    // background queue makes the index itself catch up.
+    enqueueTranscriptIndex(path, sessionId);
+    if (lag > catchUpBytes) return null;
   }
 
   const limit = Math.max(1, Math.min(500, opts.limit ?? 220));
   const before = Math.max(0, Math.min(opts.before ?? st.size + 1, st.size + 1));
-  const rows = d
-    .query<IndexedMessageRow, [string, number, number]>(`
-      SELECT id, message_id, role, kind, ts, text, byte_offset
-      FROM transcript_messages
-      WHERE path = ? AND byte_offset < ?
-      ORDER BY byte_offset DESC, id DESC
-      LIMIT ?
-    `)
-    .all(path, before, limit);
-  if (!rows.length) return { messages: [], nextBefore: null, total: 0 };
+
+  const tail: IndexedMessageRow[] = [];
+  if (lag > 0 && before > cursor.offset) {
+    const bytes = new Uint8Array(await Bun.file(path).slice(cursor.offset, st.size).arrayBuffer());
+    // Ignore a partial trailing line still being appended by the agent.
+    const scanEnd = bytes.lastIndexOf(10) + 1;
+    const decoder = new TextDecoder();
+    for (let lineStart = 0; lineStart < scanEnd; ) {
+      let lineEnd = lineStart;
+      while (lineEnd < scanEnd && bytes[lineEnd] !== 10) lineEnd++;
+      if (lineEnd > lineStart) {
+        const lineOffset = cursor.offset + lineStart;
+        if (lineOffset < before) {
+          const line = decoder.decode(bytes.subarray(lineStart, lineEnd));
+          normalizeLineMessages(line)
+            .filter(indexableMessage)
+            .forEach((msg, index) => {
+              tail.push({
+                id: `${path}\0${lineOffset}\0${index}`,
+                message_id: msg.id,
+                role: msg.role,
+                kind: msg.kind,
+                ts: msg.ts,
+                text: clippedText(msg),
+                byte_offset: lineOffset,
+              });
+            });
+        }
+      }
+      lineStart = lineEnd + 1;
+    }
+  }
+
+  const keptTail = tail.slice(Math.max(0, tail.length - limit));
+  const dbLimit = limit - keptTail.length;
+  const rows = dbLimit > 0
+    ? d
+      .query<IndexedMessageRow, [string, number, number]>(`
+        SELECT id, message_id, role, kind, ts, text, byte_offset
+        FROM transcript_messages
+        WHERE path = ? AND byte_offset < ?
+        ORDER BY byte_offset DESC, id DESC
+        LIMIT ?
+      `)
+      .all(path, before, dbLimit)
+    : [];
+  if (!rows.length && !keptTail.length) return { messages: [], nextBefore: null, total: 0 };
   rows.reverse();
-  const nextBefore = rows[0].byte_offset > 0 ? rows[0].byte_offset : null;
+  const oldest = rows[0] ?? keptTail[0];
+  const nextBefore = oldest.byte_offset > 0 ? oldest.byte_offset : null;
   return {
-    messages: rows.map(rowMessage),
+    messages: [...rows, ...keptTail].map(rowMessage),
     nextBefore,
     // Exact visible-message total is cheap in SQLite and keeps compatibility for
     // non-streaming callers that inspect it.
     total:
-      d
+      (d
         .query<{ count: number }, [string]>(
           "SELECT count(*) AS count FROM transcript_messages WHERE path = ?",
         )
-        .get(path)?.count ?? rows.length,
+        .get(path)?.count ?? rows.length) + tail.length,
   };
 }
 

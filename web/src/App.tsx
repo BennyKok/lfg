@@ -11,7 +11,6 @@ import {
   type SimpleFreq,
   type SimpleSchedule,
 } from "./cron";
-import { VoiceOrb } from "./voice-orb";
 import {
   livePosition,
   pauseSpeaking,
@@ -20,6 +19,17 @@ import {
   stopSpeaking,
   useSpeechPlayback,
 } from "./voice-tts";
+import {
+  AUDIO_MODE_PRIMER,
+  endSpeech,
+  feedSpeech,
+  isAudioModeEnabled,
+  setAudioActiveSid,
+  setAudioModeEnabled,
+  stopSpeakingAll,
+  takePrimeToken,
+  useAudioMode,
+} from "./audio-mode";
 import { liveTransportMode, useLiveSocket } from "./useLiveSocket";
 import { ConnectionStatusToasts } from "./ConnectionStatus";
 import type {
@@ -101,6 +111,7 @@ const VoiceCall = lazyWithReload("VoiceCall", () =>
 const BrowserProfiles = lazyWithReload("BrowserProfiles", () => import("./BrowserProfiles"));
 import { Badge } from "@/components/ui/badge";
 import { ImageAnnotator } from "@/components/ImageAnnotator";
+import { ZoomableImage } from "@/components/ImageLightbox";
 import { SessionDiffBar } from "@/components/SessionDiffView";
 import { Textarea } from "@/components/ui/textarea";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
@@ -161,8 +172,11 @@ type CodingAgentInfo = {
     configured: boolean;
     setupRunning: boolean;
     canAutoSetup: boolean;
+    canLoginInTerminal: boolean;
     checks: { label: string; ok: boolean; detail?: string }[];
     instructions: string[];
+    installCommand?: string;
+    loginCommand?: string;
   };
 };
 
@@ -199,7 +213,7 @@ type AgentReport = {
 };
 
 type Session = {
-  agent?: "claude" | "aisdk" | "codex" | "codex-aisdk" | "opencode" | "grok" | string;
+  agent?: "claude" | "aisdk" | "codex" | "codex-aisdk" | "opencode" | "grok" | "cursor" | string;
   pid?: number;
   cmd?: string;
   cwd?: string;
@@ -402,6 +416,14 @@ type SkillCatalogItem = {
   path: string;
 };
 
+// Mirrors OnboardingState in src/onboarding.ts — first-run state stored
+// server-side (data/onboarding.json) so all browsers/devices agree.
+type OnboardingState = {
+  profiles: { email: string; name: string; createdAt: string; avatar?: string }[];
+  steps: { profile: boolean; agents: boolean; repo: boolean; firstSession: boolean };
+  completedAt: string | null;
+};
+
 type BootstrapPayload = {
   agents?: Agent[] | null;
   codingAgents?: CodingAgentInfo[] | null;
@@ -416,6 +438,7 @@ type BootstrapPayload = {
     suggestions?: PatternSuggestion[] | null;
     runs?: SessionBrainRun[] | null;
   };
+  onboarding?: OnboardingState | null;
 };
 
 type SlashSkillState = {
@@ -425,12 +448,31 @@ type SlashSkillState = {
 };
 
 const CLAUDE_MODELS = ["sonnet", "opus", "haiku", "fable"];
-const CODEX_MODELS = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"];
+const CODEX_MODELS = [
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5.3-codex-spark",
+];
 // Models the one-shot AI-SDK test option supports (the provider maps these
 // aliases). Kept in sync with the AISDK_MODELS allowlist in serve.ts.
 const AISDK_MODELS = ["fable", "opus", "sonnet", "haiku"];
-const CODEX_AISDK_MODELS = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"];
+const CODEX_AISDK_MODELS = [
+  "gpt-5.5",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5.3-codex-spark",
+];
 const GROK_MODELS = ["grok-composer-2.5-fast", "grok-build"];
+const CURSOR_MODELS = [
+  "auto",
+  "composer-2.5",
+  "gpt-5",
+  "gpt-5.5",
+  "claude-opus-4.8",
+  "gemini-3.1-pro",
+  "grok-4.3",
+];
 const HERMES_MODELS = [
   "nousresearch/hermes-4-405b",
   "nousresearch/hermes-4-70b",
@@ -470,7 +512,7 @@ function savedThinkingLevel(): ThinkingLevel {
   return THINKING_LEVELS.includes(value as ThinkingLevel) ? (value as ThinkingLevel) : "medium";
 }
 
-type AgentKind = "claude" | "aisdk" | "codex" | "codex-aisdk" | "opencode" | "grok" | "hermes";
+type AgentKind = "claude" | "aisdk" | "codex" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "hermes";
 
 // Which agents honor a thinking/reasoning-effort level. Claude (CLI + ai-sdk)
 // takes an `effort`; Codex (CLI + ai-sdk) takes a `reasoning_effort` — both
@@ -495,6 +537,7 @@ const AGENT_MODELS: Record<AgentKind, string[]> = {
   codex: CODEX_MODELS,
   "codex-aisdk": CODEX_AISDK_MODELS,
   grok: GROK_MODELS,
+  cursor: CURSOR_MODELS,
   hermes: HERMES_MODELS,
   opencode: OPENCODE_MODELS,
 };
@@ -504,6 +547,7 @@ const AGENT_DEFAULT_MODEL: Record<AgentKind, string> = {
   codex: "gpt-5.5",
   "codex-aisdk": "gpt-5.5",
   grok: "grok-composer-2.5-fast",
+  cursor: "auto",
   hermes: "nousresearch/hermes-4-405b",
   opencode: "opencode-go/deepseek-v4-flash",
 };
@@ -515,6 +559,7 @@ const AGENT_OPTIONS: { key: AgentKind; label: string; Icon: typeof Sparkles }[] 
   { key: "aisdk", label: "claude", Icon: Sparkles },
   { key: "codex-aisdk", label: "codex", Icon: Braces },
   { key: "grok", label: "grok", Icon: Bot },
+  { key: "cursor", label: "cursor", Icon: TerminalSquare },
   { key: "hermes", label: "hermes", Icon: Sparkles },
   { key: "opencode", label: "opencode", Icon: Boxes },
 ];
@@ -524,6 +569,7 @@ const AGENT_OPTIONS: { key: AgentKind; label: string; Icon: typeof Sparkles }[] 
 function agentIconSrc(agent?: string): string {
   if (agent === "codex" || agent === "codex-aisdk") return "/agent-codex.svg";
   if (agent === "grok") return "/agent-grok.svg";
+  if (agent === "cursor") return "/agent-cursor.svg";
   if (agent === "hermes") return "/agent-hermes.svg?v=20260629";
   if (agent === "opencode") return "/agent-opencode.svg";
   return "/agent-claude.svg";
@@ -531,6 +577,7 @@ function agentIconSrc(agent?: string): string {
 function agentIconAlt(agent?: string): string {
   if (agent === "codex" || agent === "codex-aisdk") return "Codex";
   if (agent === "grok") return "Grok";
+  if (agent === "cursor") return "Cursor";
   if (agent === "hermes") return "Hermes";
   if (agent === "opencode") return "OpenCode";
   return "Claude";
@@ -2122,7 +2169,7 @@ export function RootErrorBoundary({ children }: { children: ReactNode }) {
   return (
     <ErrorBoundary
       fallback={(reset) => (
-        <div className="flex h-dvh flex-col items-center justify-center gap-3 bg-background p-6 text-center text-foreground">
+        <div className={cn(APP_SHELL_CLASS, "items-center justify-center gap-3 p-6 text-center")}>
           <div className="text-sm font-semibold">lfg hit an unexpected error</div>
           <div className="flex gap-2">
             <Button size="sm" variant="outline" onClick={reset}>
@@ -2425,7 +2472,19 @@ function useLiveSessionStream(sessions: Session[], streamIds: string[]) {
       if (!payload || !active.has(payload.sid)) return;
       const sid = payload.sid;
       const part = payload.part;
+      // Audio mode: speak the active session's reply as it streams, and flush the
+      // buffered tail when the turn ends. Placed before the text-delta guard so
+      // text-end (which the guard drops) still finalizes speech.
+      if (part?.type === "text-end" && part.id) {
+        endSpeech(sid, part.id);
+      }
       if (part?.type !== "text-delta" || !part.id) return;
+      feedSpeech(
+        sid,
+        part.id,
+        part.reset ? (part.text ?? "") : (part.delta ?? ""),
+        !!part.reset,
+      );
       setLoadingBySid((prev) => ({ ...prev, [sid]: false }));
       const timers = thinkTimerRef.current;
       if (timers[sid]) {
@@ -2827,6 +2886,10 @@ export function App() {
   const [setupChecks, setSetupChecks] = useState<SetupCheckGroup[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [users, setUsers] = useState<User[]>([]);
+  // Server-side first-run state (profiles/steps/completion) + whether the
+  // full-screen onboarding flow is showing. See loadCore for the gate.
+  const [onboarding, setOnboarding] = useState<OnboardingState | null>(null);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   const [repos, setRepos] = useState<Repo[]>([]);
   // Legacy report-view selector — retained so the old AgentView effects compile,
   // but the live UI now switches on `tab` (Live / Auto), so this stays "__live".
@@ -2916,6 +2979,7 @@ export function App() {
       // to the full orb-stack clearance.
       document.documentElement.classList.remove("lfg-keyboard-open");
       document.documentElement.style.removeProperty("--lfg-keyboard-height");
+      document.documentElement.style.removeProperty("--lfg-visual-offset-top");
       setKeyboardOpen(false);
     };
     if (!vv) {
@@ -2929,15 +2993,23 @@ export function App() {
       const kb = Math.max(0, window.innerHeight - vv.height);
       const open = kb > 120;
       const el = rootRef.current;
-      const measuredHeight = `${Math.ceil(vv.height)}px`;
-      document.documentElement.style.setProperty("--lfg-app-height", measuredHeight);
+      const visualHeight = Math.ceil(vv.height);
+      const offsetTopPx = Math.max(0, Math.round(vv.offsetTop));
+      const measuredHeight = `${visualHeight}px`;
+      const shellHeight =
+        tab === "live" && isMobile && open
+          ? `${visualHeight + offsetTopPx}px`
+          : measuredHeight;
+      const offsetTop = `${offsetTopPx}px`;
+      document.documentElement.style.setProperty("--lfg-app-height", shellHeight);
+      document.documentElement.style.setProperty("--lfg-visual-offset-top", offsetTop);
       if (el) {
         // Outside Terminal, leave keyboard-open layout to the browser/Vaul. When
         // the keyboard is closed, always override `h-dvh` with the measured
         // visual viewport so foreground-return stale `dvh` cannot leave a white
         // strip until the next pinch/zoom/layout event.
-        if (tab === "term" || !open) {
-          el.style.height = measuredHeight;
+        if (tab === "term" || !open || (tab === "live" && isMobile)) {
+          el.style.height = shellHeight;
         } else {
           el.style.height = "";
         }
@@ -2984,10 +3056,23 @@ export function App() {
       document.removeEventListener("visibilitychange", onVisible);
       clear();
     };
-  }, [loading, tab]);
+  }, [isMobile, loading, tab]);
 
   const loadCore = useCallback(async () => {
     const payload = await fetchBootstrap<BootstrapPayload>();
+    setOnboarding(payload.onboarding ?? null);
+    // First-run gate: a brand-new install has no roster (env or stored
+    // profiles), no sessions, and no completed onboarding. The flag is sticky
+    // (only ever set true here) so creating a profile/session mid-flow doesn't
+    // yank the flow away — OnboardingFlow dismisses it via onDone.
+    if (
+      payload.onboarding &&
+      !payload.onboarding.completedAt &&
+      !(payload.users?.length) &&
+      !(payload.sessions?.length)
+    ) {
+      setShowOnboarding(true);
+    }
     setAgents(payload.agents ?? []);
     setCodingAgents(payload.codingAgents ?? []);
     // Guard sessions to [] — it feeds `allLiveSessions`/`liveSessions` which
@@ -4095,6 +4180,57 @@ export function App() {
     );
   }
 
+  function loginCodingAgent(kind: AgentKind) {
+    toast.promise(
+      api<{ terminalSession: string; command: string }>(`/api/coding-agents/${kind}/login-terminal`, {
+        method: "POST",
+      }).then((payload) => {
+        localStorage.setItem("lfg_term_session", payload.terminalSession || `login-${kind}`);
+        window.dispatchEvent(new Event("lfg:term-session"));
+        setTab("term");
+        window.setTimeout(() => void refreshCodingAgents(), 3000);
+      }),
+      {
+        loading: "Opening login terminal…",
+        success: "Login terminal opened",
+        error: (e) => (e instanceof Error ? e.message : "Couldn't open login terminal"),
+      },
+    );
+  }
+
+  if (loading) {
+    return <AppShellSkeleton />;
+  }
+
+  // Brand-new install (no roster, no sessions, onboarding never completed):
+  // walk through profile → agents → first session. State is service-ized
+  // server-side (data/onboarding.json via /api/onboarding), so a second
+  // browser/device skips straight past this once it's done anywhere.
+  if (showOnboarding) {
+    return (
+      <OnboardingFlow
+        onboarding={onboarding}
+        codingAgents={codingAgents}
+        repos={repos}
+        identity={identity}
+        onProfileCreated={(email, roster) => {
+          if (roster.length) setUsers(roster);
+          setIdentity(email);
+          changeUserFilter(email);
+        }}
+        onRefreshAgents={() => void refreshCodingAgents()}
+        onDone={(sid) => {
+          setShowOnboarding(false);
+          if (sid) {
+            markCreatedSid(sid);
+            setTab("live");
+          }
+          void loadCore();
+        }}
+      />
+    );
+  }
+
   // First start on this browser: ask who you are before showing the app. Only
   // gates when a roster exists and no profile is chosen yet — once picked it's
   // remembered in localStorage (lfg_user) so we don't ask again.
@@ -4111,19 +4247,29 @@ export function App() {
   }
 
   const mainBottomPadding =
-    tab === "live" && !keyboardOpen
-      ? "pb-[var(--lfg-above-orb)] md:pb-3"
+    tab === "live"
+      ? keyboardOpen
+        ? "pb-[calc(var(--lfg-inline-composer-height,var(--lfg-composer-clear))+0.75rem)] md:pb-3"
+        : "pb-[var(--lfg-above-orb)] md:pb-3"
       : "pb-3";
   const liveDesktopWorkspace = tab === "live" && isWide;
+  const liveKeyboardShiftStyle: CSSProperties | undefined =
+    tab === "live" && isMobile && keyboardOpen
+      ? { transform: "translateY(var(--lfg-visual-offset-top, 0px))" }
+      : undefined;
 
   return (
     <AskProvider>
-    <div ref={rootRef} className="flex h-dvh flex-col overflow-hidden bg-background text-foreground">
+    <div ref={rootRef} className={APP_SHELL_CLASS}>
       {/* Two floating "islands" — brand + Live on the left, an icon-only
           Settings button on the right — mirroring the bottom nav's
           gradient-bordered pill so the whole chrome reads as one matched set.
           Auto + extension tabs now live inside the Settings page. */}
-      <header className="z-40 flex shrink-0 items-center justify-between gap-2 px-3 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))]">
+      {liveDesktopWorkspace ? null : (
+      <header
+        className="z-40 flex shrink-0 items-center justify-between gap-2 px-3 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))]"
+        style={liveKeyboardShiftStyle}
+      >
         <NavIsland className="shrink-0">
           <div className="flex h-11 items-center rounded-full bg-background/80 px-1.5 backdrop-blur-xl">
             {tab === "live" ? (
@@ -4174,12 +4320,6 @@ export function App() {
                 />
               </>
             ) : null}
-            {!callOpen ? (
-              <VoiceOrb
-                hidden={false}
-                onOpenCall={() => setCallOpen(true)}
-              />
-            ) : null}
             <AskNavButton active={tab === "ask"} onOpen={() => setTab("ask")} />
             <IconTab
               active={tab !== "live"}
@@ -4190,6 +4330,7 @@ export function App() {
           </div>
         </NavIsland>
       </header>
+      )}
 
       {error ? (
         <div className="mx-3 mt-3 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -4203,6 +4344,7 @@ export function App() {
           "min-h-0 flex-1 px-3 pt-3",
           liveDesktopWorkspace ? "overflow-hidden pb-3" : `overflow-y-auto ${mainBottomPadding}`,
         )}
+        style={liveKeyboardShiftStyle}
       >
         {tab === "live" && isMobile && projectFilter === MOBILE_NOTEPAD_FILTER ? (
           <MobileNotepadHome
@@ -4219,6 +4361,11 @@ export function App() {
             users={users}
             userFilter={userFilter}
             projectFilter={projectFilter}
+            projectOptions={projectOptions}
+            onProjectChange={setProjectFilter}
+            onUserChange={changeUserFilter}
+            onOpenSettings={() => setTab("settings")}
+            onOpenAsk={() => setTab("ask")}
             messagesBySid={liveStream.messagesBySid}
             busyBySid={liveStream.busyBySid}
             promptsBySid={liveStream.promptsBySid}
@@ -4276,6 +4423,7 @@ export function App() {
             agents={codingAgents}
             onVisibleChange={(kind, visible) => void setCodingAgentVisible(kind, visible)}
             onSetup={setupCodingAgent}
+            onLogin={loginCodingAgent}
             onSetupCheck={runSetupCheck}
             onRefresh={() => void refreshCodingAgents()}
           />
@@ -4609,7 +4757,7 @@ function FloatingSessionAudio({
 
           <button
             type="button"
-            onClick={stopSpeaking}
+            onClick={stopSpeakingAll}
             aria-label="Close audio controls"
             title="Close"
             className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -4820,6 +4968,16 @@ function usageProviderKind(agent: AgentKind): string {
   return agent;
 }
 
+function activityRingOrder(windows: UsageWindow[]): UsageWindow[] {
+  const rank = (label: string) => {
+    const l = label.toLowerCase();
+    if (l.includes("week") || l.includes("7 day")) return 0;
+    if (l.includes("5") && (l.includes("hr") || l.includes("hour"))) return 1;
+    return 2;
+  };
+  return [...windows].sort((a, b) => rank(a.label) - rank(b.label));
+}
+
 function UsageRings({
   windows,
   size = 22,
@@ -4882,7 +5040,7 @@ function UsageRingsButton({
   provider: ProviderUsage;
   className?: string;
 }) {
-  const windows = provider.windows ?? [];
+  const windows = activityRingOrder(provider.windows ?? []);
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -5087,6 +5245,460 @@ function ProjectFilterMenu({
         ))}
       </select>
     </label>
+  );
+}
+
+// First-run onboarding for a brand-new install (no roster, no sessions).
+// Three steps — create a user profile, connect at least one coding agent,
+// start a first session — each persisted server-side via /api/onboarding so
+// progress survives reloads and other devices. Steps can be skipped; skipping
+// to the end still marks onboarding completed so the flow never nags again.
+function OnboardingFlow({
+  onboarding,
+  codingAgents,
+  repos,
+  identity,
+  onProfileCreated,
+  onRefreshAgents,
+  onDone,
+}: {
+  onboarding: OnboardingState | null;
+  codingAgents: CodingAgentInfo[];
+  repos: Repo[];
+  identity: string | null;
+  onProfileCreated: (email: string, roster: User[]) => void;
+  onRefreshAgents: () => void;
+  onDone: (sessionId?: string) => void;
+}) {
+  type Step = "profile" | "agents" | "repo" | "session";
+  const steps = onboarding?.steps;
+  const [step, setStep] = useState<Step>(() =>
+    !steps?.profile
+      ? "profile"
+      : !steps?.agents
+        ? "agents"
+        : !steps?.repo
+          ? "repo"
+          : "session",
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Step 1 — profile (+ optional photo; uploaded right after the profile is
+  // created, since the avatar is keyed to the profile's email server-side)
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [photo, setPhoto] = useState<File | null>(null);
+  const photoUrl = useMemo(() => (photo ? URL.createObjectURL(photo) : null), [photo]);
+  useEffect(() => () => {
+    if (photoUrl) URL.revokeObjectURL(photoUrl);
+  }, [photoUrl]);
+
+  // Step 3 — repo: local list so a clone shows up immediately (App refreshes
+  // its own copy from bootstrap when the flow finishes)
+  const [repoList, setRepoList] = useState<Repo[]>(repos);
+  useEffect(() => {
+    if (repos.length) setRepoList((prev) => (prev.length ? prev : repos));
+  }, [repos]);
+  const [cloneUrl, setCloneUrl] = useState("");
+
+  // Step 4 — first session
+  const [cwd, setCwd] = useState(() => localStorage.getItem("lfg_v2_repo") || "");
+  const [prompt, setPrompt] = useState("");
+  const repoCwd = cwd || repoList[0]?.cwd || "";
+
+  const configuredAgents = codingAgents.filter((a) => a.status.configured);
+  // Agent for the first session: Claude when it's connected (the default
+  // recommendation), else the first configured agent, else whatever the
+  // backend defaults to.
+  const [sessionAgent, setSessionAgent] = useState("");
+  const selectableAgents = configuredAgents.length ? configuredAgents : codingAgents;
+  const effectiveAgent =
+    sessionAgent ||
+    (selectableAgents.some((a) => a.key === "claude")
+      ? "claude"
+      : selectableAgents[0]?.key || "claude");
+
+  // Persist step progress server-side; best-effort — a failed patch shouldn't
+  // block the user from moving forward locally.
+  const markStep = (patch: { steps?: Partial<OnboardingState["steps"]>; completed?: boolean }) =>
+    api("/api/onboarding", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }).catch(() => undefined);
+
+  async function submitProfile() {
+    setBusy(true);
+    setError(null);
+    try {
+      let res = await api<{ state: OnboardingState; users: User[] }>(
+        "/api/onboarding/profile",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: email.trim(), name: name.trim() }),
+        },
+      );
+      if (photo) {
+        // Best-effort: a failed photo upload shouldn't block onboarding.
+        res = await api<{ state: OnboardingState; users: User[] }>(
+          `/api/onboarding/avatar?email=${encodeURIComponent(email.trim().toLowerCase())}`,
+          { method: "POST", headers: { "Content-Type": photo.type }, body: photo },
+        ).catch(() => res);
+      }
+      onProfileCreated(email.trim().toLowerCase(), res.users ?? []);
+      setStep("agents");
+      onRefreshAgents();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't save profile");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function continueFromAgents() {
+    void markStep({ steps: { agents: true } });
+    setStep("repo");
+  }
+
+  async function cloneRepo() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api<{ repo: Repo; repos: Repo[] }>("/api/onboarding/repo", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: cloneUrl.trim() }),
+      });
+      setRepoList(res.repos ?? []);
+      if (res.repo?.cwd) setCwd(res.repo.cwd);
+      setCloneUrl("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Clone failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function continueFromRepo() {
+    void markStep({ steps: { repo: true } });
+    setStep("session");
+  }
+
+  async function setupAgent(kind: string) {
+    setError(null);
+    try {
+      await api(`/api/coding-agents/${kind}/setup`, { method: "POST" });
+      window.setTimeout(onRefreshAgents, 2000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Setup failed");
+    }
+  }
+
+  async function createFirstSession() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api<{ sessionId?: string }>("/api/sessions/new", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          cwd: repoCwd || undefined,
+          prompt: prompt.trim() || "Give me a quick tour of this repo.",
+          user: identity || undefined,
+          agent: effectiveAgent,
+        }),
+      });
+      await markStep({ steps: { firstSession: true }, completed: true });
+      onDone(res?.sessionId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't start the session");
+      setBusy(false);
+    }
+  }
+
+  function skipAll() {
+    void markStep({ completed: true });
+    onDone();
+  }
+
+  const labels: [Step, string][] = [
+    ["profile", "Profile"],
+    ["agents", "Agents"],
+    ["repo", "Repo"],
+    ["session", "Session"],
+  ];
+  const stepIndex = labels.findIndex(([key]) => key === step);
+
+  return (
+    <div className="flex h-dvh flex-col items-center justify-center bg-background px-6 text-foreground">
+      <div className="w-full max-w-md">
+        <div className="mb-4 flex items-center justify-between">
+          <img src="/icon.svg" alt="lfg" className="size-7 shrink-0" />
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            {labels.map(([key, label], i) => (
+              <span key={key} className="flex items-center gap-1.5">
+                {i > 0 && <span className="opacity-40">›</span>}
+                <span className={i === stepIndex ? "font-medium text-foreground" : ""}>
+                  {label}
+                </span>
+              </span>
+            ))}
+          </div>
+        </div>
+
+        {step === "profile" && (
+          <>
+            <h1 className="text-xl font-semibold">Welcome to lfg</h1>
+            <p className="mb-5 mt-1 text-sm text-muted-foreground">
+              Set up your profile — sessions you start are tagged to you.
+            </p>
+            <div className="flex flex-col gap-2">
+              <label className="mb-1 flex cursor-pointer items-center gap-3 self-start">
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/gif"
+                  className="hidden"
+                  onChange={(e) => setPhoto(e.target.files?.[0] ?? null)}
+                />
+                {photoUrl ? (
+                  <img
+                    src={photoUrl}
+                    alt=""
+                    className="size-14 shrink-0 rounded-full border border-border object-cover"
+                  />
+                ) : (
+                  <span className="flex size-14 shrink-0 items-center justify-center rounded-full border border-dashed border-border bg-muted/40">
+                    <UserRound className="size-5 text-muted-foreground" />
+                  </span>
+                )}
+                <span className="text-sm text-muted-foreground">
+                  {photo ? photo.name : "Add a photo (optional)"}
+                </span>
+              </label>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Name"
+                autoFocus
+                className="rounded-xl border border-border bg-muted/40 px-3 py-2.5 text-sm outline-none focus:border-foreground/30"
+              />
+              <input
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && email.trim()) void submitProfile();
+                }}
+                placeholder="Email"
+                type="email"
+                inputMode="email"
+                className="rounded-xl border border-border bg-muted/40 px-3 py-2.5 text-sm outline-none focus:border-foreground/30"
+              />
+              <button
+                type="button"
+                disabled={busy || !email.trim()}
+                onClick={() => void submitProfile()}
+                className="mt-2 flex items-center justify-center gap-2 rounded-xl bg-foreground px-3 py-2.5 text-sm font-medium text-background transition-opacity disabled:opacity-50"
+              >
+                {busy ? <Loader2 className="size-4 animate-spin" /> : null}
+                Continue
+              </button>
+            </div>
+          </>
+        )}
+
+        {step === "agents" && (
+          <>
+            <h1 className="text-xl font-semibold">Connect an agent</h1>
+            <p className="mb-5 mt-1 text-sm text-muted-foreground">
+              Sessions run on a coding agent. Connect at least one — you can add
+              more later in Settings.
+            </p>
+            <div className="flex max-h-72 flex-col gap-2 overflow-y-auto">
+              {codingAgents.map((a) => (
+                <div
+                  key={a.key}
+                  className="flex items-center gap-3 rounded-xl border border-border bg-muted/40 px-3 py-2.5"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">{a.label}</span>
+                    <span className="block truncate text-xs text-muted-foreground">
+                      {a.status.configured
+                        ? "Connected"
+                        : a.status.checks.find((c) => !c.ok)?.label || "Not set up"}
+                    </span>
+                  </span>
+                  {a.status.configured ? (
+                    <Check className="size-4 shrink-0 text-emerald-500" />
+                  ) : a.status.canAutoSetup ? (
+                    <button
+                      type="button"
+                      disabled={a.status.setupRunning}
+                      onClick={() => void setupAgent(a.key)}
+                      className="shrink-0 rounded-lg border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted disabled:opacity-50"
+                    >
+                      {a.status.setupRunning ? "Setting up…" : "Set up"}
+                    </button>
+                  ) : null}
+                </div>
+              ))}
+              {!codingAgents.length && (
+                <p className="text-sm text-muted-foreground">
+                  Checking installed agents…
+                </p>
+              )}
+            </div>
+            <div className="mt-4 flex items-center gap-2">
+              <button
+                type="button"
+                onClick={onRefreshAgents}
+                className="rounded-xl border border-border px-3 py-2.5 text-sm hover:bg-muted"
+              >
+                Refresh
+              </button>
+              <button
+                type="button"
+                onClick={continueFromAgents}
+                className="flex-1 rounded-xl bg-foreground px-3 py-2.5 text-sm font-medium text-background"
+              >
+                {configuredAgents.length ? "Continue" : "Continue anyway"}
+              </button>
+            </div>
+          </>
+        )}
+
+        {step === "repo" && (
+          <>
+            <h1 className="text-xl font-semibold">Set up a repository</h1>
+            <p className="mb-5 mt-1 text-sm text-muted-foreground">
+              Agents work inside git repos. Clone one to get started, or continue
+              with what's already on this machine.
+            </p>
+            <div className="flex flex-col gap-2">
+              {repoList.length > 0 && (
+                <div className="flex max-h-40 flex-col gap-2 overflow-y-auto">
+                  {repoList.map((r) => (
+                    <div
+                      key={r.cwd}
+                      className="flex items-center gap-3 rounded-xl border border-border bg-muted/40 px-3 py-2.5"
+                    >
+                      <Folder className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium">{r.name}</span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {r.cwd}
+                        </span>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-2">
+                <input
+                  value={cloneUrl}
+                  onChange={(e) => setCloneUrl(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && cloneUrl.trim()) void cloneRepo();
+                  }}
+                  placeholder="https://github.com/you/repo.git"
+                  className="min-w-0 flex-1 rounded-xl border border-border bg-muted/40 px-3 py-2.5 text-sm outline-none focus:border-foreground/30"
+                />
+                <button
+                  type="button"
+                  disabled={busy || !cloneUrl.trim()}
+                  onClick={() => void cloneRepo()}
+                  className="flex shrink-0 items-center gap-2 rounded-xl border border-border px-3 py-2.5 text-sm font-medium hover:bg-muted disabled:opacity-50"
+                >
+                  {busy ? <Loader2 className="size-4 animate-spin" /> : <GitFork className="size-4" />}
+                  Clone
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={continueFromRepo}
+                className="mt-2 rounded-xl bg-foreground px-3 py-2.5 text-sm font-medium text-background"
+              >
+                {repoList.length ? "Continue" : "Continue without a repo"}
+              </button>
+            </div>
+          </>
+        )}
+
+        {step === "session" && (
+          <>
+            <h1 className="text-xl font-semibold">Start your first session</h1>
+            <p className="mb-5 mt-1 text-sm text-muted-foreground">
+              Pick a repo and an agent, and tell it what to do.
+            </p>
+            <div className="flex flex-col gap-2">
+              {selectableAgents.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {selectableAgents.map((a) => (
+                    <button
+                      key={a.key}
+                      type="button"
+                      onClick={() => setSessionAgent(a.key)}
+                      className={
+                        "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors " +
+                        (effectiveAgent === a.key
+                          ? "border-foreground bg-foreground text-background"
+                          : "border-border bg-muted/40 hover:bg-muted")
+                      }
+                    >
+                      {a.label}
+                      {!a.status.configured && (
+                        <span className="ml-1 opacity-60">(not set up)</span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {repoList.length > 0 && (
+                <select
+                  value={repoCwd}
+                  onChange={(e) => setCwd(e.target.value)}
+                  className="rounded-xl border border-border bg-muted/40 px-3 py-2.5 text-sm outline-none"
+                >
+                  {repoList.map((r) => (
+                    <option key={r.cwd} value={r.cwd}>
+                      {r.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <textarea
+                value={prompt}
+                onChange={(e) => setPrompt(e.target.value)}
+                placeholder="Give me a quick tour of this repo."
+                rows={3}
+                autoFocus
+                className="resize-none rounded-xl border border-border bg-muted/40 px-3 py-2.5 text-sm outline-none focus:border-foreground/30"
+              />
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void createFirstSession()}
+                className="mt-2 flex items-center justify-center gap-2 rounded-xl bg-foreground px-3 py-2.5 text-sm font-medium text-background transition-opacity disabled:opacity-50"
+              >
+                {busy ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+                Start session
+              </button>
+            </div>
+          </>
+        )}
+
+        {error && <p className="mt-3 text-sm text-red-500">{error}</p>}
+
+        <button
+          type="button"
+          onClick={skipAll}
+          className="mt-6 w-full text-center text-xs text-muted-foreground hover:text-foreground"
+        >
+          Skip setup for now
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -5431,11 +6043,21 @@ function LiveView({
   findings = [],
   autoAgents = [],
   onOpenFinding,
+  projectOptions = [],
+  onProjectChange,
+  onUserChange,
+  onOpenSettings,
+  onOpenAsk,
 }: {
   sessions: Session[];
   users: User[];
   userFilter: string;
   projectFilter: string;
+  projectOptions?: string[];
+  onProjectChange?: (v: string) => void;
+  onUserChange?: (v: string) => void;
+  onOpenSettings?: () => void;
+  onOpenAsk?: () => void;
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
@@ -5622,6 +6244,12 @@ function LiveView({
         nameFor={nameFor}
         onOpenFinding={onOpenFinding}
         onNew={onNew}
+        userFilter={userFilter}
+        projectOptions={projectOptions}
+        onProjectChange={onProjectChange}
+        onUserChange={onUserChange}
+        onOpenSettings={onOpenSettings}
+        onOpenAsk={onOpenAsk}
       />
     );
   }
@@ -5738,10 +6366,22 @@ function RailStage({
   nameFor,
   onOpenFinding,
   onNew,
+  userFilter = "__all",
+  projectOptions = [],
+  onProjectChange,
+  onUserChange,
+  onOpenSettings,
+  onOpenAsk,
 }: {
   sessions: Session[];
   users: User[];
   projectFilter: string;
+  userFilter?: string;
+  projectOptions?: string[];
+  onProjectChange?: (v: string) => void;
+  onUserChange?: (v: string) => void;
+  onOpenSettings?: () => void;
+  onOpenAsk?: () => void;
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
@@ -6295,25 +6935,93 @@ function RailStage({
         className="flex h-full min-h-0 shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-card transition-[width] duration-200 ease-ios"
         style={{ width: railCollapsed ? 56 : 280 }}
       >
-        <div className="flex h-10 shrink-0 items-center gap-2 border-b border-border px-2.5">
-          {!railCollapsed ? (
-            <span className="min-w-0 flex-1 truncate text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              Sessions · {sessions.length}
-            </span>
-          ) : null}
-          <button
-            type="button"
-            onClick={() => setRailCollapsed((v) => !v)}
-            aria-label={railCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
-          >
-            {railCollapsed ? (
+        {railCollapsed ? (
+          <div className="flex shrink-0 flex-col items-center gap-1 border-b border-border py-2">
+            <button
+              type="button"
+              onClick={() => setRailCollapsed((v) => !v)}
+              aria-label="Expand sidebar"
+              className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
+            >
               <PanelLeftOpen className="size-4" />
-            ) : (
-              <PanelLeftClose className="size-4" />
-            )}
-          </button>
-        </div>
+            </button>
+            <button
+              type="button"
+              onClick={onNew}
+              aria-label="New session"
+              title="New session"
+              className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
+            >
+              <Plus className="size-4" />
+            </button>
+            {onOpenSettings ? (
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                aria-label="Settings"
+                title="Settings"
+                className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
+              >
+                <Settings className="size-4" />
+              </button>
+            ) : null}
+          </div>
+        ) : (
+          <div className="flex shrink-0 flex-col gap-1.5 border-b border-border px-2 py-2">
+            <div className="flex items-center gap-1.5">
+              <img src="/icon.svg" alt="lfg" className="size-5 shrink-0" />
+              <span className="min-w-0 flex-1 truncate text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Sessions · {sessions.length}
+              </span>
+              <button
+                type="button"
+                onClick={onNew}
+                aria-label="New session"
+                title="New session"
+                className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
+              >
+                <Plus className="size-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setRailCollapsed((v) => !v)}
+                aria-label="Collapse sidebar"
+                className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
+              >
+                <PanelLeftClose className="size-4" />
+              </button>
+            </div>
+            <div className="flex flex-wrap items-center gap-1">
+              {onProjectChange ? (
+                <ProjectFilterMenu
+                  value={projectFilter}
+                  projects={projectOptions}
+                  onChange={onProjectChange}
+                />
+              ) : null}
+              {onUserChange ? (
+                <UserFilterMenu
+                  value={userFilter}
+                  users={users}
+                  onChange={onUserChange}
+                />
+              ) : null}
+              <div className="ml-auto flex items-center gap-0.5">
+                {onOpenAsk ? (
+                  <AskNavButton active={false} onOpen={onOpenAsk} />
+                ) : null}
+                {onOpenSettings ? (
+                  <IconTab
+                    active={false}
+                    onClick={onOpenSettings}
+                    icon={<Settings className="size-[18px]" />}
+                    label="Settings"
+                  />
+                ) : null}
+              </div>
+            </div>
+          </div>
+        )}
         <div className="min-h-0 flex-1 overflow-y-auto px-1.5 py-2">
           {projectFilter === "__all" ? (
             <>
@@ -6879,11 +7587,11 @@ function SkillSlashSuggest({
               idx === selected ? "bg-accent text-accent-foreground" : "hover:bg-accent/70",
             )}
           >
-            <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-primary/10 font-mono text-sm font-semibold text-primary">
-              /
-            </span>
             <span className="min-w-0 flex-1">
-              <span className="block truncate font-medium">/{skill.trigger}</span>
+              <span className="block truncate font-medium">
+                <span className="font-mono text-primary">/</span>
+                {skill.trigger}
+              </span>
               {skill.description ? (
                 <span className="mt-0.5 block truncate text-xs leading-snug text-muted-foreground">
                   {skill.description}
@@ -6980,7 +7688,12 @@ function SkillTextarea({
         {...props}
         ref={textareaRef}
         value={value}
-        className={cn(props.className, showSkillButton && "!pl-11", insetEnd && "!pr-11")}
+        className={cn(
+          "relative z-0",
+          props.className,
+          showSkillButton && "!pl-11",
+          insetEnd && "!pr-11",
+        )}
         onChange={(event) => {
           onValueChange(event.target.value);
           sync(event.target);
@@ -7003,11 +7716,12 @@ function SkillTextarea({
       {showSkillButton ? (
         <button
           type="button"
+          data-no-composer-swipe
           onMouseDown={(event) => event.preventDefault()}
           onClick={openSkillPicker}
           aria-label="Insert skill"
           title="Insert skill command"
-          className="absolute left-1.5 top-1/2 z-10 flex size-8 -translate-y-1/2 items-center justify-center rounded-full font-mono text-base font-semibold text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          className="absolute left-1.5 top-1/2 z-20 flex size-8 -translate-y-1/2 touch-manipulation items-center justify-center rounded-full bg-muted/50 font-mono text-sm font-medium leading-none text-muted-foreground ring-1 ring-inset ring-border/40 transition active:scale-95 hover:bg-muted hover:text-foreground hover:ring-border/70"
         >
           /
         </button>
@@ -7143,6 +7857,18 @@ function SessionChat({
     setMessageText("");
     let optimisticText: string | null = null;
     try {
+      // Audio mode: this session becomes the one we speak, and gets primed once
+      // to stay conversational + delegate heavy work to a subagent.
+      if (isAudioModeEnabled()) {
+        setAudioActiveSid(sid);
+        if (takePrimeToken(sid)) {
+          await api(`/api/sessions/${sid}/send`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: AUDIO_MODE_PRIMER, mode: "queue" }),
+          }).catch(() => {});
+        }
+      }
       const uploaded = files.length ? await Promise.all(files.map(uploadAttachment)) : [];
       const outgoingText = composeAttachmentMessage(text, uploaded);
       optimisticText = outgoingText;
@@ -8519,6 +9245,20 @@ const SessionCard = memo(function SessionCard({
     window.dispatchEvent(new Event("lfg-collapse-change"));
   }, [collapseKey, collapsed]);
 
+  // React to collapse changes made outside this card. The local `collapsed`
+  // state is only seeded on mount, so without this an already-mounted card
+  // would not sync when localStorage is rewritten underneath it.
+  useEffect(() => {
+    if (!sid) return;
+    const sync = () => setCollapsed(isCollapsedSid(sid));
+    window.addEventListener("lfg-collapse-change", sync);
+    window.addEventListener("storage", sync);
+    return () => {
+      window.removeEventListener("lfg-collapse-change", sync);
+      window.removeEventListener("storage", sync);
+    };
+  }, [sid]);
+
   const setTransform = (pxX: number, pxY: number) => {
     const el = sectionRef.current;
     if (!el) return;
@@ -9196,25 +9936,30 @@ function MessageBubble({
     );
   }
 
-  if (message.kind === "image" && message.url) {
-    const label = message.caption || message.text || message.name || "Image";
+  if ((message.kind === "image" || message.kind === "video") && message.url) {
+    const isVideo = message.kind === "video";
+    const label =
+      message.caption || message.text || message.name || (isVideo ? "Video" : "Image");
     return (
       <AiMessage className={cn("msg", entering && "lfg-msg-in")} from="assistant">
         <MessageContent className="not-prose w-fit max-w-[min(34rem,92vw)] overflow-hidden rounded-lg border border-border bg-card p-0 shadow-sm">
-          <a
-            href={message.url}
-            target="_blank"
-            rel="noreferrer"
-            className="block bg-muted"
-            aria-label={`Open ${label}`}
-          >
-            <img
+          {/* Media renders inline in-app — no navigation away to the raw URL. */}
+          {isVideo ? (
+            <video
+              src={message.url}
+              controls
+              playsInline
+              preload="metadata"
+              aria-label={message.alt || label}
+              className="block max-h-[24rem] w-auto max-w-full bg-black object-contain"
+            />
+          ) : (
+            <ZoomableImage
               src={message.url}
               alt={message.alt || label}
-              loading="lazy"
-              className="block max-h-[24rem] w-auto max-w-full object-contain"
+              className="block max-h-[24rem] w-auto max-w-full bg-muted object-contain"
             />
-          </a>
+          )}
           <div className="flex min-w-0 items-center justify-between gap-3 px-3 py-2 text-xs text-muted-foreground">
             <span className="min-w-0 truncate">{label}</span>
             {message.size ? <span className="shrink-0">{formatBytes(message.size)}</span> : null}
@@ -9802,11 +10547,32 @@ function NewSessionDialog({
   // external affordance bumps `focusNonce`. The shadcn Textarea isn't a
   // forwardRef, so reach it through the wrapping element.
   const fieldRef = useRef<HTMLDivElement>(null);
+  const inlineBarRef = useRef<HTMLDivElement>(null);
   const inlineShellRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (variant !== "inline" || !focusNonce) return;
     fieldRef.current?.querySelector("textarea")?.focus();
   }, [focusNonce, variant]);
+  useLayoutEffect(() => {
+    if (variant !== "inline") return;
+    const bar = inlineBarRef.current;
+    if (!bar) return;
+    const sync = () => {
+      document.documentElement.style.setProperty(
+        "--lfg-inline-composer-height",
+        `${Math.ceil(bar.getBoundingClientRect().height)}px`,
+      );
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(bar);
+    window.addEventListener("resize", sync);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", sync);
+      document.documentElement.style.removeProperty("--lfg-inline-composer-height");
+    };
+  }, [variant]);
   useEffect(() => {
     if (variant !== "inline" || !onProjectSwipe) return;
     const shell = inlineShellRef.current;
@@ -10643,6 +11409,7 @@ function NewSessionDialog({
   if (variant === "inline") {
     return (
       <div
+        ref={inlineBarRef}
         aria-busy={launching}
         style={{ bottom: "var(--lfg-keyboard-height, 0px)" }}
         className="pointer-events-auto fixed inset-x-0 z-[55] overflow-x-clip bg-background/95 pt-4 shadow-[0_-8px_24px_rgba(0,0,0,0.12)] backdrop-blur-xl"
@@ -11984,6 +12751,7 @@ function CodingAgentsPage({
   agents,
   onVisibleChange,
   onSetup,
+  onLogin,
   onSetupCheck,
   onRefresh,
 }: {
@@ -11991,6 +12759,7 @@ function CodingAgentsPage({
   agents: CodingAgentInfo[];
   onVisibleChange: (kind: AgentKind, visible: boolean) => void;
   onSetup: (kind: AgentKind) => void;
+  onLogin: (kind: AgentKind) => void;
   onSetupCheck: (key: string) => void;
   onRefresh: () => void;
 }) {
@@ -12131,11 +12900,21 @@ function CodingAgentsPage({
               </div>
 
               <div className="mt-3 flex flex-wrap items-center gap-2 pl-11">
-                {agent.status.instructions.map((instruction) => (
-                  <span key={instruction} className="min-w-0 flex-1 text-xs text-muted-foreground">
-                    {instruction}
-                  </span>
-                ))}
+                <div className="min-w-0 flex-1 space-y-1 text-xs text-muted-foreground">
+                  {agent.status.instructions.map((instruction) => (
+                    <div key={instruction}>{instruction}</div>
+                  ))}
+                  {agent.status.installCommand ? (
+                    <div className="truncate">
+                      Install: <code>{agent.status.installCommand}</code>
+                    </div>
+                  ) : null}
+                  {agent.status.loginCommand ? (
+                    <div className="truncate">
+                      Login: <code>{agent.status.loginCommand}</code>
+                    </div>
+                  ) : null}
+                </div>
                 <Button
                   size="sm"
                   variant="outline"
@@ -12152,7 +12931,21 @@ function CodingAgentsPage({
                   ) : (
                     <Play className="size-4" />
                   )}
-                  {agent.status.setupRunning ? "Running…" : "Run setup"}
+                  {agent.status.setupRunning ? "Running…" : "Install"}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!agent.status.canLoginInTerminal || agent.status.setupRunning}
+                  onClick={() => onLogin(agent.key)}
+                  title={
+                    agent.status.loginCommand
+                      ? `Open terminal and run ${agent.status.loginCommand}`
+                      : "No terminal login command is available"
+                  }
+                >
+                  <TerminalSquare className="size-4" />
+                  Login
                 </Button>
               </div>
             </div>
@@ -12354,6 +13147,7 @@ function SettingsView({
   onOpenExt: (id: string) => void;
 }) {
   const initial = (user ?? "").trim().slice(0, 1).toUpperCase() || "?";
+  const audioMode = useAudioMode();
 
   return (
     <div className="mx-auto max-w-xl space-y-8 pb-10">
@@ -12545,6 +13339,33 @@ function SettingsView({
         </div>
         <p className="px-4 text-xs text-muted-foreground">
           Follows your system appearance until you set it here.
+        </p>
+      </section>
+
+      {/* Audio */}
+      <section className="space-y-2">
+        <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Audio
+        </h2>
+        <div className="overflow-hidden rounded-2xl border border-border bg-card/40">
+          <div className="flex items-center justify-between gap-4 px-4 py-2.5">
+            <div className="flex items-center gap-3">
+              <span className="flex size-7 items-center justify-center rounded-[7px] bg-primary text-white">
+                <Radio className="size-4" />
+              </span>
+              <span className="text-sm font-medium">Audio mode · auto-play replies</span>
+            </div>
+            <Switch
+              checked={audioMode}
+              onCheckedChange={setAudioModeEnabled}
+              aria-label="Toggle audio mode"
+            />
+          </div>
+        </div>
+        <p className="px-4 text-xs text-muted-foreground">
+          Auto-plays replies aloud as they stream and keeps the session
+          conversational — heavy work is delegated to a subagent so a mis-heard word
+          can't quietly run the wrong thing.
         </p>
       </section>
 

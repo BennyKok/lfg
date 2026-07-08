@@ -22,6 +22,11 @@ export type AskQuestion = {
   agentId?: string | null; // which auto agent asked (if any)
   sessionId?: string | null; // related coding session (if any)
   user?: string | null; // who should answer — scopes push + UI
+  // Fire-and-forget asks (the MCP lfg_ask_user tool): the asking agent does NOT
+  // block or poll — when the user answers, the reply is pushed verbatim into
+  // sessionId as a new user message. Legacy asks (pushback falsy) keep the old
+  // close/send/none heuristic on delivery.
+  pushback?: boolean;
   status: AskStatus;
   answer?: string | null;
   answeredVia?: "voice" | "web" | null;
@@ -103,6 +108,7 @@ export async function addQuestion(input: {
   agentId?: string | null;
   sessionId?: string | null;
   user?: string | null;
+  pushback?: boolean;
 }): Promise<AskQuestion> {
   const rows = await listQuestions();
   const q: AskQuestion = {
@@ -112,6 +118,7 @@ export async function addQuestion(input: {
     agentId: input.agentId ?? null,
     sessionId: input.sessionId ?? null,
     user: input.user ?? null,
+    pushback: input.pushback ?? false,
     status: "open",
     answer: null,
     answeredVia: null,

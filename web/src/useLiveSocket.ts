@@ -763,6 +763,7 @@ export function useLiveSocket(
   useEffect(() => {
     const active = new Set(ids);
     const live = new Set(Object.keys(listBusy));
+    const previousActive = desiredRef.current;
     desiredRef.current = active;
     seenRef.current = Object.fromEntries(Object.entries(seenRef.current).filter(([sid]) => live.has(sid)));
     setMessagesBySid((prev) => {
@@ -779,7 +780,11 @@ export function useLiveSocket(
     setNextBeforeBySid((prev) => Object.fromEntries(Object.entries(prev).filter(([sid]) => live.has(sid))));
     setLoadingBySid((prev) => {
       const next = Object.fromEntries(Object.entries(prev).filter(([sid]) => live.has(sid)));
-      for (const sid of active) if (!(messagesRef.current[sid]?.some((message) => !message.seed))) next[sid] = true;
+      for (const sid of active) {
+        if (!previousActive.has(sid) && !(messagesRef.current[sid]?.some((message) => !message.seed))) {
+          next[sid] = true;
+        }
+      }
       return next;
     });
 
@@ -816,6 +821,26 @@ export function useLiveSocket(
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [streamKey, listBusy, seedBySid, enabled, subscribeChannels, unsubscribeChannels]);
+
+  useEffect(() => {
+    if (!ids.length) return;
+    const active = new Set(ids);
+    const timeout = window.setTimeout(() => {
+      evlog("ws_client_loading_fallback", { ids });
+      setLoadingBySid((prev) => {
+        let changed = false;
+        const next = { ...prev };
+        for (const sid of active) {
+          if (next[sid] && !(messagesRef.current[sid]?.some((message) => !message.seed))) {
+            next[sid] = false;
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }, 8000);
+    return () => window.clearTimeout(timeout);
+  }, [streamKey, ids]);
 
   const addOptimisticMessage = useCallback((sid: string, text: string) => {
     const message: Message = {

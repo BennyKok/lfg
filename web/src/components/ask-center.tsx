@@ -25,6 +25,7 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 import {
   ChevronDown,
@@ -46,6 +47,64 @@ type Question = {
 };
 
 const POLL_MS = 5000;
+
+// Flatten markdown to a one-line plain-text preview (toasts, the compact
+// floating card). Questions written by agents often arrive full of headings
+// and lists; previews should read as a sentence, not render as a document.
+function stripMd(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, " ") // fenced code
+    .replace(/^#{1,6}\s+/gm, "") // heading markers
+    .replace(/^\s*[-*+]\s+/gm, "") // list bullets
+    .replace(/\*\*([^*]+)\*\*|\*([^*]+)\*|__([^_]+)__|_([^_]+)_/g, "$1$2$3$4")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function timeAgo(t: number): string {
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (s < 60) return "just now";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+}
+
+// Question body renderer. Short one-liners get comfortable large type; anything
+// longer renders as compact markdown with headings demoted to body-weight
+// labels — a question card must never look like a document of h1s.
+function QuestionBody({ text, compact }: { text: string; compact?: boolean }) {
+  const short = text.length <= 140 && !/\n/.test(text) && !/^#{1,6}\s/m.test(text);
+  if (short) {
+    return (
+      <div
+        className={cn(
+          "font-medium leading-snug tracking-[-0.01em]",
+          compact ? "text-sm" : "text-lg",
+        )}
+      >
+        {text}
+      </div>
+    );
+  }
+  return (
+    <MessageResponse
+      className={cn(
+        "text-sm leading-relaxed",
+        // Demote all heading levels: same size as body, just bolder. Kills the
+        // "gigantic pile of title tags" failure mode without losing structure.
+        "[&_h1]:text-sm [&_h2]:text-sm [&_h3]:text-sm [&_h4]:text-sm [&_h5]:text-sm [&_h6]:text-sm",
+        "[&_h1]:font-semibold [&_h2]:font-semibold [&_h3]:font-semibold",
+        "[&_h1]:mt-3 [&_h2]:mt-3 [&_h3]:mt-2 [&_h1]:mb-1 [&_h2]:mb-1 [&_h3]:mb-1",
+        "[&_p]:my-1.5 [&_ul]:my-1.5 [&_ol]:my-1.5 [&_li]:my-0.5",
+      )}
+    >
+      {text}
+    </MessageResponse>
+  );
+}
 
 type AskContextValue = {
   questions: Question[];
@@ -105,7 +164,9 @@ export function AskProvider({ children }: { children: React.ReactNode }) {
         if (!seen.current.has(q.id)) {
           seen.current.add(q.id);
           fresh = true;
-          toast("An agent needs your input", { description: q.question });
+          toast("An agent needs your input", {
+            description: stripMd(q.question).slice(0, 140),
+          });
         }
       }
       // A genuinely new question overrides a "collapse for later" — surface it.
@@ -242,11 +303,11 @@ export function AskCenter({ onExpand }: { onExpand: () => void }) {
             onClick={onExpand}
             className="min-w-0 flex-1 text-left"
           >
-            <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            <div className="text-[11px] font-medium text-muted-foreground">
               Agent needs your input{queued > 0 ? ` · ${queued} more` : ""}
             </div>
-            <div className="mt-0.5 text-sm font-medium leading-snug">
-              {current.question}
+            <div className="mt-0.5 line-clamp-3 text-sm font-medium leading-snug">
+              {stripMd(current.question)}
             </div>
           </button>
           <div className="-mr-1 -mt-1 flex shrink-0 items-center">
@@ -602,21 +663,18 @@ function QuestionCard({
         <div className="flex size-6 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-[11px] font-bold text-primary">
           {index + 1}
         </div>
-        {q.sessionId ? (
-          <div className="truncate text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            {q.sessionId}
-          </div>
-        ) : (
-          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            Agent needs your input
-          </div>
-        )}
+        <div className="flex min-w-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+          {q.sessionId ? (
+            <span className="max-w-32 truncate rounded-md bg-muted px-1.5 py-0.5 font-mono text-[10px]">
+              {q.sessionId.slice(0, 8)}
+            </span>
+          ) : null}
+          <span className="truncate">Needs your input · {timeAgo(q.createdAt)}</span>
+        </div>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="text-xl font-medium leading-snug tracking-[-0.01em]">
-          {q.question}
-        </div>
+        <QuestionBody text={q.question} />
       </div>
 
       {interactive ? (

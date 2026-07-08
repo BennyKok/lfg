@@ -65,13 +65,17 @@ if ("serviceWorker" in navigator) {
   });
 }
 
+function activateUpdate(worker: ServiceWorker) {
+  worker.postMessage({ type: "SKIP_WAITING" });
+}
+
 function promptUpdate(worker: ServiceWorker) {
   toast("A new version of lfg is available", {
     description: "Reload to get the latest.",
     duration: Infinity,
     action: {
       label: "Reload",
-      onClick: () => worker.postMessage({ type: "SKIP_WAITING" }),
+      onClick: () => activateUpdate(worker),
     },
   });
 }
@@ -80,9 +84,11 @@ async function registerServiceWorker() {
   try {
     const reg = await navigator.serviceWorker.register("/sw.js");
 
-    // A worker updated during a previous visit may already be waiting.
+    // A worker updated during a previous visit may already be waiting. Activate
+    // it immediately on startup so opening the PWA cannot strand the user on an
+    // old app shell until they notice a toast.
     if (reg.waiting && navigator.serviceWorker.controller) {
-      promptUpdate(reg.waiting);
+      activateUpdate(reg.waiting);
     }
 
     reg.addEventListener("updatefound", () => {

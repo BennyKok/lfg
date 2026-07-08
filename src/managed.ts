@@ -16,7 +16,7 @@ export type ManagedSession = {
   tmuxName: string;
   cwd: string;
   createdAt: number;
-  agent?: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "hermes";
+  agent?: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "hermes";
   // Stable id shown to clients for lfg-created sessions. For agents that mint a
   // native transcript id later (Claude/Codex CLI, Codex AI-SDK, Grok), this is
   // the durable control-plane id while nativeSessionId records the provider id.

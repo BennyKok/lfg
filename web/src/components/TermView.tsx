@@ -46,7 +46,6 @@ const KEYS = {
   enter: "\r",
 };
 
-const TERM_SESSION = "main";
 type TerminalInstance = InstanceType<typeof GhosttyTerminal>;
 type GhosttyWithInput = TerminalInstance & {
   element?: HTMLElement;
@@ -242,6 +241,7 @@ function installMouseReporting(
 }
 
 export function TermView() {
+  const [termSession, setTermSession] = useState(() => localStorage.getItem("lfg_term_session") || "main");
   const hostRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const termRef = useRef<InstanceType<typeof GhosttyTerminal> | null>(null);
@@ -262,6 +262,12 @@ export function TermView() {
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const keyboardActiveRef = useRef(false);
   const keyboardWasActiveAtPointerDownRef = useRef(false);
+
+  useEffect(() => {
+    const onSession = () => setTermSession(localStorage.getItem("lfg_term_session") || "main");
+    window.addEventListener("lfg:term-session", onSession);
+    return () => window.removeEventListener("lfg:term-session", onSession);
+  }, []);
 
   const setTerminalKeyboardActive = useCallback((active: boolean) => {
     keyboardActiveRef.current = active;
@@ -377,7 +383,7 @@ export function TermView() {
       if (disposed || !term) return;
       const proto = location.protocol === "https:" ? "wss:" : "ws:";
       const url = `${proto}//${location.host}/api/term?session=${encodeURIComponent(
-        TERM_SESSION,
+        termSession,
       )}&cols=${term.cols}&rows=${term.rows}`;
       const ws = new WebSocket(url);
       ws.binaryType = "arraybuffer";
@@ -475,7 +481,7 @@ export function TermView() {
     let alive = true;
     const poll = async () => {
       try {
-        const r = await fetch(`/api/term/scan?session=${TERM_SESSION}`);
+        const r = await fetch(`/api/term/scan?session=${encodeURIComponent(termSession)}`);
         const d = await r.json();
         if (alive && Array.isArray(d.urls) && d.urls.length)
           setLinks((prev) => mergeUrls(prev, d.urls));
@@ -487,7 +493,7 @@ export function TermView() {
       alive = false;
       clearInterval(iv);
     };
-  }, []);
+  }, [termSession]);
 
   // Drop any pending long-press timer if the tab unmounts mid-press.
   useEffect(() => cancelLongPress, [cancelLongPress]);
@@ -514,7 +520,7 @@ export function TermView() {
     <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-[#0b0b0d]">
       <div className="flex items-center gap-2 border-b border-white/10 px-3 py-1.5 text-xs text-white/60">
         <TerminalSquare className="size-3.5" />
-        <span className="font-medium">terminal · {TERM_SESSION}</span>
+        <span className="font-medium">terminal · {termSession}</span>
         <span
           className={`ml-auto inline-flex items-center gap-1 ${
             status === "open"

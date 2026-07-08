@@ -117,13 +117,16 @@ import {
   relaunchSessionWithModel,
   spawnManagedCodexSession,
   spawnManagedGrokSession,
+  spawnManagedCursorSession,
   spawnManagedHermesSession,
   spawnManagedAisdkSession,
   spawnManagedCodexAisdkSession,
   spawnManagedOpencodeAisdkSession,
   dismissCodexUpdatePrompt,
+  dismissCursorTrustPrompt,
   dismissResumeSummaryGate,
   panePidForSession,
+  tmuxHasSession,
   isBusy,
 } from "../tmux.ts";
 import { addManaged, patchManaged, removeManaged } from "../managed.ts";
@@ -140,7 +143,16 @@ import {
 } from "../live-ws.ts";
 import { appendCmd as appendAisdkCmd, removeEntry as removeAisdkEntry, readEntry as readAisdkEntry, findEntryByAnyId as findAisdkEntryByAnyId, isEntryBusy as isAisdkEntryBusy } from "../aisdk-registry.ts";
 import { markClosed } from "../closing.ts";
-import { assignUser, userRoster } from "../users.ts";
+import { assignUser, rosterEmails, userRoster } from "../users.ts";
+import {
+  addOnboardingProfile,
+  getOnboarding,
+  patchOnboarding,
+  setProfileAvatar,
+  AVATARS_DIR,
+  AVATAR_MIME_BY_EXT,
+  type OnboardingSteps,
+} from "../onboarding.ts";
 import { listProfiles, getProfile, deleteProfile } from "../browser/profiles.ts";
 import {
   startLoginSession,
@@ -150,7 +162,7 @@ import {
   type Viewport,
 } from "../browser/session.ts";
 import { testProfile } from "../browser/tool.ts";
-import { listCustomRepos, addCustomRepo, removeCustomRepo } from "../repos-store.ts";
+import { listCustomRepos, addCustomRepo, removeCustomRepo, cloneRepo } from "../repos-store.ts";
 import { projectName, reposRoot } from "../projects.ts";
 import { resolveSessionCwd, startWorktreeSweep } from "../worktree.ts";
 import {
@@ -167,6 +179,7 @@ import {
   isCodingAgentKind,
   listCodingAgents,
   listSetupChecks,
+  loginCommandFor,
   runCodingAgentSetup,
   runSetupAction,
   setCodingAgentVisibility,
@@ -182,6 +195,7 @@ import {
 import { listSkillCatalog } from "../skills-catalog.ts";
 import {
   createImageArtifact,
+  createVideoArtifact,
   getImageArtifact,
   imageArtifactMessagesSince,
   imageArtifactToMessage,
@@ -411,6 +425,26 @@ function repoRootForManagedCwd(cwd: string): string | undefined {
   return absCommon.includes("/.git/worktrees/") ? dirname(absCommon.split("/.git/worktrees/")[0] + "/.git") : topLevel || cwd;
 }
 
+function dirExists(path: string | null | undefined): path is string {
+  if (!path) return false;
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+async function resolveResumeCwd(
+  transcriptCwd: string | null,
+  project: string | null | undefined,
+): Promise<string> {
+  const repos = await listRepos().catch(() => []);
+  const repo = project ? repos.find((r) => r.project === project) : undefined;
+  if (repo && (!dirExists(transcriptCwd) || projectName(transcriptCwd) !== project)) return repo.cwd;
+  if (dirExists(transcriptCwd)) return transcriptCwd;
+  return repo?.cwd || SELF_REPO;
+}
+
 // ---------- agent reports ----------
 
 async function listAgentReports(agent: string) {
@@ -608,6 +642,7 @@ const STATIC_FILES: Record<string, { path: string; type: string }> = {
   },
   "/agent-claude.svg": { path: join(WEB_DIR, "agent-claude.svg"), type: "image/svg+xml" },
   "/agent-codex.svg": { path: join(WEB_DIR, "agent-codex.svg"), type: "image/svg+xml" },
+  "/agent-cursor.svg": { path: join(WEB_DIR, "agent-cursor.svg"), type: "image/svg+xml" },
   "/agent-opencode.svg": { path: join(WEB_DIR, "agent-opencode.svg"), type: "image/svg+xml" },
   "/agent-grok.svg": { path: join(WEB_DIR, "agent-grok.svg"), type: "image/svg+xml" },
   "/agent-hermes.svg": { path: join(WEB_DIR, "agent-hermes.svg"), type: "image/svg+xml" },
@@ -1366,6 +1401,29 @@ function clampDim(raw: string | null, fallback: number): number {
   return Math.max(1, Math.min(500, n));
 }
 
+function prepareLoginTerminal(kind: string, command: string): string {
+  const sessionId = `login-${kind}`;
+  const sessionName = termSessionName(sessionId);
+  if (!tmuxHasSession(sessionName)) {
+    const created = Bun.spawnSync([
+      "tmux",
+      "new-session",
+      "-d",
+      "-s",
+      sessionName,
+      "-c",
+      homedir(),
+    ]);
+    if (created.exitCode !== 0) {
+      throw new Error(new TextDecoder().decode(created.stderr) || "failed to create terminal session");
+    }
+  }
+  Bun.spawnSync(["tmux", "send-keys", "-t", `=${sessionName}`, "C-c"]);
+  Bun.spawnSync(["tmux", "send-keys", "-t", `=${sessionName}`, "-l", command]);
+  Bun.spawnSync(["tmux", "send-keys", "-t", `=${sessionName}`, "Enter"]);
+  return sessionId;
+}
+
 export async function cmdServe() {
   const liveWs = createLiveWsSupport({
     evlog,
@@ -1793,6 +1851,89 @@ export async function cmdServe() {
         return json({ settings: await setVoiceSettings(b) });
       }
 
+      // ---- onboarding: first-run state (user profiles created in-app, step
+      // progress, completion). Service-ized like voice config: the state lives
+      // server-side (data/onboarding.json) so every browser/device agrees on
+      // whether this install has been set up — localStorage alone can't gate a
+      // shared box. The frontend combines this with users/sessions from
+      // bootstrap to decide whether to show the first-run flow.
+      if (path === "/api/onboarding" && req.method === "GET") {
+        return json({ state: await getOnboarding(), users: userRoster() });
+      }
+      if (path === "/api/onboarding" && req.method === "POST") {
+        const b = (await req.json().catch(() => null)) as {
+          steps?: Partial<OnboardingSteps>;
+          completed?: boolean;
+        } | null;
+        if (!b) return err(400, "expected body");
+        return json({ state: await patchOnboarding(b) });
+      }
+      // Create a user profile during onboarding. The profile merges into
+      // userRoster() (env LFG_USERS stays primary), so the rest of the app —
+      // session tagging, filters, avatars — picks it up with no special cases.
+      if (path === "/api/onboarding/profile" && req.method === "POST") {
+        const b = (await req.json().catch(() => null)) as {
+          email?: string;
+          name?: string;
+        } | null;
+        if (!b) return err(400, "expected { email, name? }");
+        try {
+          const state = await addOnboardingProfile(b);
+          return json({ state, users: userRoster() });
+        } catch (e) {
+          return err(400, e instanceof Error ? e.message : "invalid profile");
+        }
+      }
+      // Upload a profile photo (raw image bytes, Content-Type = image mime,
+      // email in the query). Stored under data/avatars and served below —
+      // takes precedence over Gravatar in userRoster().
+      if (path === "/api/onboarding/avatar" && req.method === "POST") {
+        const email = url.searchParams.get("email") ?? "";
+        const mime = (req.headers.get("content-type") ?? "").split(";")[0]!.trim();
+        try {
+          const bytes = new Uint8Array(await req.arrayBuffer());
+          const state = await setProfileAvatar(email, bytes, mime);
+          return json({ state, users: userRoster() });
+        } catch (e) {
+          return err(400, e instanceof Error ? e.message : "invalid image");
+        }
+      }
+      // Clone a git repository into LFG_REPOS_ROOT — the onboarding "set up
+      // your repo" step for installs that have no repos yet.
+      if (path === "/api/onboarding/repo" && req.method === "POST") {
+        const b = (await req.json().catch(() => null)) as {
+          url?: string;
+          name?: string;
+        } | null;
+        if (!b || typeof b.url !== "string" || !b.url.trim()) {
+          return err(400, "expected { url, name? }");
+        }
+        try {
+          const repo = await cloneRepo(b.url, REPOS_ROOT, b.name);
+          await patchOnboarding({ steps: { repo: true } });
+          return json({ repo, repos: await listRepos() });
+        } catch (e) {
+          return err(400, e instanceof Error ? e.message : "clone failed");
+        }
+      }
+      {
+        // Serve onboarding-uploaded avatars. File names are md5(email).<ext>
+        // generated server-side; the regex plus extension allowlist keeps this
+        // from ever reading outside data/avatars.
+        const m = path.match(/^\/api\/avatars\/([a-f0-9]{32})\.(png|jpg|webp|gif)$/);
+        if (m && req.method === "GET") {
+          const file = Bun.file(join(AVATARS_DIR(), `${m[1]}.${m[2]}`));
+          if (!(await file.exists())) return err(404, "avatar not found");
+          return new Response(file, {
+            headers: {
+              "Content-Type": AVATAR_MIME_BY_EXT[m[2]!] ?? "application/octet-stream",
+              "Cache-Control": "private, max-age=3600",
+              "X-Content-Type-Options": "nosniff",
+            },
+          });
+        }
+      }
+
       // ---- coding-agent config: which session backends are shown in the
       // composer, plus lightweight setup health/actions for Settings.
       if (path === "/api/coding-agents" && req.method === "GET") {
@@ -1827,6 +1968,7 @@ export async function cmdServe() {
           brainNotes: listSessionNotes("open"),
           brainSuggestions: listPatternSuggestions("open"),
           brainRuns: listSessionBrainRuns(12),
+          onboarding: getOnboarding(),
         };
         const taskEntries = Object.entries(tasks);
         const settled = await Promise.allSettled(taskEntries.map(([, task]) => task));
@@ -1848,6 +1990,7 @@ export async function cmdServe() {
           brainNotes?: Awaited<ReturnType<typeof listSessionNotes>> | null;
           brainSuggestions?: Awaited<ReturnType<typeof listPatternSuggestions>> | null;
           brainRuns?: Awaited<ReturnType<typeof listSessionBrainRuns>> | null;
+          onboarding?: Awaited<ReturnType<typeof getOnboarding>> | null;
         };
         return json(
           {
@@ -1870,6 +2013,7 @@ export async function cmdServe() {
               suggestions: boot.brainSuggestions ?? null,
               runs: boot.brainRuns ?? null,
             },
+            onboarding: boot.onboarding ?? null,
           },
           { headers: { "Content-Type": "application/json", "Cache-Control": "no-cache" } },
         );
@@ -1906,6 +2050,21 @@ export async function cmdServe() {
             console.error(`[coding-agents] ${kind} setup failed:`, e),
           );
           return json({ ok: true, agents: await listCodingAgents() });
+        }
+      }
+      {
+        const m = path.match(/^\/api\/coding-agents\/([a-z0-9_-]+)\/login-terminal$/);
+        if (m && req.method === "POST") {
+          const kind = m[1];
+          if (!isCodingAgentKind(kind)) return err(404, "unknown coding agent");
+          const command = loginCommandFor(kind);
+          if (!command) return err(400, `no terminal login command for ${kind}`);
+          try {
+            const terminalSession = prepareLoginTerminal(kind, command);
+            return json({ ok: true, terminalSession, command });
+          } catch (e) {
+            return err(502, e instanceof Error ? e.message : "failed to open login terminal");
+          }
         }
       }
 
@@ -2399,10 +2558,12 @@ export async function cmdServe() {
         if (user) rows = rows.filter((q) => !q.user || q.user === user);
         return json({ questions: rows });
       }
-      // Agent asks a question. Raises a push, then long-polls for the answer so
-      // the caller's tool blocks until a human responds (or it times out, at
-      // which point the agent decides how to proceed). wait=0 returns immediately
-      // with just the id for fire-and-forget asks.
+      // Agent asks a question. The preferred path (MCP lfg_ask_user) is
+      // fire-and-forget: pushback=true + wait=false. The agent gets the id back
+      // immediately and ends its turn; when the human answers — minutes or hours
+      // later — the reply is pushed into the asking session as a new user
+      // message. The legacy long-poll (wait !== false) is kept for old callers
+      // but is deprecated: it times out whenever the user isn't around.
       if (path === "/api/ask" && req.method === "POST") {
         const b = (await req.json().catch(() => null)) as {
           question?: string;
@@ -2410,6 +2571,7 @@ export async function cmdServe() {
           agentId?: string | null;
           sessionId?: string | null;
           user?: string | null;
+          pushback?: boolean;
           wait?: boolean;
           timeoutMs?: number;
         } | null;
@@ -2420,12 +2582,14 @@ export async function cmdServe() {
           agentId: b.agentId,
           sessionId: b.sessionId,
           user: b.user,
+          pushback: b.pushback === true,
         });
         // Wake the user with a push (user-scoped). Voice talk-back happens when
         // they engage: open questions are surfaced in the voice snapshot below,
         // so the voice agent can read them out and answer on the user's behalf.
         void notifyAll({ user: q.user }).catch(() => {});
-        if (b.wait === false) return json({ id: q.id, status: q.status });
+        // Pushback asks never block — the answer arrives via session injection.
+        if (q.pushback || b.wait === false) return json({ id: q.id, status: q.status });
         // Cap the block so a stuck request can't pin a connection forever.
         const timeoutMs = Math.min(Math.max(b.timeoutMs ?? 180_000, 1_000), 600_000);
         const answered = await waitForAnswer(q.id, timeoutMs);
@@ -2460,7 +2624,36 @@ export async function cmdServe() {
           // next run to re-interpret it. Reuse the validated /send and /close
           // routes via a loopback call. On any failure we leave the question
           // "answered" so the supervisor's STEP 1 still backstops it.
-          if (q.sessionId) {
+          if (q.sessionId && q.pushback) {
+            // Fire-and-forget ask: the asking agent ended its turn and is NOT
+            // polling, so this injection is the only way the answer reaches it.
+            // Always deliver verbatim — no interpretation, a plain "no" is a
+            // real answer here. Steer mode wakes an idle session.
+            const clip = (t: string, n: number) => {
+              const c = t.replace(/\s+/g, " ").trim();
+              return c.length > n ? c.slice(0, n - 1).trimEnd() + "…" : c;
+            };
+            const text =
+              `[ask-user answer ${q.id}] The user answered the question you asked earlier.\n` +
+              `Question: ${clip(q.question, 300)}\n` +
+              `Answer: ${q.answer ?? ""}\n` +
+              `Act on this answer now; it is the user's decision.`;
+            try {
+              const r = await fetch(
+                `http://127.0.0.1:${PORT}/api/sessions/${q.sessionId}/send`,
+                {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ text, mode: "steer" }),
+                },
+              );
+              if (r.ok) await markHandled(q.id);
+              // On failure the question stays "answered" and is visible in the
+              // ask feed; the supervisor backstop can still deliver it.
+            } catch {
+              // loopback failed — leave answered
+            }
+          } else if (q.sessionId) {
             const plan = plannedSessionAction(q.answer ?? "");
             try {
               if (plan.kind === "send") {
@@ -2887,14 +3080,20 @@ export async function cmdServe() {
           });
         }
         const transcript = await resolveTranscript(sessionId);
-        if (!transcript) return err(404, "no transcript found for that session");
+        if (!transcript) {
+          console.warn(`[resume] no transcript found for ${sessionId} — cannot resume`);
+          return err(404, "no transcript found for that session");
+        }
         const cachedResume = getCachedResumableSession(sessionId);
 
         // Codex rollouts live under ~/.codex/sessions — resume them through a
         // codex-aisdk harness keyed to the rollout's threadId rather than the
         // claude CLI.
         if (transcript.includes("/.codex/")) {
-          const cwd = (await cwdForCodexTranscript(transcript)) ?? SELF_REPO;
+          const cwd = await resolveResumeCwd(
+            await cwdForCodexTranscript(transcript),
+            cachedResume?.project,
+          );
           const tmuxName = `lfg-${randomBytes(3).toString("hex")}`;
           const key = crypto.randomUUID(); // control-plane key (names registry/cmd files)
           const r = spawnManagedCodexAisdkSession({
@@ -2904,6 +3103,7 @@ export async function cmdServe() {
             model: model ?? "gpt-5.5",
             key,
             resume: sessionId,
+            lfgUser: body?.user,
           });
           if (!r.ok) return err(502, r.error || "failed to resume session");
           addManaged({
@@ -2937,19 +3137,22 @@ export async function cmdServe() {
         // claude path: resume drives the claude CLI.
         if (model && !CLAUDE_MODELS.includes(model))
           return err(400, `unknown model "${model}" (expected one of ${CLAUDE_MODELS.join(", ")})`);
-        const cwd = (await cwdForTranscript(transcript)) ?? SELF_REPO;
+        const cwd = await resolveResumeCwd(await cwdForTranscript(transcript), cachedResume?.project);
         const tmuxName = `lfg-${randomBytes(3).toString("hex")}`;
-        const resumePrompt =
-          body?.prompt?.trim() ||
-          "Resume this session and stay open. Do not start new work yet; wait for my next instruction.";
+        const resumePrompt = body?.prompt?.trim() || undefined;
         const r = spawnManagedSession({
           name: tmuxName,
           cwd,
           model,
           resume: sessionId,
           prompt: resumePrompt,
+          lfgUser: body?.user,
         });
-        if (!r.ok) return err(502, r.error || "failed to resume session");
+        if (!r.ok) {
+          console.error(`[resume] spawn failed for ${sessionId} in ${cwd}: ${r.error}`);
+          return err(502, r.error || "failed to resume session");
+        }
+        console.log(`[resume] claude --resume ${sessionId} → pane ${tmuxName} (cwd ${cwd})`);
         addManaged({
           tmuxName,
           cwd,
@@ -2963,7 +3166,8 @@ export async function cmdServe() {
         // full / don't ask again" selector. Nobody is at the pane to answer it,
         // so without this the session freezes at the menu and never forks a new
         // id below (looks like resume is broken). Answer it before we poll.
-        await dismissResumeSummaryGate(tmuxName);
+        const gate = await dismissResumeSummaryGate(tmuxName);
+        console.log(`[resume] ${tmuxName} summary-gate: ${gate}`);
         // Claude resumes into a fresh sessionId/transcript — wait for the pidfile.
         let newId: string | null = null;
         for (let i = 0; i < 12 && !newId; i++) {
@@ -2975,8 +3179,36 @@ export async function cmdServe() {
           const resumed = (await listSessions()).find(
             (s) => s.tmuxName === tmuxName || s.sessionId === sessionId || s.nativeSessionId === sessionId,
           );
-          if (!resumed?.sessionId)
+          if (!resumed?.sessionId) {
+            const paneAlive = tmuxHasSession(tmuxName);
+            console.warn(
+              `[resume] ${tmuxName} no live id after 6s (gate=${gate}, pane ${paneAlive ? "alive" : "died"}) for ${sessionId}`,
+            );
+            if (!paneAlive) {
+              console.warn(`[resume] ${sessionId} → falling back to fresh codex-aisdk fork (pane died)`);
+              removeManaged(tmuxName);
+              assignUser(tmuxName, null);
+              const fallback = await fetch(`http://127.0.0.1:${PORT}/api/sessions/${sessionId}/fork`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  prompt:
+                    body?.prompt?.trim() ||
+                    "Continue from this archived session. First summarize where it left off, then wait for my next instruction.",
+                  user: body?.user,
+                  model: body?.model,
+                  agent: "codex-aisdk",
+                }),
+              });
+              const text = await fallback.text();
+              return new Response(text, {
+                status: fallback.status,
+                headers: { "Content-Type": "application/json" },
+              });
+            }
             return err(502, "session resumed, but no live session id was discovered");
+          }
+          console.log(`[resume] ${tmuxName} id recovered via listSessions: ${resumed.sessionId}`);
           newId = resumed.sessionId;
         }
         // Anchor the live id onto the managed record so listSessions recognizes
@@ -2984,6 +3216,7 @@ export async function cmdServe() {
         // rather than depending solely on per-request pgrep/pidfile resolution
         // during the compaction window.
         patchManaged(tmuxName, { nativeSessionId: newId });
+        console.log(`[resume] ${tmuxName} live as ${newId} (resumed from ${sessionId})`);
         return json({ ok: true, tmuxName, cwd, sessionId: newId, resumedFrom: sessionId, agent: "claude" });
       }
 
@@ -2996,20 +3229,21 @@ export async function cmdServe() {
             user?: string;
             model?: string;
             thinkingLevel?: string;
-            agent?: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "hermes";
+            agent?: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "hermes";
           } | null;
           const source = (await listSessions()).find((s) => s.sessionId === sourceId);
+          const cachedSource = getCachedResumableSession(sourceId);
           const transcript = await resolveTranscript(sourceId);
           if (!transcript) return err(404, "source session transcript not found");
 
           const transcriptCwd = transcript.includes("/.codex/")
             ? await cwdForCodexTranscript(transcript).catch(() => null)
             : await cwdForTranscript(transcript).catch(() => null);
-          const sourceCwd = source?.cwd || transcriptCwd || SELF_REPO;
+          const sourceCwd = source?.cwd || cachedSource?.cwd || transcriptCwd || SELF_REPO;
           const repos = await listRepos();
           const repo =
             repos.find((r) => r.cwd === sourceCwd) ??
-            repos.find((r) => r.project === source?.project) ??
+            repos.find((r) => r.project === (source?.project || cachedSource?.project)) ??
             repos.find((r) => r.project === projectName(sourceCwd));
           if (!repo) return err(400, "source session repo is not in the repo picker");
 
@@ -3067,7 +3301,7 @@ export async function cmdServe() {
           thinkingLevel?: string;
           parentSessionId?: string;
           spawnedBy?: string;
-          agent?: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "hermes";
+          agent?: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "hermes";
         } | null;
         // Default flip (Task B): with no agent specified, the default Claude path
         // now goes through the AI SDK ("aisdk") rather than the Claude CLI. Every
@@ -3081,11 +3315,13 @@ export async function cmdServe() {
                 ? "opencode"
                 : body?.agent === "grok"
                   ? "grok"
-                  : body?.agent === "hermes"
-                    ? "hermes"
-                    : body?.agent === "claude"
-                      ? "claude"
-                      : "aisdk";
+                  : body?.agent === "cursor"
+                    ? "cursor"
+                    : body?.agent === "hermes"
+                      ? "hermes"
+                      : body?.agent === "claude"
+                        ? "claude"
+                        : "aisdk";
         // Allowlist Claude models — they land on a shell argv. Unknown value =
         // hard 400, never a silent fallback to some other model. Codex model
         // names are provider/catalog driven, so validate shape instead.
@@ -3102,6 +3338,8 @@ export async function cmdServe() {
           return err(400, `unknown model "${model}" (expected one of ${AISDK_MODELS.join(", ")})`);
         if (agent === "grok" && model && !GROK_MODELS.includes(model))
           return err(400, `unknown model "${model}" (expected one of ${GROK_MODELS.join(", ")})`);
+        if (agent === "cursor" && model && !/^[A-Za-z0-9_.:\/-]{1,120}$/.test(model))
+          return err(400, "invalid cursor model name");
         if (agent === "hermes" && model && !/^[A-Za-z0-9_.:\/-]{1,120}$/.test(model))
           return err(400, "invalid hermes model name");
         // codex-aisdk drives codex through the AI SDK, so its model is a codex
@@ -3138,12 +3376,33 @@ export async function cmdServe() {
         const repo = (await listRepos()).find((r) => r.cwd === requestedCwd);
         if (!repo) return err(400, "unknown repo");
         const parentId = body?.parentSessionId?.trim() || undefined;
+        const liveRows = parentId ? await listSessions() : [];
         const parent = parentId
-          ? (await listSessions()).find(
-              (s) => s.sessionId === parentId || s.nativeSessionId === parentId,
-            )
+          ? liveRows.find((s) => s.sessionId === parentId || s.nativeSessionId === parentId)
           : undefined;
         if (parentId && !parent) return err(404, "parent session not found");
+        // Resolve the user tag up front and LOUDLY: an explicit unknown email is
+        // a 400 (matching /api/sessions/:id/user), never a silently-unassigned
+        // session. With no explicit user, inherit from the NEAREST ASSIGNED
+        // ANCESTOR — not just the immediate parent, which may itself be an
+        // unassigned subagent mid-chain (the historic way subagents lost their
+        // user tag and became untraceable in per-user views).
+        const requestedUser = body?.user?.trim() || undefined;
+        if (requestedUser && !rosterEmails().includes(requestedUser))
+          return err(400, `unknown user "${requestedUser}" (expected one of the roster emails)`);
+        let assignedUser = requestedUser;
+        if (!assignedUser && parent) {
+          let cursor: (typeof liveRows)[number] | undefined = parent;
+          const walked = new Set<string>();
+          while (cursor && !cursor.assignedUser) {
+            const up: string | undefined =
+              cursor.parentSessionId ?? cursor.parentNativeSessionId ?? undefined;
+            if (!up || walked.has(up)) break;
+            walked.add(up);
+            cursor = liveRows.find((s) => s.sessionId === up || s.nativeSessionId === up);
+          }
+          assignedUser = cursor?.assignedUser ?? undefined;
+        }
         const tmuxName = `lfg-${randomBytes(3).toString("hex")}`;
         const cwdResolved = resolveSessionCwd(repo.cwd, tmuxName, {
           voice: !!body?.voice,
@@ -3196,15 +3455,17 @@ export async function cmdServe() {
         const launchModel =
           agent === "grok"
             ? model ?? GROK_DEFAULT_MODEL
-            : agent === "hermes"
-              ? model ?? HERMES_DEFAULT_MODEL
-              : agent === "opencode"
-                ? model ?? OPENCODE_DEFAULT_MODEL
-                : agent === "codex-aisdk"
-                  ? model ?? "gpt-5.5"
-                  : agent === "aisdk"
-                    ? model ?? "opus"
-                    : model;
+            : agent === "cursor"
+              ? model ?? "auto"
+              : agent === "hermes"
+                ? model ?? HERMES_DEFAULT_MODEL
+                : agent === "opencode"
+                  ? model ?? OPENCODE_DEFAULT_MODEL
+                  : agent === "codex-aisdk"
+                    ? model ?? "gpt-5.5"
+                    : agent === "aisdk"
+                      ? model ?? "opus"
+                      : model;
         addManaged({
           tmuxName,
           cwd,
@@ -3229,10 +3490,10 @@ export async function cmdServe() {
         invalidateListSessionsCache();
         // Tag the new session before spawn so a concurrent /api/sessions refresh
         // can show the durable row under the right user filter immediately.
-        if (body?.user || parent?.assignedUser) assignUser(tmuxName, body?.user || parent?.assignedUser || null);
+        if (assignedUser) assignUser(tmuxName, assignedUser);
         const r =
           agent === "codex"
-            ? spawnManagedCodexSession({ name: tmuxName, cwd, prompt, model, thinkingLevel, lfgSessionId: launchId })
+            ? spawnManagedCodexSession({ name: tmuxName, cwd, prompt, model, thinkingLevel, lfgSessionId: launchId, lfgUser: assignedUser })
             : agent === "grok"
               ? spawnManagedGrokSession({
                   name: tmuxName,
@@ -3241,6 +3502,16 @@ export async function cmdServe() {
                   model: model ?? GROK_DEFAULT_MODEL,
                   thinkingLevel,
                   lfgSessionId: launchId,
+                  lfgUser: assignedUser,
+                })
+            : agent === "cursor"
+              ? spawnManagedCursorSession({
+                  name: tmuxName,
+                  cwd,
+                  prompt,
+                  model: model ?? "auto",
+                  lfgSessionId: launchId,
+                  lfgUser: assignedUser,
                 })
             : agent === "hermes"
               ? spawnManagedHermesSession({
@@ -3249,6 +3520,7 @@ export async function cmdServe() {
                   model: model ?? HERMES_DEFAULT_MODEL,
                   provider: HERMES_PROVIDER,
                   lfgSessionId: launchId,
+                  lfgUser: assignedUser,
                 })
             : agent === "aisdk"
               ? spawnManagedAisdkSession({
@@ -3259,6 +3531,7 @@ export async function cmdServe() {
                   sessionId: aisdkSessionId!,
                   thinkingLevel,
                   lfgSessionId: launchId,
+                  lfgUser: assignedUser,
                 })
               : agent === "codex-aisdk"
                 ? spawnManagedCodexAisdkSession({
@@ -3269,6 +3542,7 @@ export async function cmdServe() {
                     key: codexAisdkKey!,
                     thinkingLevel,
                     lfgSessionId: launchId,
+                  lfgUser: assignedUser,
                   })
                 : agent === "opencode"
                   ? spawnManagedOpencodeAisdkSession({
@@ -3278,8 +3552,9 @@ export async function cmdServe() {
                       model: model ?? OPENCODE_DEFAULT_MODEL,
                       key: opencodeKey!,
                       lfgSessionId: launchId,
+                  lfgUser: assignedUser,
                     })
-                  : spawnManagedSession({ name: tmuxName, cwd, prompt, model, thinkingLevel, lfgSessionId: launchId });
+                  : spawnManagedSession({ name: tmuxName, cwd, prompt, model, thinkingLevel, lfgSessionId: launchId, lfgUser: assignedUser });
         if (!r.ok) {
           removeManaged(tmuxName);
           assignUser(tmuxName, null);
@@ -3296,7 +3571,19 @@ export async function cmdServe() {
             }
           })();
         }
-        if (agent === "aisdk" || agent === "opencode" || agent === "hermes")
+        // Belt-and-suspenders for the cursor workspace-trust dialog: the marker
+        // pre-write in spawnManagedCursorSession normally suppresses it, but auto-
+        // accept any dialog that still surfaces so the pane never hangs before its
+        // first turn (which is what strands cursor streaming).
+        if (agent === "cursor") {
+          void (async () => {
+            for (let i = 0; i < 12; i++) {
+              await new Promise((res) => setTimeout(res, 500));
+              if (dismissCursorTrustPrompt(`${tmuxName}:0.0`)) break;
+            }
+          })();
+        }
+        if (agent === "aisdk" || agent === "opencode" || agent === "hermes" || agent === "cursor")
           patchManaged(tmuxName, { launchState: "running" });
         return json({
           ok: true,
@@ -3305,7 +3592,68 @@ export async function cmdServe() {
           sessionId: launchId,
           agent,
           parentSessionId: parent?.sessionId ?? parentId ?? null,
+          // Echo the resolved tag so callers (MCP subagent tools, CLI) can see
+          // whether the child landed under the right user instead of guessing.
+          assignedUser: assignedUser ?? null,
           worktree: worktree?.path ?? null,
+        });
+      }
+
+      // Move an existing session under a different parent (or detach it to a
+      // root). Parentage is derived at read time from three fields on the
+      // managed record, so a reparent is just a patch of those fields — but we
+      // guard it: the child must be lfg-managed (only then is there a record to
+      // patch), the new parent must exist, and the move must not create a cycle
+      // (which would make the tree walk in agent-catalog loop forever).
+      if (path === "/api/sessions/reparent" && req.method === "POST") {
+        const body = (await req.json().catch(() => null)) as {
+          sessionId?: string;
+          parentSessionId?: string | null;
+        } | null;
+        const childId = body?.sessionId?.trim();
+        if (!childId) return err(400, "sessionId required");
+        const sessions = await listSessions();
+        const matches = (s: (typeof sessions)[number], id: string) =>
+          s.sessionId === id || s.nativeSessionId === id;
+        const child = sessions.find((s) => matches(s, childId));
+        if (!child) return err(404, "session not found");
+        if (!child.managed || !child.tmuxName)
+          return err(400, "session is not lfg-managed; its parentage cannot be changed");
+
+        const newParentId = body?.parentSessionId?.trim() || null;
+        if (!newParentId) {
+          // Detach to a root: clear the parent fields.
+          patchManaged(child.tmuxName, {
+            parentSessionId: undefined,
+            parentNativeSessionId: undefined,
+            parentAgent: undefined,
+          });
+          return json({ ok: true, sessionId: childId, parentSessionId: null });
+        }
+
+        const parent = sessions.find((s) => matches(s, newParentId));
+        if (!parent) return err(404, "parent session not found");
+        if (matches(parent, childId)) return err(400, "cannot parent a session to itself");
+        // Cycle guard: walk up from the proposed parent; if we reach the child,
+        // the move would form a loop. Bounded by session count as a backstop
+        // against a pre-existing cycle in the data.
+        let cursor: (typeof sessions)[number] | undefined = parent;
+        for (let hops = 0; cursor && hops <= sessions.length; hops++) {
+          if (matches(cursor, childId)) return err(400, "reparent would create a cycle");
+          const up: string | null | undefined =
+            cursor.parentSessionId ?? cursor.parentNativeSessionId;
+          cursor = up ? sessions.find((s) => matches(s, up)) : undefined;
+        }
+
+        patchManaged(child.tmuxName, {
+          parentSessionId: parent.sessionId ?? undefined,
+          parentNativeSessionId: parent.nativeSessionId ?? undefined,
+          parentAgent: parent.agent ?? undefined,
+        });
+        return json({
+          ok: true,
+          sessionId: childId,
+          parentSessionId: parent.sessionId ?? parent.nativeSessionId ?? newParentId,
         });
       }
 
@@ -3316,13 +3664,50 @@ export async function cmdServe() {
           if (!artifact) return err(404, "artifact not found");
           const file = Bun.file(artifact.filePath);
           if (!(await file.exists())) return err(404, "artifact file not found");
-          return new Response(file, {
-            headers: {
-              "Content-Type": artifact.mimeType,
-              "Cache-Control": "private, max-age=31536000, immutable",
-              "X-Content-Type-Options": "nosniff",
-            },
-          });
+          const baseHeaders: Record<string, string> = {
+            "Content-Type": artifact.mimeType,
+            "Cache-Control": "private, max-age=31536000, immutable",
+            "X-Content-Type-Options": "nosniff",
+            // Video seeking (and Safari playback) needs byte-range support.
+            "Accept-Ranges": "bytes",
+          };
+          // Honor a single-range request so the <video> element can seek without
+          // re-downloading the whole file. Bun.file().slice() streams the slice.
+          const range = req.headers.get("range");
+          const rangeMatch = range?.match(/^bytes=(\d*)-(\d*)$/);
+          if (rangeMatch) {
+            const total = file.size;
+            const startRaw = rangeMatch[1];
+            const endRaw = rangeMatch[2];
+            let start = startRaw ? Number(startRaw) : 0;
+            let end = endRaw ? Number(endRaw) : total - 1;
+            if (!startRaw && endRaw) {
+              // Suffix range: bytes=-N → the final N bytes.
+              start = Math.max(0, total - Number(endRaw));
+              end = total - 1;
+            }
+            if (
+              Number.isFinite(start) &&
+              Number.isFinite(end) &&
+              start <= end &&
+              start < total
+            ) {
+              end = Math.min(end, total - 1);
+              return new Response(file.slice(start, end + 1), {
+                status: 206,
+                headers: {
+                  ...baseHeaders,
+                  "Content-Range": `bytes ${start}-${end}/${total}`,
+                  "Content-Length": String(end - start + 1),
+                },
+              });
+            }
+            return new Response("range not satisfiable", {
+              status: 416,
+              headers: { ...baseHeaders, "Content-Range": `bytes */${total}` },
+            });
+          }
+          return new Response(file, { headers: baseHeaders });
         }
       }
 
@@ -3345,6 +3730,29 @@ export async function cmdServe() {
             return json({ ok: true, artifact, message: imageArtifactToMessage(artifact) });
           } catch (e) {
             return err(400, e instanceof Error ? e.message : "could not create image artifact");
+          }
+        }
+      }
+
+      {
+        const m = path.match(/^\/api\/sessions\/([0-9a-fA-F-]{36})\/artifacts\/videos$/);
+        if (m && req.method === "POST") {
+          const body = (await req.json().catch(() => null)) as {
+            path?: string;
+            caption?: string;
+            alt?: string;
+          } | null;
+          if (!body?.path?.trim()) return err(400, "path required");
+          try {
+            const artifact = createVideoArtifact({
+              sessionId: m[1],
+              path: body.path,
+              caption: body.caption,
+              alt: body.alt,
+            });
+            return json({ ok: true, artifact, message: imageArtifactToMessage(artifact) });
+          } catch (e) {
+            return err(400, e instanceof Error ? e.message : "could not create video artifact");
           }
         }
       }
@@ -4117,7 +4525,12 @@ export async function cmdServe() {
                   const msgs = transcriptMessagesForClient(p.sid, page.messages).map(msgWithHtml);
                   lastArtifactAt.set(
                     p.sid,
-                    Math.max(0, ...msgs.filter((msg) => msg.kind === "image").map((msg) => msg.ts ?? 0)),
+                    Math.max(
+                      0,
+                      ...msgs
+                        .filter((msg) => msg.kind === "image" || msg.kind === "video")
+                        .map((msg) => msg.ts ?? 0),
+                    ),
                   );
                   evlog("live_stream_backlog", {
                     rid,
@@ -4257,7 +4670,9 @@ export async function cmdServe() {
                 ).map(msgWithHtml);
                 lastArtifactAt = Math.max(
                   0,
-                  ...msgs.filter((msg) => msg.kind === "image").map((msg) => msg.ts ?? 0),
+                  ...msgs
+                    .filter((msg) => msg.kind === "image" || msg.kind === "video")
+                    .map((msg) => msg.ts ?? 0),
                 );
                 for (const msg of msgs)
                   send(`event: msg\ndata: ${JSON.stringify(msg)}\n\n`);

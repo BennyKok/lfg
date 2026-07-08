@@ -16,6 +16,19 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="lfg" />
     <title>lfg</title>
+    <script>
+      /* Apply the theme class BEFORE first paint, so --background resolves to
+         the dark value on the very first frame. Without this, the app's bundled
+         CSS (`html { background: var(--background) }`) overrides the inline dark
+         rule below but resolves --background to its light default until main.tsx
+         adds `.dark` post-bundle — leaving the uncovered bottom safe-area strip
+         light for a beat (the "white border" under the splash). main.tsx still
+         owns runtime OS-change toggling. */
+      try {
+        if (matchMedia("(prefers-color-scheme: dark)").matches)
+          document.documentElement.classList.add("dark");
+      } catch (e) {}
+    </script>
     <style>
       /* Paint the shell background on html/body too, not just the splash. A
          fixed element only covers the layout viewport, so on mobile the bottom

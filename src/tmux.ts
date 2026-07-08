@@ -1,7 +1,7 @@
 // Map a live process to its tmux pane and inject input. Claude Code sessions
 // run inside tmux panes; we discover the `claude` pid via pgrep/proc, walk up
 // its parent chain to the pane's top process, and `send-keys` into that pane.
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, realpathSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { reposRoot } from "./projects";
 
@@ -35,11 +35,40 @@ export function ensureFolderTrusted(cwd: string): void {
   }
 }
 
-function addSessionEnv(argv: string[], sessionId?: string | null): void {
-  if (!sessionId) return;
+// cursor-agent shows a blocking "Workspace Trust Required" dialog the first time
+// it opens an untrusted cwd — and its --trust flag only applies to --print mode,
+// so a spawned TUI session hangs on the dialog forever, never runs a turn, and
+// never writes its transcript (so it also never streams). Pre-write the trust
+// marker cursor persists on accept: ~/.cursor/projects/<enc-cwd>/.workspace-trusted,
+// where <enc-cwd> is the abs cwd with the leading slash dropped and remaining
+// slashes turned into dashes. Idempotent; best-effort.
+function ensureCursorFolderTrusted(cwd: string): void {
+  try {
+    if (!cwd.startsWith("/")) return;
+    const enc = cwd.replace(/^\/+/, "").replace(/\//g, "-");
+    const dir = `${homedir()}/.cursor/projects/${enc}`;
+    const marker = `${dir}/.workspace-trusted`;
+    if (existsSync(marker)) return;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      marker,
+      JSON.stringify({ trustedAt: new Date().toISOString(), workspacePath: cwd }, null, 2),
+    );
+  } catch {
+    // best-effort — worst case is the old trust-dialog hang
+  }
+}
+
+function addSessionEnv(argv: string[], sessionId?: string | null, user?: string | null): void {
   const i = argv.indexOf("new-session");
   if (i < 0) return;
-  argv.splice(i + 1, 0, "-e", `LFG_SESSION_ID=${sessionId}`);
+  const env: string[] = [];
+  if (sessionId) env.push("-e", `LFG_SESSION_ID=${sessionId}`);
+  // The assigned user rides along so anything the session spawns (lfg MCP,
+  // `lfg subagent`) can tag ITS children to the same user even when the parent
+  // chain isn't resolvable at create time (headless/cron callers).
+  if (user) env.push("-e", `LFG_USER=${user}`);
+  if (env.length) argv.splice(i + 1, 0, ...env);
 }
 
 // Resolve the `claude` executable to an absolute path. We must NOT rely on a
@@ -94,6 +123,37 @@ export function grokBin(): string {
     if (existsSync(p)) return (_grokBin = p);
   }
   return (_grokBin = "grok");
+}
+
+let _cursorBin: string | null = null;
+function isGrokAgentPath(path: string): boolean {
+  try {
+    const real = realpathSync(path);
+    return real.includes("/.grok/") || real.endsWith("/grok-linux-x86_64");
+  } catch {
+    return path.includes("/.grok/");
+  }
+}
+
+export function cursorBin(): string {
+  if (_cursorBin) return _cursorBin;
+  const cursorAgent = Bun.which("cursor-agent");
+  if (cursorAgent) return (_cursorBin = cursorAgent);
+  const agentOnPath = Bun.which("agent");
+  if (agentOnPath && !isGrokAgentPath(agentOnPath)) return (_cursorBin = agentOnPath);
+  const home = process.env.HOME ?? homedir();
+  for (const p of [
+    process.env.LFG_CURSOR_PATH ?? "",
+    `${home}/.local/bin/cursor-agent`,
+    `${home}/.bun/bin/cursor-agent`,
+    "/usr/local/bin/cursor-agent",
+    `${home}/.local/bin/agent`,
+    `${home}/.bun/bin/agent`,
+    "/usr/local/bin/agent",
+  ]) {
+    if (p && existsSync(p) && !isGrokAgentPath(p)) return (_cursorBin = p);
+  }
+  return (_cursorBin = "cursor-agent");
 }
 
 let _hermesBin: string | null = null;
@@ -285,6 +345,7 @@ export function spawnManagedSession(opts: {
   // afterwards (same as a fresh spawn). The full prior history is preserved.
   resume?: string;
   lfgSessionId?: string;
+  lfgUser?: string | null;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   ensureFolderTrusted(opts.cwd);
@@ -309,7 +370,7 @@ export function spawnManagedSession(opts: {
   // positional prompt as a second directory (which strands the new session at
   // an empty composer — the first message never gets submitted).
   if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
-  addSessionEnv(argv, opts.lfgSessionId);
+  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -351,6 +412,7 @@ export function spawnManagedCodexSession(opts: {
   model?: string;
   thinkingLevel?: string;
   lfgSessionId?: string;
+  lfgUser?: string | null;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   const argv = [
@@ -374,7 +436,7 @@ export function spawnManagedCodexSession(opts: {
   if (opts.model) argv.push("--model", opts.model);
   if (opts.thinkingLevel) argv.push("-c", `reasoning_effort=${JSON.stringify(opts.thinkingLevel)}`);
   if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
-  addSessionEnv(argv, opts.lfgSessionId);
+  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -388,6 +450,7 @@ export function spawnManagedGrokSession(opts: {
   model?: string;
   thinkingLevel?: string;
   lfgSessionId?: string;
+  lfgUser?: string | null;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   const argv = [
@@ -409,7 +472,40 @@ export function spawnManagedGrokSession(opts: {
   const effort = claudeEffortFor(opts.thinkingLevel);
   if (effort) argv.push("--effort", effort);
   if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
-  addSessionEnv(argv, opts.lfgSessionId);
+  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
+  const create = Bun.spawnSync(argv);
+  if (create.exitCode !== 0)
+    return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
+  return { ok: true };
+}
+
+export function spawnManagedCursorSession(opts: {
+  name: string;
+  cwd: string;
+  prompt?: string;
+  model?: string;
+  lfgSessionId?: string;
+  lfgUser?: string | null;
+}): { ok: boolean; error?: string } {
+  const dec = new TextDecoder();
+  // Pre-accept workspace trust so the TUI doesn't hang on the trust dialog
+  // (which would also block the transcript that the live view streams).
+  ensureCursorFolderTrusted(opts.cwd);
+  const argv = [
+    "tmux",
+    "new-session",
+    "-d",
+    "-s",
+    opts.name,
+    "-c",
+    opts.cwd,
+    cursorBin(),
+    "--sandbox",
+    "disabled",
+  ];
+  if (opts.model && opts.model !== "auto") argv.push("--model", opts.model);
+  if (opts.prompt && opts.prompt.trim()) argv.push(opts.prompt);
+  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -422,6 +518,7 @@ export function spawnManagedHermesSession(opts: {
   model?: string;
   provider?: string;
   lfgSessionId?: string;
+  lfgUser?: string | null;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   const argv = [
@@ -439,7 +536,7 @@ export function spawnManagedHermesSession(opts: {
   ];
   if (opts.model) argv.push("--model", opts.model);
   if (opts.provider) argv.push("--provider", opts.provider);
-  addSessionEnv(argv, opts.lfgSessionId);
+  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -459,6 +556,7 @@ export function spawnManagedAisdkSession(opts: {
   sessionId: string;
   thinkingLevel?: string;
   lfgSessionId?: string;
+  lfgUser?: string | null;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   // The provider drives the bundled claude binary, which still honors the trust
@@ -479,7 +577,7 @@ export function spawnManagedAisdkSession(opts: {
   // claude-code provider's `effort` option (see aisdk-session.ts).
   if (opts.thinkingLevel) argv.push("--thinking-level", opts.thinkingLevel);
   if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
-  addSessionEnv(argv, opts.lfgSessionId ?? opts.sessionId);
+  addSessionEnv(argv, opts.lfgSessionId ?? opts.sessionId, opts.lfgUser);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -499,6 +597,7 @@ export function spawnManagedCodexAisdkSession(opts: {
   key: string;
   thinkingLevel?: string;
   lfgSessionId?: string;
+  lfgUser?: string | null;
   // When set, resume this existing codex rollout/thread instead of starting a
   // fresh persistent thread — the harness seeds its threadId with it.
   resume?: string;
@@ -523,7 +622,7 @@ export function spawnManagedCodexAisdkSession(opts: {
   if (opts.thinkingLevel) argv.push("--thinking-level", opts.thinkingLevel);
   if (opts.resume) argv.push("--resume", opts.resume);
   if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
-  addSessionEnv(argv, opts.lfgSessionId ?? opts.key);
+  addSessionEnv(argv, opts.lfgSessionId ?? opts.key, opts.lfgUser);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -543,6 +642,7 @@ export function spawnManagedOpencodeAisdkSession(opts: {
   model: string;
   key: string;
   lfgSessionId?: string;
+  lfgUser?: string | null;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   // Harmless for opencode: ensureFolderTrusted only patches ~/.claude.json and
@@ -561,7 +661,7 @@ export function spawnManagedOpencodeAisdkSession(opts: {
     "--tmux", opts.name,
   ];
   if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
-  addSessionEnv(argv, opts.lfgSessionId ?? opts.key);
+  addSessionEnv(argv, opts.lfgSessionId ?? opts.key, opts.lfgUser);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -578,6 +678,23 @@ export function dismissCodexUpdatePrompt(target: string): boolean {
     return false;
   Bun.spawnSync(["tmux", "send-keys", "-t", target, "-l", "2"]);
   Bun.spawnSync(["tmux", "send-keys", "-t", target, "Enter"]);
+  return true;
+}
+
+// cursor-agent shows a blocking "⚠ Workspace Trust Required" dialog before the
+// composer for any untrusted cwd. spawnManagedCursorSession pre-writes the trust
+// marker so it normally never appears, but this is the belt-and-suspenders: if a
+// dialog slips through (marker race, a cwd whose encoding we didn't anticipate,
+// or a session spawned before the marker fix), a dashboard-spawned pane would
+// hang here forever, never run a turn, and never write the transcript the live
+// view streams — i.e. "cursor streaming is broken". Answer it by pressing `a`
+// ("Trust this workspace"). Only that exact dialog; other selectors are left for
+// the dashboard's prompt-answer flow.
+export function dismissCursorTrustPrompt(target: string): boolean {
+  const pane = capturePane(target);
+  if (!pane || !/Workspace Trust Required/i.test(pane) || !/\[a\]\s+Trust this workspace/i.test(pane))
+    return false;
+  Bun.spawnSync(["tmux", "send-keys", "-t", target, "-l", "a"]);
   return true;
 }
 
@@ -966,6 +1083,22 @@ export function inputBoxText(target: string): string | null {
   // an editable composer to the send queue.
   for (let i = lines.length - 1; i >= 0; i--) {
     const m = lines[i].match(/^\s*›\s*(.*?)\s*$/);
+    if (!m) continue;
+    const text = m[1] ?? "";
+    if (/^\d+\.\s+/.test(text)) return null;
+    return text;
+  }
+
+  // cursor-agent renders the composer as a single bottom line prefixed with a
+  // right-arrow (U+2192), e.g. `→ message text`, or `→ Add a follow-up` when
+  // empty (the placeholder just won't match the caller's needle). Without this
+  // branch inputBoxText returns null for cursor, boxHasNeedle reads "composer
+  // not visible", and every send retries type-then-clear and fails with
+  // "message never left the input box after retries". Scan bottom-up (the two
+  // status lines below the composer don't start with →) and skip numbered
+  // selector rows the same way the codex branch does.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = lines[i].match(/^\s*→\s*(.*?)\s*$/);
     if (!m) continue;
     const text = m[1] ?? "";
     if (/^\d+\.\s+/.test(text)) return null;
