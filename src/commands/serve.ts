@@ -1,7 +1,7 @@
 import { readdir, realpath, stat } from "node:fs/promises";
 import { appendFileSync, statSync, mkdirSync, readFileSync, type Dirent } from "node:fs";
 import { tmpdir, homedir } from "node:os";
-import { dirname, extname, join, resolve } from "node:path";
+import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { marked } from "marked";
 import { PATHS, installInfo } from "../config.ts";
@@ -383,6 +383,56 @@ async function listRepos() {
   for (const r of await listCustomRepos()) await addRepo(r.name, r.cwd, true);
   repos.sort((a, b) => a.name.localeCompare(b.name));
   return repos;
+}
+
+type RepoEntry = Awaited<ReturnType<typeof listRepos>>[number];
+
+function cwdIsWithin(absCwd: string, absRoot: string): boolean {
+  return absCwd === absRoot || absCwd.startsWith(`${absRoot}/`);
+}
+
+function resolveInputCwd(rawCwd: string, baseCwd?: string | null): string {
+  return !isAbsolute(rawCwd) && baseCwd ? resolve(baseCwd, rawCwd) : resolve(rawCwd);
+}
+
+function repoContainingCwd(
+  repos: RepoEntry[],
+  rawCwd: string | null | undefined,
+  baseCwd?: string | null,
+): RepoEntry | undefined {
+  const cwd = rawCwd?.trim();
+  if (!cwd) return undefined;
+  const wanted = resolveInputCwd(cwd, baseCwd);
+  return repos
+    .filter((repo) => cwdIsWithin(wanted, resolve(repo.cwd)))
+    .sort((a, b) => resolve(b.cwd).length - resolve(a.cwd).length)[0];
+}
+
+function repoForParentSession(repos: RepoEntry[], parent: Session | undefined): RepoEntry | undefined {
+  if (!parent) return undefined;
+  return (
+    repoContainingCwd(repos, parent.cwd) ??
+    (parent.project ? repos.find((repo) => repo.project === parent.project) : undefined) ??
+    (parent.cwd ? repos.find((repo) => repo.project === projectName(parent.cwd)) : undefined)
+  );
+}
+
+function repoForRequestedSessionCwd(
+  repos: RepoEntry[],
+  rawCwd: string,
+  parent: Session | undefined,
+): RepoEntry | undefined {
+  const explicit = repoContainingCwd(repos, rawCwd, parent?.cwd);
+  if (explicit) return explicit;
+
+  // Subagent callers sometimes pass their current directory, which may be an
+  // isolated /tmp/lfg-wt checkout that is deliberately absent from /api/repos.
+  // If that path is inside the parent session's cwd, map it back to the parent
+  // project instead of treating it as an arbitrary unknown repo.
+  if (parent?.cwd && cwdIsWithin(resolveInputCwd(rawCwd, parent.cwd), resolve(parent.cwd))) {
+    return repoForParentSession(repos, parent);
+  }
+  return undefined;
 }
 
 // Auto agents may run in a git worktree (or any nested checkout); the UI must
@@ -3320,13 +3370,7 @@ export async function cmdServe() {
           if (!allowed.includes(thinkingLevel))
             return err(400, `unknown thinking level "${thinkingLevel}" for ${agent} (expected one of ${allowed.join(", ")})`);
         }
-        // Always spawn in a trusted folder — claude shows a blocking "trust this
-        // folder?" dialog for any untrusted cwd, which hangs session startup.
-        // LFG MCP is registered user-level, so orchestrator/subagent sessions get
-        // the same session tools regardless of cwd.
-        const requestedCwd = body?.cwd?.trim() || SELF_REPO;
-        const repo = (await listRepos()).find((r) => r.cwd === requestedCwd);
-        if (!repo) return err(400, "unknown repo");
+        const requestedCwd = body?.cwd?.trim() || undefined;
         const parentId = body?.parentSessionId?.trim() || undefined;
         const spawnedBy = body?.spawnedBy?.trim() || (parentId ? "subagent" : undefined);
         const liveRows = parentId ? await listSessions() : [];
@@ -3334,6 +3378,28 @@ export async function cmdServe() {
           ? liveRows.find((s) => s.sessionId === parentId || s.nativeSessionId === parentId)
           : undefined;
         if (parentId && !parent) return err(404, "parent session not found");
+        // Always spawn in a trusted folder — claude shows a blocking "trust this
+        // folder?" dialog for any untrusted cwd, which hangs session startup.
+        // Explicit cwd wins; otherwise subagents inherit their parent project.
+        // Root sessions keep the historical SELF_REPO default. If a parent is
+        // present but its repo is no longer in the picker, fail loudly instead
+        // of silently spawning in SELF_REPO.
+        const repos = await listRepos();
+        const repo = requestedCwd
+          ? repoForRequestedSessionCwd(repos, requestedCwd, parent)
+          : parent
+            ? repoForParentSession(repos, parent)
+            : repos.find((r) => r.cwd === SELF_REPO);
+        if (!repo) {
+          return err(
+            400,
+            requestedCwd
+              ? "unknown repo"
+              : parent
+                ? "parent session repo is not in the repo picker"
+                : "unknown repo",
+          );
+        }
         const subagentDepth = parent && spawnedBy === "subagent"
           ? childSubagentDepth(parent, liveRows)
           : null;

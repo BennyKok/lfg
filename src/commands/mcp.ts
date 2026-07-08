@@ -102,7 +102,7 @@ const SUBAGENT_INPUT_SCHEMA = {
       "Runtime harness: claude, aisdk, codex-aisdk, codex, opencode, grok, or hermes. Defaults to aisdk. Prefer claude for design/frontend polish and codex for backend/server work.",
     ),
   model: z.string().optional().describe("Model name. Defaults to the selected agent default."),
-  cwd: z.string().optional().describe("Repository cwd for the child session. Defaults to the server's default repo."),
+  cwd: z.string().optional().describe("Repository cwd for the child session. Defaults to the parent session's project when there is a parent; otherwise the server's default repo."),
   parentSessionId: z
     .string()
     .optional()

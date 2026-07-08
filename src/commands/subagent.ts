@@ -33,8 +33,10 @@ Env:
 Behavior:
   Subagents are LFG-managed, linked to their parent, capped at depth 4, and
   launched with instructions to report progress plus one terminal state back to
-  the parent session. Nested delegation should use LFG MCP subagent tools, not
-  generic or harness-native subagent tools.
+  the parent session. When --cwd is omitted, the child inherits the parent
+  session's project when there is a parent; otherwise it uses the server default
+  repo. Nested delegation should use LFG MCP subagent tools, not generic or
+  harness-native subagent tools.
 `;
 
 type Repo = { name: string; cwd: string; project?: string };
