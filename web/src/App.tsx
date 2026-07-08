@@ -4111,15 +4111,22 @@ export function App() {
         <NavIsland className="shrink-0">
           <div className="flex h-11 items-center rounded-full bg-background/80 px-1.5 backdrop-blur-xl">
             {tab === "live" ? (
-              <button
-                type="button"
-                onClick={() => setTab("live")}
-                aria-label="Live"
-                aria-current="page"
-                className="flex items-center rounded-full px-1.5 transition-transform active:scale-[0.96]"
-              >
-                <img src="/icon.svg" alt="lfg" className="mx-1 size-6 shrink-0" />
-              </button>
+              isMobile ? (
+                <ManageSessionsMenu
+                  projectFilter={projectFilter}
+                  onSelect={(template) => void launchManageSessions(template)}
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setTab("live")}
+                  aria-label="Live"
+                  aria-current="page"
+                  className="flex items-center rounded-full px-1.5 transition-transform active:scale-[0.96]"
+                >
+                  <img src="/icon.svg" alt="lfg" className="mx-1 size-6 shrink-0" />
+                </button>
+              )
             ) : (
               <button
                 type="button"
@@ -4147,10 +4154,12 @@ export function App() {
                     onChange={setProjectFilter}
                   />
                 ) : null}
-                <ManageSessionsMenu
-                  projectFilter={projectFilter}
-                  onSelect={(template) => void launchManageSessions(template)}
-                />
+                {!isMobile ? (
+                  <ManageSessionsMenu
+                    projectFilter={projectFilter}
+                    onSelect={(template) => void launchManageSessions(template)}
+                  />
+                ) : null}
                 <UserFilterMenu
                   value={userFilter}
                   users={users}
