@@ -124,6 +124,14 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
       // The claude-code provider accepts `effort` (low|medium|high|xhigh|max);
       // omitting it inherits the provider/model default.
       ...(effort ? { effort } : {}),
+      // The provider builds the claude subprocess env from a sanitizing
+      // allowlist (HOME/PATH/ANTHROPIC_*/CLAUDE_*/…) — LFG_* is NOT on it, so
+      // without this the `lfg mcp` server under claude loses LFG_SESSION_ID/
+      // LFG_USER and every lfg_create_subagent child lands unlinked (no
+      // parent) and unassigned (no user). Forward all LFG_* vars explicitly.
+      env: Object.fromEntries(
+        Object.entries(process.env).filter(([k]) => k.startsWith("LFG_")),
+      ),
       ...(claudePath
         ? { sdkOptions: { pathToClaudeCodeExecutable: claudePath } }
         : {}),
