@@ -61,7 +61,6 @@ import {
 import {
   listSessions,
   resolveTranscript,
-  normalizeLineMessages,
   setSessionTitle,
   sessionIdForPid,
   pendingToolPrompt,
@@ -83,12 +82,15 @@ import {
   indexedRecentMessages,
   indexedMessagePage,
   indexTranscript,
-  indexTranscriptMessages,
   searchAllTranscriptIndexes,
   searchTranscriptIndex,
-  startTranscriptMessageMonitor,
-  warmTranscriptIndexes,
 } from "../transcript-index.ts";
+import {
+  ensureChatTranscriptCaughtUp,
+  startChatIngestMonitor,
+  subscribeChatTranscript,
+  warmChatTranscripts,
+} from "../chat-ingest.ts";
 import { traceLog, traceLogPathForToday } from "../trace-log.ts";
 import {
   capturePane,
@@ -195,7 +197,6 @@ import {
 const REPOS_ROOT = reposRoot();
 const SELF_REPO = PATHS.root;
 const EVLOG_DIR = join(PATHS.data, "evlogs");
-const TRANSCRIPT_OFFSET_ENCODER = new TextEncoder();
 
 function evlog(event: string, fields: Record<string, unknown> = {}) {
   traceLog(event, fields);
@@ -2049,7 +2050,7 @@ export async function cmdServe() {
       if (path === "/api/bootstrap" && req.method === "GET") {
         noteListSessionsClientActivity();
         const sessionsTask = listSessionsCached().then((sessions) => {
-          warmTranscriptIndexes(sessions);
+          warmChatTranscripts(sessions);
           warmRenderedBacklogs(sessions, 40);
           return sessions;
         });
@@ -2945,7 +2946,7 @@ export async function cmdServe() {
       if (path === "/api/sessions") {
         noteListSessionsClientActivity();
         const sessions = await listSessionsCached();
-        warmTranscriptIndexes(sessions);
+        warmChatTranscripts(sessions);
         warmRenderedBacklogs(sessions, 40);
         return json({ sessions });
       }
@@ -3930,7 +3931,7 @@ export async function cmdServe() {
         if (m && req.method === "GET") {
           const tp = await resolveTranscript(m[1]);
           if (!tp) return err(404, "session transcript not found");
-          enqueueTranscriptIndex(tp, m[1]);
+          await ensureChatTranscriptCaughtUp(tp, m[1], "api-messages");
           if (url.searchParams.get("page") === "backward") {
             const rawLimit = parseInt(url.searchParams.get("limit") ?? "220", 10);
             const rawBefore = url.searchParams.get("before");
@@ -4373,6 +4374,7 @@ export async function cmdServe() {
         let pi: ReturnType<typeof setInterval> | null = null;
         let di: ReturnType<typeof setInterval> | null = null;
         let hb: ReturnType<typeof setInterval> | null = null;
+        const transcriptUnsubs = new Map<string, () => void>();
         let closed = false;
         const stream = new ReadableStream({
           start(controller) {
@@ -4386,9 +4388,6 @@ export async function cmdServe() {
             };
             send(`: open\n\n`);
             evlog("live_stream_start", { rid, idsCount: ids.length });
-            const offsets = new Map<string, number>();
-            const bufs = new Map<string, string>();
-            const bufOffsets = new Map<string, number>();
             const lastSig = new Map<string, string>();
             const lastArtifactAt = new Map<string, number>();
             const lastMessageAt = new Map<string, number>();
@@ -4421,64 +4420,43 @@ export async function cmdServe() {
                 send(`event: msg\ndata: ${JSON.stringify({ sid, m: msgWithHtml(message) })}\n\n`);
               }
             };
-            const pumpOne = async (p: LivePane) => {
+            const subscribeTranscriptOne = (p: LivePane, tp: string) => {
+              if (transcriptUnsubs.has(p.sid)) return;
+              p.tp = tp;
+              transcriptUnsubs.set(
+                p.sid,
+                subscribeChatTranscript(tp, p.sid, (event) => {
+                  if (closed) return;
+                  const messages = visibleTranscriptMessages(event.messages);
+                  if (messages.length) markMessage(p.sid);
+                  for (const msg of messages) {
+                    send(`event: msg\ndata: ${JSON.stringify({ sid: p.sid, m: msgWithHtml(msg) })}\n\n`);
+                  }
+                }),
+              );
+            };
+            const ensureTranscriptOne = async (p: LivePane) => {
               if (closed) return;
+              if (transcriptUnsubs.has(p.sid)) return;
               try {
                 if (!p.tp) {
                   const tp = await resolveTranscript(p.sid);
                   if (!tp) return;
-                  p.tp = tp;
-                  enqueueTranscriptIndex(tp, p.sid);
-                  offsets.set(p.sid, Bun.file(tp).size);
+                  subscribeTranscriptOne(p, tp);
                   return;
                 }
-                const pumpT0 = performance.now();
-                const f = Bun.file(p.tp);
-                const size = f.size;
-                let offset = offsets.get(p.sid) ?? 0;
-                if (size < offset) {
-                  offset = 0; // rotated/truncated
-                  bufs.delete(p.sid);
-                  bufOffsets.delete(p.sid);
-                }
-                if (size > offset) {
-                  const bytes = size - offset;
-                  const chunk = await f.slice(offset, size).text();
-                  offsets.set(p.sid, size);
-                  const previousBuf = bufs.get(p.sid) ?? "";
-                  const combined = previousBuf + chunk;
-                  const lines = combined.split("\n");
-                  const rest = lines.pop() ?? "";
-                  bufs.set(p.sid, rest);
-                  let lineOffset = previousBuf ? (bufOffsets.get(p.sid) ?? offset) : offset;
-                  const indexLines: Array<{ offset: number; messages: ReturnType<typeof normalizeLineMessages> }> = [];
-                  const outgoing: Array<ReturnType<typeof msgWithHtml>> = [];
-                  for (const l of lines) {
-                    const currentOffset = lineOffset;
-                    lineOffset += TRANSCRIPT_OFFSET_ENCODER.encode(l).length + 1;
-                    if (!l) continue;
-                    const normalized = normalizeLineMessages(l);
-                    indexLines.push({ offset: currentOffset, messages: normalized });
-                    const msgs = visibleTranscriptMessages(normalized);
-                    if (msgs.length) markMessage(p.sid);
-                    for (const msg of msgs) outgoing.push(msgWithHtml(msg));
-                  }
-                  if (rest) bufOffsets.set(p.sid, lineOffset);
-                  else bufOffsets.delete(p.sid);
-                  if (indexLines.length) indexTranscriptMessages(p.tp, p.sid, indexLines);
-                  for (const msg of outgoing)
-                    send(
-                      `event: msg\ndata: ${JSON.stringify({ sid: p.sid, m: msg })}\n\n`,
-                    );
-                  evlog("live_stream_pump", {
+                subscribeTranscriptOne(p, p.tp);
+              } catch (err) {
+                const code = (err as { code?: string } | null)?.code;
+                if (code !== "ENOENT") {
+                  evlog("live_stream_ingest_error", {
                     rid,
                     sid: p.sid,
-                    bytes,
-                    lines: lines.filter(Boolean).length,
-                    durationMs: Math.round((performance.now() - pumpT0) * 1000) / 1000,
+                    transcriptPath: p.tp,
+                    error: err instanceof Error ? err.message : String(err),
                   });
                 }
-              } catch {}
+              }
             };
             const lastBusy = new Map<string, string>();
             const lastDraft = new Map<string, DraftState>();
@@ -4554,7 +4532,6 @@ export async function cmdServe() {
                 ids.map(async (sid) => {
                   const sidT0 = performance.now();
                   const tp = await resolveTranscript(sid);
-                  if (tp) enqueueTranscriptIndex(tp, sid);
                   const entry = findAisdkEntryByAnyId(sid);
                   evlog("live_stream_resolve_transcript", {
                     rid,
@@ -4594,6 +4571,7 @@ export async function cmdServe() {
                     queueOne(p);
                     return;
                   }
+                  await ensureChatTranscriptCaughtUp(p.tp, p.sid, "sse-backlog");
                   const backlogT0 = performance.now();
                   const page = await indexedMessagePage(p.tp, p.sid, { limit: 40 });
                   const readMs = performance.now() - backlogT0;
@@ -4624,7 +4602,7 @@ export async function cmdServe() {
                       nextBefore: page.nextBefore,
                     })}\n\n`,
                   );
-                  offsets.set(p.sid, Bun.file(p.tp).size);
+                  subscribeTranscriptOne(p, p.tp);
                   lastMessageAt.set(p.sid, Date.now());
                   lastSig.set(p.sid, " ");
                   lastQ.set(p.sid, "[]");
@@ -4651,7 +4629,7 @@ export async function cmdServe() {
                 }
               });
               iv = setInterval(() => {
-                for (const p of panes) pumpOne(p);
+                for (const p of panes) void ensureTranscriptOne(p);
               }, 700);
               pi = setInterval(() => {
                 for (const p of panes) {
@@ -4669,6 +4647,8 @@ export async function cmdServe() {
           },
           cancel() {
             closed = true;
+            for (const unsub of transcriptUnsubs.values()) unsub();
+            transcriptUnsubs.clear();
             if (iv) clearInterval(iv);
             if (pi) clearInterval(pi);
             if (di) clearInterval(di);
@@ -4687,7 +4667,6 @@ export async function cmdServe() {
           const sid = session?.sessionId ?? m[1];
           const tp = await resolveTranscript(m[1]);
           if (!tp) return err(404, "session transcript not found");
-          enqueueTranscriptIndex(tp, sid);
           const target = session?.tmuxTarget ?? null;
           let iv: ReturnType<typeof setInterval> | null = null;
           let pi: ReturnType<typeof setInterval> | null = null;
@@ -4695,6 +4674,7 @@ export async function cmdServe() {
           let qi: ReturnType<typeof setInterval> | null = null;
           let ai: ReturnType<typeof setInterval> | null = null;
           let hb: ReturnType<typeof setInterval> | null = null;
+          let transcriptUnsub: (() => void) | null = null;
           let closed = false;
           const stream = new ReadableStream({
             start(controller) {
@@ -4706,9 +4686,6 @@ export async function cmdServe() {
                   closed = true;
                 }
               };
-              let offset = 0;
-              let buf = "";
-              let bufOffset: number | null = null;
               let lastArtifactAt = 0;
               let lastMessageAt = Date.now();
               let lastStallLogAt = 0;
@@ -4737,46 +4714,33 @@ export async function cmdServe() {
                   send(`event: msg\ndata: ${JSON.stringify(msgWithHtml(message))}\n\n`);
                 }
               };
-              const pump = async () => {
+              const ensureTranscript = async () => {
                 if (closed) return;
                 try {
-                  const f = Bun.file(tp);
-                  const size = f.size;
-                  if (size < offset) {
-                    offset = 0; // file rotated/truncated
-                    buf = "";
-                    bufOffset = null;
+                  if (!transcriptUnsub) {
+                    transcriptUnsub = subscribeChatTranscript(tp, sid, (event) => {
+                      if (closed) return;
+                      const messages = visibleTranscriptMessages(event.messages);
+                      if (messages.length) lastMessageAt = Date.now();
+                      for (const msg of messages) send(`event: msg\ndata: ${JSON.stringify(msgWithHtml(msg))}\n\n`);
+                    });
                   }
-                  if (size > offset) {
-                    const startOffset = offset;
-                    const chunk = await f.slice(startOffset, size).text();
-                    offset = size;
-                    const previousBuf = buf;
-                    const combined = previousBuf + chunk;
-                    const lines = combined.split("\n");
-                    buf = lines.pop() ?? "";
-                    let lineOffset = previousBuf ? (bufOffset ?? startOffset) : startOffset;
-                    const indexLines: Array<{ offset: number; messages: ReturnType<typeof normalizeLineMessages> }> = [];
-                    const outgoing: Array<ReturnType<typeof msgWithHtml>> = [];
-                    for (const l of lines) {
-                      const currentOffset = lineOffset;
-                      lineOffset += TRANSCRIPT_OFFSET_ENCODER.encode(l).length + 1;
-                      if (!l) continue;
-                      const normalized = normalizeLineMessages(l);
-                      indexLines.push({ offset: currentOffset, messages: normalized });
-                      const msgs = visibleTranscriptMessages(normalized);
-                      if (msgs.length) lastMessageAt = Date.now();
-                      for (const msg of msgs) outgoing.push(msgWithHtml(msg));
-                    }
-                    bufOffset = buf ? lineOffset : null;
-                    if (indexLines.length) indexTranscriptMessages(tp, sid, indexLines);
-                    for (const msg of outgoing)
-                      send(`event: msg\ndata: ${JSON.stringify(msg)}\n\n`);
+                  await ensureChatTranscriptCaughtUp(tp, sid, "sse-single-live");
+                } catch (err) {
+                  const code = (err as { code?: string } | null)?.code;
+                  if (code !== "ENOENT") {
+                    evlog("live_stream_ingest_error", {
+                      transport: "sse-single",
+                      sid,
+                      transcriptPath: tp,
+                      error: err instanceof Error ? err.message : String(err),
+                    });
                   }
-                } catch {}
+                }
               };
               // backlog, then tail
               (async () => {
+                await ensureChatTranscriptCaughtUp(tp, sid, "sse-single-backlog");
                 const page = await indexedMessagePage(tp, sid, { limit: 40 });
                 const msgs = transcriptMessagesForClient(
                   sid,
@@ -4790,12 +4754,7 @@ export async function cmdServe() {
                 );
                 for (const msg of msgs)
                   send(`event: msg\ndata: ${JSON.stringify(msg)}\n\n`);
-                offset = Bun.file(tp).size;
-                // Tail fast: the reply is already fully written to the transcript
-                // by the time Claude finishes; a slow poll just adds dead wait
-                // before it reaches the UI. 200ms keeps perceived latency low
-                // without meaningfully more file stats.
-                iv = setInterval(pump, 200);
+                await ensureTranscript();
               })();
               // Poll the tmux pane for an interactive selector (permission /
               // plan prompts live in the TUI, not the transcript). Emit only on
@@ -4876,6 +4835,7 @@ export async function cmdServe() {
             },
             cancel() {
               closed = true;
+              transcriptUnsub?.();
               if (iv) clearInterval(iv);
               if (pi) clearInterval(pi);
               if (di) clearInterval(di);
@@ -4914,7 +4874,7 @@ export async function cmdServe() {
   // Keep SQLite as the chat read model for every active session. Transcript
   // JSONL files are treated as an import source; live draft deltas stay
   // ephemeral until the provider writes the completed turn.
-  startTranscriptMessageMonitor(listSessionsCached);
+  startChatIngestMonitor(listSessionsCached);
   // Warm the resumable-session cache in the background so the first time someone
   // opens the resume picker it's already served from SQLite (no cold scan wait).
   void refreshResumableCache({ force: true }).catch(() => {});

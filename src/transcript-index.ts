@@ -25,6 +25,15 @@ type IndexedMessageRow = {
   byte_offset: number;
 };
 
+export type TranscriptIndexCursor = {
+  path: string;
+  sessionId: string;
+  size: number;
+  offset: number;
+  mtimeMs: number;
+  indexedAt: number;
+};
+
 const DB_PATH = join(PATHS.data, "transcript-index.sqlite");
 const INDEX_TEXT_MAX = 12_000;
 const INDEX_CHUNK_BYTES = 1024 * 1024;
@@ -37,7 +46,6 @@ let monitorStarted = false;
 let monitorRunning = false;
 const enqueued = new Set<string>();
 const imports = new Map<string, Promise<{ indexed: number; offset: number; size: number }>>();
-const monitorFingerprints = new Map<string, number | null>();
 
 function database(): Database {
   if (db) return db;
@@ -153,10 +161,78 @@ function rowMessage(row: IndexedMessageRow): SessionMsg {
   };
 }
 
+function updateCursorInDb(
+  d: Database,
+  path: string,
+  sessionId: string,
+  cursor: { size: number; offset: number; mtimeMs: number },
+): void {
+  d.query(`
+      INSERT INTO transcript_index_cursors (path, session_id, size, offset, mtime_ms, indexed_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(path) DO UPDATE SET
+        session_id = excluded.session_id,
+        size = excluded.size,
+        offset = excluded.offset,
+        mtime_ms = excluded.mtime_ms,
+        indexed_at = excluded.indexed_at
+    `)
+    .run(path, sessionId, cursor.size, cursor.offset, cursor.mtimeMs, Date.now());
+}
+
+export function transcriptCursorFor(path: string): TranscriptIndexCursor | null {
+  init();
+  const row = database()
+    .query<{
+      path: string;
+      session_id: string;
+      size: number;
+      offset: number;
+      mtime_ms: number;
+      indexed_at: number;
+    }, [string]>(
+      "SELECT path, session_id, size, offset, mtime_ms, indexed_at FROM transcript_index_cursors WHERE path = ?",
+    )
+    .get(path);
+  if (!row) return null;
+  return {
+    path: row.path,
+    sessionId: row.session_id,
+    size: row.size,
+    offset: row.offset,
+    mtimeMs: row.mtime_ms,
+    indexedAt: row.indexed_at,
+  };
+}
+
+export function transcriptIndexCurrent(path: string): boolean {
+  init();
+  let st: ReturnType<typeof statSync>;
+  try {
+    st = statSync(path);
+  } catch {
+    return false;
+  }
+  const cursor = transcriptCursorFor(path);
+  return !!cursor && cursor.offset === st.size && cursor.size === st.size && cursor.mtimeMs === st.mtimeMs;
+}
+
+export function deleteTranscriptIndexForPath(path: string): void {
+  init();
+  const d = database();
+  d.transaction(() => {
+    d.query("DELETE FROM transcript_messages_fts WHERE id IN (SELECT id FROM transcript_messages WHERE path = ?)")
+      .run(path);
+    d.query("DELETE FROM transcript_messages WHERE path = ?").run(path);
+    d.query("DELETE FROM transcript_index_cursors WHERE path = ?").run(path);
+  })();
+}
+
 export function indexTranscriptMessages(
   path: string,
   sessionId: string,
   lines: Array<{ offset: number; messages: SessionMsg[] }>,
+  cursor?: { size: number; offset: number; mtimeMs: number },
 ): number {
   init();
   const rows: Array<{ id: string; msg: SessionMsg; text: string; offset: number }> = [];
@@ -172,10 +248,10 @@ export function indexTranscriptMessages(
         });
       });
   }
-  if (!rows.length) return 0;
+  if (!rows.length && !cursor) return 0;
   const started = performance.now();
   const d = database();
-  d.transaction((pending: typeof rows) => {
+  const inserted = d.transaction((pending: typeof rows) => {
     const msgStmt = d.query(`
       INSERT OR IGNORE INTO transcript_messages
         (id, session_id, path, message_id, byte_offset, ts, role, kind, text)
@@ -186,8 +262,9 @@ export function indexTranscriptMessages(
       SELECT ?, ?, ?
       WHERE NOT EXISTS (SELECT 1 FROM transcript_messages_fts WHERE id = ?)
     `);
+    let insertedRows = 0;
     for (const row of pending) {
-      msgStmt.run(
+      const result = msgStmt.run(
         row.id,
         sessionId,
         path,
@@ -198,24 +275,30 @@ export function indexTranscriptMessages(
         row.msg.kind,
         row.text,
       );
+      insertedRows += Number(result.changes ?? 0);
       ftsStmt.run(row.id, sessionId, row.text, row.id);
     }
+    if (cursor) updateCursorInDb(d, path, sessionId, cursor);
+    return insertedRows;
   })(rows);
   traceLog("transcript_index_live", {
     sessionId,
     path,
     lines: lines.length,
     indexed: rows.length,
+    inserted,
+    offset: cursor?.offset,
+    size: cursor?.size,
     durationMs: Math.round((performance.now() - started) * 1000) / 1000,
   });
-  return rows.length;
+  return inserted;
 }
 
-function cursorFor(path: string): { offset: number; size: number } | null {
+function cursorFor(path: string): { offset: number; size: number; mtimeMs: number } | null {
   init();
   return database()
-    .query<{ offset: number; size: number }, [string]>(
-      "SELECT offset, size FROM transcript_index_cursors WHERE path = ?",
+    .query<{ offset: number; size: number; mtimeMs: number }, [string]>(
+      "SELECT offset, size, mtime_ms AS mtimeMs FROM transcript_index_cursors WHERE path = ?",
     )
     .get(path) ?? null;
 }
@@ -230,19 +313,10 @@ async function indexTranscriptOnce(path: string, sessionId: string): Promise<{
   const d = database();
   const st = statSync(path);
   const existingCursor = d
-    .query<{ offset: number; size: number; mtime_ms: number; session_id: string }, [string]>(
-      "SELECT offset, size, mtime_ms, session_id FROM transcript_index_cursors WHERE path = ?",
+    .query<{ offset: number; session_id: string }, [string]>(
+      "SELECT offset, session_id FROM transcript_index_cursors WHERE path = ?",
     )
     .get(path);
-  if (
-    existingCursor &&
-    existingCursor.session_id === sessionId &&
-    existingCursor.offset === st.size &&
-    existingCursor.size === st.size &&
-    existingCursor.mtime_ms === st.mtimeMs
-  ) {
-    return { indexed: 0, offset: existingCursor.offset, size: st.size };
-  }
   let cursor = existingCursor?.offset ?? 0;
   if (existingCursor && existingCursor.session_id !== sessionId) {
     d.transaction(() => {
@@ -291,16 +365,7 @@ async function indexTranscriptOnce(path: string, sessionId: string): Promise<{
       );
       ftsStmt.run(row.id, sessionId, row.text, row.id);
     }
-    d.query(`
-      INSERT INTO transcript_index_cursors (path, session_id, size, offset, mtime_ms, indexed_at)
-      VALUES (?, ?, ?, ?, ?, ?)
-      ON CONFLICT(path) DO UPDATE SET
-        session_id = excluded.session_id,
-        size = excluded.size,
-        offset = excluded.offset,
-        mtime_ms = excluded.mtime_ms,
-        indexed_at = excluded.indexed_at
-    `).run(path, sessionId, st.size, committed, st.mtimeMs, Date.now());
+    updateCursorInDb(d, path, sessionId, { size: st.size, offset: committed, mtimeMs: st.mtimeMs });
   });
 
   while (committed < st.size) {
@@ -315,11 +380,8 @@ async function indexTranscriptOnce(path: string, sessionId: string): Promise<{
       bytes = new Uint8Array(await file.slice(committed, end).arrayBuffer());
       scanEnd = bytes.lastIndexOf(10);
     }
-    if (scanEnd < 0) {
-      scanEnd = bytes.length;
-    } else {
-      scanEnd += 1;
-    }
+    if (scanEnd < 0) break;
+    scanEnd += 1;
 
     const rows: Array<{ id: string; msg: SessionMsg; text: string; offset: number }> = [];
     for (let lineStart = 0; lineStart < scanEnd; ) {
@@ -375,6 +437,7 @@ export async function indexTranscript(path: string, sessionId: string): Promise<
 
 async function importTranscriptForRead(path: string, sessionId: string): Promise<void> {
   try {
+    if (transcriptIndexCurrent(path)) return;
     await indexTranscript(path, sessionId);
   } catch (err) {
     const code = (err as { code?: string } | null)?.code;
@@ -604,31 +667,20 @@ export function startTranscriptMessageMonitor(fetchSessions: () => Promise<Sessi
     const started = performance.now();
     try {
       const sessions = await fetchSessions();
-      const targets = new Map<string, { sessionId: string; path: string; fingerprint: number | null }>();
+      const targets = new Map<string, { sessionId: string; path: string }>();
       for (const session of sessions) {
         if (!session.sessionId || !session.transcriptPath) continue;
-        targets.set(session.transcriptPath, {
-          sessionId: session.sessionId,
-          path: session.transcriptPath,
-          fingerprint: session.lastActivityAt ?? null,
-        });
+        targets.set(session.transcriptPath, { sessionId: session.sessionId, path: session.transcriptPath });
       }
       let imported = 0;
       let indexed = 0;
-      let skipped = 0;
       for (const target of targets.values()) {
-        if (monitorFingerprints.has(target.path) && monitorFingerprints.get(target.path) === target.fingerprint) {
-          skipped++;
-          continue;
-        }
         try {
           const result = await indexTranscript(target.path, target.sessionId);
-          monitorFingerprints.set(target.path, target.fingerprint);
           imported++;
           indexed += result.indexed;
         } catch (err) {
           const code = (err as { code?: string } | null)?.code;
-          if (code === "ENOENT") monitorFingerprints.set(target.path, target.fingerprint);
           if (code !== "ENOENT") {
             traceLog("chat_db_monitor_error", {
               sessionId: target.sessionId,
@@ -644,7 +696,6 @@ export function startTranscriptMessageMonitor(fetchSessions: () => Promise<Sessi
           sessions: sessions.length,
           targets: targets.size,
           imported,
-          skipped,
           indexed,
           durationMs,
         });
