@@ -31,10 +31,11 @@ Per-socket state: subscribed sids + per-sid monotonic seq/cursor so re-subscribe
 reconnect resumes without dupes.
 
 ## Reuse, do not reinvent
-Reuse the EXISTING backlog + incremental pump from `/api/live/stream` (indexedMessagePage →
-recentMessagesCached fallback, same server-side render). Do NOT change the message payload
-shape — the frontend renders the same objects it does today. One shared file-watch/poll loop
-per sid, ref-counted across sockets; stop when the last subscriber leaves.
+Reuse the EXISTING backlog + incremental pump from `/api/live/stream` (indexedMessagePage as
+the only backlog/page read model, same server-side render). Do NOT change the message
+payload shape — the frontend renders the same objects it does today. One shared
+file-watch/poll loop per sid, ref-counted across sockets; stop when the last subscriber
+leaves.
 
 ## Instrumentation (existing evlog() helper)
 Server: ws_connect, ws_subscribe (durationMs to first batch), ws_backlog (readMs/renderMs/

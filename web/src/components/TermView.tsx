@@ -3,9 +3,19 @@
 // shell on the box. ghostty-web renders Claude Code's heavy TUI faithfully where
 // xterm.js mangles it, which is the case we mostly care about here.
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { TouchEvent as ReactTouchEvent } from "react";
+import type { FormEvent, TouchEvent as ReactTouchEvent } from "react";
 import { init, Terminal as GhosttyTerminal, FitAddon } from "ghostty-web";
-import { Check, ClipboardPaste, Copy, ExternalLink, Keyboard, KeyboardOff, TerminalSquare, X } from "lucide-react";
+import {
+  Check,
+  ClipboardPaste,
+  Copy,
+  ExternalLink,
+  Keyboard,
+  KeyboardOff,
+  SendHorizontal,
+  TerminalSquare,
+  X,
+} from "lucide-react";
 
 // One WASM load per page, shared across mount/unmount of the tab.
 let ghosttyReady: Promise<void> | null = null;
@@ -35,16 +45,205 @@ function mergeUrls(prev: string[], found: string[], cap = 8): string[] {
 }
 
 // Raw byte sequences for the on-screen key toolbar (phones can't send these).
-const KEYS = {
+const KEY_SEQUENCES = {
   esc: "\x1b",
   tab: "\t",
   ctrlC: "\x03",
+  ctrlD: "\x04",
+  ctrlA: "\x01",
+  ctrlE: "\x05",
+  ctrlL: "\x0c",
+  ctrlN: "\x0e",
+  ctrlP: "\x10",
   up: "\x1b[A",
   down: "\x1b[B",
   left: "\x1b[D",
   right: "\x1b[C",
   enter: "\r",
+  backspace: "\x7f",
+  delete: "\x1b[3~",
+  home: "\x1b[H",
+  end: "\x1b[F",
+  pageUp: "\x1b[5~",
+  pageDown: "\x1b[6~",
+} as const;
+
+type HelperKey = {
+  id: string;
+  label: string;
+  sequence: string;
+  ariaLabel: string;
+  title?: string;
 };
+
+const HELPER_KEY_GROUPS: Array<{ id: string; label: string; keys: HelperKey[] }> = [
+  {
+    id: "command",
+    label: "Cmd",
+    keys: [
+      { id: "esc", label: "Esc", sequence: KEY_SEQUENCES.esc, ariaLabel: "Escape" },
+      { id: "tab", label: "Tab", sequence: KEY_SEQUENCES.tab, ariaLabel: "Tab" },
+      { id: "ctrlC", label: "^C", sequence: KEY_SEQUENCES.ctrlC, ariaLabel: "Control C" },
+      { id: "ctrlD", label: "^D", sequence: KEY_SEQUENCES.ctrlD, ariaLabel: "Control D" },
+      { id: "ctrlL", label: "^L", sequence: KEY_SEQUENCES.ctrlL, ariaLabel: "Control L" },
+    ],
+  },
+  {
+    id: "history",
+    label: "Hist",
+    keys: [
+      { id: "ctrlP", label: "^P", sequence: KEY_SEQUENCES.ctrlP, ariaLabel: "Control P" },
+      { id: "ctrlN", label: "^N", sequence: KEY_SEQUENCES.ctrlN, ariaLabel: "Control N" },
+      { id: "up", label: "↑", sequence: KEY_SEQUENCES.up, ariaLabel: "Arrow up" },
+      { id: "down", label: "↓", sequence: KEY_SEQUENCES.down, ariaLabel: "Arrow down" },
+    ],
+  },
+  {
+    id: "move",
+    label: "Move",
+    keys: [
+      { id: "left", label: "←", sequence: KEY_SEQUENCES.left, ariaLabel: "Arrow left" },
+      { id: "right", label: "→", sequence: KEY_SEQUENCES.right, ariaLabel: "Arrow right" },
+      { id: "ctrlA", label: "^A", sequence: KEY_SEQUENCES.ctrlA, ariaLabel: "Control A" },
+      { id: "ctrlE", label: "^E", sequence: KEY_SEQUENCES.ctrlE, ariaLabel: "Control E" },
+      { id: "enter", label: "⏎", sequence: KEY_SEQUENCES.enter, ariaLabel: "Enter" },
+    ],
+  },
+];
+
+const SPECIAL_KEY_SEQUENCES: Record<string, string> = {
+  esc: KEY_SEQUENCES.esc,
+  escape: KEY_SEQUENCES.esc,
+  tab: KEY_SEQUENCES.tab,
+  enter: KEY_SEQUENCES.enter,
+  return: KEY_SEQUENCES.enter,
+  ret: KEY_SEQUENCES.enter,
+  up: KEY_SEQUENCES.up,
+  down: KEY_SEQUENCES.down,
+  left: KEY_SEQUENCES.left,
+  right: KEY_SEQUENCES.right,
+  arrowup: KEY_SEQUENCES.up,
+  arrowdown: KEY_SEQUENCES.down,
+  arrowleft: KEY_SEQUENCES.left,
+  arrowright: KEY_SEQUENCES.right,
+  backspace: KEY_SEQUENCES.backspace,
+  bs: KEY_SEQUENCES.backspace,
+  del: KEY_SEQUENCES.delete,
+  delete: KEY_SEQUENCES.delete,
+  home: KEY_SEQUENCES.home,
+  end: KEY_SEQUENCES.end,
+  pgup: KEY_SEQUENCES.pageUp,
+  pageup: KEY_SEQUENCES.pageUp,
+  "page-up": KEY_SEQUENCES.pageUp,
+  pgdn: KEY_SEQUENCES.pageDown,
+  pagedown: KEY_SEQUENCES.pageDown,
+  "page-down": KEY_SEQUENCES.pageDown,
+  space: " ",
+};
+
+const FUNCTION_KEY_SEQUENCES: Record<string, string> = {
+  f1: "\x1bOP",
+  f2: "\x1bOQ",
+  f3: "\x1bOR",
+  f4: "\x1bOS",
+  f5: "\x1b[15~",
+  f6: "\x1b[17~",
+  f7: "\x1b[18~",
+  f8: "\x1b[19~",
+  f9: "\x1b[20~",
+  f10: "\x1b[21~",
+  f11: "\x1b[23~",
+  f12: "\x1b[24~",
+};
+
+const KEY_ALIASES: Record<string, string> = {
+  "↑": "up",
+  "↓": "down",
+  "←": "left",
+  "→": "right",
+  arrowup: "up",
+  arrowdown: "down",
+  arrowleft: "left",
+  arrowright: "right",
+  escape: "esc",
+  return: "enter",
+  ret: "enter",
+  "page-up": "pageup",
+  "page-down": "pagedown",
+};
+
+function canonicalKeyName(key: string) {
+  return KEY_ALIASES[key] ?? key;
+}
+
+function controlKeySequence(key: string) {
+  const k = canonicalKeyName(key);
+  if (/^[a-z]$/.test(k)) return String.fromCharCode(k.toUpperCase().charCodeAt(0) - 64);
+  if (k === "space" || k === "@") return "\x00";
+  if (k === "[" || k === "esc") return "\x1b";
+  if (k === "\\") return "\x1c";
+  if (k === "]") return "\x1d";
+  if (k === "^") return "\x1e";
+  if (k === "_") return "\x1f";
+  if (k === "?") return "\x7f";
+  return null;
+}
+
+function modifiedSpecialKeySequence(key: string, mods: { alt: boolean; ctrl: boolean }) {
+  if (!mods.alt && !mods.ctrl) return null;
+  const k = canonicalKeyName(key);
+  const modifier = 1 + (mods.alt ? 2 : 0) + (mods.ctrl ? 4 : 0);
+  if (k === "up") return `\x1b[1;${modifier}A`;
+  if (k === "down") return `\x1b[1;${modifier}B`;
+  if (k === "right") return `\x1b[1;${modifier}C`;
+  if (k === "left") return `\x1b[1;${modifier}D`;
+  if (k === "home") return `\x1b[1;${modifier}H`;
+  if (k === "end") return `\x1b[1;${modifier}F`;
+  return null;
+}
+
+function plainKeySequence(key: string) {
+  const k = canonicalKeyName(key);
+  if (k.length === 1) return k;
+  return SPECIAL_KEY_SEQUENCES[k] ?? FUNCTION_KEY_SEQUENCES[k] ?? null;
+}
+
+function parseTerminalKey(input: string) {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+  const normalized = trimmed
+    .replace(/[＋]/g, "+")
+    .replace(/\s*\+\s*/g, "+")
+    .replace(/\s+/g, "+")
+    .toLowerCase();
+
+  if (normalized.startsWith("^") && normalized.length > 1) {
+    return controlKeySequence(normalized.slice(1));
+  }
+
+  const parts = normalized.split("+").filter(Boolean);
+  let alt = false;
+  let ctrl = false;
+  const keyParts: string[] = [];
+  for (const part of parts) {
+    if (part === "alt" || part === "option" || part === "opt") {
+      alt = true;
+    } else if (part === "ctrl" || part === "control" || part === "ctl") {
+      ctrl = true;
+    } else {
+      keyParts.push(part);
+    }
+  }
+
+  const key = keyParts.join("+");
+  if (!key) return null;
+  const modified = modifiedSpecialKeySequence(key, { alt, ctrl });
+  if (modified) return modified;
+
+  const sequence = ctrl ? controlKeySequence(key) : plainKeySequence(key);
+  if (sequence == null) return null;
+  return alt ? `\x1b${sequence}` : sequence;
+}
 
 type TerminalInstance = InstanceType<typeof GhosttyTerminal>;
 type GhosttyWithInput = TerminalInstance & {
@@ -256,9 +455,12 @@ export function TermView() {
   const [pasteInput, setPasteInput] = useState(false);
   const [keyboardActive, setKeyboardActive] = useState(false);
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
+  const [customKey, setCustomKey] = useState("");
+  const [customKeyInvalid, setCustomKeyInvalid] = useState(false);
   const lpTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lpStart = useRef<{ x: number; y: number } | null>(null);
   const pasteInputRef = useRef<HTMLInputElement>(null);
+  const customKeyInputRef = useRef<HTMLInputElement>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const keyboardActiveRef = useRef(false);
   const keyboardWasActiveAtPointerDownRef = useRef(false);
@@ -335,6 +537,20 @@ export function TermView() {
     setPasteInput(false);
     focusTerminalKeyboard(termRef.current);
   }, [sendRaw]);
+
+  const submitCustomKey = useCallback((e?: FormEvent<HTMLFormElement>) => {
+    e?.preventDefault();
+    const sequence = parseTerminalKey(customKey);
+    if (sequence == null) {
+      setCustomKeyInvalid(true);
+      customKeyInputRef.current?.focus();
+      return;
+    }
+    sendRaw(sequence);
+    setCustomKey("");
+    setCustomKeyInvalid(false);
+    focusTerminalKeyboard(termRef.current);
+  }, [customKey, sendRaw]);
 
   const toggleKeyboard = useCallback((wasActive = keyboardActiveRef.current) => {
     if (wasActive) {
@@ -604,59 +820,101 @@ export function TermView() {
       ) : null}
 
       {/* On-screen control keys — a terminal is unusable on a phone without them. */}
-      <div className="flex flex-wrap items-center gap-1 border-t border-white/10 px-2 py-1.5">
-        {[
-          ["esc", "Esc"],
-          ["tab", "Tab"],
-          ["ctrlC", "^C"],
-          ["up", "↑"],
-          ["down", "↓"],
-          ["left", "←"],
-          ["right", "→"],
-          ["enter", "⏎"],
-        ].map(([k, label]) => (
+      <div className="grid gap-2 border-t border-white/10 bg-[#0b0b0d] px-2 py-2">
+        <div className="flex gap-2 overflow-x-auto pb-0.5">
+          {HELPER_KEY_GROUPS.map((group) => (
+            <div key={group.id} className="flex shrink-0 items-center gap-1">
+              <span className="px-1 text-[10px] font-semibold uppercase text-white/35">
+                {group.label}
+              </span>
+              {group.keys.map((key) => (
+                <button
+                  type="button"
+                  key={key.id}
+                  onClick={() => sendRaw(key.sequence)}
+                  style={{ touchAction: "manipulation" }}
+                  aria-label={key.ariaLabel}
+                  title={key.title ?? key.ariaLabel}
+                  className="grid h-8 min-w-8 place-items-center rounded-md bg-white/10 px-2 text-xs font-semibold text-white/85 active:bg-white/25"
+                >
+                  {key.label}
+                </button>
+              ))}
+            </div>
+          ))}
+        </div>
+        <div className="flex min-w-0 items-center gap-1.5">
+          <form
+            onSubmit={submitCustomKey}
+            className={`flex min-w-0 flex-1 items-center gap-1 rounded-lg border px-2 py-1 ${
+              customKeyInvalid
+                ? "border-red-400/70 bg-red-500/10"
+                : "border-white/10 bg-white/[0.04]"
+            }`}
+          >
+            <span className="shrink-0 text-[10px] font-semibold uppercase text-white/35">Key</span>
+            <input
+              ref={customKeyInputRef}
+              value={customKey}
+              onChange={(e) => {
+                setCustomKey(e.target.value);
+                setCustomKeyInvalid(false);
+              }}
+              placeholder="ctrl+p"
+              inputMode="text"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              aria-label="Custom terminal key"
+              aria-invalid={customKeyInvalid}
+              style={{ fontSize: 16 }}
+              className="min-w-0 flex-1 bg-transparent px-1 py-1 text-sm text-white outline-none placeholder:text-white/25"
+            />
+            <button
+              type="submit"
+              style={{ touchAction: "manipulation" }}
+              className="grid size-7 shrink-0 place-items-center rounded-md bg-white/10 text-white/85 active:bg-white/25"
+              aria-label="Send custom terminal key"
+              title="Send custom terminal key"
+            >
+              <SendHorizontal className="size-3.5" />
+            </button>
+          </form>
           <button
             type="button"
-            key={k}
-            onClick={() => sendRaw(KEYS[k as keyof typeof KEYS])}
+            onPointerDown={() => {
+              keyboardWasActiveAtPointerDownRef.current = keyboardActiveRef.current;
+            }}
+            onClick={(e) =>
+              toggleKeyboard(
+                e.detail === 0
+                  ? keyboardActiveRef.current
+                  : keyboardWasActiveAtPointerDownRef.current,
+              )
+            }
             style={{ touchAction: "manipulation" }}
-            className="rounded-md bg-white/10 px-2.5 py-1 text-xs font-medium text-white/80 active:bg-white/25"
+            aria-pressed={keyboardActive}
+            aria-label={keyboardActive ? "hide keyboard" : "show keyboard"}
+            title={keyboardActive ? "Hide keyboard" : "Show keyboard"}
+            className={`flex h-9 shrink-0 items-center gap-1 rounded-lg px-2.5 text-xs font-medium active:bg-white/25 ${
+              keyboardActive ? "bg-white text-black" : "bg-white/10 text-white/80"
+            }`}
           >
-            {label}
+            {keyboardActive ? <KeyboardOff className="size-3.5" /> : <Keyboard className="size-3.5" />}
+            <span className="hidden sm:inline">Keyboard</span>
           </button>
-        ))}
-        <button
-          type="button"
-          onPointerDown={() => {
-            keyboardWasActiveAtPointerDownRef.current = keyboardActiveRef.current;
-          }}
-          onClick={(e) =>
-            toggleKeyboard(
-              e.detail === 0
-                ? keyboardActiveRef.current
-                : keyboardWasActiveAtPointerDownRef.current,
-            )
-          }
-          style={{ touchAction: "manipulation" }}
-          aria-pressed={keyboardActive}
-          aria-label={keyboardActive ? "hide keyboard" : "show keyboard"}
-          title={keyboardActive ? "Hide keyboard" : "Show keyboard"}
-          className={`ml-auto flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium active:bg-white/25 ${
-            keyboardActive ? "bg-white text-black" : "bg-white/10 text-white/80"
-          }`}
-        >
-          {keyboardActive ? <KeyboardOff className="size-3.5" /> : <Keyboard className="size-3.5" />}
-          Keyboard
-        </button>
-        <button
-          type="button"
-          onClick={doPaste}
-          style={{ touchAction: "manipulation" }}
-          className="flex items-center gap-1 rounded-md bg-white/10 px-2.5 py-1 text-xs font-medium text-white/80 active:bg-white/25"
-        >
-          <ClipboardPaste className="size-3.5" />
-          Paste
-        </button>
+          <button
+            type="button"
+            onClick={doPaste}
+            style={{ touchAction: "manipulation" }}
+            aria-label="Paste terminal input"
+            title="Paste terminal input"
+            className="flex h-9 shrink-0 items-center gap-1 rounded-lg bg-white/10 px-2.5 text-xs font-medium text-white/80 active:bg-white/25"
+          >
+            <ClipboardPaste className="size-3.5" />
+            <span className="hidden sm:inline">Paste</span>
+          </button>
+        </div>
       </div>
 
       {/* Long-press / right-click → floating Paste button at the touch point. */}

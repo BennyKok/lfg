@@ -183,7 +183,18 @@ Installed release builds expose the same commands through `lfg`.
 The MCP server talks to the local `lfg serve` API and exposes tools such as
 `lfg_list_sessions`, `lfg_get_session_messages`, `lfg_send_session_message`,
 `lfg_create_subagent`, and `lfg_list_subagents`. Use it from an MCP client with
-`lfg mcp` or `bun run mcp`.
+`lfg mcp` or `bun run mcp`. When an MCP client also exposes its own generic
+sub-agent/delegation tool, prefer the `lfg_*subagent*` and `lfg_delegate_*`
+tools so child sessions stay visible in LFG, inherit parent/user context, and
+can run on any configured harness. LFG-managed subagents may nest up to four
+levels deep. Each child is launched with an operating contract that tells it to
+use LFG MCP for any further delegation and to send `[subagent progress]` updates
+plus one terminal `[subagent complete]`, `[subagent blocked]`, or
+`[subagent failed]` message back to its parent session.
+
+Backend trace diagnostics are appended to `data/logs/trace-YYYY-MM-DD.jsonl`.
+The stream includes API timings, transcript indexing/page reads, live stream
+stalls, session sends, and send queue delivery state.
 
 ## Configuration
 

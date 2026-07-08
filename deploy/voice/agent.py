@@ -191,8 +191,8 @@ _ADVISOR_TASK: "asyncio.Task | None" = None
 # read and action is filtered to this user's sessions so one person never sees
 # or touches another's work.
 CURRENT_USER: str = ""
-# Where the lfg-sessions skill persists which session the user is focused on
-# ("it" / "my project"). Read fresh each turn so it tracks what they're on.
+# Where LFG persists which session the user is focused on ("it" / "my
+# project"). Read fresh each turn so it tracks what they're on.
 FOCUS_FILE = Path.home() / ".lfg" / "active-session"
 
 

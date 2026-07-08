@@ -34,26 +34,12 @@ import {
 } from "../auto/store.ts";
 import { runAutoAgent } from "../auto/runner.ts";
 import { startAutoScheduler } from "../auto/scheduler.ts";
-import { runSessionBrain, runSessionBrainForSession } from "../session-brain/runner.ts";
-import { startSessionBrainScheduler } from "../session-brain/scheduler.ts";
-import { setBrainPromptSender } from "../session-brain/merge-guard.ts";
 import {
   computeSessionDiff,
   computeSessionDiffStat,
   computeSessionDiffSummary,
   computeSessionFilePatch,
 } from "../session-diff.ts";
-import {
-  listPatternSuggestions,
-  listSessionBrainRuns,
-  listSessionNotes,
-  readSessionBrainConfig,
-  updatePatternSuggestionStatus,
-  updateSessionBrainConfig,
-  updateSessionNoteStatus,
-  type PatternSuggestionStatus,
-  type SessionNoteStatus,
-} from "../session-brain/store.ts";
 import { reportClientError, listClientErrors } from "../client-errors.ts";
 import { getAllUsage } from "../usage.ts";
 import {
@@ -75,11 +61,6 @@ import {
 import {
   listSessions,
   resolveTranscript,
-  recentMessages,
-  recentMessagesCached,
-  warmRecentMessages,
-  searchTranscript,
-  messagePage,
   normalizeLineMessages,
   setSessionTitle,
   sessionIdForPid,
@@ -99,11 +80,16 @@ import {
 } from "../session-cache.ts";
 import {
   enqueueTranscriptIndex,
+  indexedRecentMessages,
   indexedMessagePage,
   indexTranscript,
+  indexTranscriptMessages,
   searchAllTranscriptIndexes,
   searchTranscriptIndex,
+  startTranscriptMessageMonitor,
+  warmTranscriptIndexes,
 } from "../transcript-index.ts";
+import { traceLog, traceLogPathForToday } from "../trace-log.ts";
 import {
   capturePane,
   parsePrompt,
@@ -209,8 +195,10 @@ import {
 const REPOS_ROOT = reposRoot();
 const SELF_REPO = PATHS.root;
 const EVLOG_DIR = join(PATHS.data, "evlogs");
+const TRANSCRIPT_OFFSET_ENCODER = new TextEncoder();
 
 function evlog(event: string, fields: Record<string, unknown> = {}) {
+  traceLog(event, fields);
   try {
     mkdirSync(EVLOG_DIR, { recursive: true });
     const day = new Date().toISOString().slice(0, 10);
@@ -241,9 +229,7 @@ const BOOT_API_TIMING_ENDPOINTS = new Set([
   "/api/findings",
   "/api/auto/findings",
   "/api/notes",
-  "/api/session-brain/notes",
   "/api/config",
-  "/api/session-brain/config",
 ]);
 
 function apiDurationMs(start: number): number {
@@ -323,6 +309,7 @@ const PORT = Number(process.env.LFG_PORT ?? process.env.PORT ?? 8766);
 // (via `tailscale serve`), never the public internet. Override LFG_HOST only
 // if you understand the exposure.
 const HOST = process.env.LFG_HOST ?? "127.0.0.1";
+const MAX_LFG_SUBAGENT_DEPTH = 4;
 
 marked.setOptions({ gfm: true, breaks: false });
 
@@ -691,6 +678,63 @@ function err(status: number, message: string) {
   return json({ error: message }, { status });
 }
 
+type ParentableSession = {
+  sessionId?: string | null;
+  nativeSessionId?: string | null;
+  parentSessionId?: string | null;
+  parentNativeSessionId?: string | null;
+};
+
+function sessionMatchesId(session: ParentableSession, id: string): boolean {
+  return session.sessionId === id || session.nativeSessionId === id;
+}
+
+function sessionParentId(session: ParentableSession): string | undefined {
+  return session.parentSessionId ?? session.parentNativeSessionId ?? undefined;
+}
+
+function childSubagentDepth(parent: ParentableSession, sessions: ParentableSession[]): number {
+  let depth = 1;
+  let cursor: ParentableSession | undefined = parent;
+  const seen = new Set<string>();
+  while (cursor) {
+    const parentId = sessionParentId(cursor);
+    if (!parentId || seen.has(parentId)) break;
+    seen.add(parentId);
+    depth++;
+    cursor = sessions.find((session) => sessionMatchesId(session, parentId));
+  }
+  return depth;
+}
+
+function withLfgSubagentContract(
+  prompt: string | undefined,
+  opts: { parentSessionId?: string; depth?: number | null },
+): string {
+  const depthText = opts.depth ? ` Current child depth: ${opts.depth}/${MAX_LFG_SUBAGENT_DEPTH}.` : "";
+  const parentLine = opts.parentSessionId
+    ? `- Parent session id: ${opts.parentSessionId}. Send progress and terminal-state updates there with MCP tool \`lfg_send_session_message\`.`
+    : "- No parent session id was supplied. If one becomes available, send progress and terminal-state updates there.";
+  const reportLines = opts.parentSessionId
+    ? [
+        "- Send at least one `[subagent progress]` message when you begin substantive work, then again whenever you make meaningful progress, hit a blocker, or delegate work to another child.",
+        "- Before ending, send exactly one terminal-state message to the parent: `[subagent complete]`, `[subagent blocked]`, or `[subagent failed]`. Include what changed, verification run, and what remains.",
+      ]
+    : [
+        "- If no parent session id becomes available, include progress and terminal state in your final response instead of sending a parent update.",
+      ];
+  return [
+    "=== LFG SUBAGENT OPERATING CONTRACT ===",
+    "- You are an LFG-managed subagent.",
+    "- For any further delegation, use LFG MCP tools (`lfg_create_subagent` or `lfg_delegate_*`) instead of generic or harness-native subagent/delegation tools.",
+    `- Nested LFG subagents are allowed only through depth ${MAX_LFG_SUBAGENT_DEPTH}.${depthText} Do not create another child if it would exceed this limit.`,
+    parentLine,
+    ...reportLines,
+    "=== USER TASK ===",
+    (prompt ?? "").trim() || "No task prompt was provided.",
+  ].join("\n");
+}
+
 // Attach rendered markdown for assistant/user prose; tool/thinking stay raw.
 type HtmlMessage = { kind: string; text: string; html?: string };
 const messageHtmlCache = new Map<string, string>();
@@ -808,6 +852,13 @@ function sendPromptToLiveSession(
   if (!prompt) return { ok: true };
   const sid = session.sessionId;
   if (!sid) return { ok: false, error: "live session has no id" };
+  traceLog("session_send_request", {
+    sessionId: sid,
+    agent: session.agent,
+    mode: opts.mode ?? "steer",
+    busy: !!session.busy,
+    chars: prompt.length,
+  });
   if ((opts.mode ?? "steer") === "steer" && session.busy) {
     const interrupted = interruptLiveSession(session);
     if (!interrupted.ok) return interrupted;
@@ -819,6 +870,7 @@ function sendPromptToLiveSession(
   ) {
     const key = findAisdkEntryByAnyId(sid)?.sessionId ?? sid;
     appendAisdkCmd(key, { type: "send", text: prompt });
+    traceLog("session_send_aisdk_cmd", { sessionId: sid, key, chars: prompt.length });
     return {
       ok: true,
       msg: { id: randomBytes(8).toString("hex"), text: prompt, status: "delivered" },
@@ -854,14 +906,11 @@ async function liveSessionIdsCached(): Promise<Set<string>> {
 function warmRenderedBacklogs(sessions: Session[], limit = 40): void {
   for (const session of sessions.slice(0, MESSAGE_HTML_CACHE_MAX)) {
     const path = session.transcriptPath;
-    if (!path) continue;
-    void recentMessagesCached(path, limit)
-      .then((messages) => {
-        if (session.sessionId) {
-          for (const message of transcriptMessagesForClient(session.sessionId, messages)) msgWithHtml(message);
-        } else {
-          for (const message of visibleTranscriptMessages(messages)) msgWithHtml(message);
-        }
+    const sid = session.sessionId;
+    if (!path || !sid) continue;
+    void indexedMessagePage(path, sid, { limit })
+      .then((page) => {
+        for (const message of transcriptMessagesForClient(sid, page.messages)) msgWithHtml(message);
       })
       .catch(() => {});
   }
@@ -940,7 +989,7 @@ async function sessionSummaryContext(sessionId: string, transcriptPath: string):
   fallback: string;
 }> {
   const [msgs, live] = await Promise.all([
-    recentMessages(transcriptPath, 64, { maxBytes: 192 * 1024 }),
+    indexedRecentMessages(transcriptPath, sessionId, 64),
     listSessionsCached().catch(() => []),
   ]);
   const session = live.find((s) => s.sessionId === sessionId) ?? null;
@@ -1228,7 +1277,8 @@ async function waitForAdvisorAnswer(
     await new Promise((r) => setTimeout(r, 1200));
     const tp = await resolveTranscript(id);
     if (!tp) continue;
-    const answers = (await recentMessages(tp, 0, { maxBytes: null })).filter(
+    enqueueTranscriptIndex(tp, id);
+    const answers = (await indexedRecentMessages(tp, id, 2_000)).filter(
       isAdvisorAnswer,
     );
     if (answers.length > baseline) {
@@ -1277,7 +1327,7 @@ async function voiceConsult(
   if (!id) throw new Error("advisor unexpectedly missing");
   const tp = await resolveTranscript(id);
   const baseline = tp
-    ? (await recentMessages(tp, 0, { maxBytes: null })).filter(isAdvisorAnswer)
+    ? (await indexedRecentMessages(tp, id, 2_000)).filter(isAdvisorAnswer)
         .length
     : 0;
   appendAisdkCmd(id, { type: "send", text: question });
@@ -1598,7 +1648,11 @@ export async function cmdServe() {
             href: req.headers.get("referer") ?? undefined,
             ...((body && typeof body === "object" ? body : {}) as Record<string, unknown>),
           });
-          return json({ ok: true, path: join(EVLOG_DIR, `${new Date().toISOString().slice(0, 10)}.jsonl`) });
+          return json({
+            ok: true,
+            path: join(EVLOG_DIR, `${new Date().toISOString().slice(0, 10)}.jsonl`),
+            tracePath: traceLogPathForToday(),
+          });
         }
         if (req.method === "GET") {
           const file = join(EVLOG_DIR, `${new Date().toISOString().slice(0, 10)}.jsonl`);
@@ -1945,12 +1999,7 @@ export async function cmdServe() {
       if (path === "/api/bootstrap" && req.method === "GET") {
         noteListSessionsClientActivity();
         const sessionsTask = listSessionsCached().then((sessions) => {
-          warmRecentMessages(
-            sessions
-              .map((session) => session.transcriptPath)
-              .filter((path): path is string => !!path),
-            40,
-          );
+          warmTranscriptIndexes(sessions);
           warmRenderedBacklogs(sessions, 40);
           return sessions;
         });
@@ -1964,10 +2013,6 @@ export async function cmdServe() {
           skills: reposTask.then((repos) => listSkillCatalog(repos.map((repo) => repo.cwd))),
           autoAgents: listAutoAgents(),
           findings: listFindings("open"),
-          brainConfig: readSessionBrainConfig(),
-          brainNotes: listSessionNotes("open"),
-          brainSuggestions: listPatternSuggestions("open"),
-          brainRuns: listSessionBrainRuns(12),
           onboarding: getOnboarding(),
         };
         const taskEntries = Object.entries(tasks);
@@ -1986,10 +2031,6 @@ export async function cmdServe() {
           skills?: Awaited<ReturnType<typeof listSkillCatalog>> | null;
           autoAgents?: Awaited<ReturnType<typeof listAutoAgents>> | null;
           findings?: Awaited<ReturnType<typeof listFindings>> | null;
-          brainConfig?: Awaited<ReturnType<typeof readSessionBrainConfig>> | null;
-          brainNotes?: Awaited<ReturnType<typeof listSessionNotes>> | null;
-          brainSuggestions?: Awaited<ReturnType<typeof listPatternSuggestions>> | null;
-          brainRuns?: Awaited<ReturnType<typeof listSessionBrainRuns>> | null;
           onboarding?: Awaited<ReturnType<typeof getOnboarding>> | null;
         };
         return json(
@@ -2006,12 +2047,6 @@ export async function cmdServe() {
                 : null,
               tz: process.env.LFG_SCHED_TZ ?? "Asia/Hong_Kong",
               findings: boot.findings ?? null,
-            },
-            sessionBrain: {
-              config: boot.brainConfig ?? null,
-              notes: boot.brainNotes ?? null,
-              suggestions: boot.brainSuggestions ?? null,
-              runs: boot.brainRuns ?? null,
             },
             onboarding: boot.onboarding ?? null,
           },
@@ -2406,88 +2441,6 @@ export async function cmdServe() {
         return json({ findings: await listFindings(status) });
       }
 
-      if (path === "/api/session-brain/notes" && req.method === "GET") {
-        const status = url.searchParams.get("status") || undefined;
-        return json({ notes: await listSessionNotes(status) });
-      }
-      if (path === "/api/session-brain/config" && req.method === "GET") {
-        return json({ config: await readSessionBrainConfig() });
-      }
-      if (path === "/api/session-brain/config" && req.method === "POST") {
-        const b = (await req.json().catch(() => null)) as {
-          enabled?: boolean;
-          autoClose?: boolean;
-          intervalMin?: number;
-          minIdleMin?: number;
-          model?: string;
-        } | null;
-        if (!b || typeof b !== "object") return err(400, "config patch required");
-        const enabled = typeof b.enabled === "boolean" ? b.enabled : undefined;
-        const config = await updateSessionBrainConfig({
-          enabled,
-          // One visible switch controls the whole session-brain system. If a
-          // caller explicitly patches autoClose we still honor it for
-          // compatibility, otherwise enabling/disabling the brain carries the
-          // cleanup behavior with it.
-          autoClose: typeof b.autoClose === "boolean" ? b.autoClose : enabled,
-          intervalMin: typeof b.intervalMin === "number" ? b.intervalMin : undefined,
-          minIdleMin: typeof b.minIdleMin === "number" ? b.minIdleMin : undefined,
-          model: typeof b.model === "string" && b.model.trim() ? b.model.trim() : undefined,
-        });
-        return json({ config });
-      }
-      if (path === "/api/session-brain/suggestions" && req.method === "GET") {
-        const status = url.searchParams.get("status") || undefined;
-        return json({ suggestions: await listPatternSuggestions(status) });
-      }
-      if (path === "/api/session-brain/runs" && req.method === "GET") {
-        const limit = Number(url.searchParams.get("limit")) || 20;
-        return json({ runs: await listSessionBrainRuns(limit) });
-      }
-      if (path === "/api/session-brain/run" && req.method === "POST") {
-        const b = (await req.json().catch(() => null)) as {
-          autoClose?: boolean;
-          limit?: number;
-        } | null;
-        const run = await runSessionBrain(
-          { autoClose: b?.autoClose, limit: b?.limit },
-          (l) => console.log(l),
-        );
-        return json({ run });
-      }
-      {
-        const m = path.match(/^\/api\/session-brain\/notes\/([a-z0-9]+)\/status$/);
-        if (m && req.method === "POST") {
-          const b = (await req.json().catch(() => null)) as { status?: string } | null;
-          const status = b?.status;
-          if (
-            status !== "open" &&
-            status !== "snoozed" &&
-            status !== "done" &&
-            status !== "dismissed"
-          )
-            return err(400, "invalid note status");
-          const note = await updateSessionNoteStatus(m[1], status as SessionNoteStatus);
-          if (!note) return err(404, "note not found");
-          return json({ note });
-        }
-      }
-      {
-        const m = path.match(/^\/api\/session-brain\/suggestions\/([a-z0-9]+)\/status$/);
-        if (m && req.method === "POST") {
-          const b = (await req.json().catch(() => null)) as { status?: string } | null;
-          const status = b?.status;
-          if (status !== "open" && status !== "accepted" && status !== "dismissed")
-            return err(400, "invalid suggestion status");
-          const suggestion = await updatePatternSuggestionStatus(
-            m[1],
-            status as PatternSuggestionStatus,
-          );
-          if (!suggestion) return err(404, "suggestion not found");
-          return json({ suggestion });
-        }
-      }
-
       // ── Client (frontend) error auto-report → auto-fix ────────────────────
       // The web app funnels uncaught errors here. Each report is stored, shown
       // to the human via the findings feed + push, and (for real shipped builds)
@@ -2669,7 +2622,11 @@ export async function cmdServe() {
               } else if (plan.kind === "close") {
                 const r = await fetch(
                   `http://127.0.0.1:${PORT}/api/sessions/${q.sessionId}/close`,
-                  { method: "POST" },
+                  {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ source: "ask_answer_close" }),
+                  },
                 );
                 if (r.ok) await markHandled(q.id);
               } else {
@@ -2938,12 +2895,7 @@ export async function cmdServe() {
       if (path === "/api/sessions") {
         noteListSessionsClientActivity();
         const sessions = await listSessionsCached();
-        warmRecentMessages(
-          sessions
-            .map((session) => session.transcriptPath)
-            .filter((path): path is string => !!path),
-          40,
-        );
+        warmTranscriptIndexes(sessions);
         warmRenderedBacklogs(sessions, 40);
         return json({ sessions });
       }
@@ -3369,18 +3321,28 @@ export async function cmdServe() {
             return err(400, `unknown thinking level "${thinkingLevel}" for ${agent} (expected one of ${allowed.join(", ")})`);
         }
         // Always spawn in a trusted folder — claude shows a blocking "trust this
-        // folder?" dialog for any untrusted cwd, which hangs session startup. The
-        // lfg-sessions skill is installed user-level (~/.claude/skills) so the
-        // voice/orchestrator agent gets it regardless of cwd.
+        // folder?" dialog for any untrusted cwd, which hangs session startup.
+        // LFG MCP is registered user-level, so orchestrator/subagent sessions get
+        // the same session tools regardless of cwd.
         const requestedCwd = body?.cwd?.trim() || SELF_REPO;
         const repo = (await listRepos()).find((r) => r.cwd === requestedCwd);
         if (!repo) return err(400, "unknown repo");
         const parentId = body?.parentSessionId?.trim() || undefined;
+        const spawnedBy = body?.spawnedBy?.trim() || (parentId ? "subagent" : undefined);
         const liveRows = parentId ? await listSessions() : [];
         const parent = parentId
           ? liveRows.find((s) => s.sessionId === parentId || s.nativeSessionId === parentId)
           : undefined;
         if (parentId && !parent) return err(404, "parent session not found");
+        const subagentDepth = parent && spawnedBy === "subagent"
+          ? childSubagentDepth(parent, liveRows)
+          : null;
+        if (subagentDepth && subagentDepth > MAX_LFG_SUBAGENT_DEPTH) {
+          return err(
+            400,
+            `subagent nesting depth ${subagentDepth} exceeds the LFG limit of ${MAX_LFG_SUBAGENT_DEPTH}`,
+          );
+        }
         // Resolve the user tag up front and LOUDLY: an explicit unknown email is
         // a 400 (matching /api/sessions/:id/user), never a silently-unassigned
         // session. With no explicit user, inherit from the NEAREST ASSIGNED
@@ -3416,6 +3378,12 @@ export async function cmdServe() {
         // session (built before this one spawns, so it's not in the list) so its
         // first spoken reply can be a proactive blockers-first status briefing.
         let prompt = body?.prompt;
+        if (spawnedBy === "subagent") {
+          prompt = withLfgSubagentContract(prompt, {
+            parentSessionId: parent?.sessionId ?? parent?.nativeSessionId ?? parentId,
+            depth: subagentDepth,
+          });
+        }
         if (body?.voice) {
           // Clear lingering state from any previous voice session before this
           // one starts: retire the persistent deep-think advisor so it doesn't
@@ -3478,12 +3446,12 @@ export async function cmdServe() {
               : undefined,
           launchState: "launching",
           model: launchModel,
-          title: prompt?.slice(0, 72),
+          title: body?.prompt?.slice(0, 72),
           project: repo.project,
           parentSessionId: parent?.sessionId ?? parentId,
           parentNativeSessionId: parent?.nativeSessionId ?? undefined,
           parentAgent: parent?.agent,
-          spawnedBy: body?.spawnedBy?.trim() || (parent ? "subagent" : undefined),
+          spawnedBy,
           repoRoot: worktree?.repoRoot,
           worktreeBranch: worktree?.branch,
         });
@@ -3592,6 +3560,7 @@ export async function cmdServe() {
           sessionId: launchId,
           agent,
           parentSessionId: parent?.sessionId ?? parentId ?? null,
+          subagentDepth,
           // Echo the resolved tag so callers (MCP subagent tools, CLI) can see
           // whether the child landed under the right user instead of guessing.
           assignedUser: assignedUser ?? null,
@@ -3888,9 +3857,8 @@ export async function cmdServe() {
         }
       }
 
-      // Non-streaming transcript read — lets an orchestrator (e.g. the voice
-      // agent via the lfg-sessions skill) inspect what another session is
-      // doing without holding an SSE connection.
+      // Non-streaming transcript read — lets an orchestrator or LFG MCP client
+      // inspect what another session is doing without holding an SSE connection.
       {
         const m = path.match(/^\/api\/sessions\/([0-9a-fA-F-]{36})\/messages$/);
         if (m && req.method === "GET") {
@@ -3902,15 +3870,10 @@ export async function cmdServe() {
             const rawBefore = url.searchParams.get("before");
             const before =
               rawBefore == null ? null : Math.max(0, parseInt(rawBefore, 10) || 0);
-            const page =
-              (await indexedMessagePage(tp, m[1], {
-                before,
-                limit: Number.isFinite(rawLimit) ? rawLimit : 220,
-              })) ??
-              (await messagePage(tp, {
-                before,
-                limit: Number.isFinite(rawLimit) ? rawLimit : 220,
-              }));
+            const page = await indexedMessagePage(tp, m[1], {
+              before,
+              limit: Number.isFinite(rawLimit) ? rawLimit : 220,
+            });
             return json({
               id: m[1],
               total: page.total,
@@ -3923,23 +3886,12 @@ export async function cmdServe() {
           const lim = full
             ? Math.max(0, Math.min(20000, Number.isFinite(rawLimit) ? rawLimit : 0))
             : Math.min(200, Math.max(1, Number.isFinite(rawLimit) ? rawLimit : 30));
-          if (!full) {
-            const page = await indexedMessagePage(tp, m[1], { limit: lim });
-            if (page) {
-              return json({
-                id: m[1],
-                messages: transcriptMessagesForClient(m[1], page.messages).map(msgWithHtml),
-              });
-            }
-          }
+          const page = await indexedMessagePage(tp, m[1], { limit: full && lim === 0 ? 20_000 : lim });
           return json({
             id: m[1],
-            messages: transcriptMessagesForClient(
-              m[1],
-              await (full ? recentMessages : recentMessagesCached)(tp, lim, {
-                maxBytes: full ? null : undefined,
-              }),
-            ).map(msgWithHtml),
+            total: page.total,
+            nextBefore: page.nextBefore,
+            messages: transcriptMessagesForClient(m[1], page.messages).map(msgWithHtml),
           });
         }
       }
@@ -3960,9 +3912,7 @@ export async function cmdServe() {
           } | null;
           const query = body?.query?.trim();
           if (!query) return err(400, "expected { query }");
-          const r = await searchTranscriptIndex(tp, m[1], query, { limit: body?.limit }).catch(() =>
-            searchTranscript(tp, query, { limit: body?.limit }),
-          );
+          const r = await searchTranscriptIndex(tp, m[1], query, { limit: body?.limit });
           return json({ id: m[1], query, ...r });
         }
       }
@@ -4171,18 +4121,24 @@ export async function cmdServe() {
       }
 
       {
-        const m = path.match(/^\/api\/sessions\/([0-9a-fA-F-]{36})\/brain$/);
-        if (m && req.method === "POST") {
-          const run = await runSessionBrainForSession(m[1], (l) => console.log(l));
-          if (run.errors.length && !run.decisions.length) return err(404, run.errors[0] || "session not found");
-          return json({ run, decision: run.decisions[0] ?? null });
-        }
-      }
-
-      {
         const m = path.match(/^\/api\/sessions\/([0-9a-fA-F-]{36})\/close$/);
         if (m && req.method === "POST") {
+          const body = (await req.json().catch(() => null)) as { source?: unknown } | null;
+          const rawSource = typeof body?.source === "string" ? body.source.trim() : "";
+          const source = rawSource ? rawSource.slice(0, 80) : "unknown";
+          const closeLog = {
+            sessionId: m[1],
+            source,
+            href: req.headers.get("referer") ?? undefined,
+          };
           const sess = (await listSessions()).find((s) => s.sessionId === m[1]);
+          evlog("session_close_request", {
+            ...closeLog,
+            found: !!sess,
+            agent: sess?.agent,
+            tmuxName: sess?.tmuxName,
+            managed: sess?.managed,
+          });
           if (!sess) return err(404, "session not found");
           if (
             sess.agent === "aisdk" ||
@@ -4205,10 +4161,25 @@ export async function cmdServe() {
             }
             clearResolved(m[1]);
             invalidateListSessionsCache();
+            evlog("session_close_done", {
+              ...closeLog,
+              agent: sess.agent,
+              tmuxName: sess.tmuxName,
+              managed: sess.managed,
+              mode: "harness",
+            });
             return json({ ok: true });
           }
-          if (!sess.tmuxTarget)
+          if (!sess.tmuxTarget) {
+            evlog("session_close_rejected", {
+              ...closeLog,
+              agent: sess.agent,
+              tmuxName: sess.tmuxName,
+              managed: sess.managed,
+              reason: "no_tmux_target",
+            });
             return err(409, "session is not in a tmux pane — cannot close");
+          }
           // A session lfg started owns its whole tmux session (one managed
           // claude, no sibling panes) — kill the session and deregister it.
           // Attached sessions might share a tmux session with the user's other
@@ -4217,7 +4188,15 @@ export async function cmdServe() {
             sess.managed && sess.tmuxName
               ? tmuxKillSession(sess.tmuxName)
               : tmuxKillPane(sess.tmuxTarget);
-          if (!ok) return err(502, "close failed");
+          if (!ok) {
+            evlog("session_close_failed", {
+              ...closeLog,
+              agent: sess.agent,
+              tmuxName: sess.tmuxName,
+              managed: sess.managed,
+            });
+            return err(502, "close failed");
+          }
           // Tombstone the pid so the session drops out of listSessions() at once
           // — the process lingers briefly after the SIGHUP and would otherwise
           // flicker back for a poll or two before pgrep stops seeing it.
@@ -4228,24 +4207,14 @@ export async function cmdServe() {
           }
           clearResolved(m[1]);
           invalidateListSessionsCache();
+          evlog("session_close_done", {
+            ...closeLog,
+            agent: sess.agent,
+            tmuxName: sess.tmuxName,
+            managed: sess.managed,
+            mode: sess.managed && sess.tmuxName ? "tmux_session" : "tmux_pane",
+          });
           return json({ ok: true });
-        }
-      }
-
-      {
-        const m = path.match(
-          /^\/api\/sessions\/([0-9a-fA-F-]{36})\/messages$/,
-        );
-        if (m && req.method === "GET") {
-          const tp = await resolveTranscript(m[1]);
-          if (!tp) return err(404, "session transcript not found");
-          enqueueTranscriptIndex(tp, m[1]);
-          const page = await indexedMessagePage(tp, m[1], { limit: 60 });
-          const msgs = transcriptMessagesForClient(
-            m[1],
-            page?.messages ?? await recentMessagesCached(tp, 60),
-          ).map(msgWithHtml);
-          return json({ id: m[1], messages: msgs });
         }
       }
 
@@ -4353,14 +4322,36 @@ export async function cmdServe() {
             evlog("live_stream_start", { rid, idsCount: ids.length });
             const offsets = new Map<string, number>();
             const bufs = new Map<string, string>();
+            const bufOffsets = new Map<string, number>();
             const lastSig = new Map<string, string>();
             const lastArtifactAt = new Map<string, number>();
+            const lastMessageAt = new Map<string, number>();
+            const lastStallLogAt = new Map<string, number>();
+            const markMessage = (sid: string) => lastMessageAt.set(sid, Date.now());
+            const traceStallIfNeeded = (p: LivePane, busy: boolean) => {
+              const now = Date.now();
+              if (!busy) {
+                lastMessageAt.set(p.sid, now);
+                return;
+              }
+              const idleMs = now - (lastMessageAt.get(p.sid) ?? now);
+              if (idleMs < 10_000 || now - (lastStallLogAt.get(p.sid) ?? 0) < 10_000) return;
+              lastStallLogAt.set(p.sid, now);
+              evlog("live_stream_stall", {
+                transport: "sse",
+                rid,
+                sid: p.sid,
+                transcriptPath: p.tp,
+                idleMs,
+              });
+            };
             const artifactOne = (sid: string) => {
               if (closed) return;
               const after = lastArtifactAt.get(sid) ?? 0;
               const messages = imageArtifactMessagesSince(sid, after);
               for (const message of messages) {
                 lastArtifactAt.set(sid, Math.max(lastArtifactAt.get(sid) ?? 0, message.ts ?? 0));
+                markMessage(sid);
                 send(`event: msg\ndata: ${JSON.stringify({ sid, m: msgWithHtml(message) })}\n\n`);
               }
             };
@@ -4379,22 +4370,40 @@ export async function cmdServe() {
                 const f = Bun.file(p.tp);
                 const size = f.size;
                 let offset = offsets.get(p.sid) ?? 0;
-                if (size < offset) offset = 0; // rotated/truncated
+                if (size < offset) {
+                  offset = 0; // rotated/truncated
+                  bufs.delete(p.sid);
+                  bufOffsets.delete(p.sid);
+                }
                 if (size > offset) {
                   const bytes = size - offset;
                   const chunk = await f.slice(offset, size).text();
                   offsets.set(p.sid, size);
-                  let buf = (bufs.get(p.sid) ?? "") + chunk;
-                  const lines = buf.split("\n");
-                  bufs.set(p.sid, lines.pop() ?? "");
+                  const previousBuf = bufs.get(p.sid) ?? "";
+                  const combined = previousBuf + chunk;
+                  const lines = combined.split("\n");
+                  const rest = lines.pop() ?? "";
+                  bufs.set(p.sid, rest);
+                  let lineOffset = previousBuf ? (bufOffsets.get(p.sid) ?? offset) : offset;
+                  const indexLines: Array<{ offset: number; messages: ReturnType<typeof normalizeLineMessages> }> = [];
+                  const outgoing: Array<ReturnType<typeof msgWithHtml>> = [];
                   for (const l of lines) {
+                    const currentOffset = lineOffset;
+                    lineOffset += TRANSCRIPT_OFFSET_ENCODER.encode(l).length + 1;
                     if (!l) continue;
-                    const msgs = visibleTranscriptMessages(normalizeLineMessages(l));
-                    for (const msg of msgs)
-                      send(
-                        `event: msg\ndata: ${JSON.stringify({ sid: p.sid, m: msgWithHtml(msg) })}\n\n`,
-                      );
+                    const normalized = normalizeLineMessages(l);
+                    indexLines.push({ offset: currentOffset, messages: normalized });
+                    const msgs = visibleTranscriptMessages(normalized);
+                    if (msgs.length) markMessage(p.sid);
+                    for (const msg of msgs) outgoing.push(msgWithHtml(msg));
                   }
+                  if (rest) bufOffsets.set(p.sid, lineOffset);
+                  else bufOffsets.delete(p.sid);
+                  if (indexLines.length) indexTranscriptMessages(p.tp, p.sid, indexLines);
+                  for (const msg of outgoing)
+                    send(
+                      `event: msg\ndata: ${JSON.stringify({ sid: p.sid, m: msg })}\n\n`,
+                    );
                   evlog("live_stream_pump", {
                     rid,
                     sid: p.sid,
@@ -4428,6 +4437,7 @@ export async function cmdServe() {
                   lastBusy.set(p.sid, bsig);
                   send(`event: busy\ndata: ${JSON.stringify({ sid: p.sid, busy })}\n\n`);
                 }
+                traceStallIfNeeded(p, busy);
                 if (busy) sendAiTextDeltaPart(send, p.sid, entry, lastDraft, true);
                 else lastDraft.delete(p.sid);
                 return;
@@ -4448,6 +4458,7 @@ export async function cmdServe() {
                 lastBusy.set(p.sid, bsig);
                 send(`event: busy\ndata: ${JSON.stringify({ sid: p.sid, busy })}\n\n`);
               }
+              traceStallIfNeeded(p, busy);
             };
             const lastQ = new Map<string, string>();
             const queueOne = (p: { sid: string }) => {
@@ -4511,15 +4522,14 @@ export async function cmdServe() {
                     lastQ.set(p.sid, "[]");
                     lastBusy.set(p.sid, "?");
                     lastArtifactAt.set(p.sid, 0);
+                    lastMessageAt.set(p.sid, Date.now());
                     artifactOne(p.sid);
                     pollOne(p);
                     queueOne(p);
                     return;
                   }
                   const backlogT0 = performance.now();
-                  const page =
-                    (await indexedMessagePage(p.tp, p.sid, { limit: 40 })) ??
-                    (await messagePage(p.tp, { limit: 40 }));
+                  const page = await indexedMessagePage(p.tp, p.sid, { limit: 40 });
                   const readMs = performance.now() - backlogT0;
                   const renderT0 = performance.now();
                   const msgs = transcriptMessagesForClient(p.sid, page.messages).map(msgWithHtml);
@@ -4549,6 +4559,7 @@ export async function cmdServe() {
                     })}\n\n`,
                   );
                   offsets.set(p.sid, Bun.file(p.tp).size);
+                  lastMessageAt.set(p.sid, Date.now());
                   lastSig.set(p.sid, " ");
                   lastQ.set(p.sid, "[]");
                   // Seed busy with a sentinel (not "0") so the first pollOne always
@@ -4631,12 +4642,32 @@ export async function cmdServe() {
               };
               let offset = 0;
               let buf = "";
+              let bufOffset: number | null = null;
               let lastArtifactAt = 0;
+              let lastMessageAt = Date.now();
+              let lastStallLogAt = 0;
+              const traceStallIfNeeded = (busy: boolean) => {
+                const now = Date.now();
+                if (!busy) {
+                  lastMessageAt = now;
+                  return;
+                }
+                const idleMs = now - lastMessageAt;
+                if (idleMs < 10_000 || now - lastStallLogAt < 10_000) return;
+                lastStallLogAt = now;
+                evlog("live_stream_stall", {
+                  transport: "sse-single",
+                  sid,
+                  transcriptPath: tp,
+                  idleMs,
+                });
+              };
               const pollArtifacts = () => {
                 if (closed) return;
                 const messages = imageArtifactMessagesSince(sid, lastArtifactAt);
                 for (const message of messages) {
                   lastArtifactAt = Math.max(lastArtifactAt, message.ts ?? 0);
+                  lastMessageAt = Date.now();
                   send(`event: msg\ndata: ${JSON.stringify(msgWithHtml(message))}\n\n`);
                 }
               };
@@ -4645,19 +4676,36 @@ export async function cmdServe() {
                 try {
                   const f = Bun.file(tp);
                   const size = f.size;
-                  if (size < offset) offset = 0; // file rotated/truncated
+                  if (size < offset) {
+                    offset = 0; // file rotated/truncated
+                    buf = "";
+                    bufOffset = null;
+                  }
                   if (size > offset) {
-                    const chunk = await f.slice(offset, size).text();
+                    const startOffset = offset;
+                    const chunk = await f.slice(startOffset, size).text();
                     offset = size;
-                    buf += chunk;
-                    const lines = buf.split("\n");
+                    const previousBuf = buf;
+                    const combined = previousBuf + chunk;
+                    const lines = combined.split("\n");
                     buf = lines.pop() ?? "";
+                    let lineOffset = previousBuf ? (bufOffset ?? startOffset) : startOffset;
+                    const indexLines: Array<{ offset: number; messages: ReturnType<typeof normalizeLineMessages> }> = [];
+                    const outgoing: Array<ReturnType<typeof msgWithHtml>> = [];
                     for (const l of lines) {
+                      const currentOffset = lineOffset;
+                      lineOffset += TRANSCRIPT_OFFSET_ENCODER.encode(l).length + 1;
                       if (!l) continue;
-                      const msgs = visibleTranscriptMessages(normalizeLineMessages(l));
-                      for (const msg of msgs)
-                        send(`event: msg\ndata: ${JSON.stringify(msgWithHtml(msg))}\n\n`);
+                      const normalized = normalizeLineMessages(l);
+                      indexLines.push({ offset: currentOffset, messages: normalized });
+                      const msgs = visibleTranscriptMessages(normalized);
+                      if (msgs.length) lastMessageAt = Date.now();
+                      for (const msg of msgs) outgoing.push(msgWithHtml(msg));
                     }
+                    bufOffset = buf ? lineOffset : null;
+                    if (indexLines.length) indexTranscriptMessages(tp, sid, indexLines);
+                    for (const msg of outgoing)
+                      send(`event: msg\ndata: ${JSON.stringify(msg)}\n\n`);
                   }
                 } catch {}
               };
@@ -4666,7 +4714,7 @@ export async function cmdServe() {
                 const page = await indexedMessagePage(tp, sid, { limit: 40 });
                 const msgs = transcriptMessagesForClient(
                   sid,
-                  page?.messages ?? await recentMessagesCached(tp, 40),
+                  page.messages,
                 ).map(msgWithHtml);
                 lastArtifactAt = Math.max(
                   0,
@@ -4706,6 +4754,7 @@ export async function cmdServe() {
                     lastBusy = bsig;
                     send(`event: busy\ndata: ${bsig === "1" ? "true" : "false"}\n\n`);
                   }
+                  traceStallIfNeeded(bsig === "1");
                 };
                 pollPrompt();
                 pi = setInterval(pollPrompt, 1000);
@@ -4725,6 +4774,7 @@ export async function cmdServe() {
                     lastBusy = bsig;
                     send(`event: busy\ndata: ${busy ? "true" : "false"}\n\n`);
                   }
+                  traceStallIfNeeded(busy);
                   if (!busy) lastDraft.delete(sid);
                 };
                 const pollDraft = () => {
@@ -4791,14 +4841,14 @@ export async function cmdServe() {
   });
 
   startAutoScheduler((l) => console.log(l));
-  // Let the session-brain merge-guard nudge a live session's agent (queue mode)
-  // when it detects unmerged worktree work before archiving.
-  setBrainPromptSender((session, text, opts) => sendPromptToLiveSession(session, text, opts));
-  startSessionBrainScheduler((l) => console.log(l));
   startWorktreeSweep((l) => console.log(l));
   // Watch the fleet for busy -> idle transitions and fan "completed" events out
   // to voice subscribers (/api/voice/events). Idempotent + best-effort.
   startFleetWatcher();
+  // Keep SQLite as the chat read model for every active session. Transcript
+  // JSONL files are treated as an import source; live draft deltas stay
+  // ephemeral until the provider writes the completed turn.
+  startTranscriptMessageMonitor(listSessionsCached);
   // Warm the resumable-session cache in the background so the first time someone
   // opens the resume picker it's already served from SQLite (no cold scan wait).
   void refreshResumableCache({ force: true }).catch(() => {});

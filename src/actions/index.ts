@@ -10,7 +10,8 @@ import {
   tmuxHasSession,
   capturePane,
 } from "../tmux.ts";
-import { resolveTranscript, recentMessages } from "../sessions.ts";
+import { resolveTranscript } from "../sessions.ts";
+import { enqueueTranscriptIndex, indexedRecentMessages } from "../transcript-index.ts";
 import { addManaged } from "../managed.ts";
 import { readEntry as readAisdkEntry } from "../aisdk-registry.ts";
 import { USERS, assignUser } from "../users.ts";
@@ -418,7 +419,8 @@ export async function dispatchSendFixAgent(opts: {
   try {
     const tp = await resolveTranscript(opts.failSessionId);
     if (tp) {
-      const msgs = await recentMessages(tp, 8);
+      enqueueTranscriptIndex(tp, opts.failSessionId);
+      const msgs = await indexedRecentMessages(tp, opts.failSessionId, 8);
       convo = msgs
         .filter((m) => m.kind === "text" && m.text)
         .map((m) => `- ${m.role}: ${m.text!.replace(/\s+/g, " ").slice(0, 200)}`)
@@ -522,7 +524,8 @@ async function readResultLine(sessionId: string | null): Promise<string | null> 
   try {
     const tp = await resolveTranscript(sessionId);
     if (!tp) return null;
-    const msgs = await recentMessages(tp, 80);
+    enqueueTranscriptIndex(tp, sessionId);
+    const msgs = await indexedRecentMessages(tp, sessionId, 80);
     const line = msgs
       .filter((m) => m.role === "assistant" && m.kind === "text")
       .flatMap((m) => (m.text || "").split("\n"))

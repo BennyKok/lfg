@@ -29,6 +29,12 @@ Options:
 Env:
   LFG_BASE, or LFG_PORT/LFG_HOST. Defaults to http://127.0.0.1:8766.
   LFG_SESSION_ID is used as the parent when --parent is omitted.
+
+Behavior:
+  Subagents are LFG-managed, linked to their parent, capped at depth 4, and
+  launched with instructions to report progress plus one terminal state back to
+  the parent session. Nested delegation should use LFG MCP subagent tools, not
+  generic or harness-native subagent tools.
 `;
 
 type Repo = { name: string; cwd: string; project?: string };
@@ -39,6 +45,7 @@ type SessionCreateResponse = {
   cwd?: string;
   agent?: string;
   worktree?: string | null;
+  subagentDepth?: number | null;
 };
 type SessionRow = {
   sessionId: string | null;
@@ -225,6 +232,6 @@ async function cmdCreate(args: string[]) {
     return;
   }
   console.log(
-    `created ${created.agent ?? agent} subagent ${created.sessionId ?? created.tmuxName ?? "(launching)"} in ${created.cwd ?? cwd ?? "default repo"}`,
+    `created ${created.agent ?? agent} subagent ${created.sessionId ?? created.tmuxName ?? "(launching)"} in ${created.cwd ?? cwd ?? "default repo"}${created.subagentDepth ? ` (depth ${created.subagentDepth}/4)` : ""}`,
   );
 }

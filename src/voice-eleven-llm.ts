@@ -340,7 +340,7 @@ async function runTool(
         return j?.ok ? "answered" : j?.error || "answer failed";
       }
       if (name === "close_session") {
-        const j = await lfgPost(`/api/sessions/${sid}/close`, {});
+        const j = await lfgPost(`/api/sessions/${sid}/close`, { source: "voice_tool_close_session" });
         return j?.ok || !j?.error ? "closed" : j.error;
       }
     }

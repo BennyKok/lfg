@@ -48,14 +48,12 @@ import {
   Activity,
   ArrowDown,
   ArrowUp,
-  Brain,
   Bot,
   Boxes,
   Braces,
   CalendarClock,
   ClipboardList,
   Flag,
-  AlertTriangle,
   Check,
   ChevronDown,
   ChevronLeft,
@@ -278,66 +276,6 @@ type AutoFinding = {
   sessionId?: string;
 };
 
-type SessionNote = {
-  id: string;
-  sourceSessionId: string;
-  sourceNativeSessionId?: string | null;
-  agent: string;
-  title: string;
-  cwd: string | null;
-  project: string;
-  summary: string;
-  nextActions: string[];
-  blockers: string[];
-  resumePrompt: string;
-  createdAt: number;
-  updatedAt: number;
-  closedAt?: number;
-  status: "open" | "snoozed" | "done" | "dismissed";
-};
-
-type PatternSuggestion = {
-  id: string;
-  key: string;
-  title: string;
-  reasoning: string;
-  recommendation: string;
-  evidence: string[];
-  createdAt: number;
-  updatedAt: number;
-  status: "open" | "accepted" | "dismissed";
-};
-
-type SessionBrainDecision = {
-  sessionId: string;
-  title: string;
-  action: "keep_live" | "needs_input" | "archive_and_close" | "close_no_note";
-  reason: string;
-  confidence: number;
-  noteId?: string;
-  closed?: boolean;
-  guardrail?: string;
-};
-
-type SessionBrainRun = {
-  id: string;
-  startedAt: number;
-  finishedAt?: number;
-  autoClose: boolean;
-  scanned: number;
-  decisions: SessionBrainDecision[];
-  suggestions: string[];
-  errors: string[];
-};
-
-type SessionBrainConfig = {
-  enabled: boolean;
-  autoClose: boolean;
-  intervalMin: number;
-  minIdleMin: number;
-  model: string;
-};
-
 type Message = {
   id?: string;
   role?: string;
@@ -432,12 +370,6 @@ type BootstrapPayload = {
   repos?: Repo[] | null;
   skills?: SkillCatalogItem[] | null;
   auto?: { agents?: AutoAgent[] | null; tz?: string; findings?: AutoFinding[] | null };
-  sessionBrain?: {
-    config?: SessionBrainConfig | null;
-    notes?: SessionNote[] | null;
-    suggestions?: PatternSuggestion[] | null;
-    runs?: SessionBrainRun[] | null;
-  };
   onboarding?: OnboardingState | null;
 };
 
@@ -600,6 +532,14 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
+function closeSessionRequest(sid: string, source: string) {
+  return api<{ ok?: boolean }>(`/api/sessions/${encodeURIComponent(sid)}/close`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source }),
+  });
+}
+
 let skillCatalogPromise: Promise<SkillCatalogItem[]> | null = null;
 let skillCatalogLoadedAt = 0;
 let skillCatalogSnapshot: SkillCatalogItem[] = [];
@@ -744,13 +684,10 @@ function shortUser(email?: string | null) {
   return email ? email.split("@")[0] : "unassigned";
 }
 
-const MOBILE_NOTEPAD_FILTER = "__notepad";
-
 // A human-friendly label for a project. Current backend payloads use the
 // top-level folder under the repos root. The legacy dash-encoded full-path shape
 // is still accepted so old selected filters degrade cleanly.
 function shortProject(project: string): string {
-  if (project === MOBILE_NOTEPAD_FILTER) return "Notepad";
   const legacy = project.match(/(?:^|-)repos-(.+)$/)?.[1];
   if (legacy) return legacy;
   return project;
@@ -802,7 +739,7 @@ const MANAGE_SESSION_PROMPTS: ManageSessionPromptTemplate[] = [
     label: "Clean completed",
     description: "Review first, then close only clearly done sessions.",
     task:
-      "Review current live sessions in scope, identify sessions that are clearly completed, summarize what you plan to close, then close only sessions that are unambiguously complete. Leave active, uncertain, errored, or blocked sessions open and explain why.",
+      "Review all current live sessions in scope, identify sessions that are clearly completed, summarize what you plan to close, then close only sessions that are unambiguously complete. Leave active, uncertain, errored, or blocked sessions open and explain why.",
   },
   {
     id: "follow-up",
@@ -826,13 +763,13 @@ const MANAGE_SESSION_PROMPTS: ManageSessionPromptTemplate[] = [
       "Manage the selected session scope end to end: review current live sessions, summarize the plan, close only sessions that are clearly completed, send concise follow-up nudges for sessions with local commits or open PRs, and report remaining blockers. Leave anything uncertain open.",
   },
 ];
+const SMART_CLEAR_PROMPT =
+  MANAGE_SESSION_PROMPTS.find((template) => template.id === "clean") ??
+  MANAGE_SESSION_PROMPTS[0];
 
 function manageSessionsScopeText(projectFilter: string): string {
   if (projectFilter === "__all") {
     return "All projects. This was explicitly selected in the UI; include every live project visible to the current user filter.";
-  }
-  if (projectFilter === MOBILE_NOTEPAD_FILTER) {
-    return "Notepad. There is no repository-backed project scope here; review only notepad/session-brain items visible in the current view.";
   }
   return `Project "${shortProject(projectFilter)}" (project key: ${projectFilter}). Manage only sessions whose project matches this selected project scope.`;
 }
@@ -2906,7 +2843,6 @@ export function App() {
   // composer's textarea so the soft keyboard opens.
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [composerFocusNonce, setComposerFocusNonce] = useState(0);
-  const [notepadOpen, setNotepadOpen] = useState(false);
   const [callOpen, setCallOpen] = useState(false);
   const [runLog, setRunLog] = useState<string | null>(null);
   // Auto agents
@@ -2921,11 +2857,6 @@ export function App() {
   const [toastedFindingIds, setToastedFindingIds] = useState<Set<string>>(() => new Set());
   const [openFinding, setOpenFinding] = useState<AutoFinding | null>(null);
   const [editingAgent, setEditingAgent] = useState<AutoAgent | "new" | null>(null);
-  const [brainNotes, setBrainNotes] = useState<SessionNote[]>([]);
-  const [brainSuggestions, setBrainSuggestions] = useState<PatternSuggestion[]>([]);
-  const [brainRuns, setBrainRuns] = useState<SessionBrainRun[]>([]);
-  const [brainConfig, setBrainConfig] = useState<SessionBrainConfig | null>(null);
-  const [brainRunning, setBrainRunning] = useState(false);
   const seededAuto = useRef(false);
   const seenFindings = useRef<Set<string>>(new Set());
   const [userFilter, setUserFilter] = useState(() => {
@@ -3088,10 +3019,6 @@ export function App() {
     setFindings(findingList);
     findingList.forEach((f) => seenFindings.current.add(f.id));
     seededAuto.current = true;
-    setBrainConfig(payload.sessionBrain?.config ?? null);
-    setBrainNotes(payload.sessionBrain?.notes ?? []);
-    setBrainSuggestions(payload.sessionBrain?.suggestions ?? []);
-    setBrainRuns(payload.sessionBrain?.runs ?? []);
   }, []);
 
   // Sessions the user just deleted. The server's list can lag a beat (tmux pane
@@ -3195,19 +3122,6 @@ export function App() {
     }
   }, [hideToastedFinding, showToastedFinding]);
 
-  const refreshBrain = useCallback(async () => {
-    const [config, notes, suggestions, runs] = await Promise.all([
-      api<{ config: SessionBrainConfig }>("/api/session-brain/config"),
-      api<{ notes: SessionNote[] }>("/api/session-brain/notes?status=open"),
-      api<{ suggestions: PatternSuggestion[] }>("/api/session-brain/suggestions?status=open"),
-      api<{ runs: SessionBrainRun[] }>("/api/session-brain/runs?limit=12"),
-    ]);
-    setBrainConfig(config.config ?? null);
-    setBrainNotes(notes.notes ?? []);
-    setBrainSuggestions(suggestions.suggestions ?? []);
-    setBrainRuns(runs.runs ?? []);
-  }, []);
-
   const refreshSessions = useCallback(async (_opts?: { retireLaunchId?: string }) => {
     const payload = await api<{ sessions: Session[] }>("/api/sessions");
     // Guard to [] — `sessions` is consumed by `.filter()`/`.map()` on render
@@ -3266,10 +3180,9 @@ export function App() {
     const id = setInterval(() => {
       refreshSessions().catch(() => {});
       refreshAuto().catch(() => {});
-      refreshBrain().catch(() => {});
     }, 5000);
     return () => clearInterval(id);
-  }, [refreshSessions, refreshAuto, refreshBrain]);
+  }, [refreshSessions, refreshAuto]);
 
   // Refresh the user roster when the tab regains focus. The roster rarely
   // changes, so it isn't worth the 5s poll above — but avatars carry a
@@ -3411,7 +3324,7 @@ export function App() {
     [autoAgents, repos, userScopedSessions],
   );
   const mobileProjectOptions = useMemo(
-    () => [MOBILE_NOTEPAD_FILTER, ...projectOptions],
+    () => projectOptions,
     [projectOptions],
   );
 
@@ -3419,26 +3332,22 @@ export function App() {
   // fall back to "all" rather than keeping a dead filter.
   useEffect(() => {
     if (loading) return;
-    const validMobileNotepad = isMobile && projectFilter === MOBILE_NOTEPAD_FILTER;
-    if (projectFilter !== "__all" && !validMobileNotepad && !projectOptions.includes(projectFilter)) {
+    if (projectFilter !== "__all" && !projectOptions.includes(projectFilter)) {
       setProjectFilter("__all");
     }
   }, [isMobile, loading, projectFilter, projectOptions]);
 
   const liveSessions = useMemo(() => {
-    if (projectFilter === MOBILE_NOTEPAD_FILTER) return [];
     if (projectFilter === "__all") return userScopedSessions;
     return userScopedSessions.filter((session) => session.project === projectFilter);
   }, [userScopedSessions, projectFilter]);
 
   const projectScopedAutoAgents = useMemo(() => {
-    if (projectFilter === MOBILE_NOTEPAD_FILTER) return [];
     if (projectFilter === "__all") return autoAgents;
     return autoAgents.filter((agent) => autoAgentProject(agent, repos) === projectFilter);
   }, [autoAgents, projectFilter, repos]);
 
   const projectScopedFindings = useMemo(() => {
-    if (projectFilter === MOBILE_NOTEPAD_FILTER) return [];
     if (projectFilter === "__all") return liveFindings;
     const agentIds = new Set(projectScopedAutoAgents.map((agent) => agent.id));
     return liveFindings.filter((finding) => agentIds.has(finding.agentId));
@@ -3902,177 +3811,9 @@ export function App() {
     }
   }
 
-  async function runBrainNow() {
-    setBrainRunning(true);
-    try {
-      await api("/api/session-brain/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      await Promise.all([refreshBrain(), refreshSessions()]);
-      toast.success("Session brain finished");
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Session brain failed");
-    } finally {
-      setBrainRunning(false);
-    }
-  }
-
-  async function updateBrainConfig(patch: Partial<SessionBrainConfig>) {
-    const normalizedPatch =
-      typeof patch.enabled === "boolean" && typeof patch.autoClose !== "boolean"
-        ? { ...patch, autoClose: patch.enabled }
-        : patch;
-    if (
-      brainConfig &&
-      Object.entries(normalizedPatch).every(([key, value]) => brainConfig[key as keyof SessionBrainConfig] === value)
-    ) {
-      return;
-    }
-    const previous = brainConfig;
-    const fallback: SessionBrainConfig = {
-      enabled: false,
-      autoClose: false,
-      intervalMin: 60,
-      minIdleMin: 45,
-      model: "claude-sonnet-5",
-    };
-    setBrainConfig((current) => ({ ...(current ?? fallback), ...normalizedPatch }));
-    try {
-      const res = await api<{ config: SessionBrainConfig }>("/api/session-brain/config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(normalizedPatch),
-      });
-      setBrainConfig(res.config);
-    } catch (e) {
-      setBrainConfig(previous);
-      toast.error(e instanceof Error ? e.message : "Couldn't update session brain settings");
-    }
-  }
-
-  async function setNoteStatus(note: SessionNote, status: SessionNote["status"]) {
-    const previousStatus = note.status;
-    // Re-insert a note we optimistically removed, keeping it deduped in case a
-    // refresh already brought it back.
-    const restoreNote = () =>
-      setBrainNotes((prev) => (prev.some((n) => n.id === note.id) ? prev : [note, ...prev]));
-    setBrainNotes((prev) => prev.filter((n) => n.id !== note.id));
-    try {
-      await api(`/api/session-brain/notes/${note.id}/status`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
-      });
-      await refreshBrain();
-      // Done/Dismiss are destructive from the user's view (the note leaves the
-      // list for good), so make them reversible: Undo restores it locally and
-      // POSTs the prior status back to the server.
-      if (status === "done" || status === "dismissed") {
-        toast.success(status === "done" ? "Marked done" : "Dismissed", {
-          action: {
-            label: "Undo",
-            onClick: () => {
-              restoreNote();
-              api(`/api/session-brain/notes/${note.id}/status`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ status: previousStatus }),
-              })
-                .then(() => refreshBrain())
-                .catch((e) => toast.error(e instanceof Error ? e.message : "Couldn't undo"));
-            },
-          },
-        });
-      }
-    } catch (e) {
-      // The server rejected the update — restore the note so it doesn't
-      // silently disappear on a failed status change.
-      restoreNote();
-      toast.error(e instanceof Error ? e.message : "Couldn't update note");
-      await refreshBrain().catch(() => {});
-    }
-  }
-
-  async function setSuggestionStatus(
-    suggestion: PatternSuggestion,
-    status: PatternSuggestion["status"],
-  ) {
-    setBrainSuggestions((prev) => prev.filter((s) => s.id !== suggestion.id));
-    try {
-      await api(`/api/session-brain/suggestions/${suggestion.id}/status`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
-      });
-      await refreshBrain();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't update suggestion");
-      await refreshBrain().catch(() => {});
-    }
-  }
-
-  async function resumeBrainNote(note: SessionNote) {
-    try {
-      const sourceStillLive = allLiveSessions.some((session) => session.sessionId === note.sourceSessionId);
-      const resumeSessionId = sourceStillLive
-        ? note.sourceSessionId
-        : note.sourceNativeSessionId || note.sourceSessionId;
-      const owner =
-        (userFilter !== "__all" && userFilter !== "__unassigned" ? userFilter : "") ||
-        localStorage.getItem("lfg_user") ||
-        users[0]?.email ||
-        "";
-      const res = await api<{ sessionId?: string }>("/api/sessions/resume", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          sessionId: resumeSessionId,
-          prompt: note.resumePrompt,
-          user: owner || undefined,
-        }),
-      });
-      if (res.sessionId) {
-        markCreatedSid(res.sessionId);
-        markCollapsedSid(res.sessionId);
-      } else {
-        throw new Error("Resume started, but no live session id was returned");
-      }
-      await setNoteStatus(note, "done");
-      setTab("live");
-      await refreshSessions();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't resume note");
-    }
-  }
-
-  async function sendSessionToBrain(sid: string) {
-    try {
-      const payload = await api<{ decision: SessionBrainDecision | null }>(
-        `/api/sessions/${sid}/brain`,
-        { method: "POST" },
-      );
-      const decision = payload.decision;
-      if (decision?.closed) {
-        removeSession(sid);
-        toast.success("Archived to brain and closed");
-      } else if (decision?.guardrail) {
-        toast.message("Brain kept the session live", { description: decision.guardrail });
-      } else if (decision?.action === "archive_and_close") {
-        toast.message("Brain wrote a note", { description: "The session stayed live." });
-      } else {
-        toast.message("Brain reviewed the session", { description: decision?.reason });
-      }
-      await Promise.all([refreshBrain(), refreshSessions()]);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Couldn't send session to brain");
-    }
-  }
-
   async function launchManageSessions(template: ManageSessionPromptTemplate) {
     const scopedRepo =
-      projectFilter !== "__all" && projectFilter !== MOBILE_NOTEPAD_FILTER
+      projectFilter !== "__all"
         ? repos.find((repo) => repoProject(repo) === projectFilter)
         : undefined;
     const launchAgent = (localStorage.getItem("lfg_v2_agent") as AgentKind | null) || "aisdk";
@@ -4309,10 +4050,6 @@ export function App() {
                     onChange={setProjectFilter}
                   />
                 ) : null}
-                <ManageSessionsMenu
-                  projectFilter={projectFilter}
-                  onSelect={(template) => void launchManageSessions(template)}
-                />
                 <UserFilterMenu
                   value={userFilter}
                   users={users}
@@ -4346,16 +4083,7 @@ export function App() {
         )}
         style={liveKeyboardShiftStyle}
       >
-        {tab === "live" && isMobile && projectFilter === MOBILE_NOTEPAD_FILTER ? (
-          <MobileNotepadHome
-            notes={brainNotes}
-            running={brainRunning}
-            onRunNow={runBrainNow}
-            onOpenBrain={() => setTab("brain")}
-            onResume={resumeBrainNote}
-            onNoteStatus={setNoteStatus}
-          />
-        ) : tab === "live" ? (
+        {tab === "live" ? (
           <LiveView
             sessions={liveSessions}
             users={users}
@@ -4378,40 +4106,21 @@ export function App() {
             onTrackSendStatus={liveStream.trackSendStatus}
             onRefresh={refreshSessions}
             onRemove={removeSession}
-            onBrain={sendSessionToBrain}
             onNew={() =>
               isMobile ? setComposerFocusNonce((n) => n + 1) : setNewOpen(true)
             }
+            onSmartClear={() => launchManageSessions(SMART_CLEAR_PROMPT)}
             findings={projectScopedFindings}
             autoAgents={projectScopedAutoAgents}
             onOpenFinding={setOpenFinding}
           />
         ) : tab === "auto" ? (
           <AutoManageView
-            autoAgents={projectScopedAutoAgents}
-            findings={
-              projectFilter === "__all"
-                ? findings
-                : findings.filter((finding) =>
-                    projectScopedAutoAgents.some((agent) => agent.id === finding.agentId),
-                  )
-            }
+            autoAgents={autoAgents}
+            findings={findings}
             tz={schedTz}
             onEdit={setEditingAgent}
             onRunNow={runAutoNow}
-          />
-        ) : tab === "brain" ? (
-          <SessionBrainView
-            config={brainConfig}
-            notes={brainNotes}
-            suggestions={brainSuggestions}
-            runs={brainRuns}
-            running={brainRunning}
-            onRunNow={runBrainNow}
-            onConfigChange={updateBrainConfig}
-            onResume={resumeBrainNote}
-            onNoteStatus={setNoteStatus}
-            onSuggestionStatus={setSuggestionStatus}
           />
         ) : tab === "ask" ? (
           <AskPage />
@@ -4448,9 +4157,6 @@ export function App() {
             onOpenBrowser={() => setTab("browser")}
             onOpenCodingAgents={() => setTab("coding-agents")}
             onOpenAuto={() => setTab("auto")}
-            onOpenBrain={() => setTab("brain")}
-            brainConfig={brainConfig}
-            onBrainConfigChange={updateBrainConfig}
             onOpenUsage={() => setTab("usage")}
             onOpenChangelog={() => setTab("changelog")}
             extTabs={extNavTabs}
@@ -4509,22 +4215,6 @@ export function App() {
           onClose={() => setOpenFinding(null)}
           onReply={replyToFinding}
           onDismiss={dismissFinding}
-        />
-      ) : null}
-
-      {isMobile ? (
-        <MobileNotepadSheet
-          open={notepadOpen}
-          notes={brainNotes}
-          running={brainRunning}
-          onRunNow={runBrainNow}
-          onOpenBrain={() => {
-            setNotepadOpen(false);
-            setTab("brain");
-          }}
-          onResume={resumeBrainNote}
-          onNoteStatus={setNoteStatus}
-          onClose={() => setNotepadOpen(false)}
         />
       ) : null}
 
@@ -5108,57 +4798,6 @@ function UsageRingsButton({
   );
 }
 
-function ManageSessionsMenu({
-  projectFilter,
-  onSelect,
-}: {
-  projectFilter: string;
-  onSelect: (template: ManageSessionPromptTemplate) => void;
-}) {
-  const scopeLabel =
-    projectFilter === "__all"
-      ? "All projects"
-      : projectFilter === MOBILE_NOTEPAD_FILTER
-        ? "Notepad"
-        : shortProject(projectFilter);
-
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        render={
-          <button
-            type="button"
-            aria-label="Manage sessions"
-            title={`Manage sessions: ${scopeLabel}`}
-            className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors duration-200 ease-out hover:text-foreground active:scale-[0.96]"
-          />
-        }
-      >
-        <ClipboardList className="size-[18px]" />
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-72">
-        <DropdownMenuLabel className="space-y-1">
-          <span className="block text-xs font-semibold">Manage Sessions</span>
-          <span className="block truncate text-[11px] font-normal text-muted-foreground">
-            Scope: {scopeLabel}
-          </span>
-        </DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        {MANAGE_SESSION_PROMPTS.map((template) => (
-          <DropdownMenuItem
-            key={template.id}
-            className="flex cursor-pointer flex-col items-start gap-0.5 py-2"
-            onClick={() => onSelect(template)}
-          >
-            <span className="text-sm font-medium">{template.label}</span>
-            <span className="text-xs text-muted-foreground">{template.description}</span>
-          </DropdownMenuItem>
-        ))}
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
 function ProjectFilterMenu({
   value,
   projects,
@@ -5214,11 +4853,7 @@ function ProjectFilterMenu({
         touchStartY.current = null;
       }}
     >
-      {value === MOBILE_NOTEPAD_FILTER ? (
-        <ScrollText className="size-3.5 shrink-0" />
-      ) : (
-        <Folder className="size-3.5 shrink-0" />
-      )}
+      <Folder className="size-3.5 shrink-0" />
       {active ? (
         <span className="truncate text-xs font-medium">
           {shortProject(value)}
@@ -6038,7 +5673,6 @@ function LiveView({
   onTrackSendStatus,
   onRefresh,
   onRemove,
-  onBrain,
   onNew,
   findings = [],
   autoAgents = [],
@@ -6048,6 +5682,7 @@ function LiveView({
   onUserChange,
   onOpenSettings,
   onOpenAsk,
+  onSmartClear,
 }: {
   sessions: Session[];
   users: User[];
@@ -6058,6 +5693,7 @@ function LiveView({
   onUserChange?: (v: string) => void;
   onOpenSettings?: () => void;
   onOpenAsk?: () => void;
+  onSmartClear: () => Promise<void>;
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
@@ -6070,7 +5706,6 @@ function LiveView({
   onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
-  onBrain: (sid: string) => Promise<void>;
   onNew: () => void;
   findings: AutoFinding[];
   autoAgents: AutoAgent[];
@@ -6128,17 +5763,11 @@ function LiveView({
   const idle = tree.flatten(idleNodes);
   const nameFor = (id: string) => autoAgents.find((a) => a.id === id)?.name ?? id;
 
-  // Close every idle session in one tap. Each card drops immediately (onRemove)
-  // and the backend close fires in parallel; a single refresh reconciles.
-  async function clearIdle() {
-    const ids = idle.map((s) => s.sessionId).filter((id): id is string => !!id);
-    if (!ids.length) return;
-    if (!confirm(`Close ${ids.length} idle session${ids.length === 1 ? "" : "s"}?`)) return;
-    for (const id of ids) onRemove(id);
-    await Promise.allSettled(
-      ids.map((id) => api(`/api/sessions/${id}/close`, { method: "POST" })),
-    );
-    await onRefresh();
+  // Smart clear starts a manager session instead of destructively closing every
+  // idle card. The manager reviews the whole selected scope and only closes
+  // sessions that are clearly complete.
+  async function smartClear() {
+    await onSmartClear();
   }
 
   const renderCard = (session: Session, depth = 0) => (
@@ -6173,7 +5802,6 @@ function LiveView({
           onTrackSendStatus={onTrackSendStatus}
           onRefresh={onRefresh}
           onRemove={onRemove}
-          onBrain={onBrain}
           onOpenSheet={(sid, origin) => setSheet({ sid, origin })}
           entering={recentlyCreatedSids.has(session.sessionId ?? "")}
         />
@@ -6239,7 +5867,6 @@ function LiveView({
         onTrackSendStatus={onTrackSendStatus}
         onRefresh={onRefresh}
         onRemove={onRemove}
-        onBrain={onBrain}
         findings={findings}
         nameFor={nameFor}
         onOpenFinding={onOpenFinding}
@@ -6299,11 +5926,11 @@ function LiveView({
             action={
               <button
                 type="button"
-                onClick={clearIdle}
-                className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                onClick={() => void smartClear()}
+                className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
               >
-                <X className="size-3" />
-                Clear all
+                <ClipboardList className="size-3" />
+                Smart clear
               </button>
             }
           />
@@ -6332,7 +5959,6 @@ function LiveView({
         onTrackSendStatus={onTrackSendStatus}
         onRefresh={onRefresh}
         onRemove={onRemove}
-        onBrain={onBrain}
         onClose={() => setSheet(null)}
       />
     ) : null}
@@ -6361,7 +5987,6 @@ function RailStage({
   onTrackSendStatus,
   onRefresh,
   onRemove,
-  onBrain,
   findings = [],
   nameFor,
   onOpenFinding,
@@ -6394,7 +6019,6 @@ function RailStage({
   onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
-  onBrain: (sid: string) => Promise<void>;
   findings: AutoFinding[];
   nameFor: (id: string) => string;
   onOpenFinding: (f: AutoFinding) => void;
@@ -6651,10 +6275,12 @@ function RailStage({
   );
   const closeSession = useCallback(
     async (sid: string | null) => {
-      if (!sid || !bySid.has(sid)) return;
+      const session = sid ? bySid.get(sid) : null;
+      if (!sid || !session) return;
+      if (!confirm(`End ${titleForSession(session)}?`)) return;
       closeColumn(sid);
       try {
-        await api(`/api/sessions/${sid}/close`, { method: "POST" });
+        await closeSessionRequest(sid, "live_keyboard_shift_e");
         onRemove(sid);
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "Couldn't end session");
@@ -6793,7 +6419,7 @@ function RailStage({
           }
           return;
         case "e":
-          if (cur && !e.repeat) {
+          if (cur && e.shiftKey && !e.repeat) {
             e.preventDefault();
             void s.closeSession(cur);
           }
@@ -6895,7 +6521,6 @@ function RailStage({
             onTrackSendStatus={onTrackSendStatus}
             onRefresh={onRefresh}
             onRemove={onRemove}
-            onBrain={onBrain}
             variant="stage"
             onClose={onCloseColumn}
             entering={recentlyCreatedSids.has(sid)}
@@ -7101,7 +6726,7 @@ function ShortcutsHelp({ onClose }: { onClose: () => void }) {
     ["c", "New session"],
     ["p", "Pin / unpin cursored session"],
     ["x", "Close cursored column"],
-    ["e", "End cursored session"],
+    ["Shift+E", "End cursored session"],
     ["1 – 9", "Open the Nth session"],
     ["\\", "Collapse / expand the rail"],
     ["?", "Toggle this help"],
@@ -8201,7 +7826,6 @@ function SessionActionsMenu({
   users,
   onRefresh,
   onRemove,
-  onBrain,
   onError,
   triggerClassName,
 }: {
@@ -8209,7 +7833,6 @@ function SessionActionsMenu({
   users: User[];
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
-  onBrain: (sid: string) => Promise<void>;
   onError: (error: string | null) => void;
   triggerClassName?: string;
 }) {
@@ -8247,23 +7870,13 @@ function SessionActionsMenu({
     onError(null);
     onRemove(sid); // drop the card now; the tombstone survives the next poll
     try {
-      await api(`/api/sessions/${sid}/close`, { method: "POST" });
+      await closeSessionRequest(sid, "session_menu");
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
     } finally {
       await onRefresh().catch((err) =>
         onError(err instanceof Error ? err.message : String(err)),
       );
-    }
-  }
-
-  async function sendToBrain() {
-    if (!sid) return;
-    onError(null);
-    try {
-      await onBrain(sid);
-    } catch (err) {
-      onError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -8323,10 +7936,6 @@ function SessionActionsMenu({
             <GitFork className="size-4" />
             Fork
           </DropdownMenuItem>
-          <DropdownMenuItem disabled={!sid} onClick={() => void sendToBrain()}>
-            <Brain className="size-4" />
-            Send to brain
-          </DropdownMenuItem>
           {canDriveSession(session) ? (
             <>
               <DropdownMenuSeparator />
@@ -8364,7 +7973,6 @@ function SessionTitleSheet({
   onTrackSendStatus,
   onRefresh,
   onRemove,
-  onBrain,
   onClose,
 }: {
   // The active session id. The sheet is a top-level modal (lifted out of any one
@@ -8388,7 +7996,6 @@ function SessionTitleSheet({
   onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
-  onBrain: (sid: string) => Promise<void>;
   onClose: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -8853,7 +8460,6 @@ function SessionTitleSheet({
             users={users}
             onRefresh={onRefresh}
             onRemove={onRemove}
-            onBrain={onBrain}
             onError={setError}
             triggerClassName="size-9"
           />
@@ -9051,7 +8657,6 @@ const SessionCard = memo(function SessionCard({
   onTrackSendStatus,
   onRefresh,
   onRemove,
-  onBrain,
   onOpenSheet,
   variant = "grid",
   onClose,
@@ -9071,7 +8676,6 @@ const SessionCard = memo(function SessionCard({
   onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
-  onBrain: (sid: string) => Promise<void>;
   // Tapping the title asks the parent to open the full-height detail sheet
   // for this sid, anchored to the title's rect. The sheet lives at the parent so
   // it can switch between sessions; undefined → the gesture is disabled.
@@ -9204,9 +8808,7 @@ const SessionCard = memo(function SessionCard({
   const [collapsed, setCollapsed] = useState<boolean>(() => (sid ? isCollapsedSid(sid) : false));
   const [headH, setHeadH] = useState(44);
   const [swipeOpen, setSwipeOpen] = useState(false);
-  const [brainSwipeOpen, setBrainSwipeOpen] = useState(false);
-  const [braining, setBraining] = useState(false);
-  const [swipeIntent, setSwipeIntent] = useState<"delete" | "brain" | null>(null);
+  const [swipeIntent, setSwipeIntent] = useState<"delete" | null>(null);
   // True only while a horizontal swipe is in progress. The red delete action is
   // kept out of the paint tree unless this or swipeOpen is set — otherwise it
   // sits behind every card and bleeds at the edges during fast momentum scroll.
@@ -9216,7 +8818,7 @@ const SessionCard = memo(function SessionCard({
     startX: 0, startY: 0, x: 0, w: 0,
     dragging: false, decided: false, horizontal: false, justSwiped: false,
   });
-  const openRef = useRef<"none" | "delete" | "brain">("none");
+  const openRef = useRef<"none" | "delete">("none");
   const OPEN = 116;    // resting reveal width once snapped open — wide enough to
                        // leave a left gap before the icon + "Delete" label
   const COMMIT = 0.55; // drag past this fraction of the card → delete on release
@@ -9271,29 +8873,20 @@ const SessionCard = memo(function SessionCard({
     if (!sid) return;
     onRemove(sid); // drop the card now; the tombstone survives the next poll
     try {
-      await api(`/api/sessions/${sid}/close`, { method: "POST" });
+      await closeSessionRequest(sid, "mobile_swipe_delete");
     } finally {
       await onRefresh();
     }
   }
 
-  async function brainSession() {
-    if (!sid || braining) return;
-    setBraining(true);
-    closeSwipe();
-    haptic("selection");
-    try {
-      await onBrain(sid);
-    } finally {
-      setBraining(false);
-    }
-  }
-
   function commitDelete() {
     const el = sectionRef.current;
+    if (!sid || !confirm(`End ${titleForSession(session)}?`)) {
+      closeSwipe();
+      return;
+    }
     haptic("warning");
     setSwipeOpen(false);
-    setBrainSwipeOpen(false);
     openRef.current = "none";
     if (el) {
       el.style.transition = "transform 0.26s var(--ease-ios), opacity 0.26s";
@@ -9307,7 +8900,6 @@ const SessionCard = memo(function SessionCard({
     const el = sectionRef.current;
     if (el) el.style.transition = "";
     setSwipeOpen(false);
-    setBrainSwipeOpen(false);
     setSwipeIntent(null);
     openRef.current = "none";
     setTransform(0, 0);
@@ -9343,11 +8935,11 @@ const onTouchStart = (e: ReactTouchEvent) => {
       }
     }
     if (d.horizontal) {
-      let nx = (openRef.current === "delete" ? -OPEN : openRef.current === "brain" ? OPEN : 0) + mx;
+      let nx = (openRef.current === "delete" ? -OPEN : 0) + mx;
       if (nx < -d.w) nx = -d.w;
-      if (nx > d.w) nx = d.w;
+      if (nx > 0) nx = 0;
       d.x = nx;
-      setSwipeIntent(nx < -6 ? "delete" : nx > 6 ? "brain" : null);
+      setSwipeIntent(nx < -6 ? "delete" : null);
       setTransform(nx, 0);
       return;
     }
@@ -9371,16 +8963,11 @@ const onTouchStart = (e: ReactTouchEvent) => {
         commitDelete();
         return;
       }
-      if (d.x >= d.w * COMMIT) {
-        void brainSession();
-        return;
-      }
-      const nextOpen = d.x <= -OPEN * 0.5 ? "delete" : d.x >= OPEN * 0.5 ? "brain" : "none";
+      const nextOpen = d.x <= -OPEN * 0.5 ? "delete" : "none";
       if (nextOpen !== "none" && openRef.current === "none") haptic("selection");
       openRef.current = nextOpen;
       setSwipeOpen(nextOpen === "delete");
-      setBrainSwipeOpen(nextOpen === "brain");
-      setTransform(nextOpen === "delete" ? -OPEN : nextOpen === "brain" ? OPEN : 0, 0);
+      setTransform(nextOpen === "delete" ? -OPEN : 0, 0);
       return;
     }
   };
@@ -9439,22 +9026,6 @@ const onTouchStart = (e: ReactTouchEvent) => {
 
   return (
     <div className={cn("relative min-w-0 md:static", variant === "stage" && "md:h-full")}>
-      {/* swipe-to-brain action revealed behind the card (mobile only) */}
-      <button
-        type="button"
-        aria-label="Send session to brain"
-        tabIndex={brainSwipeOpen ? 0 : -1}
-        onClick={() => void brainSession()}
-        disabled={braining}
-        className={cn(
-          "absolute inset-0 flex items-center justify-start gap-2 rounded-xl bg-primary pl-6 text-sm font-semibold text-white md:hidden",
-          brainSwipeOpen || swipeIntent === "brain" ? "" : "hidden",
-          brainSwipeOpen ? "" : "pointer-events-none",
-        )}
-      >
-        {braining ? <Loader2 className="size-5 animate-spin" /> : <Brain className="size-5" />}
-        Brain
-      </button>
       {/* swipe-to-delete action revealed behind the card (mobile only) */}
       <button
         type="button"
@@ -9606,7 +9177,6 @@ const onTouchStart = (e: ReactTouchEvent) => {
             users={users}
             onRefresh={onRefresh}
             onRemove={onRemove}
-            onBrain={onBrain}
             onError={setError}
           />
         )}
@@ -13123,9 +12693,6 @@ function SettingsView({
   onOpenBrowser,
   onOpenCodingAgents,
   onOpenAuto,
-  onOpenBrain,
-  brainConfig,
-  onBrainConfigChange,
   onOpenUsage,
   onOpenChangelog,
   extTabs,
@@ -13138,9 +12705,6 @@ function SettingsView({
   onOpenBrowser: () => void;
   onOpenCodingAgents: () => void;
   onOpenAuto: () => void;
-  onOpenBrain: () => void;
-  brainConfig: SessionBrainConfig | null;
-  onBrainConfigChange: (patch: Partial<SessionBrainConfig>) => void;
   onOpenUsage: () => void;
   onOpenChangelog: () => void;
   extTabs: ExtensionNavTab[];
@@ -13220,38 +12784,6 @@ function SettingsView({
             </div>
             <ChevronRight className="size-4 text-muted-foreground/60" />
           </button>
-          <div className="flex items-center justify-between gap-4 px-4 py-2.5">
-            <button
-              type="button"
-              onClick={onOpenBrain}
-              className="flex min-w-0 flex-1 items-center gap-3 text-left"
-            >
-              <span className="flex size-7 shrink-0 items-center justify-center rounded-[7px] bg-foreground text-background">
-                <Brain className="size-4" />
-              </span>
-              <span className="min-w-0">
-                <span className="block text-sm font-medium">Session brain</span>
-                <span className="block truncate text-xs text-muted-foreground">
-                  {brainConfig?.enabled ? "Automatic cleanup enabled" : "Automatic cleanup paused"}
-                </span>
-              </span>
-            </button>
-            <div className="flex shrink-0 items-center gap-2">
-              <button
-                type="button"
-                onClick={onOpenBrain}
-                aria-label="Open session brain settings"
-                className="flex size-7 items-center justify-center rounded-lg text-muted-foreground/60 hover:bg-muted hover:text-foreground"
-              >
-                <ChevronRight className="size-4" />
-              </button>
-              <Switch
-                checked={brainConfig?.enabled ?? false}
-                onCheckedChange={(enabled) => onBrainConfigChange({ enabled })}
-                aria-label="Enable session brain"
-              />
-            </div>
-          </div>
         </div>
       </section>
 
@@ -13517,471 +13049,6 @@ function AutoManageView({
       >
         <Plus className="size-4" /> New auto agent
       </button>
-    </div>
-  );
-}
-
-// Scroll-aware edge-fade mask for an internal scroll area. Returns a ref to put
-// on the scroll container plus a mask-image style that fades ONLY the edge that
-// currently has hidden content — so nothing fades at rest, and the fade lives on
-// the content (not the card border, which stays crisp).
-function useEdgeFadeMask<T extends HTMLElement>(fadePx = 24) {
-  const ref = useRef<T | null>(null);
-  const [edges, setEdges] = useState({ top: false, bottom: false });
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const update = () => {
-      const { scrollTop, scrollHeight, clientHeight } = el;
-      const top = scrollTop > 1;
-      const bottom = scrollTop + clientHeight < scrollHeight - 1;
-      setEdges((prev) => (prev.top === top && prev.bottom === bottom ? prev : { top, bottom }));
-    };
-    update();
-    el.addEventListener("scroll", update, { passive: true });
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => {
-      el.removeEventListener("scroll", update);
-      ro.disconnect();
-    };
-  }, []);
-  const top = edges.top ? "transparent" : "#000";
-  const bottom = edges.bottom ? "transparent" : "#000";
-  const mask = `linear-gradient(to bottom, ${top} 0, #000 ${fadePx}px, #000 calc(100% - ${fadePx}px), ${bottom} 100%)`;
-  return {
-    ref,
-    style: { maskImage: mask, WebkitMaskImage: mask } as React.CSSProperties,
-  };
-}
-
-function NotepadNotes({
-  notes,
-  onResume,
-  onNoteStatus,
-  action,
-  showHeader = true,
-  scrollable = false,
-}: {
-  notes: SessionNote[];
-  onResume: (note: SessionNote) => void;
-  onNoteStatus: (note: SessionNote, status: SessionNote["status"]) => void;
-  action?: React.ReactNode;
-  showHeader?: boolean;
-  // When true, the note list becomes its own bounded scroll area with an
-  // edge-fade mask instead of relying on the page to scroll.
-  scrollable?: boolean;
-}) {
-  const fade = useEdgeFadeMask<HTMLDivElement>();
-  // Keep notepad as a chronological feed: most recently touched notes first.
-  const sorted = [...notes].sort((a, b) => {
-    const bTime = b.updatedAt || b.createdAt || 0;
-    const aTime = a.updatedAt || a.createdAt || 0;
-    return bTime - aTime;
-  });
-  // Accordion, not independent toggles: on mobile a single open note keeps the
-  // list short and scannable — opening one folds the rest away instead of
-  // pushing everything down into a long feed.
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  return (
-    <section className="space-y-2">
-      {showHeader ? (
-        <CategoryHeader label="Notepad" count={notes.length} dotClass="bg-primary" action={action} />
-      ) : null}
-      {sorted.length ? (
-        <div
-          className={cn(
-            "overflow-hidden",
-            // Flat feed (like the chat) when scrollable; bordered card otherwise.
-            !scrollable && "rounded-xl border border-border bg-card",
-          )}
-        >
-          <div
-            ref={scrollable ? fade.ref : undefined}
-            style={scrollable ? fade.style : undefined}
-            className={cn(
-              "divide-y divide-border",
-              scrollable && "max-h-[78dvh] overflow-y-auto overscroll-contain",
-            )}
-          >
-          {sorted.map((note) => {
-            const open = expandedId === note.id;
-            const place = note.project || note.cwd || "No project";
-            return (
-              <div key={note.id} className={cn("transition-colors", open && "bg-foreground/[0.02]")}>
-                {/* Whole row is the toggle; detail + actions live behind the fold. */}
-                <button
-                  type="button"
-                  aria-expanded={open}
-                  onClick={() => setExpandedId((id) => (id === note.id ? null : note.id))}
-                  className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors duration-150 ease-ios hover:bg-foreground/[0.03] active:bg-foreground/[0.06]"
-                >
-                  <img
-                    src={agentIconSrc(note.agent)}
-                    alt=""
-                    className="size-7 shrink-0 rounded-lg ring-1 ring-inset ring-border/60"
-                  />
-                  <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="truncate text-sm font-medium leading-tight">
-                      {note.title}
-                    </span>
-                    <span className="mt-0.5 flex items-center gap-1.5 text-[11px] leading-tight text-muted-foreground">
-                      <span className="truncate">{place}</span>
-                      <span className="text-muted-foreground/40">·</span>
-                      <span className="shrink-0 tabular-nums">{relTime(note.updatedAt)}</span>
-                    </span>
-                  </span>
-                  {note.blockers.length ? (
-                    <AlertTriangle
-                      className="size-3.5 shrink-0 text-warning"
-                      aria-label="Has blockers"
-                    />
-                  ) : null}
-                  {note.nextActions.length ? (
-                    <span
-                      className="shrink-0 rounded-full bg-primary/12 px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-primary"
-                      aria-label={`${note.nextActions.length} next actions`}
-                    >
-                      {note.nextActions.length}
-                    </span>
-                  ) : null}
-                  <ChevronDown
-                    className={cn(
-                      "size-4 shrink-0 text-muted-foreground/60 transition-transform duration-200 ease-ios motion-reduce:transition-none",
-                      open && "rotate-180",
-                    )}
-                  />
-                </button>
-                {/* grid 0fr→1fr height reveal, mirroring .typing-indicator-slot;
-                    reduced-motion drops the transition. Content stays mounted but
-                    goes inert while collapsed so its buttons aren't tabbable. */}
-                <div
-                  className={cn(
-                    "grid transition-[grid-template-rows] duration-200 ease-ios motion-reduce:transition-none",
-                    open ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
-                  )}
-                >
-                  <div className="min-h-0 overflow-hidden" inert={open ? undefined : true}>
-                    <div className="space-y-3 px-3 pb-3 pl-[calc(0.75rem+1.75rem+0.75rem)]">
-                      <p className="text-[13px] leading-relaxed text-foreground/80">{note.summary}</p>
-                      {note.nextActions.length ? (
-                        <div className="space-y-1.5">
-                          <div className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-                            Next steps
-                          </div>
-                          {note.nextActions.map((item) => (
-                            <div key={item} className="flex gap-2 text-xs leading-relaxed text-foreground/75">
-                              <span className="mt-[0.4rem] size-1.5 shrink-0 rounded-full bg-primary/70" />
-                              <span>{item}</span>
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-                      {note.blockers.length ? (
-                        <div className="space-y-1.5">
-                          <div className="text-[10px] font-semibold uppercase tracking-wide text-warning/80">
-                            Blockers
-                          </div>
-                          {note.blockers.map((blocker) => (
-                            <div
-                              key={blocker}
-                              className="rounded-lg border border-warning/30 bg-warning/10 px-2.5 py-1.5 text-xs leading-relaxed text-warning"
-                            >
-                              {blocker}
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-                      <div className="flex flex-wrap justify-end gap-2 pt-0.5">
-                        <Button size="sm" variant="outline" onClick={() => onResume(note)}>
-                          <RotateCcw className="mr-1.5 size-3.5" /> Resume
-                        </Button>
-                        <Button size="sm" variant="tint" onClick={() => onNoteStatus(note, "done")}>
-                          <Check className="mr-1.5 size-3.5" /> Done
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => onNoteStatus(note, "dismissed")}
-                        >
-                          <X className="mr-1.5 size-3.5" /> Dismiss
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-          </div>
-        </div>
-      ) : (
-        <div className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-          The session brain writes a note here whenever a session ends with unfinished work.
-        </div>
-      )}
-    </section>
-  );
-}
-
-function MobileNotepadHome({
-  notes,
-  running,
-  onRunNow,
-  onOpenBrain,
-  onResume,
-  onNoteStatus,
-}: {
-  notes: SessionNote[];
-  running: boolean;
-  onRunNow: () => void;
-  onOpenBrain: () => void;
-  onResume: (note: SessionNote) => void;
-  onNoteStatus: (note: SessionNote, status: SessionNote["status"]) => void;
-}) {
-  return (
-    <div className="mx-auto flex max-w-lg flex-col gap-4 pb-10">
-      <NotepadNotes
-        notes={notes}
-        onResume={onResume}
-        onNoteStatus={onNoteStatus}
-        showHeader={false}
-        scrollable
-      />
-    </div>
-  );
-}
-
-function MobileNotepadSheet({
-  open,
-  notes,
-  running,
-  onRunNow,
-  onOpenBrain,
-  onResume,
-  onNoteStatus,
-  onClose,
-}: {
-  open: boolean;
-  notes: SessionNote[];
-  running: boolean;
-  onRunNow: () => void;
-  onOpenBrain: () => void;
-  onResume: (note: SessionNote) => void;
-  onNoteStatus: (note: SessionNote, status: SessionNote["status"]) => void;
-  onClose: () => void;
-}) {
-  return (
-    <Drawer
-      open={open}
-      onOpenChange={(next) => {
-        if (!next) onClose();
-      }}
-    >
-      <DrawerContent className="mx-auto max-w-lg">
-        <DrawerTitle className="sr-only">Notepad</DrawerTitle>
-        <div className="max-h-[78dvh] overflow-y-auto px-2 pt-1">
-          <MobileNotepadHome
-            notes={notes}
-            running={running}
-            onRunNow={onRunNow}
-            onOpenBrain={onOpenBrain}
-            onResume={onResume}
-            onNoteStatus={onNoteStatus}
-          />
-        </div>
-      </DrawerContent>
-    </Drawer>
-  );
-}
-
-function SessionBrainView({
-  config,
-  notes,
-  suggestions,
-  runs,
-  running,
-  onRunNow,
-  onConfigChange,
-  onResume,
-  onNoteStatus,
-  onSuggestionStatus,
-}: {
-  config: SessionBrainConfig | null;
-  notes: SessionNote[];
-  suggestions: PatternSuggestion[];
-  runs: SessionBrainRun[];
-  running: boolean;
-  onRunNow: () => void;
-  onConfigChange: (patch: Partial<SessionBrainConfig>) => void;
-  onResume: (note: SessionNote) => void;
-  onNoteStatus: (note: SessionNote, status: SessionNote["status"]) => void;
-  onSuggestionStatus: (
-    suggestion: PatternSuggestion,
-    status: PatternSuggestion["status"],
-  ) => void;
-}) {
-  const latest = runs[0];
-  return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-4 pb-10">
-      <div className="flex flex-wrap items-center justify-between gap-3 px-1">
-        <div className="min-w-0">
-          <h1 className="text-lg font-semibold leading-tight">Session brain</h1>
-          <div className="text-xs text-muted-foreground">
-            {latest
-              ? `Last run ${relTime(latest.finishedAt ?? latest.startedAt)} ago · ${latest.scanned} scanned`
-              : "No runs yet"}
-          </div>
-        </div>
-        <Button onClick={onRunNow} disabled={running} size="sm">
-          {running ? <Loader2 className="mr-1.5 size-4 animate-spin" /> : <Brain className="mr-1.5 size-4" />}
-          Run brain
-        </Button>
-      </div>
-
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
-        <div className="flex items-center justify-between gap-4 px-3 py-3">
-          <div className="min-w-0">
-            <div className="text-sm font-semibold">Session brain</div>
-            <div className="text-xs text-muted-foreground">
-              Runs every {config?.intervalMin ?? 60} minutes, writes notes, and safely closes archived sessions.
-            </div>
-          </div>
-          <Switch
-            checked={config?.enabled ?? false}
-            onCheckedChange={(enabled) => onConfigChange({ enabled })}
-            aria-label="Enable session brain"
-          />
-        </div>
-        <div className="flex items-center justify-between gap-4 border-t border-border px-3 py-3">
-          <div className="min-w-0">
-            <div className="text-sm font-semibold">Model</div>
-            <div className="text-xs text-muted-foreground">
-              LLM the brain uses to classify and summarize sessions.
-            </div>
-          </div>
-          <FieldPill>
-            <select
-              value={config?.model ?? "claude-sonnet-5"}
-              onChange={(e) => onConfigChange({ model: e.target.value })}
-              aria-label="Session brain model"
-              className="max-w-40 appearance-none truncate bg-transparent pr-1 text-xs font-medium outline-none"
-            >
-              {(() => {
-                const opts = [
-                  { value: "claude-sonnet-5", label: "Sonnet 5" },
-                  { value: "claude-opus-4-8", label: "Opus 4.8" },
-                  { value: "claude-haiku-4-5", label: "Haiku 4.5" },
-                  { value: "claude-fable-5", label: "Fable 5" },
-                ];
-                const current = config?.model;
-                if (current && !opts.some((o) => o.value === current)) {
-                  opts.unshift({ value: current, label: current });
-                }
-                return opts.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ));
-              })()}
-            </select>
-          </FieldPill>
-        </div>
-      </section>
-
-      <NotepadNotes
-        notes={notes}
-        onResume={onResume}
-        onNoteStatus={onNoteStatus}
-      />
-
-      <section className="space-y-2">
-        <CategoryHeader label="Prompt Improvements" count={suggestions.length} dotClass="bg-warning" />
-        {suggestions.length ? (
-          <div className="flex flex-col gap-2">
-            {suggestions.map((suggestion) => (
-              <article
-                key={suggestion.id}
-                className="rounded-xl border border-border bg-card px-3 py-3"
-              >
-                <div className="flex items-start gap-3">
-                  <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md bg-warning/15 text-warning">
-                    <Sparkles className="size-3.5" />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <h2 className="text-sm font-semibold">{suggestion.title}</h2>
-                    <p className="mt-1 text-xs leading-snug text-muted-foreground">
-                      {suggestion.reasoning}
-                    </p>
-                    <p className="mt-2 text-sm leading-snug">{suggestion.recommendation}</p>
-                    {suggestion.evidence.length ? (
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {suggestion.evidence.slice(0, 4).map((item) => (
-                          <span
-                            key={item}
-                            className="max-w-full truncate rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground"
-                          >
-                            {item}
-                          </span>
-                        ))}
-                      </div>
-                    ) : null}
-                  </div>
-                </div>
-                <div className="mt-3 flex justify-end gap-2">
-                  <Button
-                    size="sm"
-                    variant="tint"
-                    onClick={() => onSuggestionStatus(suggestion, "accepted")}
-                  >
-                    <Check className="mr-1.5 size-3.5" /> Accept
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => onSuggestionStatus(suggestion, "dismissed")}
-                  >
-                    Dismiss
-                  </Button>
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <div className="rounded-xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
-            No open suggestions.
-          </div>
-        )}
-      </section>
-
-      <section className="space-y-2">
-        <CategoryHeader label="Recent Runs" count={runs.length} dotClass="bg-muted-foreground" />
-        <div className="overflow-hidden rounded-xl border border-border bg-card">
-          {runs.length ? (
-            runs.map((run) => {
-              const archived = run.decisions.filter((d) => d.action === "archive_and_close").length;
-              const needsInput = run.decisions.filter((d) => d.action === "needs_input").length;
-              return (
-                <div key={run.id} className="border-b border-border px-3 py-2 last:border-b-0">
-                  <div className="flex items-center justify-between gap-3 text-sm">
-                    <span className="font-medium">{relTime(run.finishedAt ?? run.startedAt)} ago</span>
-                    <span className="text-xs text-muted-foreground">
-                      {run.scanned} scanned · {archived} archived · {needsInput} input
-                    </span>
-                  </div>
-                  {run.errors.length ? (
-                    <div className="mt-1 truncate text-xs text-destructive">{run.errors[0]}</div>
-                  ) : null}
-                </div>
-              );
-            })
-          ) : (
-            <div className="px-4 py-6 text-center text-sm text-muted-foreground">
-              No run history.
-            </div>
-          )}
-        </div>
-      </section>
     </div>
   );
 }

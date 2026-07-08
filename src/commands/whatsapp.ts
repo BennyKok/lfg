@@ -15,7 +15,8 @@ import { PATHS } from "../config.ts";
 import { resolveSessionCwd } from "../worktree.ts";
 import { addManaged, removeManaged } from "../managed.ts";
 import { enqueueMessage } from "../sendq.ts";
-import { listSessions, recentMessages, resolveTranscript, sessionIdForPid } from "../sessions.ts";
+import { listSessions, resolveTranscript, sessionIdForPid } from "../sessions.ts";
+import { enqueueTranscriptIndex, indexedRecentMessages } from "../transcript-index.ts";
 import {
   dismissCodexUpdatePrompt,
   panePidForSession,
@@ -534,7 +535,9 @@ async function relayAssistantMessages(sock: WASocket) {
     if (rec.paused) continue;
     const tp = await resolveTranscript(transcriptIdFor(rec));
     if (!tp) continue;
-    const messages = await recentMessages(tp, 80);
+    const transcriptId = transcriptIdFor(rec);
+    enqueueTranscriptIndex(tp, transcriptId);
+    const messages = await indexedRecentMessages(tp, transcriptId, 80);
     const pending = messages.filter((m) => {
       if (m.role !== "assistant" || m.kind !== "text" || !m.text.trim()) return false;
       if (rec.lastRelayedId && m.id === rec.lastRelayedId) return false;

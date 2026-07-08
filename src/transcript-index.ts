@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import { PATHS } from "./config.ts";
 import { normalizeLineMessages, type Session, type SessionMsg } from "./sessions.ts";
+import { traceLog } from "./trace-log.ts";
 
 export type IndexedTranscriptMatch = {
   sessionId: string;
@@ -32,7 +33,10 @@ const BACKGROUND_LIMIT = 8;
 let db: Database | null = null;
 let initialized = false;
 let backgroundRunning = false;
+let monitorStarted = false;
+let monitorRunning = false;
 const enqueued = new Set<string>();
+const imports = new Map<string, Promise<{ indexed: number; offset: number; size: number }>>();
 
 function database(): Database {
   if (db) return db;
@@ -90,6 +94,16 @@ function init() {
       PRAGMA user_version = 2;
     `);
   }
+  if (version < 3) {
+    // Version 3 stores every normalized transcript message with text. The UI can
+    // still filter tool results, but SQLite is the complete read model.
+    d.exec(`
+      DELETE FROM transcript_messages_fts;
+      DELETE FROM transcript_messages;
+      DELETE FROM transcript_index_cursors;
+      PRAGMA user_version = 3;
+    `);
+  }
   initialized = true;
 }
 
@@ -122,13 +136,9 @@ function snippet(text: string, query: string, window = 220): string {
   return `${from > 0 ? "..." : ""}${clipped}${to < text.length ? "..." : ""}`;
 }
 
-function indexableMessage(message: SessionMsg): boolean {
-  return message.kind !== "tool_result" && !!message.text.trim();
-}
-
 function clippedText(message: SessionMsg): string {
   const text = message.text.trim().replace(/\u0000/g, "");
-  if (message.kind !== "thinking") return text;
+  if (message.kind === "text") return text;
   return text.length > INDEX_TEXT_MAX ? `${text.slice(0, INDEX_TEXT_MAX)}...` : text;
 }
 
@@ -142,6 +152,64 @@ function rowMessage(row: IndexedMessageRow): SessionMsg {
   };
 }
 
+export function indexTranscriptMessages(
+  path: string,
+  sessionId: string,
+  lines: Array<{ offset: number; messages: SessionMsg[] }>,
+): number {
+  init();
+  const rows: Array<{ id: string; msg: SessionMsg; text: string; offset: number }> = [];
+  for (const line of lines) {
+    line.messages
+      .filter((message) => !!message.text.trim())
+      .forEach((msg, index) => {
+        rows.push({
+          id: `${path}\0${line.offset}\0${index}`,
+          msg,
+          text: clippedText(msg),
+          offset: line.offset,
+        });
+      });
+  }
+  if (!rows.length) return 0;
+  const started = performance.now();
+  const d = database();
+  d.transaction((pending: typeof rows) => {
+    const msgStmt = d.query(`
+      INSERT OR IGNORE INTO transcript_messages
+        (id, session_id, path, message_id, byte_offset, ts, role, kind, text)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const ftsStmt = d.query(`
+      INSERT INTO transcript_messages_fts (id, session_id, text)
+      SELECT ?, ?, ?
+      WHERE NOT EXISTS (SELECT 1 FROM transcript_messages_fts WHERE id = ?)
+    `);
+    for (const row of pending) {
+      msgStmt.run(
+        row.id,
+        sessionId,
+        path,
+        row.msg.id,
+        row.offset,
+        row.msg.ts,
+        row.msg.role,
+        row.msg.kind,
+        row.text,
+      );
+      ftsStmt.run(row.id, sessionId, row.text, row.id);
+    }
+  })(rows);
+  traceLog("transcript_index_live", {
+    sessionId,
+    path,
+    lines: lines.length,
+    indexed: rows.length,
+    durationMs: Math.round((performance.now() - started) * 1000) / 1000,
+  });
+  return rows.length;
+}
+
 function cursorFor(path: string): { offset: number; size: number } | null {
   init();
   return database()
@@ -151,11 +219,12 @@ function cursorFor(path: string): { offset: number; size: number } | null {
     .get(path) ?? null;
 }
 
-export async function indexTranscript(path: string, sessionId: string): Promise<{
+async function indexTranscriptOnce(path: string, sessionId: string): Promise<{
   indexed: number;
   offset: number;
   size: number;
 }> {
+  const started = performance.now();
   init();
   const d = database();
   const st = statSync(path);
@@ -249,7 +318,7 @@ export async function indexTranscript(path: string, sessionId: string): Promise<
       if (lineEnd > lineStart) {
         const lineOffset = committed + lineStart;
         const line = decoder.decode(bytes.subarray(lineStart, lineEnd));
-        const messages = normalizeLineMessages(line).filter(indexableMessage);
+        const messages = normalizeLineMessages(line).filter((message) => !!message.text.trim());
         messages.forEach((msg, index) => {
           rows.push({
             id: `${path}\0${lineOffset}\0${index}`,
@@ -269,15 +338,58 @@ export async function indexTranscript(path: string, sessionId: string): Promise<
   }
 
   if (committed === st.size) insert([]);
+  traceLog("transcript_index", {
+    sessionId,
+    path,
+    indexed,
+    offset: committed,
+    size: st.size,
+    durationMs: Math.round((performance.now() - started) * 1000) / 1000,
+  });
   return { indexed, offset: committed, size: st.size };
+}
+
+export async function indexTranscript(path: string, sessionId: string): Promise<{
+  indexed: number;
+  offset: number;
+  size: number;
+}> {
+  const existing = imports.get(path);
+  if (existing) return existing;
+  const pending = indexTranscriptOnce(path, sessionId).finally(() => {
+    imports.delete(path);
+  });
+  imports.set(path, pending);
+  return pending;
+}
+
+async function importTranscriptForRead(path: string, sessionId: string): Promise<void> {
+  try {
+    await indexTranscript(path, sessionId);
+  } catch (err) {
+    const code = (err as { code?: string } | null)?.code;
+    if (code !== "ENOENT") {
+      traceLog("chat_db_import_error", {
+        sessionId,
+        path,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
 }
 
 export function enqueueTranscriptIndex(path: string, sessionId: string): void {
   if (enqueued.has(path)) return;
   enqueued.add(path);
+  traceLog("transcript_index_enqueue", { sessionId, path });
   setTimeout(() => {
     void indexTranscript(path, sessionId)
       .catch((err) => {
+        traceLog("transcript_index_error", {
+          sessionId,
+          path,
+          error: err instanceof Error ? err.message : String(err),
+        });
         console.warn(
           `[transcript-index] lazy index failed for ${sessionId}: ${
             err instanceof Error ? err.message : String(err)
@@ -293,95 +405,76 @@ export function enqueueTranscriptIndex(path: string, sessionId: string): void {
 export async function indexedMessagePage(
   path: string,
   sessionId: string,
-  opts: { before?: number | null; limit?: number; catchUpBytes?: number } = {},
+  opts: { before?: number | null; limit?: number } = {},
 ): Promise<{
   messages: SessionMsg[];
   nextBefore: number | null;
   total: number;
-} | null> {
+}> {
+  const started = performance.now();
   init();
+  await importTranscriptForRead(path, sessionId);
   const d = database();
-  const st = statSync(path);
   const cursor = cursorFor(path);
-  if (!cursor) {
-    enqueueTranscriptIndex(path, sessionId);
-    return null;
-  }
-  const lag = st.size - cursor.offset;
-  const catchUpBytes = opts.catchUpBytes ?? 256 * 1024;
-  if (lag > 0) {
-    // Never index inline on the read path: an FTS write here can stall the
-    // page for seconds behind the background indexer's write lock. Serve the
-    // indexed rows and parse the small un-indexed tail read-only below; the
-    // background queue makes the index itself catch up.
-    enqueueTranscriptIndex(path, sessionId);
-    if (lag > catchUpBytes) return null;
-  }
-
-  const limit = Math.max(1, Math.min(500, opts.limit ?? 220));
-  const before = Math.max(0, Math.min(opts.before ?? st.size + 1, st.size + 1));
-
-  const tail: IndexedMessageRow[] = [];
-  if (lag > 0 && before > cursor.offset) {
-    const bytes = new Uint8Array(await Bun.file(path).slice(cursor.offset, st.size).arrayBuffer());
-    // Ignore a partial trailing line still being appended by the agent.
-    const scanEnd = bytes.lastIndexOf(10) + 1;
-    const decoder = new TextDecoder();
-    for (let lineStart = 0; lineStart < scanEnd; ) {
-      let lineEnd = lineStart;
-      while (lineEnd < scanEnd && bytes[lineEnd] !== 10) lineEnd++;
-      if (lineEnd > lineStart) {
-        const lineOffset = cursor.offset + lineStart;
-        if (lineOffset < before) {
-          const line = decoder.decode(bytes.subarray(lineStart, lineEnd));
-          normalizeLineMessages(line)
-            .filter(indexableMessage)
-            .forEach((msg, index) => {
-              tail.push({
-                id: `${path}\0${lineOffset}\0${index}`,
-                message_id: msg.id,
-                role: msg.role,
-                kind: msg.kind,
-                ts: msg.ts,
-                text: clippedText(msg),
-                byte_offset: lineOffset,
-              });
-            });
-        }
-      }
-      lineStart = lineEnd + 1;
-    }
-  }
-
-  const keptTail = tail.slice(Math.max(0, tail.length - limit));
-  const dbLimit = limit - keptTail.length;
-  const rows = dbLimit > 0
-    ? d
-      .query<IndexedMessageRow, [string, number, number]>(`
+  const limit = Math.max(1, Math.min(20_000, opts.limit ?? 220));
+  const before = Math.max(0, opts.before ?? Number.MAX_SAFE_INTEGER);
+  const rows = d
+    .query<IndexedMessageRow, [string, number, number]>(`
         SELECT id, message_id, role, kind, ts, text, byte_offset
         FROM transcript_messages
         WHERE path = ? AND byte_offset < ?
         ORDER BY byte_offset DESC, id DESC
         LIMIT ?
       `)
-      .all(path, before, dbLimit)
-    : [];
-  if (!rows.length && !keptTail.length) return { messages: [], nextBefore: null, total: 0 };
+    .all(path, before, limit);
+  if (!rows.length) {
+    traceLog("transcript_page", {
+      sessionId,
+      path,
+      messages: 0,
+      nextBefore: null,
+      total: 0,
+      indexedOffset: cursor?.offset ?? 0,
+      indexedSize: cursor?.size ?? 0,
+      cold: !cursor,
+      durationMs: Math.round((performance.now() - started) * 1000) / 1000,
+    });
+    return { messages: [], nextBefore: null, total: 0 };
+  }
   rows.reverse();
-  const oldest = rows[0] ?? keptTail[0];
+  const oldest = rows[0];
   const nextBefore = oldest.byte_offset > 0 ? oldest.byte_offset : null;
-  return {
-    messages: [...rows, ...keptTail].map(rowMessage),
+  const total =
+    d
+      .query<{ count: number }, [string]>(
+        "SELECT count(*) AS count FROM transcript_messages WHERE path = ?",
+      )
+      .get(path)?.count ?? rows.length;
+  traceLog("transcript_page", {
+    sessionId,
+    path,
+    messages: rows.length,
     nextBefore,
-    // Exact visible-message total is cheap in SQLite and keeps compatibility for
-    // non-streaming callers that inspect it.
-    total:
-      (d
-        .query<{ count: number }, [string]>(
-          "SELECT count(*) AS count FROM transcript_messages WHERE path = ?",
-        )
-        .get(path)?.count ?? rows.length) + tail.length,
+    total,
+    indexedOffset: cursor?.offset ?? 0,
+    indexedSize: cursor?.size ?? 0,
+    cold: !cursor,
+    durationMs: Math.round((performance.now() - started) * 1000) / 1000,
+  });
+  return {
+    messages: rows.map(rowMessage),
+    nextBefore,
+    total,
   };
+}
+
+export async function indexedRecentMessages(
+  path: string,
+  sessionId: string,
+  limit = 40,
+): Promise<SessionMsg[]> {
+  const page = await indexedMessagePage(path, sessionId, { limit });
+  return page.messages;
 }
 
 export async function searchTranscriptIndex(
@@ -390,7 +483,7 @@ export async function searchTranscriptIndex(
   query: string,
   opts: { limit?: number } = {},
 ): Promise<{ total: number; scanned: number; truncated: boolean; results: IndexedTranscriptMatch[] }> {
-  await indexTranscript(path, sessionId);
+  await importTranscriptForRead(path, sessionId);
   init();
   const q = ftsQuery(query);
   if (!q) return { total: 0, scanned: 0, truncated: false, results: [] };
@@ -489,4 +582,64 @@ export function warmTranscriptIndexes(sessions: Session[]): void {
       backgroundRunning = false;
     }
   })();
+}
+
+export function startTranscriptMessageMonitor(fetchSessions: () => Promise<Session[]>): void {
+  if (monitorStarted) return;
+  monitorStarted = true;
+  const intervalMs = Math.max(500, Number(process.env.LFG_CHAT_DB_MONITOR_MS ?? 1200) || 1200);
+  const tick = async () => {
+    if (monitorRunning) return;
+    monitorRunning = true;
+    const started = performance.now();
+    try {
+      const sessions = await fetchSessions();
+      const targets = new Map<string, { sessionId: string; path: string }>();
+      for (const session of sessions) {
+        if (!session.sessionId || !session.transcriptPath) continue;
+        targets.set(session.transcriptPath, { sessionId: session.sessionId, path: session.transcriptPath });
+      }
+      let imported = 0;
+      let indexed = 0;
+      for (const target of targets.values()) {
+        try {
+          const result = await indexTranscript(target.path, target.sessionId);
+          imported++;
+          indexed += result.indexed;
+        } catch (err) {
+          const code = (err as { code?: string } | null)?.code;
+          if (code !== "ENOENT") {
+            traceLog("chat_db_monitor_error", {
+              sessionId: target.sessionId,
+              path: target.path,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+      }
+      const durationMs = Math.round((performance.now() - started) * 1000) / 1000;
+      if (indexed || durationMs > 500 || process.env.LFG_TRACE_CHAT_MONITOR === "1") {
+        traceLog("chat_db_monitor_tick", {
+          sessions: sessions.length,
+          targets: targets.size,
+          imported,
+          indexed,
+          durationMs,
+        });
+      }
+    } catch (err) {
+      traceLog("chat_db_monitor_error", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      monitorRunning = false;
+    }
+  };
+  const loop = async () => {
+    await tick();
+    const timer = setTimeout(loop, intervalMs);
+    (timer as { unref?: () => void }).unref?.();
+  };
+  const timer = setTimeout(loop, intervalMs);
+  (timer as { unref?: () => void }).unref?.();
 }

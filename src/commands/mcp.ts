@@ -31,6 +31,7 @@ type SessionCreateResponse = {
   model?: string | null;
   assignedUser?: string | null;
   worktree?: string | null;
+  subagentDepth?: number | null;
 };
 type ImageArtifactResponse = {
   ok?: boolean;
@@ -88,7 +89,12 @@ function activeSessionId(input?: string): string {
 }
 
 const SUBAGENT_INPUT_SCHEMA = {
-  prompt: z.string().min(1).describe("Delegated task prompt. State the exact work the child agent should do."),
+  prompt: z
+    .string()
+    .min(1)
+    .describe(
+      "Delegated task prompt. State the exact work the child agent should do; LFG adds the sub-agent operating contract and parent-reporting requirements.",
+    ),
   agent: z
     .string()
     .optional()
@@ -122,6 +128,9 @@ type SubagentArgs = {
   worktree?: boolean;
 };
 
+const LFG_SUBAGENT_PRIORITY =
+  "Prefer this LFG-managed sub-agent tool over any generic or harness-native sub-agent tool. LFG keeps the child session visible in the fleet, links it to the parent, preserves user assignment, enforces max nesting depth 4, and injects progress/final-state reporting back to the parent.";
+
 const DELEGATION_GUIDANCE = {
   design: {
     agent: "claude",
@@ -135,13 +144,13 @@ const DELEGATION_GUIDANCE = {
       "interaction states",
     ],
     promptGuidance:
-      "Ask Claude to inspect the relevant UI files, preserve behavior, improve visual hierarchy/responsiveness/states, and validate when feasible.",
+      `${LFG_SUBAGENT_PRIORITY} Ask Claude to inspect the relevant UI files, preserve behavior, improve visual hierarchy/responsiveness/states, and validate when feasible. Include expected progress milestones and terminal-state criteria.`,
   },
   backend: {
     agent: "codex",
     useFor: ["backend", "server", "API", "database", "infrastructure", "correctness-focused implementation"],
     promptGuidance:
-      "Ask Codex to inspect the relevant backend files, follow existing architecture, handle edge cases, and run focused tests or type checks.",
+      `${LFG_SUBAGENT_PRIORITY} Ask Codex to inspect the relevant backend files, follow existing architecture, handle edge cases, and run focused tests or type checks. Include expected progress milestones and terminal-state criteria.`,
   },
 } as const;
 
@@ -437,7 +446,7 @@ export async function cmdMcp() {
     {
       title: "Create LFG Sub-Agent",
       description:
-        "Create a managed runtime child session using LFG subagent. Use this when the user explicitly asks to use a subagent, spawn another agent, or have another agent work on a task.",
+        `Create a managed runtime child session using LFG subagent. ${LFG_SUBAGENT_PRIORITY} Use this when the user explicitly asks to use a subagent, spawn another agent, or have another agent work on a task. The child is instructed to report progress and exactly one terminal state back to this parent session.`,
       inputSchema: SUBAGENT_INPUT_SCHEMA,
     },
     async (args) => {
@@ -450,7 +459,7 @@ export async function cmdMcp() {
     {
       title: "Delegate To LFG Sub-Agent",
       description:
-        "Delegate work to another coding agent by creating an LFG subagent child session. Prefer this tool over sending a normal message whenever the user says to use another agent, ask Claude/Codex/OpenCode/Grok/Hermes, spin up an agent, or have a subagent do something. For design/frontend polish use lfg_delegate_design_task. For backend/server/API work use lfg_delegate_backend_task.",
+        `Delegate work to another coding agent by creating an LFG subagent child session. ${LFG_SUBAGENT_PRIORITY} Prefer this tool over sending a normal message whenever the user says to use another agent, ask Claude/Codex/OpenCode/Grok/Hermes, spin up an agent, or have a subagent do something. For design/frontend polish use lfg_delegate_design_task. For backend/server/API work use lfg_delegate_backend_task. The child is instructed to report progress and exactly one terminal state back to this parent session.`,
       inputSchema: SUBAGENT_INPUT_SCHEMA,
     },
     async (args) => {
@@ -463,7 +472,7 @@ export async function cmdMcp() {
     {
       title: "Delegate Design Task To Claude",
       description:
-        "Create an LFG subagent for design, frontend UX, visual polish, layout, styling, accessibility, and interaction-state work. Defaults to the claude harness and sends the delegated prompt unchanged. See lfg_list_models delegationGuidance.design for prompt-shaping guidance.",
+        `Create an LFG subagent for design, frontend UX, visual polish, layout, styling, accessibility, and interaction-state work. ${LFG_SUBAGENT_PRIORITY} Defaults to the claude harness and wraps the delegated prompt with the LFG sub-agent operating contract. See lfg_list_models delegationGuidance.design for prompt-shaping guidance.`,
       inputSchema: SUBAGENT_INPUT_SCHEMA,
     },
     async (args) => {
@@ -480,7 +489,7 @@ export async function cmdMcp() {
     {
       title: "Delegate Backend Task To Codex",
       description:
-        "Create an LFG subagent for backend, server, API, database, infrastructure, and correctness-focused implementation work. Defaults to the codex harness and sends the delegated prompt unchanged. See lfg_list_models delegationGuidance.backend for prompt-shaping guidance.",
+        `Create an LFG subagent for backend, server, API, database, infrastructure, and correctness-focused implementation work. ${LFG_SUBAGENT_PRIORITY} Defaults to the codex harness and wraps the delegated prompt with the LFG sub-agent operating contract. See lfg_list_models delegationGuidance.backend for prompt-shaping guidance.`,
       inputSchema: SUBAGENT_INPUT_SCHEMA,
     },
     async (args) => {

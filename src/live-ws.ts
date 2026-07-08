@@ -6,14 +6,12 @@ import { PATHS } from "./config.ts";
 import {
   listSessions,
   resolveTranscript,
-  recentMessagesCached,
-  messagePage,
   normalizeLineMessages,
   pendingToolPrompt,
   type PendingPrompt,
   type Session,
 } from "./sessions.ts";
-import { enqueueTranscriptIndex, indexedMessagePage } from "./transcript-index.ts";
+import { enqueueTranscriptIndex, indexedMessagePage, indexTranscriptMessages } from "./transcript-index.ts";
 import {
   capturePane,
   parsePrompt,
@@ -26,6 +24,7 @@ import {
 } from "./aisdk-registry.ts";
 import { imageArtifactMessagesSince, imageArtifactToMessage, listImageArtifacts, type ImageArtifactMessage } from "./artifacts.ts";
 import { listQueue, reconcileQueued } from "./sendq.ts";
+import { traceLog } from "./trace-log.ts";
 
 export type LiveWsSocketData = { liveWs: true; rid: string };
 
@@ -68,11 +67,13 @@ const BACKLOG_LIMIT = 40;
 const HEARTBEAT_MS = 25_000;
 const IDLE_CLOSE_MS = 60_000;
 const RING_CAP = 256;
+const transcriptOffsetEncoder = new TextEncoder();
 
 const messageHtmlCache = new Map<string, string>();
 const MESSAGE_HTML_CACHE_MAX = 4_000;
 
 function defaultEvlog(event: string, fields: Record<string, unknown> = {}) {
+  traceLog(event, fields);
   try {
     mkdirSync(EVLOG_DIR, { recursive: true });
     const day = new Date().toISOString().slice(0, 10);
@@ -266,10 +267,13 @@ type SidTail = {
   pane: LivePane;
   offset: number;
   buf: string;
+  bufOffset: number | null;
   lastSig: string;
   lastBusy: string;
   lastQ: string;
   lastArtifactAt: number;
+  lastMessageAt: number;
+  lastStallLogAt: number;
   lastDraft: Map<string, DraftState>;
   pumpInterval: ReturnType<typeof setInterval> | null;
   pollInterval: ReturnType<typeof setInterval> | null;
@@ -401,6 +405,24 @@ export function createLiveWsSupport(opts: {
     statusInterval = setInterval(() => void publishStatus(), 1000);
   };
 
+  const traceStallIfNeeded = (tail: SidTail, busy: boolean) => {
+    const now = Date.now();
+    if (!busy) {
+      tail.lastMessageAt = now;
+      return;
+    }
+    const idleMs = now - tail.lastMessageAt;
+    if (idleMs < 10_000 || now - tail.lastStallLogAt < 10_000) return;
+    tail.lastStallLogAt = now;
+    evlog("live_stream_stall", {
+      transport: "ws",
+      sid: tail.sid,
+      transcriptPath: tail.pane.tp,
+      idleMs,
+      subscribers: tail.sockets.size,
+    });
+  };
+
   const cleanupSidTail = (sid: string) => {
     const tail = sidTails.get(sid);
     if (!tail || tail.sockets.size) return;
@@ -430,28 +452,39 @@ export function createLiveWsSupport(opts: {
       const pumpT0 = performance.now();
       const f = Bun.file(tail.pane.tp);
       const size = f.size;
-      if (size < tail.offset) tail.offset = 0;
+      if (size < tail.offset) {
+        tail.offset = 0;
+        tail.buf = "";
+        tail.bufOffset = null;
+      }
       if (size <= tail.offset) return;
+      const startOffset = tail.offset;
       const bytes = size - tail.offset;
-      const chunk = await f.slice(tail.offset, size).text();
+      const chunk = await f.slice(startOffset, size).text();
       tail.offset = size;
-      // Keep the SQLite index continuously caught up for live sessions: the
-      // pump already knows the file grew, and enqueueTranscriptIndex is
-      // incremental (cursor-based) + deduped per path, so this only parses
-      // the new bytes in the background.
-      enqueueTranscriptIndex(tail.pane.tp, tail.sid);
-      tail.buf += chunk;
-      const lines = tail.buf.split("\n");
+      const previousBuf = tail.buf;
+      const combined = previousBuf + chunk;
+      const lines = combined.split("\n");
       tail.buf = lines.pop() ?? "";
+      let lineOffset = previousBuf ? (tail.bufOffset ?? startOffset) : startOffset;
+      tail.bufOffset = tail.buf ? lineOffset : null;
       let visibleLines = 0;
+      const indexLines: Array<{ offset: number; messages: ReturnType<typeof normalizeLineMessages> }> = [];
+      const outgoing: Array<ReturnType<typeof msgWithHtml>> = [];
       for (const line of lines) {
+        const currentOffset = lineOffset;
+        lineOffset += transcriptOffsetEncoder.encode(line).length + 1;
         if (!line) continue;
         visibleLines++;
-        const messages = visibleTranscriptMessages(normalizeLineMessages(line));
-        for (const message of messages) {
-          publishSid(tail.sid, "msg", { message: msgWithHtml(message) });
-        }
+        const normalized = normalizeLineMessages(line);
+        indexLines.push({ offset: currentOffset, messages: normalized });
+        const messages = visibleTranscriptMessages(normalized);
+        for (const message of messages) outgoing.push(msgWithHtml(message));
+        if (messages.length) tail.lastMessageAt = Date.now();
       }
+      tail.bufOffset = tail.buf ? lineOffset : null;
+      if (indexLines.length) indexTranscriptMessages(tail.pane.tp, tail.sid, indexLines);
+      for (const message of outgoing) publishSid(tail.sid, "msg", { message });
       evlog("ws_msg_pump", {
         sid: tail.sid,
         bytes,
@@ -491,6 +524,7 @@ export function createLiveWsSupport(opts: {
         publishSid(tail.sid, "busy", { busy });
         if (!busy) void publishCurrentBatch(tail);
       }
+      traceStallIfNeeded(tail, busy);
       if (!busy) tail.lastDraft.delete(tail.sid);
       return;
     }
@@ -508,6 +542,7 @@ export function createLiveWsSupport(opts: {
       publishSid(tail.sid, "busy", { busy });
       if (!busy) void publishCurrentBatch(tail);
     }
+    traceStallIfNeeded(tail, busy);
   };
 
   const pollDraft = (tail: SidTail) => {
@@ -525,10 +560,13 @@ export function createLiveWsSupport(opts: {
       pane: { sid, tp, target: null },
       offset: tp ? Bun.file(tp).size : 0,
       buf: "",
+      bufOffset: null,
       lastSig: " ",
       lastBusy: "?",
       lastQ: "[]",
       lastArtifactAt: 0,
+      lastMessageAt: Date.now(),
+      lastStallLogAt: 0,
       lastDraft: new Map(),
       pumpInterval: null,
       pollInterval: null,
@@ -553,7 +591,7 @@ export function createLiveWsSupport(opts: {
   const readBacklog = async (sid: string, tp: string) => {
     const backlogT0 = performance.now();
     const page = await indexedMessagePage(tp, sid, { limit: BACKLOG_LIMIT });
-    const messages = page?.messages ?? await recentMessagesCached(tp, BACKLOG_LIMIT);
+    const messages = page.messages;
     const readMs = performance.now() - backlogT0;
     const renderT0 = performance.now();
     const rendered = transcriptMessagesForClient(sid, messages).map(msgWithHtml);
@@ -561,12 +599,12 @@ export function createLiveWsSupport(opts: {
     evlog("ws_backlog", {
       sid,
       messages: rendered.length,
-      nextBefore: page?.nextBefore ?? null,
+      nextBefore: page.nextBefore,
       readMs: roundMs(readMs),
       renderMs: roundMs(renderMs),
       totalMs: roundMs(performance.now() - backlogT0),
     });
-    return { messages: rendered, nextBefore: page?.nextBefore ?? null, readMs, renderMs };
+    return { messages: rendered, nextBefore: page.nextBefore, readMs, renderMs };
   };
 
   async function publishCurrentBatch(tail: SidTail): Promise<void> {
@@ -780,9 +818,7 @@ export function createLiveWsSupport(opts: {
       }
       enqueueTranscriptIndex(tp, sid);
       const bounded = Math.max(1, Math.min(200, limit || 80));
-      const page =
-        (await indexedMessagePage(tp, sid, { before, limit: bounded })) ??
-        (await messagePage(tp, { before, limit: bounded }));
+      const page = await indexedMessagePage(tp, sid, { before, limit: bounded });
       const messages = transcriptMessagesForClient(sid, page.messages).map(msgWithHtml);
       safeSend(state.ws, stamp(transcriptChannel(sid), {
         t: "page",
