@@ -2911,6 +2911,7 @@ export function App() {
       document.documentElement.classList.remove("lfg-keyboard-open");
       document.documentElement.style.removeProperty("--lfg-keyboard-height");
       document.documentElement.style.removeProperty("--lfg-visual-offset-top");
+      document.documentElement.style.removeProperty("--lfg-visual-height");
       setKeyboardOpen(false);
     };
     if (!vv) {
@@ -2939,12 +2940,9 @@ export function App() {
       );
       const visualTopPx = open || tab === "term" ? rawVisualTopPx : 0;
       const measuredHeight = `${visualHeight}px`;
-      const shellHeight =
-        tab === "live" && isMobile && open
-          ? `${visualHeight + visualTopPx}px`
-          : measuredHeight;
       const offsetTop = `${visualTopPx}px`;
-      document.documentElement.style.setProperty("--lfg-app-height", shellHeight);
+      document.documentElement.style.setProperty("--lfg-app-height", measuredHeight);
+      document.documentElement.style.setProperty("--lfg-visual-height", measuredHeight);
       document.documentElement.style.setProperty("--lfg-visual-offset-top", offsetTop);
       if (!open && rawVisualTopPx > 0) {
         requestAnimationFrame(() => window.scrollTo(0, 0));
@@ -2955,7 +2953,7 @@ export function App() {
         // visual viewport so foreground-return stale `dvh` cannot leave a white
         // strip until the next pinch/zoom/layout event.
         if (tab === "term" || !open || (tab === "live" && isMobile)) {
-          el.style.height = shellHeight;
+          el.style.height = measuredHeight;
         } else {
           el.style.height = "";
         }
@@ -4004,15 +4002,13 @@ export function App() {
 
   const mainBottomPadding =
     tab === "live"
-      ? keyboardOpen
-        ? "pb-[calc(var(--lfg-inline-composer-height,var(--lfg-composer-clear))+0.75rem)] md:pb-3"
-        : "pb-[var(--lfg-above-orb)] md:pb-3"
+      ? isMobile
+        ? "pb-3"
+        : keyboardOpen
+          ? "pb-[calc(var(--lfg-inline-composer-height,var(--lfg-composer-clear))+0.75rem)] md:pb-3"
+          : "pb-[var(--lfg-above-orb)] md:pb-3"
       : "pb-3";
   const liveDesktopWorkspace = tab === "live" && isWide;
-  const liveKeyboardShiftStyle: CSSProperties | undefined =
-    tab === "live" && isMobile && keyboardOpen
-      ? { transform: "translateY(var(--lfg-visual-offset-top, 0px))" }
-      : undefined;
 
   return (
     <AskProvider>
@@ -4024,7 +4020,6 @@ export function App() {
       {liveDesktopWorkspace ? null : (
       <header
         className="z-40 flex shrink-0 items-center justify-between gap-2 px-3 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))]"
-        style={liveKeyboardShiftStyle}
       >
         <NavIsland className="shrink-0">
           <div className="flex h-11 items-center rounded-full bg-background/80 px-1.5 backdrop-blur-xl">
@@ -4096,7 +4091,6 @@ export function App() {
           "min-h-0 flex-1 px-3 pt-3",
           liveDesktopWorkspace ? "overflow-hidden pb-3" : `overflow-y-auto ${mainBottomPadding}`,
         )}
-        style={liveKeyboardShiftStyle}
       >
         {tab === "live" ? (
           <LiveView
@@ -8432,7 +8426,7 @@ function SessionTitleSheet({
       className="fixed inset-x-0 z-[90]"
       style={{
         top: "var(--lfg-visual-offset-top, 0px)",
-        height: "calc(var(--lfg-app-height, 100dvh) - var(--lfg-visual-offset-top, 0px))",
+        height: "var(--lfg-visual-height, var(--lfg-app-height, 100dvh))",
       }}
     >
       <button
@@ -10985,25 +10979,16 @@ function NewSessionDialog({
     </>
   );
 
-  // Mobile home screen: anchor the shared composer inline at the bottom of the
-  // viewport. On Android, `interactive-widget=resizes-content` shrinks the layout
-  // viewport when the keyboard opens, so the bottom edge already rides above it.
-  // iOS Safari ignores `interactive-widget`, so the layout viewport stays full
-  // height and a plain `bottom-0` would leave the composer floating mid-screen
-  // above a dead band (the split you'd see with the keyboard up). Offset the
-  // bottom by the live `--lfg-keyboard-height` (published from visualViewport in
-  // the App shell) so the shell sits just above the keyboard on both platforms —
-  // the var is 0 when the keyboard is closed and on Android where the layout
-  // viewport already shrank.
-  // Keep the fixed shell pinned in place during background launches; translating
-  // it briefly reveals the browser canvas as a white strip at the bottom on iOS.
+  // Mobile home screen: render the shared composer as a real bottom flex child
+  // of the app shell. The App root is pinned to visualViewport.height, so this
+  // participates in layout and moves above the soft keyboard instead of relying
+  // on fixed-position keyboard offsets (which vary across iOS PWA/Safari modes).
   if (variant === "inline") {
     return (
       <div
         ref={inlineBarRef}
         aria-busy={launching}
-        style={{ bottom: "var(--lfg-keyboard-height, 0px)" }}
-        className="pointer-events-auto fixed inset-x-0 z-[55] overflow-x-clip bg-background/95 pt-4 shadow-[0_-8px_24px_rgba(0,0,0,0.12)] backdrop-blur-xl"
+        className="pointer-events-auto relative z-[55] shrink-0 overflow-x-clip bg-background/95 pt-4 shadow-[0_-8px_24px_rgba(0,0,0,0.12)] backdrop-blur-xl"
       >
         <div ref={inlineShellRef} className="mx-auto max-w-lg will-change-transform">
           {formBody}
