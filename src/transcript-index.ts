@@ -37,6 +37,7 @@ let monitorStarted = false;
 let monitorRunning = false;
 const enqueued = new Set<string>();
 const imports = new Map<string, Promise<{ indexed: number; offset: number; size: number }>>();
+const monitorFingerprints = new Map<string, number | null>();
 
 function database(): Database {
   if (db) return db;
@@ -229,10 +230,19 @@ async function indexTranscriptOnce(path: string, sessionId: string): Promise<{
   const d = database();
   const st = statSync(path);
   const existingCursor = d
-    .query<{ offset: number; session_id: string }, [string]>(
-      "SELECT offset, session_id FROM transcript_index_cursors WHERE path = ?",
+    .query<{ offset: number; size: number; mtime_ms: number; session_id: string }, [string]>(
+      "SELECT offset, size, mtime_ms, session_id FROM transcript_index_cursors WHERE path = ?",
     )
     .get(path);
+  if (
+    existingCursor &&
+    existingCursor.session_id === sessionId &&
+    existingCursor.offset === st.size &&
+    existingCursor.size === st.size &&
+    existingCursor.mtime_ms === st.mtimeMs
+  ) {
+    return { indexed: 0, offset: existingCursor.offset, size: st.size };
+  }
   let cursor = existingCursor?.offset ?? 0;
   if (existingCursor && existingCursor.session_id !== sessionId) {
     d.transaction(() => {
@@ -594,20 +604,31 @@ export function startTranscriptMessageMonitor(fetchSessions: () => Promise<Sessi
     const started = performance.now();
     try {
       const sessions = await fetchSessions();
-      const targets = new Map<string, { sessionId: string; path: string }>();
+      const targets = new Map<string, { sessionId: string; path: string; fingerprint: number | null }>();
       for (const session of sessions) {
         if (!session.sessionId || !session.transcriptPath) continue;
-        targets.set(session.transcriptPath, { sessionId: session.sessionId, path: session.transcriptPath });
+        targets.set(session.transcriptPath, {
+          sessionId: session.sessionId,
+          path: session.transcriptPath,
+          fingerprint: session.lastActivityAt ?? null,
+        });
       }
       let imported = 0;
       let indexed = 0;
+      let skipped = 0;
       for (const target of targets.values()) {
+        if (monitorFingerprints.has(target.path) && monitorFingerprints.get(target.path) === target.fingerprint) {
+          skipped++;
+          continue;
+        }
         try {
           const result = await indexTranscript(target.path, target.sessionId);
+          monitorFingerprints.set(target.path, target.fingerprint);
           imported++;
           indexed += result.indexed;
         } catch (err) {
           const code = (err as { code?: string } | null)?.code;
+          if (code === "ENOENT") monitorFingerprints.set(target.path, target.fingerprint);
           if (code !== "ENOENT") {
             traceLog("chat_db_monitor_error", {
               sessionId: target.sessionId,
@@ -623,6 +644,7 @@ export function startTranscriptMessageMonitor(fetchSessions: () => Promise<Sessi
           sessions: sessions.length,
           targets: targets.size,
           imported,
+          skipped,
           indexed,
           durationMs,
         });
