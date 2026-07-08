@@ -103,7 +103,9 @@ import {
   indexTranscript,
   searchAllTranscriptIndexes,
   searchTranscriptIndex,
+  warmTranscriptIndexes,
 } from "../transcript-index.ts";
+import { traceLog, traceLogPathForToday } from "../trace-log.ts";
 import {
   capturePane,
   parsePrompt,
@@ -211,6 +213,7 @@ const SELF_REPO = PATHS.root;
 const EVLOG_DIR = join(PATHS.data, "evlogs");
 
 function evlog(event: string, fields: Record<string, unknown> = {}) {
+  traceLog(event, fields);
   try {
     mkdirSync(EVLOG_DIR, { recursive: true });
     const day = new Date().toISOString().slice(0, 10);
@@ -854,14 +857,11 @@ async function liveSessionIdsCached(): Promise<Set<string>> {
 function warmRenderedBacklogs(sessions: Session[], limit = 40): void {
   for (const session of sessions.slice(0, MESSAGE_HTML_CACHE_MAX)) {
     const path = session.transcriptPath;
-    if (!path) continue;
-    void recentMessagesCached(path, limit)
+    const sid = session.sessionId;
+    if (!path || !sid) continue;
+    void indexedMessagePage(path, sid, { limit })
       .then((messages) => {
-        if (session.sessionId) {
-          for (const message of transcriptMessagesForClient(session.sessionId, messages)) msgWithHtml(message);
-        } else {
-          for (const message of visibleTranscriptMessages(messages)) msgWithHtml(message);
-        }
+        for (const message of transcriptMessagesForClient(sid, messages.messages)) msgWithHtml(message);
       })
       .catch(() => {});
   }
@@ -1585,7 +1585,7 @@ export async function cmdServe() {
     async fetch(req, server) {
       const url = new URL(req.url);
       const path = url.pathname;
-      const apiTimingStart = BOOT_API_TIMING_ENDPOINTS.has(path) ? performance.now() : 0;
+      const apiTimingStart = path.startsWith("/api/") ? performance.now() : 0;
 
       const response = await (async () => {
       try {
@@ -1598,7 +1598,11 @@ export async function cmdServe() {
             href: req.headers.get("referer") ?? undefined,
             ...((body && typeof body === "object" ? body : {}) as Record<string, unknown>),
           });
-          return json({ ok: true, path: join(EVLOG_DIR, `${new Date().toISOString().slice(0, 10)}.jsonl`) });
+          return json({
+            ok: true,
+            path: join(EVLOG_DIR, `${new Date().toISOString().slice(0, 10)}.jsonl`),
+            tracePath: traceLogPathForToday(),
+          });
         }
         if (req.method === "GET") {
           const file = join(EVLOG_DIR, `${new Date().toISOString().slice(0, 10)}.jsonl`);
@@ -4783,7 +4787,12 @@ export async function cmdServe() {
 
       return err(404, "not found");
       } finally {
-        if (apiTimingStart) evlog("api_timing", { endpoint: path, durationMs: apiDurationMs(apiTimingStart) });
+        if (apiTimingStart) {
+          const durationMs = apiDurationMs(apiTimingStart);
+          if (BOOT_API_TIMING_ENDPOINTS.has(path) || durationMs >= 1_000) {
+            evlog("api_timing", { endpoint: path, method: req.method, durationMs });
+          }
+        }
       }
       })();
       return maybeCompressResponse(req, path, response);
