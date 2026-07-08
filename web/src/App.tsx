@@ -2889,10 +2889,10 @@ export function App() {
   //
   // Two iOS quirks make the naive "set height = vv.height" leave dead space in
   // the Terminal tab:
-  //   • The browser scrolls the *layout* viewport to reveal the focused field,
-  //     so `vv.offsetTop` goes positive while the root stays anchored at layout
-  //     top — leaving a strip of background below the app. Translate the root
-  //     down by `offsetTop` to re-pin it to the visible band.
+  //   • The browser scrolls the *layout* viewport to reveal the focused field.
+  //     Depending on Safari/PWA mode this shows up as `vv.offsetTop`,
+  //     `vv.pageTop`, or `window.scrollY`. Translate/pad from that measured
+  //     visual top to re-pin the app to the visible band.
   //   • `<main>` reserves bottom padding for the safe-area inset. While the
   //     keyboard is open we collapse that padding (see `keyboardOpen`) so the
   //     terminal fills right up to the keyboard instead of floating above a gap.
@@ -2925,15 +2925,30 @@ export function App() {
       const open = kb > 120;
       const el = rootRef.current;
       const visualHeight = Math.ceil(vv.height);
-      const offsetTopPx = Math.max(0, Math.round(vv.offsetTop));
+      const rawVisualTopPx = Math.max(
+        0,
+        Math.round(
+          Math.max(
+            vv.offsetTop || 0,
+            vv.pageTop || 0,
+            window.scrollY || 0,
+            document.documentElement.scrollTop || 0,
+            document.body.scrollTop || 0,
+          ),
+        ),
+      );
+      const visualTopPx = open || tab === "term" ? rawVisualTopPx : 0;
       const measuredHeight = `${visualHeight}px`;
       const shellHeight =
         tab === "live" && isMobile && open
-          ? `${visualHeight + offsetTopPx}px`
+          ? `${visualHeight + visualTopPx}px`
           : measuredHeight;
-      const offsetTop = `${offsetTopPx}px`;
+      const offsetTop = `${visualTopPx}px`;
       document.documentElement.style.setProperty("--lfg-app-height", shellHeight);
       document.documentElement.style.setProperty("--lfg-visual-offset-top", offsetTop);
+      if (!open && rawVisualTopPx > 0) {
+        requestAnimationFrame(() => window.scrollTo(0, 0));
+      }
       if (el) {
         // Outside Terminal, leave keyboard-open layout to the browser/Vaul. When
         // the keyboard is closed, always override `h-dvh` with the measured
@@ -2946,7 +2961,7 @@ export function App() {
         }
         // Only Terminal gets translated for keyboard offset. A translateY(0)
         // still creates a containing block that would reparent fixed nav chrome.
-        el.style.transform = tab === "term" && vv.offsetTop ? `translateY(${vv.offsetTop}px)` : "";
+        el.style.transform = tab === "term" && visualTopPx ? `translateY(${visualTopPx}px)` : "";
       }
       // Publish the live keyboard height + a flag on <html> so toasts and the
       // dictation pill (portaled to <body>, outside rootRef) can hike up to sit
@@ -8413,7 +8428,13 @@ function SessionTitleSheet({
   const title = titleForSession(session);
 
   return createPortal(
-    <div className="fixed inset-0 z-[90]">
+    <div
+      className="fixed inset-x-0 z-[90]"
+      style={{
+        top: "var(--lfg-visual-offset-top, 0px)",
+        height: "calc(var(--lfg-app-height, 100dvh) - var(--lfg-visual-offset-top, 0px))",
+      }}
+    >
       <button
         type="button"
         ref={backdropRef}
