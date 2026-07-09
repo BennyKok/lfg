@@ -122,7 +122,16 @@ class ChatTranscriptTailer {
     }
 
     let committed = cursor?.offset ?? 0;
-    if (readOffset < committed) readOffset = committed;
+    // Skipping ahead to the shared committed cursor is only valid when nobody
+    // is listening in THIS process. Self-indexing SDK harnesses advance the
+    // sqlite cursor from their own process; if serve's tailer clamps its read
+    // offset up to that cursor, it never parses the appended lines and its WS
+    // subscribers receive no "msg" events at all — the live view goes dead,
+    // clients hit the stall watchdog, and every session renders only the
+    // snapshot tail. With subscribers we keep our own in-memory read offset
+    // and re-parse those bytes purely to publish them (re-indexing is
+    // idempotent: INSERT OR IGNORE on deterministic ids, monotonic cursor).
+    if (!this.subscribers.size && readOffset < committed) readOffset = committed;
 
     const file = Bun.file(this.path);
     const decoder = new TextDecoder();

@@ -213,6 +213,7 @@ function updateCursorInDb(
         offset = excluded.offset,
         mtime_ms = excluded.mtime_ms,
         indexed_at = excluded.indexed_at
+      WHERE excluded.offset >= transcript_index_cursors.offset
     `)
     .run(path, sessionId, cursor.size, cursor.offset, cursor.mtimeMs, Date.now());
 }
