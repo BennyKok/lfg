@@ -6,12 +6,12 @@ import { PATHS } from "./config.ts";
 import {
   listSessions,
   resolveTranscript,
-  normalizeLineMessages,
   pendingToolPrompt,
   type PendingPrompt,
   type Session,
 } from "./sessions.ts";
-import { enqueueTranscriptIndex, indexedMessagePage, indexTranscriptMessages } from "./transcript-index.ts";
+import { indexedMessagePage } from "./transcript-index.ts";
+import { ensureChatTranscriptCaughtUp, subscribeChatTranscript } from "./chat-ingest.ts";
 import {
   capturePane,
   parsePrompt,
@@ -67,7 +67,6 @@ const BACKLOG_LIMIT = 40;
 const HEARTBEAT_MS = 25_000;
 const IDLE_CLOSE_MS = 60_000;
 const RING_CAP = 256;
-const transcriptOffsetEncoder = new TextEncoder();
 
 const messageHtmlCache = new Map<string, string>();
 const MESSAGE_HTML_CACHE_MAX = 4_000;
@@ -265,9 +264,6 @@ type SidTail = {
   sid: string;
   sockets: Set<LiveWs>;
   pane: LivePane;
-  offset: number;
-  buf: string;
-  bufOffset: number | null;
   lastSig: string;
   lastBusy: string;
   lastQ: string;
@@ -275,9 +271,9 @@ type SidTail = {
   lastMessageAt: number;
   lastStallLogAt: number;
   lastDraft: Map<string, DraftState>;
-  pumpInterval: ReturnType<typeof setInterval> | null;
   pollInterval: ReturnType<typeof setInterval> | null;
   draftInterval: ReturnType<typeof setInterval> | null;
+  transcriptUnsub: (() => void) | null;
 };
 
 export function createLiveWsSupport(opts: {
@@ -426,9 +422,9 @@ export function createLiveWsSupport(opts: {
   const cleanupSidTail = (sid: string) => {
     const tail = sidTails.get(sid);
     if (!tail || tail.sockets.size) return;
-    if (tail.pumpInterval) clearInterval(tail.pumpInterval);
     if (tail.pollInterval) clearInterval(tail.pollInterval);
     if (tail.draftInterval) clearInterval(tail.draftInterval);
+    tail.transcriptUnsub?.();
     sidTails.delete(sid);
   };
 
@@ -438,61 +434,37 @@ export function createLiveWsSupport(opts: {
     tail.pane.target = bySid.get(tail.sid) ?? null;
   };
 
-  const pumpOne = async (tail: SidTail) => {
+  const subscribeTailToTranscript = (tail: SidTail, tp: string) => {
+    if (tail.transcriptUnsub) return;
+    tail.transcriptUnsub = subscribeChatTranscript(tp, tail.sid, (event) => {
+      const messages = visibleTranscriptMessages(event.messages);
+      if (messages.length) tail.lastMessageAt = Date.now();
+      for (const message of messages) publishSid(tail.sid, "msg", { message: msgWithHtml(message) });
+    });
+  };
+
+  const ensureTranscriptSubscription = async (tail: SidTail) => {
     try {
+      if (tail.transcriptUnsub) return;
       if (!tail.pane.tp) {
         const tp = await resolveTranscript(tail.sid);
         if (!tp) return;
         tail.pane.tp = tp;
-        enqueueTranscriptIndex(tp, tail.sid);
+        subscribeTailToTranscript(tail, tp);
         await publishCurrentBatch(tail);
-        tail.offset = Bun.file(tp).size;
         return;
       }
-      const pumpT0 = performance.now();
-      const f = Bun.file(tail.pane.tp);
-      const size = f.size;
-      if (size < tail.offset) {
-        tail.offset = 0;
-        tail.buf = "";
-        tail.bufOffset = null;
+      subscribeTailToTranscript(tail, tail.pane.tp);
+    } catch (err) {
+      const code = (err as { code?: string } | null)?.code;
+      if (code !== "ENOENT") {
+        evlog("ws_transcript_ingest_error", {
+          sid: tail.sid,
+          transcriptPath: tail.pane.tp,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
-      if (size <= tail.offset) return;
-      const startOffset = tail.offset;
-      const bytes = size - tail.offset;
-      const chunk = await f.slice(startOffset, size).text();
-      tail.offset = size;
-      const previousBuf = tail.buf;
-      const combined = previousBuf + chunk;
-      const lines = combined.split("\n");
-      tail.buf = lines.pop() ?? "";
-      let lineOffset = previousBuf ? (tail.bufOffset ?? startOffset) : startOffset;
-      tail.bufOffset = tail.buf ? lineOffset : null;
-      let visibleLines = 0;
-      const indexLines: Array<{ offset: number; messages: ReturnType<typeof normalizeLineMessages> }> = [];
-      const outgoing: Array<ReturnType<typeof msgWithHtml>> = [];
-      for (const line of lines) {
-        const currentOffset = lineOffset;
-        lineOffset += transcriptOffsetEncoder.encode(line).length + 1;
-        if (!line) continue;
-        visibleLines++;
-        const normalized = normalizeLineMessages(line);
-        indexLines.push({ offset: currentOffset, messages: normalized });
-        const messages = visibleTranscriptMessages(normalized);
-        for (const message of messages) outgoing.push(msgWithHtml(message));
-        if (messages.length) tail.lastMessageAt = Date.now();
-      }
-      tail.bufOffset = tail.buf ? lineOffset : null;
-      if (indexLines.length) indexTranscriptMessages(tail.pane.tp, tail.sid, indexLines);
-      for (const message of outgoing) publishSid(tail.sid, "msg", { message });
-      evlog("ws_msg_pump", {
-        sid: tail.sid,
-        bytes,
-        lines: visibleLines,
-        subscribers: tail.sockets.size,
-        durationMs: roundMs(performance.now() - pumpT0),
-      });
-    } catch {}
+    }
   };
 
   const pollArtifacts = (tail: SidTail) => {
@@ -558,9 +530,6 @@ export function createLiveWsSupport(opts: {
       sid,
       sockets: new Set(),
       pane: { sid, tp, target: null },
-      offset: tp ? Bun.file(tp).size : 0,
-      buf: "",
-      bufOffset: null,
       lastSig: " ",
       lastBusy: "?",
       lastQ: "[]",
@@ -568,17 +537,17 @@ export function createLiveWsSupport(opts: {
       lastMessageAt: Date.now(),
       lastStallLogAt: 0,
       lastDraft: new Map(),
-      pumpInterval: null,
       pollInterval: null,
       draftInterval: null,
+      transcriptUnsub: null,
     };
     sidTails.set(sid, tail);
-    if (tp) enqueueTranscriptIndex(tp, sid);
+    if (tp) subscribeTailToTranscript(tail, tp);
     void hydrateTarget(tail).then(() => void pollOne(tail));
     pollArtifacts(tail);
     pollQueue(tail);
-    tail.pumpInterval = setInterval(() => void pumpOne(tail), 700);
     tail.pollInterval = setInterval(() => {
+      void ensureTranscriptSubscription(tail);
       void pollOne(tail);
       pollArtifacts(tail);
       pollQueue(tail);
@@ -613,8 +582,9 @@ export function createLiveWsSupport(opts: {
       tp = await resolveTranscript(tail.sid);
       if (!tp) return;
       tail.pane.tp = tp;
-      enqueueTranscriptIndex(tp, tail.sid);
+      subscribeTailToTranscript(tail, tp);
     }
+    await ensureChatTranscriptCaughtUp(tp, tail.sid, "ws-snapshot");
     const backlog = await readBacklog(tail.sid, tp);
     const channel = transcriptChannel(tail.sid);
     const frame = stamp(channel, {
@@ -686,7 +656,7 @@ export function createLiveWsSupport(opts: {
     let batchMessages: unknown[] = [];
     let nextBefore: number | null = null;
     if (tp) {
-      enqueueTranscriptIndex(tp, sid);
+      await ensureChatTranscriptCaughtUp(tp, sid, "ws-subscribe");
       const backlog = await readBacklog(sid, tp);
       batchMessages = backlog.messages;
       nextBefore = backlog.nextBefore;
@@ -816,7 +786,7 @@ export function createLiveWsSupport(opts: {
         sendChannel(state, transcriptChannel(sid), { t: "error", sid, message: "session transcript not found" });
         return;
       }
-      enqueueTranscriptIndex(tp, sid);
+      await ensureChatTranscriptCaughtUp(tp, sid, "ws-backfill");
       const bounded = Math.max(1, Math.min(200, limit || 80));
       const page = await indexedMessagePage(tp, sid, { before, limit: bounded });
       const messages = transcriptMessagesForClient(sid, page.messages).map(msgWithHtml);
