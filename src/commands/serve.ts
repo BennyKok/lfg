@@ -85,6 +85,7 @@ import {
   indexTranscript,
   searchAllTranscriptIndexes,
   searchTranscriptIndex,
+  shutdownTranscriptIndexWorker,
 } from "../transcript-index.ts";
 import {
   ensureChatTranscriptCaughtUp,
@@ -4919,6 +4920,15 @@ export async function cmdServe() {
       return maybeCompressResponse(req, path, response);
     },
   });
+
+  const shutdown = (signal: "SIGINT" | "SIGTERM") => {
+    void shutdownTranscriptIndexWorker().finally(() => {
+      server.stop(true);
+      process.exit(signal === "SIGINT" ? 130 : 143);
+    });
+  };
+  process.once("SIGINT", () => shutdown("SIGINT"));
+  process.once("SIGTERM", () => shutdown("SIGTERM"));
 
   startAutoScheduler((l) => console.log(l));
   startModelDiscoveryScheduler((l) => console.log(l));
