@@ -1,12 +1,17 @@
 // Headless interactive session harness for the "codex-aisdk" agent kind.
 //
-// This is the long-lived process behind a "codex (ai sdk)" session. Like its
+// This is the long-lived process behind a managed codex session. Like its
 // Claude sibling (./aisdk-session.ts) it runs inside a tmux pane used purely as
 // a process supervisor + lifecycle handle (we never drive I/O through the pane),
-// and drives a multi-turn conversation through the Vercel AI SDK — here via the
-// ai-sdk-provider-codex-cli app-server provider, which talks JSON-RPC to a
-// `codex app-server` child over stdio. ChatGPT-subscription auth comes from
-// ~/.codex/auth.json; there is NO API key.
+// and drives a multi-turn conversation through the OFFICIAL @openai/codex-sdk
+// (`Codex` → `startThread`/`resumeThread` → `runStreamed`). ChatGPT-subscription
+// auth comes from ~/.codex/auth.json; there is NO API key.
+//
+// History: this harness previously went through the Vercel AI SDK
+// (ai-sdk-provider-codex-cli app-server provider). The official SDK removes the
+// adapter's contortions: `thread.started` reports the thread id the moment the
+// first turn starts (the old path learned it via onSessionCreated + resolved
+// providerMetadata after the turn), and turns take a plain AbortSignal.
 //
 // Control plane is identical to the Claude harness:
 //   - control IN: we tail a command file (data/aisdk/<key>.cmd) for
@@ -14,21 +19,11 @@
 //   - busy + discovery: a registry entry (data/aisdk/<key>.json) we keep
 //     updated; serve reads it for the live-view busy dot and session list.
 //
-// The KEY DIFFERENCE from the Claude harness is the id model. Claude lets us
-// choose a deterministic sessionId up front and writes the transcript JSONL
-// there. Codex does NOT: the `app-server` mints a `threadId` we only learn AFTER
-// turn 1 (from result.providerMetadata['codex-app-server'].threadId), and it
-// persists the rollout under ~/.codex/sessions/... named by that id. So:
-//   - We mint a control-plane KEY (a uuid) up front, used ONLY to name the
-//     registry/command files. serve routes sends/interrupts through it.
-//   - Turn 1 runs with providerOptions { threadMode: 'persistent' }; afterwards
-//     we read the threadId and patch it into the registry.
-//   - Later turns resume with providerOptions { threadId }.
-// The transcript itself is discovered by the EXISTING findCodexTranscriptById /
-// codexThreads once the threadId is known — we never write a custom transcript.
-//
-// Interrupt is an AbortController on the current turn — staying purely on the AI
-// SDK surface (the provider aborts the in-flight RPC turn for us).
+// The id model is unchanged: codex mints the threadId (we learn it at
+// thread.started on turn 1) and persists the rollout under ~/.codex/sessions
+// named by it. We mint a control-plane KEY (a uuid) up front for the
+// registry/command files; the transcript is discovered by
+// findCodexTranscriptById once the threadId is known.
 import {
   type AisdkCommand,
   cmdPath,
@@ -60,25 +55,16 @@ function arg(argv: string[], name: string): string | undefined {
   return i >= 0 ? argv[i + 1] : undefined;
 }
 
-function resolveCodexPath(): string | undefined {
-  const usable = (path: string | undefined | null): string | undefined => {
-    if (!path) return undefined;
-    try {
-      const real = realpathSync(path);
-      return existsSync(real) ? real : undefined;
-    } catch {
-      return undefined;
-    }
-  };
+// Only an EXPLICIT override redirects the SDK away from its bundled codex
+// binary. The SDK pins a matching @openai/codex dependency (protocol-tested
+// pairing); pointing it at an older global CLI risks a protocol mismatch, so —
+// unlike the old provider — we no longer prefer the global binary by default.
+function resolveCodexPathOverride(): string | undefined {
+  const explicit = process.env.LFG_CODEX_PATH;
+  if (!explicit) return undefined;
   try {
-    const explicit = usable(process.env.LFG_CODEX_PATH);
-    if (explicit) return explicit;
-    // The provider defaults to its optional local @openai/codex dependency when
-    // codexPath is absent. Prefer the user's global CLI so resumed app-server
-    // sessions do not get pinned to an older repo-local wrapper.
-    const global = usable(`${homedir()}/.bun/bin/codex`);
-    if (global) return global;
-    return usable(Bun.which("codex")) ?? undefined;
+    const real = realpathSync(explicit);
+    return existsSync(real) ? real : undefined;
   } catch {
     return undefined;
   }
@@ -154,6 +140,24 @@ async function findCodexTranscriptById(id: string): Promise<string | null> {
   return found;
 }
 
+// Shared thread options for both the interactive harness and the one-shot
+// runner: full access + never-approve mirrors the tmux codex session's
+// `--sandbox danger-full-access --ask-for-approval never`.
+function threadOptions(model: string, cwd: string, thinkingLevel?: string) {
+  return {
+    model,
+    workingDirectory: cwd,
+    sandboxMode: "danger-full-access" as const,
+    approvalPolicy: "never" as const,
+    // Managed worktrees live under /tmp — codex refuses non-git dirs otherwise.
+    skipGitRepoCheck: true,
+    ...(thinkingLevel
+      ? { modelReasoningEffort: thinkingLevel as "low" | "medium" | "high" }
+      : {}),
+  };
+}
+
+// One-shot headless run for the auto/report runner: single thread, single turn.
 export async function pipeToCodexAiSdk(
   prompt: string,
   log: (s: string) => void,
@@ -161,81 +165,54 @@ export async function pipeToCodexAiSdk(
 ): Promise<string> {
   const model = opts.model ?? "gpt-5.5";
   const cwd = opts.cwd ?? process.cwd();
-  const thinkingLevel = opts.thinkingLevel;
-  const codexPath = resolveCodexPath();
-  const { streamText } = await import("ai");
-  const { createCodexAppServer } = await import("ai-sdk-provider-codex-cli");
+  const { Codex } = await import("@openai/codex-sdk");
+  const codexPathOverride = resolveCodexPathOverride();
+  const codex = new Codex(codexPathOverride ? { codexPathOverride } : {});
 
-  log(`[runner] piping ${prompt.length} chars to codex via ai-sdk (${model})`);
-  const provider = createCodexAppServer({
-    defaultSettings: {
-      cwd,
-      sandboxPolicy: "danger-full-access",
-      approvalPolicy: "never",
-      autoApprove: true,
-      ...(codexPath ? { codexPath } : {}),
-    },
-  });
-
-  try {
-    const llm = provider(
-      model,
-      thinkingLevel ? { effort: thinkingLevel as any } : undefined,
-    );
-    const result = streamText({
-      model: llm,
-      prompt,
-      providerOptions: {
-        "codex-app-server": {
-          threadMode: "stateless",
-          ...(thinkingLevel ? { effort: thinkingLevel } : {}),
-        },
-      },
-    } as any);
-    let chars = 0;
-    let lastEmit = 0;
-    const flush = (force = false) => {
-      const now = Date.now();
-      if (force || now - lastEmit > 800) {
-        lastEmit = now;
-        const k = chars >= 1000 ? `${(chars / 1000).toFixed(1)}k` : String(chars);
-        log(`[runner] codex generating… ${k} chars`);
-      }
-    };
-    for await (const part of result.fullStream as any) {
-      if (part?.type === "text-delta") {
-        chars += String(part.text ?? part.textDelta ?? part.delta ?? "").length;
-        flush();
-      } else if (part?.type === "tool-call") {
-        log(`[runner] codex running tool: ${part.toolName ?? "?"}`);
-      } else if (part?.type === "error") {
-        throw new Error(String((part as any).error).slice(0, 800));
-      }
+  log(`[runner] piping ${prompt.length} chars to codex via codex-sdk (${model})`);
+  const thread = codex.startThread(threadOptions(model, cwd, opts.thinkingLevel));
+  const { events } = await thread.runStreamed(prompt);
+  let text = "";
+  let chars = 0;
+  let lastEmit = 0;
+  const flush = (force = false) => {
+    const now = Date.now();
+    if (force || now - lastEmit > 800) {
+      lastEmit = now;
+      const k = chars >= 1000 ? `${(chars / 1000).toFixed(1)}k` : String(chars);
+      log(`[runner] codex generating… ${k} chars`);
     }
-    const text = await result.text;
-    flush(true);
-    if (!text || !text.trim()) throw new Error("codex ai-sdk backend produced empty result");
-    log(`[runner] codex ai-sdk done (${text.length} chars)`);
-    return text;
-  } finally {
-    await provider.dispose?.().catch(() => {});
+  };
+  for await (const event of events) {
+    if (event.type === "item.completed" && event.item.type === "agent_message") {
+      text += (text ? "\n\n" : "") + event.item.text;
+      chars = text.length;
+      flush();
+    } else if (event.type === "item.started" && event.item.type === "command_execution") {
+      log(`[runner] codex running: ${(event.item as { command?: string }).command ?? "?"}`);
+    } else if (event.type === "turn.failed") {
+      throw new Error(String(event.error?.message ?? "codex turn failed").slice(0, 800));
+    } else if (event.type === "error") {
+      throw new Error(String(event.message ?? "codex thread error").slice(0, 800));
+    }
   }
+  flush(true);
+  if (!text.trim()) throw new Error("codex sdk backend produced empty result");
+  log(`[runner] codex sdk done (${text.length} chars)`);
+  return text;
 }
 
 export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
   // The control-plane key (a uuid) — names the registry/command files. NOT the
-  // codex thread id (which we don't know until after turn 1).
+  // codex thread id (which we learn at thread.started on turn 1).
   const keyArg = arg(argv, "--key");
   const model = arg(argv, "--model") ?? "gpt-5.5";
   const thinkingLevel = arg(argv, "--thinking-level");
   const cwd = arg(argv, "--cwd") ?? process.cwd();
   const tmuxName = arg(argv, "--tmux") ?? "";
-  // Resuming a closed codex session: the rollout's threadId is known up front, so
-  // we seed `threadId` with it (below) and turn 1 resumes that thread instead of
-  // minting a new persistent one. Absent on a fresh session.
+  // Resuming a closed codex session: the rollout's threadId is known up front.
   const resumeThreadId = arg(argv, "--resume");
-  // Everything after `--` is the initial prompt (mirrors how the Claude harness
-  // and the tmux codex session pass the first message).
+  // Everything after `--` is the initial prompt.
   const dashI = argv.indexOf("--");
   const initialPrompt = dashI >= 0 ? argv.slice(dashI + 1).join(" ").trim() : "";
 
@@ -249,13 +226,15 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
     process.chdir(cwd);
   } catch {}
 
-  const codexPath = resolveCodexPath();
-  const { streamText } = await import("ai");
-  // Lazy-import the provider so the rest of the CLI never hard-depends on it.
-  const { createCodexAppServer } = await import("ai-sdk-provider-codex-cli");
-  // When resuming, the threadId is the rollout id we were handed; seed it so the
-  // first turn resumes that thread. Otherwise it's learned early via
-  // onSessionCreated, then reused to resume on later turns.
+  const { Codex } = await import("@openai/codex-sdk");
+  const codexPathOverride = resolveCodexPathOverride();
+  // Omitting `env` inherits process.env (HOME → ~/.codex auth, LFG_* for MCP).
+  const codex = new Codex(codexPathOverride ? { codexPathOverride } : {});
+  const opts = threadOptions(model, cwd, thinkingLevel ?? undefined);
+  const thread = resumeThreadId
+    ? codex.resumeThread(resumeThreadId, opts)
+    : codex.startThread(opts);
+
   let threadId: string | null = resumeThreadId ?? null;
   let transcriptPath: string | null = null;
   let transcriptPathInflight: Promise<string | null> | null = null;
@@ -274,49 +253,17 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
       if (!path) return;
       transcriptPath = path;
       // sessionId MUST be the LFG key (what the serve monitor + search use);
-      // threadId is discovery-only. Using threadId here would churn the
-      // session_id column against the monitor and break search-by-session.
+      // threadId is discovery-only.
       await ensureChatTranscriptCaughtUp(path, key, "codex-aisdk-stream");
     })().catch(() => {});
   }
 
-  // One provider per harness: it owns a shared `codex app-server` child process
-  // reused across every turn (and resumed thread). Full-access + never-approve
-  // mirrors the tmux codex session's `--sandbox danger-full-access
-  // --ask-for-approval never`. (NB: the app-server settings name these
-  // `sandboxPolicy`/`approvalPolicy`, not the exec-mode `sandboxMode`/
-  // `approvalMode` — see the installed types.)
-  const provider = createCodexAppServer({
-    defaultSettings: {
-      cwd,
-      sandboxPolicy: "danger-full-access",
-      approvalPolicy: "never",
-      // Auto-answer any approval request the provider can't route through a
-      // handler, so an unattended turn never blocks waiting on stdin.
-      autoApprove: true,
-      // Codex creates the persistent app-server thread before the turn
-      // completes. Publish that id immediately so lfg can tail the rollout
-      // transcript while the first response is still running.
-      onSessionCreated: (session: { threadId?: string }) => {
-        if (typeof session.threadId === "string" && session.threadId) {
-          threadId = session.threadId;
-          patchEntry(key, { threadId });
-          triggerTranscriptCatchUp();
-        }
-      },
-      ...(codexPath ? { codexPath } : {}),
-    },
-  });
-
-  // Control-plane registry entry — the moment this exists (and our pid is alive),
-  // serve surfaces the session in the live view. threadId starts null: the live
-  // view falls back to the control-plane key until turn 1 reports the real id.
+  // Control-plane registry entry — the moment this exists (and our pid is
+  // alive), serve surfaces the session in the live view. threadId starts null
+  // on fresh sessions and is patched at turn 1's thread.started event.
   writeEntry({
     sessionId: key,
     agent: "codex",
-    // Resumed sessions already know their threadId, so publish it now (the live
-    // view + transcript discovery key off it). Fresh sessions start null and get
-    // patched once turn 1 reports the id.
     threadId,
     harnessPid: process.pid,
     tmuxName,
@@ -335,62 +282,42 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
   const publishDraft = makeDraftPublisher(key);
 
   async function runTurn(prompt: string, signal: AbortSignal): Promise<void> {
-    // No AskUserQuestion handling needed here: the codex app-server provider
-    // auto-responds {answers:{}} to any interactive question, so this headless
-    // turn never blocks waiting on an answer (unlike the Claude/opencode paths).
-    // First turn: ask the app-server to start a PERSISTENT thread so we can
-    // resume it. Every later turn: resume the known threadId. (The provider
-    // rejects an unknown threadId, so we only pass it once we've captured one.)
-    const codexOpts = threadId
-      ? { threadId }
-      : { threadMode: "persistent" as const };
-    const llm = provider(
-      model,
-      thinkingLevel ? { effort: thinkingLevel as any } : undefined,
-    );
-
-    const result = streamText({
-      model: llm,
-      prompt,
-      abortSignal: signal,
-      providerOptions: {
-        "codex-app-server": {
-          ...codexOpts,
-          ...(thinkingLevel ? { effort: thinkingLevel } : {}),
-        },
-      },
-    } as any);
+    // Codex turns are explicit request/response — no streaming-input merge —
+    // so per-turn busy handling in drain() below cannot drift.
     try {
-      let draft = "";
+      const { events } = await thread.runStreamed(prompt, { signal });
+      let completed = ""; // text of finished agent_message items this turn
+      let live = ""; // text of the in-progress agent_message item
       publishDraft("", true);
-      for await (const part of result.fullStream as any) {
-        triggerTranscriptCatchUp();
-        if (part?.type === "text-delta") {
-          const delta = String(part.text ?? part.textDelta ?? part.delta ?? "");
-          if (delta) {
-            draft += delta;
-            publishDraft(draft);
+      for await (const event of events) {
+        if (event.type === "thread.started") {
+          if (event.thread_id && event.thread_id !== threadId) {
+            threadId = event.thread_id;
+            patchEntry(key, { threadId });
           }
-        } else if (part?.type === "error") {
-          throw new Error(String((part as any).error).slice(0, 800));
+          triggerTranscriptCatchUp();
+        } else if (
+          (event.type === "item.updated" || event.type === "item.completed") &&
+          event.item.type === "agent_message"
+        ) {
+          if (event.type === "item.completed") {
+            completed += (completed ? "\n\n" : "") + event.item.text;
+            live = "";
+          } else {
+            live = event.item.text;
+          }
+          const draft = completed + (completed && live ? "\n\n" : "") + live;
+          if (draft) publishDraft(draft);
+          triggerTranscriptCatchUp();
+        } else if (event.type === "item.completed") {
+          // Tool/file/search items landing in the rollout — index them live.
+          triggerTranscriptCatchUp();
+        } else if (event.type === "turn.failed") {
+          throw new Error(String(event.error?.message ?? "turn failed").slice(0, 800));
+        } else if (event.type === "error") {
+          throw new Error(String(event.message ?? "thread error").slice(0, 800));
         }
       }
-      publishDraft(draft, true);
-      await result.text; // surfaces a failed generation
-      // The threadId only appears once a persistent turn has completed; read it
-      // from the resolved metadata and pin it for resume + transcript discovery.
-      if (!threadId) {
-        try {
-          const meta = (await result.providerMetadata) as any;
-          const id = meta?.["codex-app-server"]?.threadId;
-          if (typeof id === "string" && id) {
-            threadId = id;
-            patchEntry(key, { threadId });
-            triggerTranscriptCatchUp();
-          }
-        } catch {}
-      }
-      triggerTranscriptCatchUp();
     } catch (e) {
       if (signal.aborted) return; // interrupted on purpose — not an error
       console.error(
@@ -426,13 +353,9 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
     closing = true;
     currentAc?.abort();
     removeEntry(key);
-    // Close the shared app-server child so the codex process doesn't linger.
-    void Promise.resolve()
-      .then(() => provider.close?.())
-      .catch(() => {})
-      // Give the registry write + provider close a tick, then exit so the tmux
-      // pane closes.
-      .finally(() => setTimeout(() => process.exit(0), 50));
+    // Give the registry write a tick to flush, then exit so the tmux pane
+    // closes (the SDK's codex child exits with us).
+    setTimeout(() => process.exit(0), 50);
   }
 
   function dispatch(cmd: AisdkCommand): void {
