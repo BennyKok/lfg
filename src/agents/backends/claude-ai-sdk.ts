@@ -1,17 +1,9 @@
-// Vercel AI SDK backend for report generation — an alternative to spawning
+// Claude Agent SDK backend for report generation — an alternative to spawning
 // `claude -p` directly (see pipeToClaudeCli in ../runner.ts).
 //
-// It uses the `ai-sdk-provider-claude-code` community provider, which drives
-// the Claude Code CLI under the hood. We deliberately point it at the user's
-// *installed* `claude` binary (pathToClaudeCodeExecutable) so it runs the exact
-// same executable and the exact same subscription OAuth credentials
-// (~/.claude/.credentials.json) as the legacy CLI path — no API key, no second
-// runtime, no version drift. settingSources lets it honor ~/.claude/settings.json.
-//
-// Deps (ai, ai-sdk-provider-claude-code, zod, @anthropic-ai/sdk,
-// @modelcontextprotocol/sdk) are only imported here, and this module is only
-// imported when LFG_CLAUDE_BACKEND=ai-sdk, so the legacy CLI backend keeps
-// working even if these packages aren't installed.
+// This drives the same installed Claude Code CLI + subscription auth as the
+// legacy CLI path, but uses the official Agent SDK `query()` surface so report
+// generation no longer depends on the Vercel AI SDK Claude Code provider.
 
 export type AiSdkOptions = {
   /** Model id: "opus" | "sonnet" | "haiku" or a full id like "claude-opus-4-8". */
@@ -22,21 +14,58 @@ export type AiSdkOptions = {
   thinkingLevel?: string;
 };
 
-/** Resolve the installed `claude` binary so the provider drives it directly. */
+type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+
+/** Resolve the installed `claude` binary so the SDK drives it directly. */
 function resolveClaudePath(): string | undefined {
-  // Bun.which honors PATH; fall back to undefined so the provider uses its own.
   try {
-    return Bun.which("claude") ?? undefined;
+    return process.env.LFG_CLAUDE_PATH ?? Bun.which("claude") ?? undefined;
   } catch {
     return undefined;
   }
 }
 
-function effortFor(level?: string): string | undefined {
+function effortFor(level?: string): Effort | undefined {
   if (!level) return undefined;
   if (level === "none" || level === "minimal") return "low";
-  if (["low", "medium", "high", "xhigh", "max"].includes(level)) return level;
+  if (["low", "medium", "high", "xhigh", "max"].includes(level)) {
+    return level as Effort;
+  }
   return undefined;
+}
+
+function textFromContent(content: unknown): string {
+  if (!Array.isArray(content)) return "";
+  let out = "";
+  for (const block of content) {
+    if (
+      block &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "text"
+    ) {
+      out += String((block as { text?: unknown }).text ?? "");
+    }
+  }
+  return out;
+}
+
+function toolStartsFromContent(content: unknown): Array<{ id?: string; name: string }> {
+  if (!Array.isArray(content)) return [];
+  const tools: Array<{ id?: string; name: string }> = [];
+  for (const block of content) {
+    if (
+      block &&
+      typeof block === "object" &&
+      (block as { type?: unknown }).type === "tool_use"
+    ) {
+      const b = block as { id?: unknown; name?: unknown };
+      tools.push({
+        id: typeof b.id === "string" ? b.id : undefined,
+        name: typeof b.name === "string" ? b.name : "?",
+      });
+    }
+  }
+  return tools;
 }
 
 export async function pipeToClaudeAiSdk(
@@ -45,40 +74,39 @@ export async function pipeToClaudeAiSdk(
   opts: AiSdkOptions = {},
 ): Promise<string> {
   const model = opts.model ?? process.env.LFG_CLAUDE_MODEL ?? "opus";
-  const allowedTools = opts.allowedTools ?? ["WebSearch", "WebFetch"];
   const effort = effortFor(opts.thinkingLevel);
-  const claudePath = process.env.LFG_CLAUDE_PATH ?? resolveClaudePath();
+  const claudePath = resolveClaudePath();
 
   log(`[runner] piping ${prompt.length} chars to claude via ai-sdk (${model})`);
 
   // Lazy import so the package is only required when this backend is selected.
-  const { streamText } = await import("ai");
-  const { claudeCode } = await import("ai-sdk-provider-claude-code");
-
-  const llm = claudeCode(model, {
-    // Same read-only web tools the CLI path grants for "other sources" lookups.
-    // NB: this allow-list implicitly EXCLUDES AskUserQuestion, so this one-shot
-    // report backend can never call it — which matters because bypass perms do
-    // NOT auto-resolve AskUserQuestion and a headless caller can't answer it
-    // (would hang). Do NOT add AskUserQuestion to this list.
-    allowedTools,
-    ...(effort ? { effort } : {}),
-    // Honor the user's ~/.claude/settings.json + project settings, matching the
-    // installed CLI's behavior.
-    settingSources: ["user", "project"],
-    // Drive the *installed* claude binary + its subscription auth, not a copy
-    // bundled inside node_modules.
-    ...(claudePath
-      ? { sdkOptions: { pathToClaudeCodeExecutable: claudePath } }
-      : {}),
-  } as any);
+  const { query } = await import("@anthropic-ai/claude-agent-sdk");
 
   if (claudePath) log(`[runner] ai-sdk driving installed binary: ${claudePath}`);
 
-  const result = streamText({ model: llm, prompt });
+  const q = query({
+    prompt,
+    options: {
+      model,
+      permissionMode: "bypassPermissions",
+      ...(opts.allowedTools !== undefined
+        ? { allowedTools: opts.allowedTools, tools: opts.allowedTools }
+        : { disallowedTools: ["AskUserQuestion"] }),
+      settingSources: ["user", "project"],
+      includePartialMessages: true,
+      ...(effort ? { effort } : {}),
+      // env is intentionally omitted: Agent SDK then inherits process.env,
+      // including PATH/HOME/LFG_*/ANTHROPIC_*.
+      ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),
+    },
+  });
 
   let chars = 0;
   let lastEmit = 0;
+  let text = "";
+  let resultText = "";
+  let sawPartialText = false;
+  const loggedTools = new Set<string>();
   const flush = (force = false) => {
     const now = Date.now();
     if (force || now - lastEmit > 800) {
@@ -87,29 +115,71 @@ export async function pipeToClaudeAiSdk(
       log(`[runner] generating report… ${k} chars`);
     }
   };
+  const logTool = (name: string, id?: string) => {
+    const key = id ?? name;
+    if (loggedTools.has(key)) return;
+    loggedTools.add(key);
+    log(`[runner] claude running tool: ${name}`);
+  };
 
-  // fullStream surfaces text deltas, tool calls, and errors — mirroring the
-  // progress signal we get from the CLI's stream-json events.
-  for await (const part of result.fullStream as any) {
-    switch (part?.type) {
-      case "text-delta": {
-        const t = part.text ?? part.textDelta ?? part.delta ?? "";
-        chars += String(t).length;
-        flush();
-        break;
+  for await (const msg of q) {
+    const m = msg as unknown as Record<string, unknown>;
+    const type = m.type as string | undefined;
+    if (m.parent_tool_use_id != null) continue;
+
+    if (type === "stream_event") {
+      const event = m.event as {
+        type?: string;
+        delta?: { type?: string; text?: string };
+        content_block?: { type?: string; id?: string; name?: string };
+      };
+      if (event?.type === "content_block_delta" && event.delta?.type === "text_delta") {
+        const delta = event.delta.text ?? "";
+        if (delta) {
+          sawPartialText = true;
+          chars += delta.length;
+          flush();
+        }
+      } else if (
+        event?.type === "content_block_start" &&
+        event.content_block?.type === "tool_use"
+      ) {
+        logTool(event.content_block.name ?? "?", event.content_block.id);
       }
-      case "tool-call":
-        log(`[runner] claude running tool: ${part.toolName ?? "?"}`);
-        break;
-      case "error":
+      continue;
+    }
+
+    if (type === "assistant") {
+      const message = m.message as { content?: unknown } | undefined;
+      for (const tool of toolStartsFromContent(message?.content)) {
+        logTool(tool.name, tool.id);
+      }
+      const t = textFromContent(message?.content);
+      if (t) {
+        text += t;
+        if (!sawPartialText) {
+          chars += t.length;
+          flush();
+        }
+      }
+      continue;
+    }
+
+    if (type === "result") {
+      const subtype = (m as { subtype?: unknown }).subtype;
+      if (subtype !== "success") {
+        const errors = Array.isArray((m as { errors?: unknown }).errors)
+          ? ((m as { errors: unknown[] }).errors).map(String).join("; ")
+          : "";
         throw new Error(
-          `ai-sdk stream error: ${String((part as any).error).slice(0, 800)}`,
+          `ai-sdk stream error: ${String(errors || subtype || "unknown").slice(0, 800)}`,
         );
+      }
+      resultText = String((m as { result?: unknown }).result ?? "");
     }
   }
 
-  // Awaiting .text rejects if the underlying generation failed.
-  const text = await result.text;
+  if (!text && resultText) text = resultText;
   flush(true);
   if (!text || !text.trim()) {
     throw new Error("ai-sdk backend produced empty result");
