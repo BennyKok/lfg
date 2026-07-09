@@ -254,6 +254,14 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
       setBusy(true);
       const messages = normalizeSdkEnvelope(msg);
       if (messages.length) indexSessionMessagesDirect(sessionId, messages);
+      // A finalized assistant message supersedes the streamed draft. Without
+      // this reset the draft accumulates EVERY text block of a long multi-tool
+      // turn (it only cleared on `result`), so the live view rendered one
+      // ever-growing blob duplicating the already-indexed messages.
+      if (type === "assistant" && messages.some((m) => m.kind === "text") && draft) {
+        draft = "";
+        publishDraft("", true);
+      }
       return;
     }
     if (type === "result") {

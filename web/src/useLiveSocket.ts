@@ -456,7 +456,13 @@ export function useLiveSocket(
       const cid = channelId({ kind: payload.kind, key: payload.key });
       if (typeof payload.seq === "number" && Number.isFinite(payload.seq)) {
         const previous = lastSeqRef.current[cid] ?? 0;
-        if (payload.seq <= previous) return;
+        // `snapshot`/`gap`/`resumed` are authoritative resync points: the server
+        // sends them precisely when our resume cursor is invalid (e.g. its seq
+        // counters reset on restart, so every new frame is numerically "stale").
+        // Dropping them by seq comparison would permanently blind a long-lived
+        // page after a serve restart — accept them and rebase the cursor instead.
+        const resync = payload.t === "snapshot" || payload.t === "gap" || payload.t === "resumed";
+        if (!resync && payload.seq <= previous) return;
         lastSeqRef.current[cid] = payload.seq;
       }
       if (payload.t === "error") {

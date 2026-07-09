@@ -232,8 +232,6 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
     ]);
     try {
       const { events } = await thread.runStreamed(prompt, { signal });
-      let completed = ""; // text of finished agent_message items this turn
-      let live = ""; // text of the in-progress agent_message item
       publishDraft("", true);
       for await (const event of events) {
         if (event.type === "thread.started") {
@@ -245,16 +243,17 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
           (event.type === "item.updated" || event.type === "item.completed") &&
           event.item.type === "agent_message"
         ) {
+          // The draft is only the in-progress message. Completed items are
+          // indexed directly (and published as real msg frames), so keeping
+          // them in the draft — as the JSONL-lag era code did — would render
+          // an ever-growing blob duplicating the finalized messages.
           if (event.type === "item.completed") {
-            completed += (completed ? "\n\n" : "") + event.item.text;
-            live = "";
             const message = codexCompletedItemMessage(event.item as Record<string, unknown>);
             if (message) indexSessionMessagesDirect(key, [message]);
-          } else {
-            live = event.item.text;
+            publishDraft("", true);
+          } else if (event.item.text) {
+            publishDraft(event.item.text);
           }
-          const draft = completed + (completed && live ? "\n\n" : "") + live;
-          if (draft) publishDraft(draft);
         } else if (event.type === "item.completed") {
           const message = codexCompletedItemMessage(event.item as Record<string, unknown>);
           if (message) indexSessionMessagesDirect(key, [message]);
