@@ -3,6 +3,7 @@ import { isCursorTurnEndedLine, normalizeLineMessages, type Session, type Sessio
 import {
   deleteTranscriptIndexForPath,
   indexTranscriptMessages,
+  isSessionIndexKey,
   transcriptCursorFor,
   transcriptIndexCurrent,
 } from "./transcript-index.ts";
@@ -30,6 +31,10 @@ const LIVE_POLL_MS = 700;
 const MONITOR_POLL_MS = Math.max(500, Number(process.env.LFG_CHAT_DB_MONITOR_MS ?? 1200) || 1200);
 const WARM_LIMIT = 8;
 const encoder = new TextEncoder();
+
+function emptyIngestResult(): ChatIngestResult {
+  return { indexed: 0, lines: 0, offset: 0, size: 0, unchanged: true };
+}
 
 class ChatTranscriptTailer {
   path: string;
@@ -277,6 +282,7 @@ function tailerFor(path: string, sessionId: string): ChatTranscriptTailer {
 }
 
 export function tailerHasSubscribers(path: string): boolean {
+  if (isSessionIndexKey(path)) return false;
   return (tailers.get(path)?.subscriberCount ?? 0) > 0;
 }
 
@@ -285,6 +291,7 @@ export function subscribeChatTranscript(
   sessionId: string,
   cb: ChatIngestSubscriber,
 ): () => void {
+  if (isSessionIndexKey(path)) return () => {};
   return tailerFor(path, sessionId).subscribe(cb);
 }
 
@@ -293,13 +300,14 @@ export function ensureChatTranscriptCaughtUp(
   sessionId: string,
   reason = "manual",
 ): Promise<ChatIngestResult> {
+  if (isSessionIndexKey(path)) return Promise.resolve(emptyIngestResult());
   return tailerFor(path, sessionId).catchUp(reason);
 }
 
 export function warmChatTranscripts(sessions: Session[], limit = WARM_LIMIT): void {
   if (warmRunning) return;
   const targets = sessions
-    .filter((session) => session.sessionId && session.transcriptPath)
+    .filter((session) => session.sessionId && session.transcriptPath && !isSessionIndexKey(session.transcriptPath))
     .slice(0, limit) as Array<Session & { sessionId: string; transcriptPath: string }>;
   if (!targets.length) return;
   warmRunning = true;
@@ -326,6 +334,7 @@ export function startChatIngestMonitor(fetchSessions: () => Promise<Session[]>):
       const targets = new Map<string, { sessionId: string; path: string; agent: Session["agent"] }>();
       for (const session of sessions) {
         if (!session.sessionId || !session.transcriptPath) continue;
+        if (isSessionIndexKey(session.transcriptPath)) continue;
         targets.set(session.transcriptPath, {
           sessionId: session.sessionId,
           path: session.transcriptPath,

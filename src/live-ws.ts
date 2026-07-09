@@ -10,7 +10,7 @@ import {
   type Session,
 } from "./sessions.ts";
 import { listSessionsCached, noteListSessionsClientActivity } from "./session-cache.ts";
-import { indexedMessagePage, indexedMessagesAfterRowid } from "./transcript-index.ts";
+import { indexedMessagePage, indexedMessagesAfterRowid, isSessionIndexKey } from "./transcript-index.ts";
 import { ensureChatTranscriptCaughtUp, subscribeChatTranscript } from "./chat-ingest.ts";
 import {
   capturePane,
@@ -447,11 +447,12 @@ export function createLiveWsSupport(opts: {
   const subscribeTailToTranscript = async (tail: SidTail, tp: string) => {
     if (tail.transcriptSource) return;
     const entry = findEntryByAnyId(tail.sid);
-    if (entry) {
-      const snapshotCursor = indexedMessagesAfterRowid(tp, entry.sessionId, 0, 0);
+    if (entry || isSessionIndexKey(tp)) {
+      const sessionId = entry?.sessionId ?? tail.sid;
+      const snapshotCursor = indexedMessagesAfterRowid(tp, sessionId, 0, 0);
       tail.transcriptSource = "db";
       tail.transcriptDbRowid = snapshotCursor.maxRowid;
-      tail.transcriptDbSessionId = entry.sessionId;
+      tail.transcriptDbSessionId = sessionId;
       return;
     }
     tail.transcriptSource = "file";

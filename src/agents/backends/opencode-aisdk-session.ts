@@ -21,17 +21,14 @@
 //   - busy + discovery: a registry entry (data/aisdk/<key>.json) we keep
 //     updated; serve reads it for the live-view busy dot and session list.
 //
-// THE KEY DIFFERENCE from both siblings is the transcript. Claude lets the SDK
-// write the standard JSONL for us; codex persists a rollout we can discover.
-// opencode does NEITHER — it keeps conversation state server-side — so this
-// harness SELF-PERSISTS a transcript in the EXACT Claude-projects JSONL shape,
-// at the exact path findTranscriptById() resolves, so lfg's existing Claude
-// discovery + live stream read it unchanged.
+// THE KEY DIFFERENCE from both siblings is the transcript. opencode keeps
+// conversation state server-side, so this harness builds Claude-shaped message
+// envelopes and indexes their normalized rows directly into SQLite.
 //
-// Id model: we mint a deterministic transcript UUID up front and use it as BOTH
-// the control-plane KEY (registry/command file names) AND the transcript file
-// name. opencode's own session id (its resume handle) is created up front too
-// and stored in the registry's threadId slot.
+// Id model: we mint a deterministic transcript/index UUID up front and use it as
+// the control-plane KEY (registry/command file names) and SQLite path key.
+// opencode's own session id (its resume handle) is created up front too and
+// stored in the registry's threadId slot.
 import {
   type AisdkCommand,
   cmdPath,
@@ -40,9 +37,9 @@ import {
   writeEntry,
 } from "../../aisdk-registry.ts";
 import { normalizeLineMessages } from "../../sessions.ts";
-import { indexTranscriptMessages } from "../../transcript-index.ts";
+import { indexSessionMessagesDirect } from "../../transcript-index.ts";
 import { makeDraftPublisher } from "./draft.ts";
-import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -85,7 +82,7 @@ function modelRef(model: string): { providerID: string; modelID: string } | unde
   return { providerID: model.slice(0, i), modelID: model.slice(i + 1) };
 }
 
-type OcPart = { type?: string; text?: string; tool?: string; state?: { input?: unknown } };
+type OcPart = { id?: string; type?: string; text?: string; tool?: string; state?: { input?: unknown }; sessionID?: string };
 
 function partsToBlocks(parts: OcPart[]): { text: string; blocks: unknown[] } {
   let text = "";
@@ -119,6 +116,25 @@ function latestOpencodeError(opencodeSessionId: string): string | null {
     }
   } catch {}
   return null;
+}
+
+function toolPartMessage(part: OcPart, fallbackId: string): ReturnType<typeof normalizeLineMessages>[number] {
+  const input = part.state?.input == null
+    ? ""
+    : (() => {
+        try {
+          return JSON.stringify(part.state.input, null, 2);
+        } catch {
+          return String(part.state.input);
+        }
+      })();
+  return {
+    id: part.id || fallbackId,
+    role: "assistant",
+    kind: "tool_use",
+    text: input ? `${part.tool ?? "tool"}: ${input}` : `${part.tool ?? "tool"}`,
+    ts: Date.now(),
+  };
 }
 
 // One-shot headless run for the auto/report runner: own server, one session,
@@ -159,18 +175,9 @@ export async function pipeToOpencodeAiSdk(
   }
 }
 
-// ---- Self-persisted Claude-shaped transcript ----------------------------------
-// We replicate exactly what lfg's Claude discovery reads (see the previous
-// revision's notes): path ~/.claude/projects/<enc-cwd>/<uuid>.jsonl, minimal
-// user/assistant line envelopes with the fields normalizeLineMessages parses.
-function transcriptPathFor(cwd: string, uuid: string): string {
-  const enc = cwd.replace(/\//g, "-");
-  return join(homedir(), ".claude", "projects", enc, `${uuid}.jsonl`);
-}
-
 export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
-  // The control-plane key (a uuid) — names the registry/command files AND the
-  // transcript file (we own it, so they're one id).
+  // The control-plane key (a uuid) — names the registry/command files and the
+  // synthetic direct-index path.
   const keyArg = arg(argv, "--key");
   let model = arg(argv, "--model") ?? "anthropic/claude-sonnet-4-6";
   const cwd = arg(argv, "--cwd") ?? process.cwd();
@@ -198,40 +205,24 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
   const server = await createOpencodeServer({});
   const client = createOpencodeClient({ baseUrl: server.url });
 
-  // The transcript we OWN — minted up front so the live view can read it before
-  // the first turn completes.
-  const transcriptPath = transcriptPathFor(cwd, key);
-  try {
-    mkdirSync(join(transcriptPath, ".."), { recursive: true });
-  } catch {}
-  let runningOffset = 0;
-  try {
-    runningOffset = statSync(transcriptPath).size;
-  } catch {}
   let parentUuid: string | null = null;
 
-  function appendLine(obj: Record<string, unknown>): void {
+  function indexEnvelope(obj: Record<string, unknown>): void {
     try {
       const line = JSON.stringify(obj);
-      const offset = runningOffset;
-      appendFileSync(transcriptPath, line + "\n");
-      runningOffset += Buffer.byteLength(line) + 1;
-      let mtimeMs = Date.now();
-      try {
-        mtimeMs = statSync(transcriptPath).mtimeMs;
-      } catch {}
-      try {
-        indexTranscriptMessages(transcriptPath, key, [{ offset, messages: normalizeLineMessages(line) }], {
-          size: runningOffset,
-          offset: runningOffset,
-          mtimeMs,
-        });
-      } catch {}
+      const now = Date.now();
+      const fallbackId = String(obj.uuid ?? crypto.randomUUID());
+      const messages = normalizeLineMessages(line).map((message, index) => ({
+        ...message,
+        id: message.id ?? (index === 0 ? fallbackId : `${fallbackId}#${index}`),
+        ts: message.ts ?? now,
+      }));
+      indexSessionMessagesDirect(key, messages);
     } catch {}
   }
   function writeUser(text: string): void {
     const uuid = crypto.randomUUID();
-    appendLine({
+    indexEnvelope({
       parentUuid,
       type: "user",
       message: { role: "user", content: [{ type: "text", text }] },
@@ -245,7 +236,7 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
   function writeAssistant(content: unknown[], apiError = false): void {
     if (!content.length) return;
     const uuid = crypto.randomUUID();
-    appendLine({
+    indexEnvelope({
       parentUuid,
       type: "assistant",
       ...(apiError ? { isApiErrorMessage: true } : {}),
@@ -307,6 +298,7 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
         (sub as { data?: AsyncIterable<unknown> }).data;
       if (!stream) return;
       let draft = "";
+      const indexedToolParts = new Set<string>();
       for await (const raw of stream) {
         if (closing) break;
         if (!turnActive) continue;
@@ -316,6 +308,13 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
           if (part.type === "text" && typeof part.text === "string") {
             draft = part.text;
             publishDraft(draft);
+          } else if (part.type === "tool") {
+            const fallbackId = `${ocSessionId}:tool:${part.tool ?? "tool"}:${JSON.stringify(part.state?.input ?? {})}`;
+            const id = part.id || fallbackId;
+            if (!indexedToolParts.has(id)) {
+              indexedToolParts.add(id);
+              indexSessionMessagesDirect(key, [toolPartMessage(part, fallbackId)]);
+            }
           }
         }
         if (ev?.type === "session.idle") draft = "";

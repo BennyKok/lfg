@@ -13,9 +13,9 @@
 // re-discovered from ~/.claude/projects JSONL), version-locked to ai@6. Going
 // direct removes the middle layer while keeping the exact same external
 // contract, so serve and the web UI are unchanged:
-//   - transcript OUT: the Agent SDK's CLI persists the standard JSONL to
-//     ~/.claude/projects/<enc-cwd>/<sessionId>.jsonl, which the existing
-//     live-view discovery + WS stream read unchanged.
+//   - transcript OUT: SDK messages are indexed directly into SQLite under the
+//     synthetic lfg:// session key. The Agent SDK's private JSONL may still
+//     exist for its own resume machinery, but lfg does not read or write it.
 //   - control IN: we tail a command file (data/aisdk/<sessionId>.cmd) for
 //     send / interrupt / close, written by the serve endpoints.
 //   - busy + discovery: a registry entry (data/aisdk/<sessionId>.json) that we
@@ -30,8 +30,8 @@ import {
   removeEntry,
   writeEntry,
 } from "../../aisdk-registry.ts";
-import { ensureChatTranscriptCaughtUp } from "../../chat-ingest.ts";
-import { resolveTranscript } from "../../sessions.ts";
+import { normalizeLineMessages, type SessionMsg } from "../../sessions.ts";
+import { indexSessionMessagesDirect, sessionHasIndexedMessages } from "../../transcript-index.ts";
 import { makeDraftPublisher } from "./draft.ts";
 import { readFileSync } from "node:fs";
 
@@ -59,6 +59,31 @@ function resolveClaudePath(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+function sdkMessageIdentity(msg: Record<string, unknown>): string | null {
+  const message = msg.message as Record<string, unknown> | undefined;
+  const id = msg.uuid ?? msg.id ?? message?.uuid ?? message?.id;
+  return typeof id === "string" && id ? id : null;
+}
+
+function normalizeSdkEnvelope(msg: Record<string, unknown>): SessionMsg[] {
+  const id = sdkMessageIdentity(msg);
+  const envelope = { ...msg } as Record<string, unknown>;
+  if (!envelope.uuid && id) envelope.uuid = id;
+  const now = Date.now();
+  const fallbackId =
+    id ??
+    `${String(msg.type ?? "message")}:${String(envelope.timestamp ?? now)}:${JSON.stringify(msg.message ?? msg).slice(0, 200)}`;
+  return normalizeLineMessages(JSON.stringify(envelope)).map((message, index) => ({
+    ...message,
+    id: message.id ?? (index === 0 ? fallbackId : `${fallbackId}#${index}`),
+    ts: message.ts ?? now,
+  }));
+}
+
+function userTextMessage(text: string): SessionMsg {
+  return { id: crypto.randomUUID(), role: "user", kind: "text", text, ts: Date.now() };
 }
 
 // Minimal push-driven AsyncIterable — the Agent SDK's streaming-input mode
@@ -151,36 +176,12 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
     createdAt: Date.now(),
   });
 
-  // A transcript that already exists for this id means we're a relaunched
-  // harness continuing an existing session — resume it. Fresh sessions mint
-  // the deterministic id up front (sessionId and resume are mutually
-  // exclusive on the SDK).
-  let transcriptPath = await resolveTranscript(sessionId);
-  const resuming = !!transcriptPath;
+  // Direct-indexed rows for this id mean we're a relaunched harness continuing
+  // an existing session. Fresh sessions mint the deterministic id up front
+  // (sessionId and resume are mutually exclusive on the SDK).
+  const resuming = sessionHasIndexedMessages(sessionId);
 
   const publishDraft = makeDraftPublisher(sessionId);
-  // The JSONL usually doesn't exist yet when a fresh session's harness boots —
-  // resolve lazily (with retry) so inline indexing kicks in the moment the CLI
-  // writes the first line, instead of being disabled for the whole session.
-  let transcriptResolveInflight: Promise<string | null> | null = null;
-  const catchUpTranscript = () => {
-    if (transcriptPath) {
-      void ensureChatTranscriptCaughtUp(transcriptPath, sessionId, "aisdk-stream").catch(() => {});
-      return;
-    }
-    transcriptResolveInflight ??= resolveTranscript(sessionId)
-      .then((tp) => {
-        if (tp) {
-          transcriptPath = tp;
-          void ensureChatTranscriptCaughtUp(tp, sessionId, "aisdk-stream").catch(() => {});
-        }
-        return tp;
-      })
-      .catch(() => null)
-      .finally(() => {
-        transcriptResolveInflight = null;
-      });
-  };
 
   const input = new InputChannel();
   let closing = false;
@@ -247,13 +248,12 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
       return;
     }
     if (type === "system" && (msg as { subtype?: string }).subtype === "init") {
-      // First-hand confirmation the CLI is up; transcript now exists on disk.
-      catchUpTranscript();
       return;
     }
     if (type === "assistant" || type === "user") {
       setBusy(true);
-      catchUpTranscript();
+      const messages = normalizeSdkEnvelope(msg);
+      if (messages.length) indexSessionMessagesDirect(sessionId, messages);
       return;
     }
     if (type === "result") {
@@ -265,7 +265,6 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
       draft = "";
       publishDraft("", true);
       setBusy(false);
-      catchUpTranscript();
       return;
     }
   }
@@ -274,6 +273,7 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
     draft = "";
     publishDraft("", true);
     setBusy(true);
+    indexSessionMessagesDirect(sessionId, [userTextMessage(text)]);
     input.push(text);
   }
 

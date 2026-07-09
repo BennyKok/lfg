@@ -19,11 +19,9 @@
 //   - busy + discovery: a registry entry (data/aisdk/<key>.json) we keep
 //     updated; serve reads it for the live-view busy dot and session list.
 //
-// The id model is unchanged: codex mints the threadId (we learn it at
-// thread.started on turn 1) and persists the rollout under ~/.codex/sessions
-// named by it. We mint a control-plane KEY (a uuid) up front for the
-// registry/command files; the transcript is discovered by
-// findCodexTranscriptById once the threadId is known.
+// We mint a control-plane KEY (a uuid) up front for the registry/command files.
+// Codex still reports its own threadId for SDK resume, but lfg indexes the SDK
+// stream directly under the control-plane key instead of reading rollout JSONL.
 import {
   type AisdkCommand,
   cmdPath,
@@ -31,24 +29,10 @@ import {
   removeEntry,
   writeEntry,
 } from "../../aisdk-registry.ts";
-import { ensureChatTranscriptCaughtUp } from "../../chat-ingest.ts";
+import type { SessionMsg } from "../../sessions.ts";
+import { indexSessionMessagesDirect } from "../../transcript-index.ts";
 import { makeDraftPublisher } from "./draft.ts";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { readdir } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
-
-const HOME = process.env.HOME ?? homedir();
-const CODEX_SESSIONS_DIR = join(HOME, ".codex", "sessions");
-const CODEX_ROLLOUT_FILES_CACHE_MS = 800;
-const UUID_IN_TEXT =
-  /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
-const UUID_EXACT =
-  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
-let codexFilesCache: { at: number; files: string[] } | null = null;
-let codexFilesInflight: Promise<string[]> | null = null;
-const codexPathById = new Map<string, string>();
-const codexMissById = new Map<string, number>();
 
 function arg(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(name);
@@ -70,76 +54,6 @@ function resolveCodexPathOverride(): string | undefined {
   }
 }
 
-async function codexRolloutFiles(): Promise<string[]> {
-  const now = Date.now();
-  if (codexFilesCache && now - codexFilesCache.at < CODEX_ROLLOUT_FILES_CACHE_MS) {
-    return codexFilesCache.files;
-  }
-  if (codexFilesInflight) return codexFilesInflight;
-  codexFilesInflight = scanCodexRolloutFiles().finally(() => {
-    codexFilesInflight = null;
-  });
-  return codexFilesInflight;
-}
-
-async function scanCodexRolloutFiles(): Promise<string[]> {
-  const out: string[] = [];
-  let years: string[];
-  try {
-    years = await readdir(CODEX_SESSIONS_DIR);
-  } catch {
-    return out;
-  }
-  for (const y of years) {
-    let months: string[];
-    try {
-      months = await readdir(join(CODEX_SESSIONS_DIR, y));
-    } catch {
-      continue;
-    }
-    for (const m of months) {
-      let days: string[];
-      try {
-        days = await readdir(join(CODEX_SESSIONS_DIR, y, m));
-      } catch {
-        continue;
-      }
-      for (const d of days) {
-        let files: string[];
-        try {
-          files = await readdir(join(CODEX_SESSIONS_DIR, y, m, d));
-        } catch {
-          continue;
-        }
-        for (const f of files) {
-          if (!f.endsWith(".jsonl")) continue;
-          const path = join(CODEX_SESSIONS_DIR, y, m, d, f);
-          out.push(path);
-          const id = path.match(UUID_IN_TEXT)?.[0];
-          if (id) {
-            codexPathById.set(id, path);
-            codexMissById.delete(id);
-          }
-        }
-      }
-    }
-  }
-  codexFilesCache = { at: Date.now(), files: out };
-  return out;
-}
-
-async function findCodexTranscriptById(id: string): Promise<string | null> {
-  if (!UUID_EXACT.test(id)) return null;
-  const hit = codexPathById.get(id);
-  if (hit) return hit;
-  const missAt = codexMissById.get(id);
-  if (missAt && Date.now() - missAt < CODEX_ROLLOUT_FILES_CACHE_MS) return null;
-  await codexRolloutFiles();
-  const found = codexPathById.get(id) ?? null;
-  if (!found) codexMissById.set(id, Date.now());
-  return found;
-}
-
 // Shared thread options for both the interactive harness and the one-shot
 // runner: full access + never-approve mirrors the tmux codex session's
 // `--sandbox danger-full-access --ask-for-approval never`.
@@ -155,6 +69,56 @@ function threadOptions(model: string, cwd: string, thinkingLevel?: string) {
       ? { modelReasoningEffort: thinkingLevel as "low" | "medium" | "high" }
       : {}),
   };
+}
+
+function compactText(value: string, max = 8_000): string {
+  if (value.length <= max) return value;
+  const head = Math.floor(max * 0.7);
+  const tail = max - head;
+  return `${value.slice(0, head)}\n\n...[${value.length - head - tail} chars omitted]...\n\n${value.slice(-tail)}`;
+}
+
+function stringifyValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value == null) return "";
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function codexCompletedItemMessage(item: Record<string, unknown>): SessionMsg | null {
+  const id = typeof item.id === "string" && item.id ? item.id : crypto.randomUUID();
+  const type = typeof item.type === "string" ? item.type : "item";
+  const ts = Date.now();
+  if (type === "agent_message") {
+    const text = typeof item.text === "string" ? item.text.trim() : "";
+    return text ? { id, role: "assistant", kind: "text", text, ts } : null;
+  }
+  if (type === "command_execution") {
+    const command = typeof item.command === "string" ? item.command : "";
+    const output = stringifyValue(item.output ?? item.stdout ?? item.stderr).trim();
+    const text = compactText([command ? `$ ${command}` : "command_execution", output].filter(Boolean).join("\n"));
+    return { id, role: "assistant", kind: "tool_use", text, ts };
+  }
+  if (type === "web_search") {
+    const query = typeof item.query === "string" ? item.query : "";
+    const result = stringifyValue(item.results ?? item.result ?? item.output).trim();
+    const text = compactText([query ? `web_search: ${query}` : "web_search", result].filter(Boolean).join("\n"));
+    return { id, role: "assistant", kind: "tool_use", text, ts };
+  }
+  if (type === "file_change") {
+    const path = typeof item.path === "string" ? item.path : "";
+    const text = compactText([path ? `file_change: ${path}` : "file_change", stringifyValue(item).trim()].filter(Boolean).join("\n"));
+    return { id, role: "assistant", kind: "tool_use", text, ts };
+  }
+  if (type === "reasoning") {
+    const text = stringifyValue(item.summary ?? item.text).trim();
+    return text ? { id, role: "assistant", kind: "thinking", text: compactText(text), ts } : null;
+  }
+  const text = compactText([type, stringifyValue(item).trim()].filter(Boolean).join("\n"));
+  return text.trim() ? { id, role: "tool", kind: "tool_result", text, ts } : null;
 }
 
 // One-shot headless run for the auto/report runner: single thread, single turn.
@@ -236,27 +200,6 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
     : codex.startThread(opts);
 
   let threadId: string | null = resumeThreadId ?? null;
-  let transcriptPath: string | null = null;
-  let transcriptPathInflight: Promise<string | null> | null = null;
-
-  function triggerTranscriptCatchUp(): void {
-    const id = threadId;
-    if (!id) return;
-    void (async () => {
-      let path = transcriptPath;
-      if (!path) {
-        transcriptPathInflight ??= findCodexTranscriptById(id).finally(() => {
-          transcriptPathInflight = null;
-        });
-        path = await transcriptPathInflight;
-      }
-      if (!path) return;
-      transcriptPath = path;
-      // sessionId MUST be the LFG key (what the serve monitor + search use);
-      // threadId is discovery-only.
-      await ensureChatTranscriptCaughtUp(path, key, "codex-aisdk-stream");
-    })().catch(() => {});
-  }
 
   // Control-plane registry entry — the moment this exists (and our pid is
   // alive), serve surfaces the session in the live view. threadId starts null
@@ -284,6 +227,9 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
   async function runTurn(prompt: string, signal: AbortSignal): Promise<void> {
     // Codex turns are explicit request/response — no streaming-input merge —
     // so per-turn busy handling in drain() below cannot drift.
+    indexSessionMessagesDirect(key, [
+      { id: crypto.randomUUID(), role: "user", kind: "text", text: prompt, ts: Date.now() },
+    ]);
     try {
       const { events } = await thread.runStreamed(prompt, { signal });
       let completed = ""; // text of finished agent_message items this turn
@@ -295,7 +241,6 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
             threadId = event.thread_id;
             patchEntry(key, { threadId });
           }
-          triggerTranscriptCatchUp();
         } else if (
           (event.type === "item.updated" || event.type === "item.completed") &&
           event.item.type === "agent_message"
@@ -303,15 +248,16 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
           if (event.type === "item.completed") {
             completed += (completed ? "\n\n" : "") + event.item.text;
             live = "";
+            const message = codexCompletedItemMessage(event.item as Record<string, unknown>);
+            if (message) indexSessionMessagesDirect(key, [message]);
           } else {
             live = event.item.text;
           }
           const draft = completed + (completed && live ? "\n\n" : "") + live;
           if (draft) publishDraft(draft);
-          triggerTranscriptCatchUp();
         } else if (event.type === "item.completed") {
-          // Tool/file/search items landing in the rollout — index them live.
-          triggerTranscriptCatchUp();
+          const message = codexCompletedItemMessage(event.item as Record<string, unknown>);
+          if (message) indexSessionMessagesDirect(key, [message]);
         } else if (event.type === "turn.failed") {
           throw new Error(String(event.error?.message ?? "turn failed").slice(0, 800));
         } else if (event.type === "error") {
@@ -324,7 +270,6 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
         `codex-aisdk-session turn failed: ${e instanceof Error ? e.message : e}`,
       );
     } finally {
-      triggerTranscriptCatchUp();
       publishDraft("", true);
     }
   }

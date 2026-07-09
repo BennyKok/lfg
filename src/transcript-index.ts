@@ -53,6 +53,15 @@ let walCheckpointStarted = false;
 let walCheckpointRunning = false;
 const enqueued = new Set<string>();
 const imports = new Map<string, Promise<{ indexed: number; offset: number; size: number }>>();
+const directNextOffset = new Map<string, number>();
+
+export function sessionIndexKey(sessionId: string): string {
+  return `lfg://session/${sessionId}`;
+}
+
+export function isSessionIndexKey(path: string): boolean {
+  return path.startsWith("lfg://");
+}
 
 function startWalCheckpointTimer(): void {
   if (walCheckpointStarted) return;
@@ -154,6 +163,18 @@ function init() {
       PRAGMA user_version = 3;
     `);
   }
+  if (version < 4) {
+    // Version 4 switches managed SDK sessions from transcript JSONL ingestion to
+    // direct SDK-stream indexing under synthetic lfg:// paths. The old file-keyed
+    // rows are derived data and can be rebuilt where file-backed agents still
+    // need them.
+    d.exec(`
+      DELETE FROM transcript_messages_fts;
+      DELETE FROM transcript_messages;
+      DELETE FROM transcript_index_cursors;
+      PRAGMA user_version = 4;
+    `);
+  }
   initialized = true;
 }
 
@@ -224,6 +245,7 @@ function updateCursorInDb(
 
 export function transcriptCursorFor(path: string): TranscriptIndexCursor | null {
   init();
+  if (isSessionIndexKey(path)) return null;
   const row = database()
     .query<{
       path: string;
@@ -249,6 +271,7 @@ export function transcriptCursorFor(path: string): TranscriptIndexCursor | null 
 
 export function transcriptIndexCurrent(path: string): boolean {
   init();
+  if (isSessionIndexKey(path)) return true;
   let st: ReturnType<typeof statSync>;
   try {
     st = statSync(path);
@@ -337,6 +360,88 @@ export function indexTranscriptMessages(
   return inserted;
 }
 
+function nextDirectOffset(d: Database, path: string): number {
+  const cached = directNextOffset.get(path);
+  if (cached != null) return cached;
+  const max =
+    d
+      .query<{ max_offset: number | null }, [string]>(
+        "SELECT max(byte_offset) AS max_offset FROM transcript_messages WHERE path = ?",
+      )
+      .get(path)?.max_offset ?? null;
+  const next = (max ?? -1) + 1;
+  directNextOffset.set(path, next);
+  return next;
+}
+
+export function indexSessionMessagesDirect(sessionId: string, messages: SessionMsg[]): number {
+  init();
+  const key = sessionIndexKey(sessionId);
+  const d = database();
+  let seq = nextDirectOffset(d, key);
+  const rows: Array<{ id: string; msg: SessionMsg; text: string; offset: number }> = [];
+  messages
+    .filter((message) => !!message.text.trim() && !!message.id)
+    .forEach((msg, blockIndex) => {
+      rows.push({
+        id: `${key}\0${msg.id}\0${blockIndex}`,
+        msg,
+        text: clippedText(msg),
+        offset: seq++,
+      });
+    });
+  directNextOffset.set(key, seq);
+  if (!rows.length) return 0;
+  const started = performance.now();
+  const inserted = d.transaction((pending: typeof rows) => {
+    const msgStmt = d.query(`
+      INSERT OR IGNORE INTO transcript_messages
+        (id, session_id, path, message_id, byte_offset, ts, role, kind, text)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const ftsStmt = d.query(`
+      INSERT INTO transcript_messages_fts (id, session_id, text)
+      SELECT ?, ?, ?
+      WHERE NOT EXISTS (SELECT 1 FROM transcript_messages_fts WHERE id = ?)
+    `);
+    let insertedRows = 0;
+    for (const row of pending) {
+      const result = msgStmt.run(
+        row.id,
+        sessionId,
+        key,
+        row.msg.id,
+        row.offset,
+        row.msg.ts,
+        row.msg.role,
+        row.msg.kind,
+        row.text,
+      );
+      insertedRows += Number(result.changes ?? 0);
+      ftsStmt.run(row.id, sessionId, row.text, row.id);
+    }
+    return insertedRows;
+  })(rows);
+  if (inserted) pageTotalCache.delete(key);
+  traceLog("transcript_index_direct", {
+    sessionId,
+    path: key,
+    messages: messages.length,
+    indexed: rows.length,
+    inserted,
+    durationMs: Math.round((performance.now() - started) * 1000) / 1000,
+  });
+  return inserted;
+}
+
+export function sessionHasIndexedMessages(sessionId: string): boolean {
+  init();
+  const key = sessionIndexKey(sessionId);
+  return !!database()
+    .query<{ one: number }, [string]>("SELECT 1 AS one FROM transcript_messages WHERE path = ? LIMIT 1")
+    .get(key);
+}
+
 function cursorFor(path: string): { offset: number; size: number; mtimeMs: number } | null {
   init();
   return database()
@@ -351,6 +456,7 @@ async function indexTranscriptOnce(path: string, sessionId: string): Promise<{
   offset: number;
   size: number;
 }> {
+  if (isSessionIndexKey(path)) return { indexed: 0, offset: 0, size: 0 };
   const started = performance.now();
   init();
   const d = database();
@@ -482,6 +588,7 @@ export async function indexTranscript(path: string, sessionId: string): Promise<
   offset: number;
   size: number;
 }> {
+  if (isSessionIndexKey(path)) return { indexed: 0, offset: 0, size: 0 };
   const existing = imports.get(path);
   if (existing) return existing;
   const pending = indexTranscriptOnce(path, sessionId).finally(() => {
@@ -492,6 +599,7 @@ export async function indexTranscript(path: string, sessionId: string): Promise<
 }
 
 async function importTranscriptForRead(path: string, sessionId: string): Promise<void> {
+  if (isSessionIndexKey(path)) return;
   try {
     let st: ReturnType<typeof statSync>;
     try {
@@ -521,6 +629,7 @@ async function importTranscriptForRead(path: string, sessionId: string): Promise
 }
 
 export function enqueueTranscriptIndex(path: string, sessionId: string): void {
+  if (isSessionIndexKey(path)) return;
   if (enqueued.has(path)) return;
   enqueued.add(path);
   traceLog("transcript_index_enqueue", { sessionId, path });
@@ -592,7 +701,13 @@ export async function indexedMessagePage(
   rows.reverse();
   const oldest = rows[0];
   const nextBefore = oldest.byte_offset > 0 ? oldest.byte_offset : null;
-  const totalKey = cursor?.offset ?? 0;
+  const totalKey = isSessionIndexKey(path)
+    ? (d
+        .query<{ max_offset: number | null }, [string]>(
+          "SELECT max(byte_offset) AS max_offset FROM transcript_messages WHERE path = ?",
+        )
+        .get(path)?.max_offset ?? 0)
+    : (cursor?.offset ?? 0);
   const cachedTotal = pageTotalCache.get(path);
   const total =
     cachedTotal && cachedTotal.offset === totalKey
@@ -769,7 +884,7 @@ export async function searchAllTranscriptIndexes(
 export function warmTranscriptIndexes(sessions: Session[]): void {
   if (backgroundRunning) return;
   const targets = sessions
-    .filter((session) => session.sessionId && session.transcriptPath)
+    .filter((session) => session.sessionId && session.transcriptPath && !isSessionIndexKey(session.transcriptPath))
     .slice(0, BACKGROUND_LIMIT) as Array<Session & { sessionId: string; transcriptPath: string }>;
   if (!targets.length) return;
   backgroundRunning = true;
@@ -797,6 +912,7 @@ export function startTranscriptMessageMonitor(fetchSessions: () => Promise<Sessi
       const targets = new Map<string, { sessionId: string; path: string }>();
       for (const session of sessions) {
         if (!session.sessionId || !session.transcriptPath) continue;
+        if (isSessionIndexKey(session.transcriptPath)) continue;
         targets.set(session.transcriptPath, { sessionId: session.sessionId, path: session.transcriptPath });
       }
       let imported = 0;
