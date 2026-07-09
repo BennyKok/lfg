@@ -159,15 +159,45 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
   const resuming = !!transcriptPath;
 
   const publishDraft = makeDraftPublisher(sessionId);
+  // The JSONL usually doesn't exist yet when a fresh session's harness boots —
+  // resolve lazily (with retry) so inline indexing kicks in the moment the CLI
+  // writes the first line, instead of being disabled for the whole session.
+  let transcriptResolveInflight: Promise<string | null> | null = null;
   const catchUpTranscript = () => {
-    if (!transcriptPath) return;
-    void ensureChatTranscriptCaughtUp(transcriptPath, sessionId, "aisdk-stream").catch(() => {});
+    if (transcriptPath) {
+      void ensureChatTranscriptCaughtUp(transcriptPath, sessionId, "aisdk-stream").catch(() => {});
+      return;
+    }
+    transcriptResolveInflight ??= resolveTranscript(sessionId)
+      .then((tp) => {
+        if (tp) {
+          transcriptPath = tp;
+          void ensureChatTranscriptCaughtUp(tp, sessionId, "aisdk-stream").catch(() => {});
+        }
+        return tp;
+      })
+      .catch(() => null)
+      .finally(() => {
+        transcriptResolveInflight = null;
+      });
   };
 
   const input = new InputChannel();
-  let pendingTurns = 0;
   let closing = false;
   let draft = "";
+  let busy = false;
+
+  // Busy is ACTIVITY-DRIVEN, not turn-counted. The SDK's streaming input may
+  // merge a queued/steering send into the running turn, so `result` events do
+  // not correspond 1:1 with sends — a counter drifts and the busy dot sticks.
+  // Instead: any send or assistant activity marks busy, any turn result clears
+  // it, and if the CLI immediately starts another turn for a queued message the
+  // next stream event flips it right back. Self-healing in every ordering.
+  const setBusy = (next: boolean) => {
+    if (busy === next) return;
+    busy = next;
+    patchEntry(sessionId, next ? { busy: true } : { busy: false, draftText: null, draftUpdatedAt: null });
+  };
 
   const q = query({
     prompt: input as AsyncIterable<never>,
@@ -199,19 +229,10 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
     },
   });
 
-  function endTurn(): void {
-    pendingTurns = Math.max(0, pendingTurns - 1);
-    draft = "";
-    publishDraft("", true);
-    if (pendingTurns === 0) {
-      patchEntry(sessionId, { busy: false, draftText: null, draftUpdatedAt: null });
-    }
-    catchUpTranscript();
-  }
-
   function handleMessage(msg: Record<string, unknown>): void {
     const type = msg.type as string;
     if (type === "stream_event") {
+      setBusy(true);
       // Only the top-level assistant stream feeds the draft; subagent/tool
       // streams carry a parent_tool_use_id.
       if (msg.parent_tool_use_id != null) return;
@@ -227,14 +248,11 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
     }
     if (type === "system" && (msg as { subtype?: string }).subtype === "init") {
       // First-hand confirmation the CLI is up; transcript now exists on disk.
-      if (!transcriptPath) {
-        void resolveTranscript(sessionId).then((tp) => {
-          if (tp) transcriptPath = tp;
-        });
-      }
+      catchUpTranscript();
       return;
     }
     if (type === "assistant" || type === "user") {
+      setBusy(true);
       catchUpTranscript();
       return;
     }
@@ -244,16 +262,18 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
           ? String((msg as { result?: unknown }).result ?? (msg as { subtype?: string }).subtype)
           : null;
       if (errText) console.error(`aisdk-session turn ended with error: ${errText.slice(0, 800)}`);
-      endTurn();
+      draft = "";
+      publishDraft("", true);
+      setBusy(false);
+      catchUpTranscript();
       return;
     }
   }
 
   function send(text: string): void {
-    pendingTurns++;
     draft = "";
-    patchEntry(sessionId, { busy: true, draftText: null, draftUpdatedAt: null });
     publishDraft("", true);
+    setBusy(true);
     input.push(text);
   }
 
