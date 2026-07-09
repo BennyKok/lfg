@@ -2158,58 +2158,37 @@ export async function listSessions(): Promise<Session[]> {
   // opening a transcript stream. Cheap — a tmux pane capture (a few ms each) or
   // an in-memory registry lookup — and it replaces N eager SSE connections.
   profileSync(profile, "sessionBusy_ms", () => {
-    const activityByTarget = paneActivityMap();
-    if (activityByTarget.size)
-      for (const key of busyCache.keys()) if (!activityByTarget.has(key)) busyCache.delete(key);
-    for (const s of out) s.busy = sessionBusy(s, activityByTarget);
+    const live = new Set(out.map((s) => s.tmuxTarget).filter(Boolean) as string[]);
+    for (const key of busyCache.keys()) if (!live.has(key)) busyCache.delete(key);
+    for (const s of out) s.busy = sessionBusy(s);
   });
   profile?.end(out.length);
   return out;
 }
 
-// One `tmux list-panes -a` yields every pane's last-activity timestamp, so we can
-// skip the per-session `capture-pane` fork for panes that produced no output since
-// the last poll (identical pane text ⇒ identical isBusy). This per-session capture
-// was the dominant cost of listSessions (~74ms across 24 sessions).
-function paneActivityMap(): Map<string, string> {
-  const m = new Map<string, string>();
-  try {
-    const r = Bun.spawnSync([
-      "tmux",
-      "list-panes",
-      "-a",
-      "-F",
-      "#{session_name}:#{window_index}.#{pane_index} #{pane_activity}",
-    ]);
-    if (r.exitCode !== 0) return m;
-    for (const line of new TextDecoder().decode(r.stdout).split("\n")) {
-      const sp = line.indexOf(" ");
-      if (sp < 0) continue;
-      m.set(line.slice(0, sp), line.slice(sp + 1).trim());
-    }
-  } catch {}
-  return m;
-}
-
-// tmuxTarget -> { pane_activity we last captured at, busy result }.
-const busyCache = new Map<string, { activity: string; busy: boolean }>();
+// A per-session `tmux capture-pane` fork was the dominant cost of listSessions
+// (~74ms across ~24 sessions), run ~every 1.2s by the warm refresher. This tmux
+// build doesn't populate #{pane_activity}, so we can't gate captures on real
+// output; instead cache the busy result briefly. The ~1.2s warm-refresh reuses it
+// on ~2 of 3 polls, so most captures are skipped. Busy is at most BUSY_CACHE_TTL_MS
+// stale — fine for a fleet "working" dot and consistent with the ~1.5s status cache.
+const BUSY_CACHE_TTL_MS = 2500;
+const busyCache = new Map<string, { at: number; busy: boolean }>();
 
 // Live busy state for a single session, derived the same way the SSE stream
 // derives it (so the list and the stream agree): a tmux session is busy when
 // its pane shows a running turn; a pane-less aisdk session is busy when its
 // registry entry is mid-inference. Defaults to false when state is unknown.
-function sessionBusy(s: Session, activityByTarget: Map<string, string>): boolean {
+function sessionBusy(s: Session): boolean {
   try {
     if (s.launching) return true;
     if (s.tmuxTarget) {
-      // Only trust the activity gate when we actually have a timestamp; if tmux
-      // doesn't report one, fall back to capturing every poll (old behavior).
-      const activity = activityByTarget.get(s.tmuxTarget) ?? "";
+      const now = performance.now();
       const hit = busyCache.get(s.tmuxTarget);
-      if (activity && hit && hit.activity === activity) return hit.busy;
+      if (hit && now - hit.at < BUSY_CACHE_TTL_MS) return hit.busy;
       const pane = capturePane(s.tmuxTarget);
       const busy = pane ? isBusy(pane) : false;
-      if (activity) busyCache.set(s.tmuxTarget, { activity, busy });
+      busyCache.set(s.tmuxTarget, { at: now, busy });
       return busy;
     }
     if (s.sessionId) {
