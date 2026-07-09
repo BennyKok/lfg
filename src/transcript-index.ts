@@ -256,6 +256,7 @@ export function transcriptIndexCurrent(path: string): boolean {
 
 export function deleteTranscriptIndexForPath(path: string): void {
   init();
+  pageTotalCache.delete(path);
   const d = database();
   d.transaction(() => {
     d.query("DELETE FROM transcript_messages_fts WHERE id IN (SELECT id FROM transcript_messages WHERE path = ?)")
@@ -538,6 +539,12 @@ export function enqueueTranscriptIndex(path: string, sessionId: string): void {
   }, 0);
 }
 
+// Per-path message total, cached against the indexed byte offset. The count(*)
+// over a path's rows was run on every page load (a few ms on a large index);
+// the total only changes when new rows are indexed (offset advances), so paging
+// through an unchanged transcript reuses the cached count instead of re-scanning.
+const pageTotalCache = new Map<string, { offset: number; total: number }>();
+
 export async function indexedMessagePage(
   path: string,
   sessionId: string,
@@ -580,12 +587,21 @@ export async function indexedMessagePage(
   rows.reverse();
   const oldest = rows[0];
   const nextBefore = oldest.byte_offset > 0 ? oldest.byte_offset : null;
+  const totalKey = cursor?.offset ?? 0;
+  const cachedTotal = pageTotalCache.get(path);
   const total =
-    d
-      .query<{ count: number }, [string]>(
-        "SELECT count(*) AS count FROM transcript_messages WHERE path = ?",
-      )
-      .get(path)?.count ?? rows.length;
+    cachedTotal && cachedTotal.offset === totalKey
+      ? cachedTotal.total
+      : (() => {
+          const n =
+            d
+              .query<{ count: number }, [string]>(
+                "SELECT count(*) AS count FROM transcript_messages WHERE path = ?",
+              )
+              .get(path)?.count ?? rows.length;
+          pageTotalCache.set(path, { offset: totalKey, total: n });
+          return n;
+        })();
   traceLog("transcript_page", {
     sessionId,
     path,
