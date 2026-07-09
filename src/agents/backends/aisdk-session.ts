@@ -1,23 +1,28 @@
 // Headless interactive session harness for the "aisdk" agent kind.
 //
-// This is the long-lived process behind a "claude code (ai sdk)" session. It runs
+// This is the long-lived process behind a "claude code" managed session. It runs
 // inside a tmux pane (the pane is only a process supervisor + lifecycle handle —
-// we never drive I/O through it), and drives a multi-turn conversation through the
-// Vercel AI SDK + the ai-sdk-provider-claude-code provider, the same harness the
-// one-shot report backend uses (see ./claude-ai-sdk.ts).
+// we never drive I/O through it) and drives a multi-turn conversation through the
+// OFFICIAL @anthropic-ai/claude-agent-sdk (`query()` with streaming input) — one
+// live claude subprocess for the whole session, no per-turn resume dance.
 //
-// Parity with the tmux claude/codex sessions is achieved WITHOUT reusing the
-// tmux send-keys machinery:
-//   - transcript OUT: the provider (persistSession on by default) writes the
-//     standard JSONL to ~/.claude/projects/<enc-cwd>/<sessionId>.jsonl, which the
-//     existing live-view discovery + SSE stream read unchanged.
+// History: this harness previously went through the Vercel AI SDK
+// (`streamText` + ai-sdk-provider-claude-code). That adapter wrapped this same
+// Agent SDK but hid its session surface — no permission callbacks (the
+// AskUserQuestion hang), no first-hand message stream (transcripts had to be
+// re-discovered from ~/.claude/projects JSONL), version-locked to ai@6. Going
+// direct removes the middle layer while keeping the exact same external
+// contract, so serve and the web UI are unchanged:
+//   - transcript OUT: the Agent SDK's CLI persists the standard JSONL to
+//     ~/.claude/projects/<enc-cwd>/<sessionId>.jsonl, which the existing
+//     live-view discovery + WS stream read unchanged.
 //   - control IN: we tail a command file (data/aisdk/<sessionId>.cmd) for
 //     send / interrupt / close, written by the serve endpoints.
 //   - busy + discovery: a registry entry (data/aisdk/<sessionId>.json) that we
 //     keep updated; serve reads it for the live-view busy dot and session list.
 //
-// Interrupt is an AbortController on the current turn — staying purely on the AI
-// SDK surface rather than reaching into the underlying Query.
+// Interrupt is the SDK's native `query.interrupt()` — it stops the current turn
+// without killing the session process.
 import {
   type AisdkCommand,
   cmdPath,
@@ -35,14 +40,16 @@ function arg(argv: string[], name: string): string | undefined {
   return i >= 0 ? argv[i + 1] : undefined;
 }
 
-// Map lfg's shared thinking-level vocabulary onto the claude-code provider's
-// `effort` option (low|medium|high|xhigh|max). Mirrors claudeEffortFor in
-// tmux.ts; duplicated here to keep this harness free of the heavier tmux/serve
-// dependency graph. Undefined → provider default effort.
-function effortFor(level?: string): string | undefined {
+// Map lfg's shared thinking-level vocabulary onto the Agent SDK's `effort`
+// option (low|medium|high|xhigh|max). Mirrors claudeEffortFor in tmux.ts;
+// duplicated here to keep this harness free of the heavier tmux/serve
+// dependency graph. Undefined → SDK/model default effort.
+function effortFor(level?: string): "low" | "medium" | "high" | "xhigh" | "max" | undefined {
   if (!level) return undefined;
   if (level === "none" || level === "minimal") return "low";
-  if (["low", "medium", "high", "xhigh", "max"].includes(level)) return level;
+  if (["low", "medium", "high", "xhigh", "max"].includes(level)) {
+    return level as "low" | "medium" | "high" | "xhigh" | "max";
+  }
   return undefined;
 }
 
@@ -51,6 +58,58 @@ function resolveClaudePath(): string | undefined {
     return process.env.LFG_CLAUDE_PATH ?? Bun.which("claude") ?? undefined;
   } catch {
     return undefined;
+  }
+}
+
+// Minimal push-driven AsyncIterable — the Agent SDK's streaming-input mode
+// consumes this; serve-side sends are pushed in as they arrive on the cmd file.
+type UserMsg = {
+  type: "user";
+  message: { role: "user"; content: string };
+  parent_tool_use_id: null;
+};
+
+class InputChannel implements AsyncIterable<UserMsg> {
+  private buffer: UserMsg[] = [];
+  private waiter: ((v: IteratorResult<UserMsg>) => void) | null = null;
+  private closed = false;
+
+  push(text: string): void {
+    const msg: UserMsg = {
+      type: "user",
+      message: { role: "user", content: text },
+      parent_tool_use_id: null,
+    };
+    if (this.waiter) {
+      const w = this.waiter;
+      this.waiter = null;
+      w({ value: msg, done: false });
+    } else {
+      this.buffer.push(msg);
+    }
+  }
+
+  close(): void {
+    this.closed = true;
+    if (this.waiter) {
+      const w = this.waiter;
+      this.waiter = null;
+      w({ value: undefined as never, done: true });
+    }
+  }
+
+  [Symbol.asyncIterator](): AsyncIterator<UserMsg> {
+    return {
+      next: (): Promise<IteratorResult<UserMsg>> => {
+        if (this.buffer.length) {
+          return Promise.resolve({ value: this.buffer.shift()!, done: false });
+        }
+        if (this.closed) return Promise.resolve({ value: undefined as never, done: true });
+        return new Promise((resolve) => {
+          this.waiter = resolve;
+        });
+      },
+    };
   }
 }
 
@@ -76,8 +135,7 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
   } catch {}
 
   const claudePath = resolveClaudePath();
-  const { streamText } = await import("ai");
-  const { claudeCode } = await import("ai-sdk-provider-claude-code");
+  const { query } = await import("@anthropic-ai/claude-agent-sdk");
 
   // Control-plane registry entry — the moment this exists (and our pid is alive),
   // serve will surface the session in the live view.
@@ -92,21 +150,13 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
     title: initialPrompt ? initialPrompt.slice(0, 72) : null,
     createdAt: Date.now(),
   });
-  // Best-effort inline indexing only — never gate the session on it. If the
-  // transcript path can't be resolved, run normally and let the serve monitor
-  // backfill; do NOT exit.
-  const transcriptPath = await resolveTranscript(sessionId);
-  if (!transcriptPath) {
-    console.error(
-      `aisdk-session: transcript path unresolved for ${sessionId}; inline indexing disabled (monitor will backfill)`,
-    );
-  }
 
-  const queue: string[] = [];
-  let startedOnce = false; // turn 1 sets the session id; later turns resume it
-  let currentAc: AbortController | null = null;
-  let draining = false;
-  let closing = false;
+  // A transcript that already exists for this id means we're a relaunched
+  // harness continuing an existing session — resume it. Fresh sessions mint
+  // the deterministic id up front (sessionId and resume are mutually
+  // exclusive on the SDK).
+  let transcriptPath = await resolveTranscript(sessionId);
+  const resuming = !!transcriptPath;
 
   const publishDraft = makeDraftPublisher(sessionId);
   const catchUpTranscript = () => {
@@ -114,13 +164,17 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
     void ensureChatTranscriptCaughtUp(transcriptPath, sessionId, "aisdk-stream").catch(() => {});
   };
 
-  async function runTurn(prompt: string, signal: AbortSignal): Promise<void> {
-    const first = !startedOnce;
-    startedOnce = true;
-    // The provider/CLI rejects `sessionId` together with `resume` — so set the
-    // deterministic id only on the first turn, and resume it thereafter.
-    const llm = claudeCode(model, {
-      ...(first ? { sessionId } : { resume: sessionId }),
+  const input = new InputChannel();
+  let pendingTurns = 0;
+  let closing = false;
+  let draft = "";
+
+  const q = query({
+    prompt: input as AsyncIterable<never>,
+    options: {
+      model,
+      cwd,
+      ...(resuming ? { resume: sessionId } : { sessionId }),
       // Full capability + no permission prompts, mirroring the tmux claude's
       // --dangerously-skip-permissions. settingSources honors ~/.claude config
       // (and loads filesystem skills).
@@ -128,98 +182,98 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
       // This headless/paneless harness can't render or answer an interactive
       // question, and bypassPermissions does NOT auto-resolve AskUserQuestion —
       // the CLI's permission resolver returns behavior:"ask" for it BEFORE the
-      // bypass auto-allow branch (it's exempted), so without this the turn would
-      // hang busy forever waiting on an answer that can never arrive. Disallowing
-      // the tool forces the agent to decide for itself instead of asking. Safe
-      // because this harness sets NO allowedTools (allowedTools/disallowedTools
-      // are mutually exclusive in the provider).
+      // bypass auto-allow branch, so without this a turn would hang busy
+      // forever. Disallowing the tool forces the agent to decide for itself.
+      // (The Agent SDK's canUseTool callback is the future path to answering
+      // these from the dashboard instead.)
       disallowedTools: ["AskUserQuestion"],
       settingSources: ["user", "project"],
-      // Thinking mode: pin the reasoning effort when the caller asked for one.
-      // The claude-code provider accepts `effort` (low|medium|high|xhigh|max);
-      // omitting it inherits the provider/model default.
+      // stream_event partial messages drive the live draft in the web UI.
+      includePartialMessages: true,
       ...(effort ? { effort } : {}),
-      // The provider builds the claude subprocess env from a sanitizing
-      // allowlist (HOME/PATH/ANTHROPIC_*/CLAUDE_*/…) — LFG_* is NOT on it, so
-      // without this the `lfg mcp` server under claude loses LFG_SESSION_ID/
-      // LFG_USER and every lfg_create_subagent child lands unlinked (no
-      // parent) and unassigned (no user). Forward all LFG_* vars explicitly.
-      env: Object.fromEntries(
-        Object.entries(process.env).filter(([k]) => k.startsWith("LFG_")),
-      ),
-      ...(claudePath
-        ? { sdkOptions: { pathToClaudeCodeExecutable: claudePath } }
-        : {}),
-    } as any);
+      // env is a FULL replacement for the subprocess environment when set —
+      // omitting it inherits all of process.env (PATH/HOME/LFG_*/ANTHROPIC_*),
+      // which is exactly what we want. (The old Vercel provider's sanitizing
+      // allowlist dropped LFG_* and orphaned every lfg_create_subagent child.)
+      ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),
+    },
+  });
 
-    const result = streamText({ model: llm, prompt, abortSignal: signal });
-    try {
-      let draft = "";
-      publishDraft("", true);
-      for await (const part of result.fullStream as any) {
-        if (part?.type === "text-delta") {
-          const delta = String(part.text ?? part.textDelta ?? part.delta ?? "");
-          if (delta) {
-            draft += delta;
-            publishDraft(draft);
-          }
-        } else if (part?.type === "error") {
-          throw new Error(String((part as any).error).slice(0, 800));
-        } else if (
-          part?.type === "finish" ||
-          part?.type === "step-finish" ||
-          part?.type === "finish-step"
-        ) {
-          catchUpTranscript();
+  function endTurn(): void {
+    pendingTurns = Math.max(0, pendingTurns - 1);
+    draft = "";
+    publishDraft("", true);
+    if (pendingTurns === 0) {
+      patchEntry(sessionId, { busy: false, draftText: null, draftUpdatedAt: null });
+    }
+    catchUpTranscript();
+  }
+
+  function handleMessage(msg: Record<string, unknown>): void {
+    const type = msg.type as string;
+    if (type === "stream_event") {
+      // Only the top-level assistant stream feeds the draft; subagent/tool
+      // streams carry a parent_tool_use_id.
+      if (msg.parent_tool_use_id != null) return;
+      const event = msg.event as { type?: string; delta?: { type?: string; text?: string } };
+      if (event?.type === "content_block_delta" && event.delta?.type === "text_delta") {
+        const delta = event.delta.text ?? "";
+        if (delta) {
+          draft += delta;
+          publishDraft(draft);
         }
       }
-      publishDraft(draft, true);
-      await result.text; // surfaces a failed generation
+      return;
+    }
+    if (type === "system" && (msg as { subtype?: string }).subtype === "init") {
+      // First-hand confirmation the CLI is up; transcript now exists on disk.
+      if (!transcriptPath) {
+        void resolveTranscript(sessionId).then((tp) => {
+          if (tp) transcriptPath = tp;
+        });
+      }
+      return;
+    }
+    if (type === "assistant" || type === "user") {
       catchUpTranscript();
-    } catch (e) {
-      if (signal.aborted) return; // interrupted on purpose — not an error
-      console.error(`aisdk-session turn failed: ${e instanceof Error ? e.message : e}`);
-    } finally {
-      publishDraft("", true);
+      return;
+    }
+    if (type === "result") {
+      const errText =
+        (msg as { subtype?: string }).subtype !== "success"
+          ? String((msg as { result?: unknown }).result ?? (msg as { subtype?: string }).subtype)
+          : null;
+      if (errText) console.error(`aisdk-session turn ended with error: ${errText.slice(0, 800)}`);
+      endTurn();
+      return;
     }
   }
 
-  async function drain(): Promise<void> {
-    if (draining) return;
-    draining = true;
-    try {
-      while (queue.length && !closing) {
-        const prompt = queue.shift()!;
-        currentAc = new AbortController();
-        patchEntry(sessionId, { busy: true, draftText: null, draftUpdatedAt: null });
-        try {
-          await runTurn(prompt, currentAc.signal);
-        } finally {
-          currentAc = null;
-          patchEntry(sessionId, { busy: false, draftText: null, draftUpdatedAt: null });
-        }
-      }
-    } finally {
-      draining = false;
-    }
+  function send(text: string): void {
+    pendingTurns++;
+    draft = "";
+    patchEntry(sessionId, { busy: true, draftText: null, draftUpdatedAt: null });
+    publishDraft("", true);
+    input.push(text);
   }
 
   function shutdown(): void {
+    if (closing) return;
     closing = true;
-    currentAc?.abort();
-    removeEntry(sessionId);
-    // Give the registry write a tick to flush, then exit so the tmux pane closes.
-    setTimeout(() => process.exit(0), 50);
+    input.close();
+    void q.interrupt().catch(() => {});
+    // Fallback if the SDK loop doesn't wind down promptly.
+    setTimeout(() => {
+      removeEntry(sessionId);
+      process.exit(0);
+    }, 1500);
   }
 
   function dispatch(cmd: AisdkCommand): void {
     if (cmd.type === "send") {
-      if (cmd.text.trim()) {
-        queue.push(cmd.text);
-        void drain();
-      }
+      if (cmd.text.trim()) send(cmd.text);
     } else if (cmd.type === "interrupt") {
-      currentAc?.abort();
+      void q.interrupt().catch(() => {});
     } else if (cmd.type === "close") {
       shutdown();
     }
@@ -251,21 +305,23 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
   }, 250);
 
   // First message, if any, kicks off the conversation immediately.
-  if (initialPrompt) {
-    queue.push(initialPrompt);
-    void drain();
-  }
+  if (initialPrompt) send(initialPrompt);
 
-  // Keep the process alive on the poll timer; resolve only on shutdown.
-  await new Promise<void>((resolve) => {
-    const exitWatch = setInterval(() => {
-      if (closing) {
-        clearInterval(poll);
-        clearInterval(exitWatch);
-        resolve();
-      }
-    }, 100);
-  });
+  // The SDK message loop IS the session lifetime: it ends when the input
+  // channel closes (shutdown) or the subprocess dies.
+  try {
+    for await (const msg of q) {
+      handleMessage(msg as unknown as Record<string, unknown>);
+    }
+  } catch (e) {
+    if (!closing) {
+      console.error(`aisdk-session: query loop failed: ${e instanceof Error ? e.message : e}`);
+    }
+  } finally {
+    clearInterval(poll);
+    removeEntry(sessionId);
+    process.exit(closing ? 0 : 1);
+  }
 }
 
 // Run directly: `bun src/agents/backends/aisdk-session.ts --session <uuid> ...`.

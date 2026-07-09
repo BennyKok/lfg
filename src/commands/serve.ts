@@ -3179,93 +3179,49 @@ export async function cmdServe() {
           });
         }
 
-        // claude path: resume drives the claude CLI.
+        // claude path: relaunch the managed Agent-SDK harness resuming the SAME
+        // session id in place. The SDK's `resume` continues the existing
+        // transcript (no fork unless forkSession is set), so the whole legacy
+        // dance below it replaced — dismissing the CLI's "Resume from summary"
+        // selector, polling pidfiles for the forked id, codex fallback — is gone.
         if (model) {
-          const allowed = modelsForAgent("claude");
+          const allowed = modelsForAgent("aisdk");
           if (!allowed.includes(model))
             return err(400, `unknown model "${model}" (expected one of ${allowed.join(", ")})`);
         }
         const cwd = await resolveResumeCwd(await cwdForTranscript(transcript), cachedResume?.project);
         const tmuxName = `lfg-${randomBytes(3).toString("hex")}`;
         const resumePrompt = body?.prompt?.trim() || undefined;
-        const r = spawnManagedSession({
-          name: tmuxName,
-          cwd,
-          model,
-          resume: sessionId,
-          prompt: resumePrompt,
-          lfgUser: body?.user,
-        });
-        if (!r.ok) {
-          console.error(`[resume] spawn failed for ${sessionId} in ${cwd}: ${r.error}`);
-          return err(502, r.error || "failed to resume session");
-        }
-        console.log(`[resume] claude --resume ${sessionId} → pane ${tmuxName} (cwd ${cwd})`);
         addManaged({
           tmuxName,
           cwd,
           createdAt: Date.now(),
-          agent: "claude",
+          agent: "aisdk",
+          sessionId,
+          nativeSessionId: sessionId,
+          launchState: "launching",
+          model: model ?? "opus",
           project: cachedResume?.project || undefined,
           repoRoot: repoRootForManagedCwd(cwd),
         });
+        invalidateListSessionsCache();
         if (body?.user) assignUser(tmuxName, body.user);
-        // Claude Code 2.1+ blocks a heavy `--resume` at a "Resume from summary /
-        // full / don't ask again" selector. Nobody is at the pane to answer it,
-        // so without this the session freezes at the menu and never forks a new
-        // id below (looks like resume is broken). Answer it before we poll.
-        const gate = await dismissResumeSummaryGate(tmuxName);
-        console.log(`[resume] ${tmuxName} summary-gate: ${gate}`);
-        // Claude resumes into a fresh sessionId/transcript — wait for the pidfile.
-        let newId: string | null = null;
-        for (let i = 0; i < 12 && !newId; i++) {
-          await new Promise((res) => setTimeout(res, 500));
-          const pid = panePidForSession(tmuxName);
-          if (pid) newId = sessionIdForPid(pid);
+        const r = spawnManagedAisdkSession({
+          name: tmuxName,
+          cwd,
+          model: model ?? "opus",
+          sessionId,
+          prompt: resumePrompt,
+          lfgUser: body?.user,
+        });
+        if (!r.ok) {
+          removeManaged(tmuxName);
+          assignUser(tmuxName, null);
+          console.error(`[resume] aisdk spawn failed for ${sessionId} in ${cwd}: ${r.error}`);
+          return err(502, r.error || "failed to resume session");
         }
-        if (!newId) {
-          const resumed = (await listSessions()).find(
-            (s) => s.tmuxName === tmuxName || s.sessionId === sessionId || s.nativeSessionId === sessionId,
-          );
-          if (!resumed?.sessionId) {
-            const paneAlive = tmuxHasSession(tmuxName);
-            console.warn(
-              `[resume] ${tmuxName} no live id after 6s (gate=${gate}, pane ${paneAlive ? "alive" : "died"}) for ${sessionId}`,
-            );
-            if (!paneAlive) {
-              console.warn(`[resume] ${sessionId} → falling back to fresh codex-aisdk fork (pane died)`);
-              removeManaged(tmuxName);
-              assignUser(tmuxName, null);
-              const fallback = await fetch(`http://127.0.0.1:${PORT}/api/sessions/${sessionId}/fork`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                  prompt:
-                    body?.prompt?.trim() ||
-                    "Continue from this archived session. First summarize where it left off, then wait for my next instruction.",
-                  user: body?.user,
-                  model: body?.model,
-                  agent: "codex-aisdk",
-                }),
-              });
-              const text = await fallback.text();
-              return new Response(text, {
-                status: fallback.status,
-                headers: { "Content-Type": "application/json" },
-              });
-            }
-            return err(502, "session resumed, but no live session id was discovered");
-          }
-          console.log(`[resume] ${tmuxName} id recovered via listSessions: ${resumed.sessionId}`);
-          newId = resumed.sessionId;
-        }
-        // Anchor the live id onto the managed record so listSessions recognizes
-        // the resumed session immediately (and keeps its visible id stable)
-        // rather than depending solely on per-request pgrep/pidfile resolution
-        // during the compaction window.
-        patchManaged(tmuxName, { nativeSessionId: newId });
-        console.log(`[resume] ${tmuxName} live as ${newId} (resumed from ${sessionId})`);
-        return json({ ok: true, tmuxName, cwd, sessionId: newId, resumedFrom: sessionId, agent: "claude" });
+        console.log(`[resume] agent-sdk resume ${sessionId} → pane ${tmuxName} (cwd ${cwd})`);
+        return json({ ok: true, tmuxName, cwd, sessionId, resumedFrom: sessionId, agent: "aisdk" });
       }
 
       {
