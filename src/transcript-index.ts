@@ -301,6 +301,9 @@ export function indexTranscriptMessages(
   cursor?: { size: number; offset: number; mtimeMs: number },
 ): number {
   init();
+  // Same direct-ownership guard as indexTranscript — callers like the chat
+  // tailer reach this entrypoint directly.
+  if (!isSessionIndexKey(path) && sessionHasIndexedMessages(sessionId)) return 0;
   const rows: Array<{ id: string; msg: SessionMsg; text: string; offset: number }> = [];
   for (const line of lines) {
     line.messages
@@ -589,6 +592,14 @@ export async function indexTranscript(path: string, sessionId: string): Promise<
   size: number;
 }> {
   if (isSessionIndexKey(path)) return { indexed: 0, offset: 0, size: 0 };
+  // A direct-indexed session owns its transcript: its harness streams rows in
+  // under the lfg:// key. File-ingesting a native transcript (e.g. the codex
+  // rollout JSONL that shares the session id via thread mapping) would insert
+  // a second, duplicated copy of every message under a different path.
+  if (sessionHasIndexedMessages(sessionId)) {
+    traceLog("transcript_index_skip_direct", { sessionId, path });
+    return { indexed: 0, offset: 0, size: 0 };
+  }
   const existing = imports.get(path);
   if (existing) return existing;
   const pending = indexTranscriptOnce(path, sessionId).finally(() => {

@@ -32,7 +32,7 @@ import {
 import type { SessionMsg } from "../../sessions.ts";
 import { indexSessionMessagesDirect } from "../../transcript-index.ts";
 import { makeDraftPublisher } from "./draft.ts";
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 
 function arg(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(name);
@@ -88,8 +88,15 @@ function stringifyValue(value: unknown): string {
   }
 }
 
-function codexCompletedItemMessage(item: Record<string, unknown>): SessionMsg | null {
-  const id = typeof item.id === "string" && item.id ? item.id : crypto.randomUUID();
+function codexCompletedItemMessage(item: Record<string, unknown>, turnNonce: string): SessionMsg | null {
+  // Codex item ids are per-turn counters ("item_0", "item_1", …) that RESET
+  // every turn. The direct index dedupes rows by message id, so without a
+  // per-turn nonce every message of turn 2+ collided with turn 1's ids and
+  // was silently dropped (INSERT OR IGNORE) — the session answered but the
+  // transcript never showed it. The nonce is minted once per runTurn, so
+  // re-emitted item.completed events within a turn still dedupe correctly.
+  const rawId = typeof item.id === "string" && item.id ? item.id : crypto.randomUUID();
+  const id = `${turnNonce}/${rawId}`;
   const type = typeof item.type === "string" ? item.type : "item";
   const ts = Date.now();
   if (type === "agent_message") {
@@ -227,6 +234,9 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
   async function runTurn(prompt: string, signal: AbortSignal): Promise<void> {
     // Codex turns are explicit request/response — no streaming-input merge —
     // so per-turn busy handling in drain() below cannot drift.
+    // Unique per turn AND per harness process, so item_N ids never collide
+    // across turns or across a restart that resumes the same session.
+    const turnNonce = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     indexSessionMessagesDirect(key, [
       { id: crypto.randomUUID(), role: "user", kind: "text", text: prompt, ts: Date.now() },
     ]);
@@ -248,14 +258,14 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
           // them in the draft — as the JSONL-lag era code did — would render
           // an ever-growing blob duplicating the finalized messages.
           if (event.type === "item.completed") {
-            const message = codexCompletedItemMessage(event.item as Record<string, unknown>);
+            const message = codexCompletedItemMessage(event.item as Record<string, unknown>, turnNonce);
             if (message) indexSessionMessagesDirect(key, [message]);
             publishDraft("", true);
           } else if (event.item.text) {
             publishDraft(event.item.text);
           }
         } else if (event.type === "item.completed") {
-          const message = codexCompletedItemMessage(event.item as Record<string, unknown>);
+          const message = codexCompletedItemMessage(event.item as Record<string, unknown>, turnNonce);
           if (message) indexSessionMessagesDirect(key, [message]);
         } else if (event.type === "turn.failed") {
           throw new Error(String(event.error?.message ?? "turn failed").slice(0, 800));
@@ -319,6 +329,10 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
   // harness (simple + reliable across filesystems; 250ms is interactive enough).
   const cmdFile = cmdPath(key);
   let cmdOffset = 0;
+  // Start tailing from the CURRENT end of the command file. Commands before
+  // this process started belong to a previous harness incarnation — replaying
+  // them on restart would re-send every historical message as a new turn.
+  try { cmdOffset = statSync(cmdFile).size; } catch {}
   const poll = setInterval(() => {
     let raw = "";
     try {

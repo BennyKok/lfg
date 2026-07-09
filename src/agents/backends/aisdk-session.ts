@@ -33,7 +33,7 @@ import {
 import { normalizeLineMessages, type SessionMsg } from "../../sessions.ts";
 import { indexSessionMessagesDirect, sessionHasIndexedMessages } from "../../transcript-index.ts";
 import { makeDraftPublisher } from "./draft.ts";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 
 function arg(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(name);
@@ -311,6 +311,10 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
   // reliable across editors/filesystems; 250ms is well within interactive feel.
   const cmdFile = cmdPath(sessionId);
   let cmdOffset = 0;
+  // Start tailing from the CURRENT end of the command file. Commands before
+  // this process started belong to a previous harness incarnation — replaying
+  // them on restart would re-send every historical message as a new turn.
+  try { cmdOffset = statSync(cmdFile).size; } catch {}
   const poll = setInterval(() => {
     let raw = "";
     try {

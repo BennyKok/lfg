@@ -2371,7 +2371,11 @@ function useLiveSessionStream(sessions: Session[], streamIds: string[]) {
     );
     setMessagesBySid((prev) => {
       const next: Record<string, Message[]> = {};
-      for (const sid of live) {
+      // Keep state for every visible/subscribed sid, not just busy ones —
+      // matches useLiveSocket: the stream won't replay history for a session
+      // we stayed connected to, so dropping idle sessions' messages leaves
+      // re-entered chats history-less.
+      for (const sid of new Set([...live, ...active])) {
         const current = prev[sid];
         next[sid] = current?.length ? current : seedBySid[sid] ? [seedBySid[sid]] : [];
       }
@@ -2387,7 +2391,7 @@ function useLiveSessionStream(sessions: Session[], streamIds: string[]) {
       Object.fromEntries(Object.entries(prev).filter(([sid]) => active.has(sid))),
     );
     setNextBeforeBySid((prev) =>
-      Object.fromEntries(Object.entries(prev).filter(([sid]) => live.has(sid))),
+      Object.fromEntries(Object.entries(prev).filter(([sid]) => live.has(sid) || active.has(sid))),
     );
     setLoadingBySid((prev) => {
       const next = Object.fromEntries(Object.entries(prev).filter(([sid]) => live.has(sid)));

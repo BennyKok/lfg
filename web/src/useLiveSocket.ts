@@ -431,6 +431,12 @@ export function useLiveSocket(
 
   const unsubscribeChannels = useCallback((channels: LiveChannel[]) => {
     if (!channels.length) return false;
+    // Drop the resume cursor with the subscription. The cursor is a promise
+    // that we still hold every frame up to that seq — but the app deletes a
+    // session's local message state when it leaves the live set, so resuming
+    // from the old seq on re-entry would replay only new deltas and render a
+    // history-less chat. Without a cursor the next subscribe gets a snapshot.
+    for (const channel of channels) delete lastSeqRef.current[channelId(channel)];
     return send({ t: "unsubscribe", channels });
   }, [send]);
 
@@ -794,7 +800,12 @@ export function useLiveSocket(
     seenRef.current = Object.fromEntries(Object.entries(seenRef.current).filter(([sid]) => live.has(sid)));
     setMessagesBySid((prev) => {
       const next: Record<string, Message[]> = {};
-      for (const sid of live) {
+      // Retain message state for every sid we are (or stay) subscribed to —
+      // not just busy ones. The subscription resumes by seq cursor, so the
+      // server never re-sends a snapshot while we're subscribed; dropping a
+      // still-subscribed idle session's messages here left re-entered chats
+      // rendering only the deltas that arrived after the drop.
+      for (const sid of new Set([...live, ...active])) {
         const current = prev[sid];
         next[sid] = current?.length ? current : seedBySid[sid] ? [seedBySid[sid]] : [];
       }
@@ -803,7 +814,7 @@ export function useLiveSocket(
     setBusyBySid((prev) => Object.fromEntries(Object.entries(prev).filter(([sid]) => active.has(sid))));
     setPromptsBySid((prev) => Object.fromEntries(Object.entries(prev).filter(([sid]) => active.has(sid))));
     setQueuesBySid((prev) => Object.fromEntries(Object.entries(prev).filter(([sid]) => active.has(sid))));
-    setNextBeforeBySid((prev) => Object.fromEntries(Object.entries(prev).filter(([sid]) => live.has(sid))));
+    setNextBeforeBySid((prev) => Object.fromEntries(Object.entries(prev).filter(([sid]) => live.has(sid) || active.has(sid))));
     setLoadingBySid((prev) => {
       const next = Object.fromEntries(Object.entries(prev).filter(([sid]) => live.has(sid)));
       for (const sid of active) {

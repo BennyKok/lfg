@@ -39,7 +39,7 @@ import {
 import { normalizeLineMessages } from "../../sessions.ts";
 import { indexSessionMessagesDirect } from "../../transcript-index.ts";
 import { makeDraftPublisher } from "./draft.ts";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -435,6 +435,10 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
   // harnesses (simple + reliable across filesystems; 250ms is interactive).
   const cmdFile = cmdPath(key);
   let cmdOffset = 0;
+  // Start tailing from the CURRENT end of the command file. Commands before
+  // this process started belong to a previous harness incarnation — replaying
+  // them on restart would re-send every historical message as a new turn.
+  try { cmdOffset = statSync(cmdFile).size; } catch {}
   const poll = setInterval(() => {
     let raw = "";
     try {
