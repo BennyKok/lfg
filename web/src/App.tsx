@@ -1,5 +1,6 @@
 import { Component, createContext, type ComponentProps, forwardRef, memo, Suspense, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useChat } from "@ai-sdk/react";
 import {
   DEFAULT_SCHED_TZ,
   DEFAULT_SIMPLE,
@@ -31,6 +32,14 @@ import {
   useAudioMode,
 } from "./audio-mode";
 import { liveTransportMode, useLiveSocket } from "./useLiveSocket";
+import {
+  LfgChatTransport,
+  lfgMessagesToUIMessages,
+  lfgUIMessagesToMessages,
+  mergeLfgUIMessages,
+  type LfgChatMessage,
+  type LfgTranscriptSubscribe,
+} from "./lib/lfg-chat-transport";
 import { ConnectionStatusToasts } from "./ConnectionStatus";
 import type {
   CSSProperties,
@@ -4225,6 +4234,7 @@ export function App() {
             onOptimisticMessage={liveStream.addOptimisticMessage}
             onRemoveOptimisticMessage={liveStream.removeOptimisticMessage}
             onTrackSendStatus={liveStream.trackSendStatus}
+            onSubscribeTranscript={useWsLive ? wsLiveStream.subscribeTranscript : undefined}
             onRefresh={refreshSessions}
             onRemove={removeSession}
             onNew={() =>
@@ -5795,6 +5805,7 @@ function LiveView({
   onOptimisticMessage,
   onRemoveOptimisticMessage,
   onTrackSendStatus,
+  onSubscribeTranscript,
   onRefresh,
   onRemove,
   onNew,
@@ -5828,6 +5839,7 @@ function LiveView({
   onOptimisticMessage: (sid: string, text: string) => void;
   onRemoveOptimisticMessage: (sid: string, text: string) => void;
   onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
+  onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
   onNew: () => void;
@@ -5924,6 +5936,7 @@ function LiveView({
           onOptimisticMessage={onOptimisticMessage}
           onRemoveOptimisticMessage={onRemoveOptimisticMessage}
           onTrackSendStatus={onTrackSendStatus}
+          onSubscribeTranscript={onSubscribeTranscript}
           onRefresh={onRefresh}
           onRemove={onRemove}
           onOpenSheet={(sid, origin) => setSheet({ sid, origin })}
@@ -5989,6 +6002,7 @@ function LiveView({
         onOptimisticMessage={onOptimisticMessage}
         onRemoveOptimisticMessage={onRemoveOptimisticMessage}
         onTrackSendStatus={onTrackSendStatus}
+        onSubscribeTranscript={onSubscribeTranscript}
         onRefresh={onRefresh}
         onRemove={onRemove}
         findings={findings}
@@ -6081,6 +6095,7 @@ function LiveView({
         onOptimisticMessage={onOptimisticMessage}
         onRemoveOptimisticMessage={onRemoveOptimisticMessage}
         onTrackSendStatus={onTrackSendStatus}
+        onSubscribeTranscript={onSubscribeTranscript}
         onRefresh={onRefresh}
         onRemove={onRemove}
         onClose={() => setSheet(null)}
@@ -6109,6 +6124,7 @@ function RailStage({
   onOptimisticMessage,
   onRemoveOptimisticMessage,
   onTrackSendStatus,
+  onSubscribeTranscript,
   onRefresh,
   onRemove,
   findings = [],
@@ -6141,6 +6157,7 @@ function RailStage({
   onOptimisticMessage: (sid: string, text: string) => void;
   onRemoveOptimisticMessage: (sid: string, text: string) => void;
   onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
+  onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
   findings: AutoFinding[];
@@ -6643,6 +6660,7 @@ function RailStage({
             onOptimisticMessage={onOptimisticMessage}
             onRemoveOptimisticMessage={onRemoveOptimisticMessage}
             onTrackSendStatus={onTrackSendStatus}
+            onSubscribeTranscript={onSubscribeTranscript}
             onRefresh={onRefresh}
             onRemove={onRemove}
             variant="stage"
@@ -7492,6 +7510,7 @@ function SessionChat({
   onOptimisticMessage,
   onRemoveOptimisticMessage,
   onTrackSendStatus,
+  onSubscribeTranscript,
   onRefresh,
   onDictatingChange,
 }: {
@@ -7507,6 +7526,7 @@ function SessionChat({
   onOptimisticMessage: (sid: string, text: string) => void;
   onRemoveOptimisticMessage: (sid: string, text: string) => void;
   onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
+  onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
   onDictatingChange?: (recording: boolean) => void;
 }) {
@@ -7521,6 +7541,31 @@ function SessionChat({
   const [launching, setLaunching] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const previewUrls = useRef<string[]>([]);
+  const seededMessages = useMemo(() => lfgMessagesToUIMessages(messages), [messages]);
+  const chatTransport = useMemo(
+    () =>
+      sid
+        ? new LfgChatTransport({
+            sessionId: sid,
+            subscribeTranscript: onSubscribeTranscript,
+          })
+        : undefined,
+    [sid, onSubscribeTranscript],
+  );
+  const chat = useChat<LfgChatMessage>({
+    id: sid ?? "missing-session",
+    messages: seededMessages,
+    transport: chatTransport,
+    onError: (err) => onError(err.message),
+  });
+  const { messages: uiMessages, setMessages, sendMessage: sendChatMessage, status: chatStatus } = chat;
+  const chatMessages = useMemo(() => lfgUIMessagesToMessages(uiMessages), [uiMessages]);
+  const chatBusy = busy || chatStatus === "submitted" || chatStatus === "streaming";
+
+  useEffect(() => {
+    if (!sid) return;
+    setMessages((current) => mergeLfgUIMessages(current, seededMessages));
+  }, [seededMessages, setMessages, sid]);
 
   useEffect(() => {
     return () => {
@@ -7604,7 +7649,6 @@ function SessionChat({
     setSending(true);
     onError(null);
     setMessageText("");
-    let optimisticText: string | null = null;
     try {
       // Audio mode: this session becomes the one we speak, and gets primed once
       // to stay conversational + delegate heavy work to a subagent.
@@ -7620,17 +7664,13 @@ function SessionChat({
       }
       const uploaded = files.length ? await Promise.all(files.map(uploadAttachment)) : [];
       const outgoingText = composeAttachmentMessage(text, uploaded);
-      optimisticText = outgoingText;
-      onOptimisticMessage(sid, outgoingText);
       // Pulse the composer so the send visibly launches into the transcript.
       setLaunching(true);
       window.setTimeout(() => setLaunching(false), 480);
-      const sent = await api<{ msg?: QueueMsg }>(`/api/sessions/${sid}/send`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: outgoingText, mode }),
+      void sendChatMessage({ text: outgoingText }, { body: { mode } }).catch((err) => {
+        onError(err instanceof Error ? err.message : String(err));
       });
-      onTrackSendStatus(sid, outgoingText, sent.msg ?? null);
+      onTrackSendStatus(sid, outgoingText, null);
       for (const att of files) {
         if (att.previewUrl) URL.revokeObjectURL(att.previewUrl);
       }
@@ -7640,7 +7680,6 @@ function SessionChat({
         onError(err instanceof Error ? err.message : String(err));
       });
     } catch (err) {
-      if (optimisticText) onRemoveOptimisticMessage(sid, optimisticText);
       onError(err instanceof Error ? err.message : String(err));
       setMessageText(text);
       setAttachments((current) =>
@@ -7666,14 +7705,14 @@ function SessionChat({
       <PausedBanner session={session} onRefresh={onRefresh} />
       <ChatStream
         sid={sid}
-        messages={messages}
-        busy={busy}
+        messages={chatMessages}
+        busy={chatBusy}
         loading={loading}
         onLoadOlderMessages={onLoadOlderMessages}
       />
 
       <PromptPanel prompt={prompt} sid={sid} onError={onError} />
-      <QueuePanel queue={queue} sid={sid} messages={messages} />
+      <QueuePanel queue={queue} sid={sid} messages={chatMessages} />
 
       {error ? (
         <div className="border-t border-border/70 px-3 py-1.5 text-xs text-destructive">{error}</div>
@@ -7836,7 +7875,7 @@ function SessionChat({
                 onCancel={(base) => setMessageText(base)}
               />
             </div>
-            {busy && canDriveSession(session) ? (
+            {chatBusy && canDriveSession(session) ? (
               <Button
                 size="icon"
                 type="button"
@@ -8095,6 +8134,7 @@ function SessionTitleSheet({
   onOptimisticMessage,
   onRemoveOptimisticMessage,
   onTrackSendStatus,
+  onSubscribeTranscript,
   onRefresh,
   onRemove,
   onClose,
@@ -8118,6 +8158,7 @@ function SessionTitleSheet({
   onOptimisticMessage: (sid: string, text: string) => void;
   onRemoveOptimisticMessage: (sid: string, text: string) => void;
   onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
+  onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
   onClose: () => void;
@@ -8606,6 +8647,7 @@ function SessionTitleSheet({
             onOptimisticMessage={onOptimisticMessage}
             onRemoveOptimisticMessage={onRemoveOptimisticMessage}
             onTrackSendStatus={onTrackSendStatus}
+            onSubscribeTranscript={onSubscribeTranscript}
             onRefresh={onRefresh}
           />
         </div>
@@ -8775,6 +8817,7 @@ const SessionCard = memo(function SessionCard({
   onOptimisticMessage,
   onRemoveOptimisticMessage,
   onTrackSendStatus,
+  onSubscribeTranscript,
   onRefresh,
   onRemove,
   onOpenSheet,
@@ -8794,6 +8837,7 @@ const SessionCard = memo(function SessionCard({
   onOptimisticMessage: (sid: string, text: string) => void;
   onRemoveOptimisticMessage: (sid: string, text: string) => void;
   onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
+  onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
   // Tapping the title asks the parent to open the full-height detail sheet
@@ -9327,6 +9371,7 @@ const onTouchStart = (e: ReactTouchEvent) => {
           onOptimisticMessage={onOptimisticMessage}
           onRemoveOptimisticMessage={onRemoveOptimisticMessage}
           onTrackSendStatus={onTrackSendStatus}
+          onSubscribeTranscript={onSubscribeTranscript}
           onRefresh={onRefresh}
           onDictatingChange={setDictating}
         />

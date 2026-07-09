@@ -15,7 +15,7 @@ type Session = {
   model?: string | null;
 };
 
-type Message = {
+export type Message = {
   id?: string;
   role?: string;
   kind?: string;
@@ -34,7 +34,7 @@ type Message = {
   catchUp?: boolean;
 };
 
-type AiStreamPart = {
+export type AiStreamPart = {
   type: "text-delta" | "text-start" | "text-end" | "error" | string;
   id?: string;
   delta?: string;
@@ -107,6 +107,15 @@ type SummaryHandler = {
   reject: (error: Error) => void;
   onChunk: (chunk: string) => void;
 };
+export type TranscriptEvent =
+  | { type: "message"; message: Message }
+  | { type: "ai_part"; part: AiStreamPart }
+  | { type: "busy"; busy: boolean }
+  | { type: "error"; error: string };
+export type TranscriptSubscribe = (
+  sid: string,
+  listener: (event: TranscriptEvent) => void,
+) => () => void;
 
 const DRAFT_CATCHUP_MIN_CHARS = 160;
 
@@ -372,6 +381,7 @@ export function useLiveSocket(
   const lastSeqRef = useRef<Record<string, number>>({});
   const agentRunHandlersRef = useRef<Record<string, AgentRunHandler>>({});
   const summaryHandlersRef = useRef<Record<string, SummaryHandler>>({});
+  const transcriptListenersRef = useRef<Record<string, Set<(event: TranscriptEvent) => void>>>({});
   const seenRef = useRef<Record<string, Set<string>>>({});
   const messagesRef = useRef(messagesBySid);
   const nextBeforeRef = useRef(nextBeforeBySid);
@@ -388,6 +398,12 @@ export function useLiveSocket(
   const connectRef = useRef<() => void>(() => {});
 
   const [connection, setConnection] = useState<ConnectionState>(INITIAL_CONNECTION_STATE);
+
+  const emitTranscriptEvent = useCallback((sid: string, event: TranscriptEvent) => {
+    const listeners = transcriptListenersRef.current[sid];
+    if (!listeners?.size) return;
+    for (const listener of listeners) listener(event);
+  }, []);
 
   useEffect(() => {
     messagesRef.current = messagesBySid;
@@ -445,6 +461,7 @@ export function useLiveSocket(
       }
       if (payload.t === "error") {
         const message = payload.message || payload.code || "live socket error";
+        if (payload.kind === "transcript") emitTranscriptEvent(payload.key, { type: "error", error: message });
         if (payload.kind === "agent_run") agentRunHandlersRef.current[payload.key]?.onError?.(message);
         if (payload.kind === "summary") {
           const handler = summaryHandlersRef.current[payload.key];
@@ -549,6 +566,7 @@ export function useLiveSocket(
       const rawMessage = payload.message ?? payload.m;
       if (!rawMessage) return;
       const message = normalizeMessageIdentity(rawMessage);
+      emitTranscriptEvent(sid, { type: "message", message });
       markFirst(sid, message);
       setLoadingBySid((prev) => ({ ...prev, [sid]: false }));
       const id = mediaIdentity(message);
@@ -581,6 +599,7 @@ export function useLiveSocket(
 
     if (payload.t === "ai_part") {
       const part = payload.part;
+      if (part) emitTranscriptEvent(sid, { type: "ai_part", part });
       if (part?.type !== "text-delta" || !part.id) return;
       setLoadingBySid((prev) => ({ ...prev, [sid]: false }));
       const timers = thinkTimerRef.current;
@@ -604,6 +623,7 @@ export function useLiveSocket(
 
     if (payload.t === "busy") {
       const busy = !!payload.busy;
+      emitTranscriptEvent(sid, { type: "busy", busy });
       setBusyBySid((prev) => ({ ...prev, [sid]: busy }));
       if (!busy) {
         const tm = thinkTimerRef.current[sid];
@@ -621,7 +641,7 @@ export function useLiveSocket(
     }
     if (payload.t === "prompt") setPromptsBySid((prev) => ({ ...prev, [sid]: payload.prompt ?? null }));
     if (payload.t === "queue") setQueuesBySid((prev) => ({ ...prev, [sid]: payload.queue ?? [] }));
-  }, [markFirst, send]);
+  }, [emitTranscriptEvent, markFirst, send]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -1002,6 +1022,17 @@ export function useLiveSocket(
     return promise;
   }, [enabled, subscribeChannels, unsubscribeChannels]);
 
+  const subscribeTranscript = useCallback<TranscriptSubscribe>((sid, listener) => {
+    const listeners = transcriptListenersRef.current[sid] || (transcriptListenersRef.current[sid] = new Set());
+    listeners.add(listener);
+    return () => {
+      const current = transcriptListenersRef.current[sid];
+      if (!current) return;
+      current.delete(listener);
+      if (!current.size) delete transcriptListenersRef.current[sid];
+    };
+  }, []);
+
   const mergedBusy = useMemo(() => ({ ...listBusy, ...busyBySid }), [listBusy, busyBySid]);
 
   return {
@@ -1018,5 +1049,6 @@ export function useLiveSocket(
     reconnectNow,
     watchAgentRun,
     streamSummary,
+    subscribeTranscript,
   };
 }
