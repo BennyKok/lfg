@@ -2,7 +2,7 @@ import { mkdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import { PATHS } from "./config.ts";
-import { normalizeLineMessages, type Session, type SessionMsg } from "./sessions.ts";
+import { isCursorTurnEndedLine, normalizeLineMessages, type Session, type SessionMsg } from "./sessions.ts";
 import { traceLog } from "./trace-log.ts";
 
 export type IndexedTranscriptMatch = {
@@ -421,6 +421,9 @@ async function indexTranscriptOnce(path: string, sessionId: string): Promise<{
     scanEnd += 1;
 
     const rows: Array<{ id: string; msg: SessionMsg; text: string; offset: number }> = [];
+    // Start of a trailing run of volatile cursor `turn_ended` markers within this
+    // chunk. A real (message-bearing) line resets it — only a file-trailing run holds.
+    let holdStart = scanEnd;
     for (let lineStart = 0; lineStart < scanEnd; ) {
       let lineEnd = lineStart;
       while (lineEnd < scanEnd && bytes[lineEnd] !== 10) lineEnd++;
@@ -428,22 +431,32 @@ async function indexTranscriptOnce(path: string, sessionId: string): Promise<{
         const lineOffset = committed + lineStart;
         const line = decoder.decode(bytes.subarray(lineStart, lineEnd));
         const messages = normalizeLineMessages(line).filter((message) => !!message.text.trim());
-        messages.forEach((msg, index) => {
-          rows.push({
-            id: `${path}\0${lineOffset}\0${index}`,
-            msg,
-            text: clippedText(msg),
-            offset: lineOffset,
+        if (messages.length === 0 && isCursorTurnEndedLine(line)) {
+          if (holdStart === scanEnd) holdStart = lineStart;
+        } else {
+          holdStart = scanEnd;
+          messages.forEach((msg, index) => {
+            rows.push({
+              id: `${path}\0${lineOffset}\0${index}`,
+              msg,
+              text: clippedText(msg),
+              offset: lineOffset,
+            });
           });
-        });
+        }
       }
       lineStart = lineEnd + 1;
     }
 
-    committed += scanEnd;
+    // cursor rewrites a file-trailing `turn_ended` marker in place on its next turn,
+    // so holding the byte cursor before it keeps that turn's user line from being
+    // skipped. Only apply at EOF; a marker with content after it is already durable.
+    const atEof = committed + scanEnd === st.size;
+    const advance = atEof && holdStart < scanEnd ? holdStart : scanEnd;
+    committed += advance;
     indexed += rows.length;
     insert(rows);
-    if (scanEnd === 0) break;
+    if (advance < scanEnd || scanEnd === 0) break;
   }
 
   if (committed === st.size) insert([]);
