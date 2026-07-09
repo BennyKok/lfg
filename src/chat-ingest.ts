@@ -1,5 +1,5 @@
 import { statSync } from "node:fs";
-import { normalizeLineMessages, type Session, type SessionMsg } from "./sessions.ts";
+import { isCursorTurnEndedLine, normalizeLineMessages, type Session, type SessionMsg } from "./sessions.ts";
 import {
   deleteTranscriptIndexForPath,
   indexTranscriptMessages,
@@ -141,26 +141,45 @@ class ChatTranscriptTailer {
       const parts = combined.split("\n");
       this.partial = parts.pop() ?? "";
       let lineOffset = previousPartial ? (this.partialOffset ?? committed) : chunkStart;
-      const complete: Array<{ offset: number; messages: SessionMsg[] }> = [];
+      const complete: Array<{ offset: number; messages: SessionMsg[]; volatile: boolean }> = [];
 
       for (const line of parts) {
         const offset = lineOffset;
         lineOffset += encoder.encode(line).length + 1;
         const messages = line ? normalizeLineMessages(line) : [];
-        complete.push({ offset, messages });
+        // A cursor `turn_ended` marker with no surfaced message gets rewritten in
+        // place by the next turn (see isCursorTurnEndedLine) — never commit past it.
+        const volatile = messages.length === 0 && !!line && isCursorTurnEndedLine(line);
+        complete.push({ offset, messages, volatile });
         completedLines++;
       }
 
       this.partialOffset = this.partial ? lineOffset : null;
       if (!complete.length) continue;
 
-      committed = lineOffset;
-      indexed += indexTranscriptMessages(this.path, this.sessionId, complete, {
+      // At EOF, hold the commit cursor at the start of a trailing run of volatile
+      // markers so cursor's in-place rewrite (its next user turn) is re-read next
+      // poll instead of skipped. Inert for append-only agents (no volatile lines).
+      let hold = complete.length;
+      if (chunkEnd === st.size) while (hold > 0 && complete[hold - 1].volatile) hold--;
+      const emit = hold < complete.length ? complete.slice(0, hold) : complete;
+      committed = hold < complete.length ? complete[hold].offset : lineOffset;
+
+      indexed += indexTranscriptMessages(this.path, this.sessionId, emit, {
         size: st.size,
         offset: committed,
         mtimeMs: st.mtimeMs,
       });
-      this.publish(complete);
+      if (emit.length) this.publish(emit);
+
+      if (hold < complete.length) {
+        // Held back over a trailing marker: drop any in-memory partial and resume
+        // from the marker's start next poll. Nothing real follows it in the file.
+        this.offset = committed;
+        this.partial = "";
+        this.partialOffset = null;
+        break;
+      }
     }
 
     if (!this.partial && committed === st.size) {

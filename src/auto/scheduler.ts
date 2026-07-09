@@ -1,7 +1,7 @@
 // In-process cron scheduler. lfg-serve runs persistently, so we tick once a
 // minute and fire any enabled auto agent that is due. Two things that bit us:
-//   1. Cron is interpreted in a configured timezone (default Asia/Hong_Kong),
-//      NOT the box's UTC — so "0 11 * * *" means 11:00 HKT, as authored.
+//   1. Cron is interpreted in the user's global settings timezone, NOT the
+//      box's UTC — so "0 11 * * *" means 11:00 in that configured zone.
 //   2. Catch-up: we fire the MOST RECENT scheduled instant in the last ~25h if
 //      the agent hasn't run since it. So a missed minute (service restart, box
 //      asleep) still runs that day instead of silently skipping.
@@ -10,8 +10,7 @@
 
 import { listAutoAgents, setLastRun } from "./store.ts";
 import { runAutoAgent } from "./runner.ts";
-
-const TZ = process.env.LFG_SCHED_TZ ?? "Asia/Hong_Kong";
+import { getGlobalSettingsSync } from "../settings.ts";
 
 const DOW: Record<string, number> = {
   Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6,
@@ -70,7 +69,7 @@ function fieldMatch(field: string, value: number): boolean {
 }
 
 // Standard 5-field cron, evaluated in TZ: minute hour day-of-month month day-of-week.
-export function cronMatches(expr: string, d: Date, tz: string = TZ): boolean {
+export function cronMatches(expr: string, d: Date, tz: string = getGlobalSettingsSync().timeZone): boolean {
   const f = expr.trim().split(/\s+/);
   if (f.length !== 5) return false;
   const p = zonedParts(d, tz);
@@ -85,11 +84,11 @@ export function cronMatches(expr: string, d: Date, tz: string = TZ): boolean {
 
 // The most recent minute <= now (within lookback) at which the cron matched,
 // or null if it hasn't matched in the window. Used for catch-up.
-function mostRecentDue(expr: string, now: Date, lookbackMin = 1500): number | null {
+function mostRecentDue(expr: string, now: Date, tz: string, lookbackMin = 1500): number | null {
   const base = Math.floor(now.getTime() / 60_000) * 60_000;
   for (let i = 0; i <= lookbackMin; i++) {
     const t = base - i * 60_000;
-    if (cronMatches(expr, new Date(t))) return t;
+    if (cronMatches(expr, new Date(t), tz)) return t;
   }
   return null;
 }
@@ -105,6 +104,7 @@ export function startAutoScheduler(onLog: (s: string) => void = () => {}): void 
     ticking = true;
     try {
       const now = new Date();
+      const tz = getGlobalSettingsSync().timeZone;
       let agents;
       try {
         agents = await listAutoAgents();
@@ -113,7 +113,7 @@ export function startAutoScheduler(onLog: (s: string) => void = () => {}): void 
       }
       for (const a of agents) {
         if (!a.enabled || !a.schedule) continue;
-        const due = mostRecentDue(a.schedule, now);
+        const due = mostRecentDue(a.schedule, now, tz);
         if (due === null) continue;
         if (a.lastRunAt && a.lastRunAt >= due) continue; // already ran for this instant
         // Stamp first so a crash mid-run doesn't loop-retry the same instant.
@@ -134,5 +134,5 @@ export function startAutoScheduler(onLog: (s: string) => void = () => {}): void 
   // Fire an initial tick shortly after boot so a restart near (or past) a
   // scheduled time catches up promptly instead of waiting up to 60s.
   setTimeout(() => void tick(), 3_000);
-  onLog(`[auto-sched] started (tz=${TZ}, 60s tick + catch-up)`);
+  onLog(`[auto-sched] started (tz=${getGlobalSettingsSync().timeZone}, 60s tick + catch-up)`);
 }

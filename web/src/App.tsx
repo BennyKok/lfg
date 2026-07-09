@@ -1,4 +1,4 @@
-import { Component, type ComponentProps, forwardRef, memo, Suspense, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Component, createContext, type ComponentProps, forwardRef, memo, Suspense, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   DEFAULT_SCHED_TZ,
@@ -113,6 +113,7 @@ import { ZoomableImage } from "@/components/ImageLightbox";
 import { SessionDiffBar } from "@/components/SessionDiffView";
 import { Textarea } from "@/components/ui/textarea";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
+import { Popover } from "@base-ui/react/popover";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -362,9 +363,27 @@ type OnboardingState = {
   completedAt: string | null;
 };
 
+type ModelCatalogItem = {
+  key: AgentKind;
+  label: string;
+  defaultModel: string;
+  models: string[];
+  thinkingLevels: string[];
+  session: boolean;
+  auto: boolean;
+  visible?: boolean;
+  configured?: boolean;
+};
+
+type GlobalSettings = {
+  timeZone: string;
+};
+
 type BootstrapPayload = {
   agents?: Agent[] | null;
   codingAgents?: CodingAgentInfo[] | null;
+  models?: ModelCatalogItem[] | null;
+  settings?: GlobalSettings | null;
   sessions?: Session[] | null;
   users?: User[] | null;
   repos?: Repo[] | null;
@@ -431,7 +450,7 @@ const OPENCODE_MODELS = [
   "opencode-go/qwen3.7-plus",
 ];
 const THINKING_LEVELS = ["low", "medium", "high", "xhigh"] as const;
-type ThinkingLevel = (typeof THINKING_LEVELS)[number];
+type ThinkingLevel = string;
 type AutoAgentBackend = "aisdk" | "codex-aisdk" | "opencode" | "hermes";
 const AUTO_AGENT_OPTIONS: { key: AutoAgentBackend; label: string }[] = [
   { key: "aisdk", label: "claude" },
@@ -441,7 +460,7 @@ const AUTO_AGENT_OPTIONS: { key: AutoAgentBackend; label: string }[] = [
 ];
 function savedThinkingLevel(): ThinkingLevel {
   const value = localStorage.getItem("lfg_thinking_level");
-  return THINKING_LEVELS.includes(value as ThinkingLevel) ? (value as ThinkingLevel) : "medium";
+  return value && (THINKING_LEVELS as readonly string[]).includes(value) ? value : "medium";
 }
 
 type AgentKind = "claude" | "aisdk" | "codex" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "hermes";
@@ -455,6 +474,7 @@ function agentSupportsThinking(agent: AgentKind): boolean {
     agent === "claude" ||
     agent === "aisdk" ||
     agent === "grok" ||
+    agent === "cursor" ||
     agent === "codex" ||
     agent === "codex-aisdk"
   );
@@ -483,6 +503,62 @@ const AGENT_DEFAULT_MODEL: Record<AgentKind, string> = {
   hermes: "nousresearch/hermes-4-405b",
   opencode: "opencode-go/deepseek-v4-flash",
 };
+const AGENT_THINKING_LEVELS: Record<AgentKind, string[]> = {
+  claude: ["low", "medium", "high", "xhigh", "max"],
+  aisdk: ["low", "medium", "high", "xhigh", "max"],
+  codex: ["none", "minimal", "low", "medium", "high", "xhigh"],
+  "codex-aisdk": ["none", "minimal", "low", "medium", "high", "xhigh"],
+  grok: ["low", "medium", "high", "xhigh", "max"],
+  cursor: ["low", "medium", "high", "xhigh", "max"],
+  hermes: [],
+  opencode: [],
+};
+
+type AgentModelCatalog = {
+  models: Record<AgentKind, string[]>;
+  defaults: Record<AgentKind, string>;
+  thinkingLevels: Record<AgentKind, string[]>;
+};
+
+function buildAgentModelCatalog(items?: ModelCatalogItem[] | null): AgentModelCatalog {
+  const models = Object.fromEntries(
+    Object.entries(AGENT_MODELS).map(([key, value]) => [key, [...value]]),
+  ) as Record<AgentKind, string[]>;
+  const defaults = { ...AGENT_DEFAULT_MODEL };
+  const thinkingLevels = Object.fromEntries(
+    Object.entries(AGENT_THINKING_LEVELS).map(([key, value]) => [key, [...value]]),
+  ) as Record<AgentKind, string[]>;
+  for (const item of items ?? []) {
+    if (!AGENT_MODELS[item.key] || !item.models?.length) continue;
+    models[item.key] = item.models;
+    defaults[item.key] = item.defaultModel || defaults[item.key];
+    thinkingLevels[item.key] = item.thinkingLevels ?? thinkingLevels[item.key];
+  }
+  return { models, defaults, thinkingLevels };
+}
+
+const AgentModelCatalogContext = createContext<AgentModelCatalog>(
+  buildAgentModelCatalog(),
+);
+
+function useAgentModelCatalog(): AgentModelCatalog {
+  return useContext(AgentModelCatalogContext);
+}
+
+function useAgentModels(agent: AgentKind): string[] {
+  const catalog = useAgentModelCatalog();
+  return catalog.models[agent] ?? AGENT_MODELS[agent];
+}
+
+function useAgentDefaultModel(agent: AgentKind): string {
+  const catalog = useAgentModelCatalog();
+  return catalog.defaults[agent] ?? AGENT_DEFAULT_MODEL[agent];
+}
+
+function useAgentThinkingLevels(agent: AgentKind): string[] {
+  const catalog = useAgentModelCatalog();
+  return catalog.thinkingLevels[agent] ?? AGENT_THINKING_LEVELS[agent] ?? [];
+}
 
 // New-session picker options, in display order. The three AI-SDK agents are the
 // only choices ("aisdk" leads since it's the default). Each carries a short
@@ -2820,6 +2896,9 @@ export function App() {
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [codingAgents, setCodingAgents] = useState<CodingAgentInfo[]>([]);
+  const [modelCatalog, setModelCatalog] = useState<AgentModelCatalog>(() =>
+    buildAgentModelCatalog(),
+  );
   const [setupChecks, setSetupChecks] = useState<SetupCheckGroup[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [users, setUsers] = useState<User[]>([]);
@@ -2852,6 +2931,7 @@ export function App() {
   const [tab, setTab] = useState<string>("live");
   const extNavTabs = useExtensionNavTabs();
   const [autoAgents, setAutoAgents] = useState<AutoAgent[]>([]);
+  const [settings, setSettings] = useState<GlobalSettings>({ timeZone: DEFAULT_SCHED_TZ });
   const [schedTz, setSchedTz] = useState<string>(DEFAULT_SCHED_TZ);
   const [findings, setFindings] = useState<AutoFinding[]>([]);
   const [toastedFindingIds, setToastedFindingIds] = useState<Set<string>>(() => new Set());
@@ -3019,6 +3099,8 @@ export function App() {
     }
     setAgents(payload.agents ?? []);
     setCodingAgents(payload.codingAgents ?? []);
+    setModelCatalog(buildAgentModelCatalog(payload.models));
+    setSettings(payload.settings ?? { timeZone: payload.auto?.tz ?? DEFAULT_SCHED_TZ });
     // Guard sessions to [] — it feeds `allLiveSessions`/`liveSessions` which
     // call `.filter()` unconditionally on render, so a malformed/empty payload
     // must degrade to an empty live view rather than crash.
@@ -3027,7 +3109,7 @@ export function App() {
     setRepos(payload.repos ?? []);
     seedSkillCatalog(payload.skills);
     setAutoAgents(payload.auto?.agents ?? []);
-    if (payload.auto?.tz) setSchedTz(payload.auto.tz);
+    setSchedTz(payload.settings?.timeZone ?? payload.auto?.tz ?? DEFAULT_SCHED_TZ);
     const findingList = payload.auto?.findings ?? [];
     setFindings(findingList);
     findingList.forEach((f) => seenFindings.current.add(f.id));
@@ -3833,6 +3915,7 @@ export function App() {
     const launchModel =
       localStorage.getItem(`lfg_model_${launchAgent}`) ||
       localStorage.getItem("lfg_model") ||
+      modelCatalog.defaults[launchAgent] ||
       AGENT_DEFAULT_MODEL[launchAgent];
     const owner =
       userFilter !== "__all" && userFilter !== "__unassigned"
@@ -3864,12 +3947,24 @@ export function App() {
     }
   }
 
-  const refreshCodingAgents = useCallback(async () => {
+  const updateSettings = useCallback(async (patch: Partial<GlobalSettings>) => {
+    const payload = await api<{ settings: GlobalSettings }>("/api/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    setSettings(payload.settings);
+    setSchedTz(payload.settings.timeZone);
+  }, []);
+
+  const refreshCodingAgents = useCallback(async (opts: { refreshModels?: boolean } = {}) => {
+    const agentsPath = opts.refreshModels ? "/api/coding-agents?refreshModels=1" : "/api/coding-agents";
     const [agentsPayload, checksPayload] = await Promise.all([
-      api<{ agents: CodingAgentInfo[] }>("/api/coding-agents"),
+      api<{ agents: CodingAgentInfo[]; models?: ModelCatalogItem[] | null }>(agentsPath),
       api<{ checks: SetupCheckGroup[] }>("/api/setup/checks").catch(() => ({ checks: [] })),
     ]);
     setCodingAgents(agentsPayload.agents ?? []);
+    setModelCatalog(buildAgentModelCatalog(agentsPayload.models));
     setSetupChecks(checksPayload.checks ?? []);
   }, []);
 
@@ -3898,12 +3993,13 @@ export function App() {
       current.map((item) => (item.key === kind ? { ...item, visible } : item)),
     );
     try {
-      const payload = await api<{ agents: CodingAgentInfo[] }>(`/api/coding-agents/${kind}`, {
+      const payload = await api<{ agents: CodingAgentInfo[]; models?: ModelCatalogItem[] | null }>(`/api/coding-agents/${kind}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ visible }),
       });
       setCodingAgents(payload.agents ?? []);
+      setModelCatalog(buildAgentModelCatalog(payload.models));
     } catch (e) {
       setCodingAgents(previous);
       setError(e instanceof Error ? e.message : String(e));
@@ -3919,11 +4015,12 @@ export function App() {
       ),
     );
     toast.promise(
-      api<{ agents: CodingAgentInfo[] }>(`/api/coding-agents/${kind}/setup`, {
+      api<{ agents: CodingAgentInfo[]; models?: ModelCatalogItem[] | null }>(`/api/coding-agents/${kind}/setup`, {
         method: "POST",
       })
         .then((payload) => {
           setCodingAgents(payload.agents ?? []);
+          setModelCatalog(buildAgentModelCatalog(payload.models));
           window.setTimeout(() => void refreshCodingAgents(), 3000);
         }),
       {
@@ -4011,6 +4108,7 @@ export function App() {
   const liveDesktopWorkspace = tab === "live" && isWide;
 
   return (
+    <AgentModelCatalogContext.Provider value={modelCatalog}>
     <AskProvider>
     <div ref={rootRef} className={APP_SHELL_CLASS}>
       {/* Two floating "islands" — brand + Live on the left, an icon-only
@@ -4143,7 +4241,7 @@ export function App() {
             onSetup={setupCodingAgent}
             onLogin={loginCodingAgent}
             onSetupCheck={runSetupCheck}
-            onRefresh={() => void refreshCodingAgents()}
+            onRefresh={() => void refreshCodingAgents({ refreshModels: true })}
           />
         ) : tab === "changelog" ? (
           <ChangelogPage />
@@ -4170,6 +4268,8 @@ export function App() {
             onOpenChangelog={() => setTab("changelog")}
             extTabs={extNavTabs}
             onOpenExt={setTab}
+            settings={settings}
+            onSettingsChange={updateSettings}
           />
         )}
       </main>
@@ -4280,6 +4380,7 @@ export function App() {
       <Toaster position="bottom-center" />
     </div>
     </AskProvider>
+    </AgentModelCatalogContext.Provider>
   );
 }
 
@@ -8521,20 +8622,29 @@ function ForkSessionDialog({
   onClose: () => void;
   onCreated: () => Promise<void>;
 }) {
-  const [agent, setAgent] = useState<AgentKind>(() => defaultForkAgent(session.agent));
+  const catalog = useAgentModelCatalog();
+  const defaultModelFor = (key: AgentKind) => catalog.defaults[key] ?? AGENT_DEFAULT_MODEL[key];
+  const defaultAgent = defaultForkAgent(session.agent);
+  const [agent, setAgent] = useState<AgentKind>(() => defaultAgent);
   const [model, setModel] = useState(
     () =>
-      localStorage.getItem(`lfg_fork_model_${defaultForkAgent(session.agent)}`) ||
-      AGENT_DEFAULT_MODEL[defaultForkAgent(session.agent)],
+      localStorage.getItem(`lfg_fork_model_${defaultAgent}`) ||
+      defaultModelFor(defaultAgent),
   );
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(() => savedThinkingLevel());
   const [prompt, setPrompt] = useState("");
   const sid = session.sessionId;
-  const models = AGENT_MODELS[agent];
+  const models = catalog.models[agent] ?? AGENT_MODELS[agent];
+  const thinkingLevels = useAgentThinkingLevels(agent);
 
   useEffect(() => {
     if (!models.includes(model)) setModel(models[0]);
   }, [models, model]);
+  useEffect(() => {
+    if (thinkingLevels.length && !thinkingLevels.includes(thinkingLevel)) {
+      setThinkingLevel(thinkingLevels.includes("high") ? "high" : thinkingLevels[0]);
+    }
+  }, [thinkingLevel, thinkingLevels]);
 
   function submit(e?: FormEvent) {
     e?.preventDefault();
@@ -8594,7 +8704,7 @@ function ForkSessionDialog({
                 aria-label={label}
                 onClick={() => {
                   setAgent(key);
-                  setModel(localStorage.getItem(`lfg_fork_model_${key}`) || AGENT_DEFAULT_MODEL[key]);
+                  setModel(localStorage.getItem(`lfg_fork_model_${key}`) || defaultModelFor(key));
                 }}
                 className={cn(
                   "flex h-7 w-9 items-center justify-center rounded-full transition",
@@ -8606,20 +8716,7 @@ function ForkSessionDialog({
             ))}
           </div>
 
-          <FieldPill>
-            <select
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              aria-label="Model"
-              className="max-w-36 appearance-none truncate bg-transparent pr-1 text-xs font-medium outline-none"
-            >
-              {models.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </FieldPill>
+          <ModelPicker value={model} models={models} onChange={setModel} />
 
           {agentSupportsThinking(agent) ? (
             <FieldPill>
@@ -8629,7 +8726,7 @@ function ForkSessionDialog({
                 aria-label="Thinking level"
                 className="max-w-24 appearance-none truncate bg-transparent pr-1 text-xs font-medium outline-none"
               >
-                {THINKING_LEVELS.map((item) => (
+                {thinkingLevels.map((item) => (
                   <option key={item} value={item}>
                     {item}
                   </option>
@@ -8704,6 +8801,7 @@ const SessionCard = memo(function SessionCard({
   // the one-shot entrance animation on the card root.
   entering?: boolean;
 }) {
+  const catalog = useAgentModelCatalog();
   const [error, setError] = useState<string | null>(null);
   const [summarizing, setSummarizing] = useState(false);
 
@@ -9164,7 +9262,7 @@ const onTouchStart = (e: ReactTouchEvent) => {
                 }
               >
                 <DropdownMenuLabel>Model</DropdownMenuLabel>
-                {(AGENT_MODELS[session.agent as AgentKind] ?? CLAUDE_MODELS).map((item) => (
+                {((catalog.models[session.agent as AgentKind] ?? AGENT_MODELS[session.agent as AgentKind]) ?? CLAUDE_MODELS).map((item) => (
                   <DropdownMenuRadioItem key={item} value={item}>
                     {item}
                   </DropdownMenuRadioItem>
@@ -10088,6 +10186,8 @@ function NewSessionDialog({
   focusNonce?: number;
   codingAgents?: CodingAgentInfo[];
 }) {
+  const catalog = useAgentModelCatalog();
+  const defaultModelFor = (key: AgentKind) => catalog.defaults[key] ?? AGENT_DEFAULT_MODEL[key];
   const [agent, setAgent] = useState<AgentKind>(
     () => (localStorage.getItem("lfg_v2_agent") as AgentKind | null) || "aisdk",
   );
@@ -10096,7 +10196,7 @@ function NewSessionDialog({
     () =>
       localStorage.getItem(`lfg_model_${localStorage.getItem("lfg_v2_agent") || "aisdk"}`) ||
       localStorage.getItem("lfg_model") ||
-      AGENT_DEFAULT_MODEL[(localStorage.getItem("lfg_v2_agent") as AgentKind | null) || "aisdk"],
+      defaultModelFor((localStorage.getItem("lfg_v2_agent") as AgentKind | null) || "aisdk"),
   );
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(
     () => savedThinkingLevel(),
@@ -10122,6 +10222,18 @@ function NewSessionDialog({
   // expands the section so opening the dialog stays instant; reset on close.
   const [resumeOpen, setResumeOpen] = useState(false);
   const [resumable, setResumable] = useState<ResumableSession[] | null>(null);
+  const [agentPopoverOpen, setAgentPopoverOpen] = useState(false);
+  const [modelLayerOpen, setModelLayerOpen] = useState(false);
+  const handleModelLayerOpenChange = useCallback((next: boolean) => {
+    setModelLayerOpen(next);
+  }, []);
+  const handleAgentPopoverOpenChange = useCallback(
+    (next: boolean) => {
+      if (!next && modelLayerOpen) return;
+      setAgentPopoverOpen(next);
+    },
+    [modelLayerOpen],
+  );
   // Close the resume sheet and drop the cached list so the next open refetches
   // (and shows the skeleton) instead of flashing a stale roster.
   const closeResume = useCallback(() => {
@@ -10319,9 +10431,9 @@ function NewSessionDialog({
         ? ["fable", "opus", "sonnet", "haiku"].includes(model)
           ? model
           : undefined
-        : AGENT_MODELS["codex-aisdk"].includes(model)
+        : (catalog.models["codex-aisdk"] ?? AGENT_MODELS["codex-aisdk"]).includes(model)
           ? model
-          : AGENT_DEFAULT_MODEL["codex-aisdk"];
+          : defaultModelFor("codex-aisdk");
     onClose();
     toast.promise(
       api("/api/sessions/resume", {
@@ -10351,7 +10463,8 @@ function NewSessionDialog({
     if (open) setUser(defaultUser || localStorage.getItem("lfg_user") || users[0]?.email || "");
   }, [open, defaultUser, users]);
 
-  const models = AGENT_MODELS[agent];
+  const models = catalog.models[agent] ?? AGENT_MODELS[agent];
+  const thinkingLevels = useAgentThinkingLevels(agent);
   // When the live view is filtered to a specific project, lock new sessions to
   // that project's repo (and hide the picker below). Falls back to the normal
   // localStorage/first-repo default when viewing "All projects" or when the
@@ -10430,6 +10543,11 @@ function NewSessionDialog({
   useEffect(() => {
     if (!models.includes(model)) setModel(models[0]);
   }, [models, model]);
+  useEffect(() => {
+    if (thinkingLevels.length && !thinkingLevels.includes(thinkingLevel)) {
+      setThinkingLevel(thinkingLevels.includes("high") ? "high" : thinkingLevels[0]);
+    }
+  }, [thinkingLevel, thinkingLevels]);
 
   const visibleAgentOptions = useMemo(() => {
     const visible = new Set<string>();
@@ -10444,7 +10562,7 @@ function NewSessionDialog({
     if (visibleAgentOptions.some((option) => option.key === agent)) return;
     const next = visibleAgentOptions[0]?.key ?? "aisdk";
     setAgent(next);
-    setModel(localStorage.getItem(`lfg_model_${next}`) || AGENT_DEFAULT_MODEL[next]);
+    setModel(localStorage.getItem(`lfg_model_${next}`) || defaultModelFor(next));
   }, [agent, visibleAgentOptions]);
 
   if (!open) return null;
@@ -10624,7 +10742,7 @@ function NewSessionDialog({
                 }
                 setAgent(key);
                 setModel(
-                  localStorage.getItem(`lfg_model_${key}`) || AGENT_DEFAULT_MODEL[key],
+                  localStorage.getItem(`lfg_model_${key}`) || defaultModelFor(key),
                 );
               }}
               className={cn(
@@ -10642,20 +10760,14 @@ function NewSessionDialog({
         </div>
       ) : null}
 
-      <FieldPill flat={variant === "inline"}>
-        <select
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          aria-label="Model"
-          className="max-w-28 appearance-none truncate bg-transparent pr-1 text-xs font-medium outline-none"
-        >
-          {models.map((item) => (
-            <option key={item} value={item}>
-              {item}
-            </option>
-          ))}
-        </select>
-      </FieldPill>
+      <ModelPicker
+        value={model}
+        models={models}
+        onChange={setModel}
+        flat={variant === "inline"}
+        width="max-w-28"
+        onMobileLayerOpenChange={variant === "inline" ? handleModelLayerOpenChange : undefined}
+      />
 
       {agentSupportsThinking(agent) && (
         <FieldPill flat={variant === "inline"}>
@@ -10665,7 +10777,7 @@ function NewSessionDialog({
             aria-label="Thinking level"
             className="max-w-24 appearance-none truncate bg-transparent pr-1 text-xs font-medium outline-none"
           >
-            {THINKING_LEVELS.map((item) => (
+            {thinkingLevels.map((item) => (
               <option key={item} value={item}>
                 {item}
               </option>
@@ -10730,7 +10842,7 @@ function NewSessionDialog({
   // *above* it — reclaiming the separate row those controls used to occupy while
   // the tall field leaves plenty of empty space.
   const agentPopover = (
-    <DropdownMenu>
+    <DropdownMenu open={agentPopoverOpen} onOpenChange={handleAgentPopoverOpenChange}>
       <DropdownMenuTrigger
         render={
           <button
@@ -11385,6 +11497,237 @@ function FieldPill({ icon, children, flat = false }: { icon?: ReactNode; childre
   );
 }
 
+function ModelPicker({
+  value,
+  models,
+  onChange,
+  flat = false,
+  width = "max-w-36",
+  onMobileLayerOpenChange,
+}: {
+  value: string;
+  models: string[];
+  onChange: (value: string) => void;
+  flat?: boolean;
+  width?: string;
+  onMobileLayerOpenChange?: (open: boolean) => void;
+}) {
+  const isMobile = useIsMobile();
+  const [open, setOpen] = useState(false);
+  const [mobileMounted, setMobileMounted] = useState(false);
+  const [mobileVisible, setMobileVisible] = useState(false);
+  const [query, setQuery] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const mobileTransitionMs = 260;
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return models;
+    return models.filter((item) => item.toLowerCase().includes(q));
+  }, [models, query]);
+  const searchable = models.length > 8;
+
+  useEffect(() => {
+    if (!open) setQuery("");
+  }, [open]);
+  useEffect(() => {
+    if (!open || !isMobile) return;
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [isMobile, open]);
+  useEffect(() => {
+    if (!isMobile) {
+      setMobileMounted(false);
+      setMobileVisible(false);
+      return;
+    }
+    if (open) {
+      setMobileMounted(true);
+      const frames: number[] = [];
+      frames.push(window.requestAnimationFrame(() => {
+        frames.push(window.requestAnimationFrame(() => setMobileVisible(true)));
+      }));
+      return () => frames.forEach((frame) => window.cancelAnimationFrame(frame));
+    }
+
+    setMobileVisible(false);
+    const timer = window.setTimeout(() => setMobileMounted(false), mobileTransitionMs);
+    return () => window.clearTimeout(timer);
+  }, [isMobile, open]);
+  useEffect(() => {
+    onMobileLayerOpenChange?.(isMobile && mobileMounted);
+  }, [isMobile, mobileMounted, onMobileLayerOpenChange]);
+  useEffect(() => {
+    return () => onMobileLayerOpenChange?.(false);
+  }, [onMobileLayerOpenChange]);
+
+  const choose = (item: string) => {
+    onChange(item);
+    setOpen(false);
+  };
+
+  const triggerClass = cn(
+    "inline-flex min-w-0 cursor-pointer items-center gap-1.5 rounded-full text-foreground transition active:scale-[0.98]",
+    isMobile ? "h-11" : "h-8",
+    flat ? (isMobile ? "px-2" : "px-1") : isMobile ? "bg-muted px-4" : "bg-muted px-3",
+  );
+
+  const trigger = (
+    <button
+      type="button"
+      aria-label="Model"
+      aria-haspopup="dialog"
+      aria-expanded={open}
+      className={triggerClass}
+    >
+      <span className={cn("truncate text-xs font-medium", isMobile && "text-sm", width)}>
+        {value || "model"}
+      </span>
+      <ChevronDown className={cn("shrink-0 text-muted-foreground/70", isMobile ? "size-4" : "size-3")} />
+    </button>
+  );
+
+  const search = searchable ? (
+    <div className="relative">
+      <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+      <input
+        ref={inputRef}
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        onKeyDown={(event) => {
+          event.stopPropagation();
+          if (event.key === "Escape") setOpen(false);
+          if (event.key === "Enter" && filtered[0]) choose(filtered[0]);
+        }}
+        placeholder="Filter models"
+        className="h-10 w-full rounded-xl border border-border bg-background pl-9 pr-3 text-sm outline-none transition-colors placeholder:text-muted-foreground focus:border-foreground/30"
+      />
+    </div>
+  ) : null;
+
+  const list = (
+    <div className={cn("overflow-y-auto pr-1", isMobile ? "max-h-[52dvh]" : "max-h-72")}>
+      {filtered.length ? (
+        filtered.map((item) => {
+          const selected = value === item;
+          return (
+            <button
+              key={item}
+              type="button"
+              onClick={() => choose(item)}
+              className={cn(
+                "flex w-full min-w-0 items-center gap-3 rounded-xl px-3 text-left text-sm outline-none transition-colors",
+                isMobile ? "h-12" : "h-10",
+                selected
+                  ? "bg-primary/12 text-foreground ring-1 ring-inset ring-primary/20"
+                  : cn("text-foreground focus-visible:bg-muted", !isMobile && "hover:bg-muted"),
+              )}
+            >
+              <Check className={cn("size-4 shrink-0 text-primary", selected ? "opacity-100" : "opacity-0")} />
+              <span className="min-w-0 flex-1 truncate">{item}</span>
+            </button>
+          );
+        })
+      ) : (
+        <div className="px-3 py-8 text-center text-sm text-muted-foreground">
+          No matching models
+        </div>
+      )}
+    </div>
+  );
+
+  if (isMobile) {
+    return (
+      <>
+        <button
+          type="button"
+          aria-label="Model"
+          aria-haspopup="dialog"
+          aria-expanded={open}
+          onClick={() => setOpen(true)}
+          className={triggerClass}
+        >
+          <span className={cn("truncate text-sm font-medium", width)}>
+            {value || "model"}
+          </span>
+          <ChevronDown className="size-4 shrink-0 text-muted-foreground/70" />
+        </button>
+        {mobileMounted
+          ? createPortal(
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-label="Model"
+              className="fixed inset-0 z-[150]"
+              onPointerDown={(event) => event.stopPropagation()}
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                type="button"
+                aria-label="Close model picker"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setOpen(false);
+                }}
+                className={cn(
+                  "absolute inset-0 bg-black/80 transition-opacity duration-200 ease-out",
+                  mobileVisible ? "opacity-100" : "opacity-0",
+                )}
+              />
+              <div
+                className={cn(
+                  "absolute inset-x-0 bottom-0 z-[1] mx-auto flex max-h-[82dvh] max-w-lg transform-gpu flex-col rounded-t-[2rem] border border-border bg-background p-4 pb-[max(env(safe-area-inset-bottom),1rem)] text-foreground shadow-2xl transition-[transform,opacity] duration-[260ms] ease-[cubic-bezier(0.32,0.72,0,1)] will-change-transform",
+                  mobileVisible ? "opacity-100" : "opacity-95",
+                )}
+                style={{
+                  transform: mobileVisible
+                    ? "translate3d(0, 0, 0)"
+                    : "translate3d(0, calc(100% + 1rem), 0)",
+                }}
+              >
+                <div className="mx-auto mb-3 h-1.5 w-24 shrink-0 rounded-full bg-muted" />
+                <h2 className="mb-3 text-base font-semibold">Model</h2>
+                <div className="min-h-0 space-y-3">
+                  {search}
+                  {list}
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+          : null}
+      </>
+    );
+  }
+
+  return (
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger render={trigger} />
+      <Popover.Portal>
+        <Popover.Positioner
+          side="bottom"
+          align="start"
+          sideOffset={6}
+          className="isolate z-[130] outline-none"
+        >
+          <Popover.Popup
+            initialFocus={searchable ? inputRef : true}
+            className="w-80 max-w-[calc(100vw-1rem)] rounded-2xl border border-border bg-popover p-2 text-popover-foreground shadow-2xl ring-1 ring-foreground/5 outline-none"
+          >
+            <div className="space-y-2">
+              {search}
+              {list}
+            </div>
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
 function AutoAgentModelPicker({
   backend,
   setBackend,
@@ -11400,7 +11743,8 @@ function AutoAgentModelPicker({
   thinkingLevel: ThinkingLevel;
   setThinkingLevel: (v: ThinkingLevel) => void;
 }) {
-  const models = AGENT_MODELS[backend];
+  const models = useAgentModels(backend);
+  const thinkingLevels = useAgentThinkingLevels(backend);
   return (
     <div className="mt-2 flex flex-wrap items-center gap-1.5">
       <div className="inline-flex h-8 items-center rounded-full bg-muted p-0.5 text-xs font-semibold">
@@ -11421,20 +11765,7 @@ function AutoAgentModelPicker({
         ))}
       </div>
 
-      <FieldPill>
-        <select
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          aria-label="Auto agent model"
-          className="max-w-36 appearance-none truncate bg-transparent pr-1 text-xs font-medium outline-none"
-        >
-          {models.map((item) => (
-            <option key={item} value={item}>
-              {item}
-            </option>
-          ))}
-        </select>
-      </FieldPill>
+      <ModelPicker value={model} models={models} onChange={setModel} />
 
       {agentSupportsThinking(backend) ? (
         <FieldPill>
@@ -11444,7 +11775,7 @@ function AutoAgentModelPicker({
             aria-label="Auto agent thinking level"
             className="max-w-24 appearance-none truncate bg-transparent pr-1 text-xs font-medium outline-none"
           >
-            {THINKING_LEVELS.map((item) => (
+            {thinkingLevels.map((item) => (
               <option key={item} value={item}>
                 {item}
               </option>
@@ -11504,22 +11835,24 @@ function FindingSheet({
   ) => Promise<void>;
   onDismiss: (f: AutoFinding) => void;
 }) {
+  const defaultModel = useAgentDefaultModel(sourceAgent?.agent ?? "aisdk");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [backend, setBackend] = useState<AutoAgentBackend>(sourceAgent?.agent ?? "aisdk");
   const [model, setModel] = useState(
-    sourceAgent?.model ?? AGENT_DEFAULT_MODEL[sourceAgent?.agent ?? "aisdk"],
+    sourceAgent?.model ?? defaultModel,
   );
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(
     (sourceAgent?.thinkingLevel as ThinkingLevel | undefined) ?? savedThinkingLevel(),
   );
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const backendModels = AGENT_MODELS[backend];
+  const backendModels = useAgentModels(backend);
+  const backendDefaultModel = useAgentDefaultModel(backend);
   const supportsThinking = agentSupportsThinking(backend);
 
   useEffect(() => {
-    if (!backendModels.includes(model)) setModel(AGENT_DEFAULT_MODEL[backend]);
-  }, [backend, backendModels, model]);
+    if (!backendModels.includes(model)) setModel(backendDefaultModel);
+  }, [backendDefaultModel, backendModels, model]);
 
   const launchOpts = (): { agent: AutoAgentBackend; model: string; thinkingLevel?: string } => ({
     agent: backend,
@@ -11688,14 +12021,16 @@ function NewAutoAgentComposer({
       : undefined;
   const [cwd, setCwd] = useState(scopedRepo?.cwd ?? repos[0]?.cwd ?? "");
   const [backend, setBackend] = useState<AutoAgentBackend>("aisdk");
-  const [model, setModel] = useState(AGENT_DEFAULT_MODEL.aisdk);
+  const defaultModel = useAgentDefaultModel("aisdk");
+  const [model, setModel] = useState(defaultModel);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(savedThinkingLevel());
-  const backendModels = AGENT_MODELS[backend];
+  const backendModels = useAgentModels(backend);
+  const backendDefaultModel = useAgentDefaultModel(backend);
   const supportsThinking = agentSupportsThinking(backend);
 
   useEffect(() => {
-    if (!backendModels.includes(model)) setModel(AGENT_DEFAULT_MODEL[backend]);
-  }, [backend, backendModels, model]);
+    if (!backendModels.includes(model)) setModel(backendDefaultModel);
+  }, [backendDefaultModel, backendModels, model]);
 
   // Fire-and-close: hand the idea to the parent (which runs compose → save
   // under a loading toast) and dismiss the sheet immediately. The slow,
@@ -11831,8 +12166,9 @@ function AgentEditorSheet({
   // else the first repo.
   const [cwd, setCwd] = useState(existing?.cwd ?? repos[0]?.cwd ?? "");
   const [backend, setBackend] = useState<AutoAgentBackend>(existing?.agent ?? "aisdk");
+  const initialDefaultModel = useAgentDefaultModel(existing?.agent ?? "aisdk");
   const [model, setModel] = useState(
-    existing?.model ?? AGENT_DEFAULT_MODEL[existing?.agent ?? "aisdk"],
+    existing?.model ?? initialDefaultModel,
   );
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>(
     (existing?.thinkingLevel as ThinkingLevel | undefined) ?? savedThinkingLevel(),
@@ -11842,12 +12178,13 @@ function AgentEditorSheet({
   const [enhanceErr, setEnhanceErr] = useState<string | null>(null);
   // Scan only when the schedule changes, not on every keystroke elsewhere.
   const nextPreview = useMemo(() => nextRunAt(schedule, tz), [schedule, tz]);
-  const backendModels = AGENT_MODELS[backend];
+  const backendModels = useAgentModels(backend);
+  const backendDefaultModel = useAgentDefaultModel(backend);
   const supportsThinking = agentSupportsThinking(backend);
 
   useEffect(() => {
-    if (!backendModels.includes(model)) setModel(AGENT_DEFAULT_MODEL[backend]);
-  }, [backend, backendModels, model]);
+    if (!backendModels.includes(model)) setModel(backendDefaultModel);
+  }, [backendDefaultModel, backendModels, model]);
 
   // Rewrite the user's rough idea into a sharp watch-agent prompt in place. The
   // server runs a one-shot, tool-less claude pass; we swap the result into the
@@ -12322,6 +12659,96 @@ function VoiceSettingsSection() {
   );
 }
 
+function browserTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || DEFAULT_SCHED_TZ;
+  } catch {
+    return DEFAULT_SCHED_TZ;
+  }
+}
+
+function timeZoneOptions(current?: string): string[] {
+  const intl = Intl as typeof Intl & { supportedValuesOf?: (key: "timeZone") => string[] };
+  const zones = intl.supportedValuesOf?.("timeZone") ?? [];
+  const all = new Set<string>();
+  for (const zone of [DEFAULT_SCHED_TZ, browserTimeZone(), current]) {
+    if (zone) all.add(zone);
+  }
+  for (const zone of zones) all.add(zone);
+  return [...all].sort((a, b) => a.localeCompare(b));
+}
+
+function TimeZoneSettingsSection({
+  settings,
+  onChange,
+}: {
+  settings: GlobalSettings;
+  onChange: (patch: Partial<GlobalSettings>) => Promise<void>;
+}) {
+  const [saving, setSaving] = useState(false);
+  const zones = useMemo(() => timeZoneOptions(settings.timeZone), [settings.timeZone]);
+
+  async function save(timeZone: string) {
+    if (!timeZone || timeZone === settings.timeZone || saving) return;
+    setSaving(true);
+    try {
+      await onChange({ timeZone });
+      toast.success("Timezone updated");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not update timezone");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="space-y-2">
+      <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        Scheduling
+      </h2>
+      <div className="overflow-hidden rounded-2xl border border-border bg-card/40">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5">
+          <div className="flex items-center gap-3">
+            <span className="flex size-7 items-center justify-center rounded-[7px] bg-primary text-white">
+              <Globe className="size-4" />
+            </span>
+            <span className="text-sm font-medium">Timezone</span>
+          </div>
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void save(browserTimeZone())}
+              disabled={saving || browserTimeZone() === settings.timeZone}
+              className="rounded-full bg-muted px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
+            >
+              Use device
+            </button>
+            <label className="flex min-w-0 items-center gap-1 rounded-full bg-muted px-3 py-1.5">
+              <select
+                value={settings.timeZone}
+                onChange={(event) => void save(event.target.value)}
+                disabled={saving}
+                aria-label="Schedule timezone"
+                className="max-w-[12rem] appearance-none truncate bg-transparent text-right text-xs font-medium outline-none"
+              >
+                {zones.map((zone) => (
+                  <option key={zone} value={zone}>
+                    {zone}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="size-3 text-muted-foreground/70" />
+            </label>
+          </div>
+        </div>
+      </div>
+      <p className="px-4 text-xs text-muted-foreground">
+        Auto-agent runs and model-refresh schedules use this timezone.
+      </p>
+    </section>
+  );
+}
+
 function CodingAgentsPage({
   setupChecks,
   agents,
@@ -12337,8 +12764,22 @@ function CodingAgentsPage({
   onSetup: (kind: AgentKind) => void;
   onLogin: (kind: AgentKind) => void;
   onSetupCheck: (key: string) => void;
-  onRefresh: () => void;
+  onRefresh: () => void | Promise<void>;
 }) {
+  const [refreshing, setRefreshing] = useState(false);
+  async function refresh() {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await onRefresh();
+      toast.success("Coding agents refreshed");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not refresh coding agents");
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   return (
     <div className="mx-auto max-w-xl space-y-3 pb-10">
       <div className="flex items-center justify-between px-4">
@@ -12347,10 +12788,11 @@ function CodingAgentsPage({
         </h2>
         <button
           type="button"
-          onClick={onRefresh}
-          className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground"
+          onClick={() => void refresh()}
+          disabled={refreshing}
+          className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
         >
-          <RotateCcw className="size-3.5" />
+          <RotateCcw className={cn("size-3.5", refreshing && "animate-spin")} />
           Refresh
         </button>
       </div>
@@ -12695,6 +13137,8 @@ function SettingsView({
   dark,
   toggleTheme,
   user,
+  settings,
+  onSettingsChange,
   onOpenTerminal,
   onOpenBrowser,
   onOpenCodingAgents,
@@ -12707,6 +13151,8 @@ function SettingsView({
   dark: boolean;
   toggleTheme: () => void;
   user: string | null;
+  settings: GlobalSettings;
+  onSettingsChange: (patch: Partial<GlobalSettings>) => Promise<void>;
   onOpenTerminal: () => void;
   onOpenBrowser: () => void;
   onOpenCodingAgents: () => void;
@@ -12757,6 +13203,8 @@ function SettingsView({
           </button>
         </div>
       </section>
+
+      <TimeZoneSettingsSection settings={settings} onChange={onSettingsChange} />
 
       {/* Auto agents — opens as its own page. */}
       <section className="space-y-2">

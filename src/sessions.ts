@@ -282,7 +282,7 @@ function computeStatus(
     // a normal sentence containing "model" + "unavailable" can't trip it. The
     // synthetic-model marker (liveModel) is a corroborating signal when present.
     const modelErr =
-      /issue with the selected model|may not have access to it\.?\s*run \/model|claude[\w.\s-]*is (currently )?unavailable|\bis no longer (available|supported)\b/i.test(
+      /issue with the selected model|may not have access to it\.?\s*run \/model|claude[\w.\s-]*is (currently )?unavailable|\bis no longer (available|supported)\b|\bnamed models?\b[^.]*\bunavailable\b|can only use auto\b/i.test(
         text,
       );
     if (modelErr || (liveModel === "<synthetic>" && /\bmodel\b/i.test(text))) {
@@ -1218,10 +1218,28 @@ function stripCursorRedactions(text: string): string {
   return text.replace(/\n*\[REDACTED\]\s*$/g, "").trimEnd();
 }
 
+// cursor rewrites its trailing `{"type":"turn_ended",...}` marker IN PLACE when the
+// next turn begins — its transcript is NOT append-only. An indexer that advances its
+// byte cursor past that marker resumes the next poll PAST the start of the user turn
+// that overwrote it, so that user message is silently skipped ("user message is
+// gone"). The incremental indexers use this to hold their byte cursor at the marker's
+// start and re-read it next poll. Only cursor emits `turn_ended`, so this predicate is
+// false for every other agent and the hold is inert for their append-only transcripts.
+export function isCursorTurnEndedLine(line: string): boolean {
+  if (!line.includes("turn_ended")) return false;
+  try {
+    return (JSON.parse(line) as { type?: unknown }).type === "turn_ended";
+  } catch {
+    return false;
+  }
+}
+
 function normalizeCursorLineMessages(line: string): SessionMsg[] {
   let x: {
     type?: string;
     role?: string;
+    status?: string;
+    error?: string;
     message?: { role?: string; content?: unknown };
   };
   try {
@@ -1229,8 +1247,21 @@ function normalizeCursorLineMessages(line: string): SessionMsg[] {
   } catch {
     return [];
   }
+  // cursor closes every turn with a bare {type:"turn_ended", status, error?}
+  // marker. A successful turn carries no content here and stays dropped, but a
+  // FAILED turn (model rejected, plan/quota, auth) writes ONLY this line — no
+  // assistant text at all. Dropping it too is what makes a broken cursor session
+  // look like "streaming is broken": silently stuck, no output, no reason. So
+  // surface an errored turn as an assistant error message — it renders in the
+  // transcript/live stream AND trips computeStatus via `apiError`.
+  if (x.type === "turn_ended") {
+    const err = typeof x.error === "string" ? x.error.trim() : "";
+    return x.status === "error" && err
+      ? [{ id: null, role: "assistant", kind: "text", text: err, ts: null, apiError: true }]
+      : [];
+  }
   // Only cursor lines: role at the top level, no top-level `type`, a message
-  // envelope. turn_ended and other typed markers are not messages.
+  // envelope. Other typed markers are not messages.
   if (x.type !== undefined || !x.message) return [];
   const role = x.role ?? x.message.role;
   if (role !== "user" && role !== "assistant") return [];

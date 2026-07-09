@@ -173,13 +173,24 @@ import {
   setCodingAgentVisibility,
 } from "../coding-agents.ts";
 import {
-  AISDK_MODELS,
   AUTO_AGENT_BACKENDS,
-  CLAUDE_MODELS,
-  GROK_MODELS,
-  HERMES_MODELS,
+  listModelCatalog,
+  modelsForAgent,
+  resolveModelForAgent,
   thinkingLevelsForAgent,
 } from "../agent-catalog.ts";
+import {
+  readModelDiscoveryCacheSync,
+  refreshModelCatalog,
+  startModelDiscoveryScheduler,
+} from "../model-discovery.ts";
+import {
+  DEFAULT_TIME_ZONE,
+  getGlobalSettings,
+  setGlobalSettings,
+  validTimeZone,
+  type GlobalSettings,
+} from "../settings.ts";
 import { listSkillCatalog } from "../skills-catalog.ts";
 import {
   createImageArtifact,
@@ -2042,10 +2053,34 @@ export async function cmdServe() {
       // ---- coding-agent config: which session backends are shown in the
       // composer, plus lightweight setup health/actions for Settings.
       if (path === "/api/coding-agents" && req.method === "GET") {
-        return json({ agents: await listCodingAgents() });
+        if (url.searchParams.get("refreshModels") === "1") {
+          await refreshModelCatalog({ reason: "manual", onLog: (line) => console.log(line) });
+        }
+        const agents = await listCodingAgents();
+        return json({
+          agents,
+          models: listModelCatalog(agents),
+          discovery: readModelDiscoveryCacheSync(),
+        });
       }
       if (path === "/api/setup/checks" && req.method === "GET") {
         return json({ checks: await listSetupChecksCached() });
+      }
+      if (path === "/api/settings") {
+        if (req.method === "GET") {
+          return json({ settings: await getGlobalSettings() });
+        }
+        if (req.method === "POST") {
+          const b = (await req.json().catch(() => null)) as Partial<GlobalSettings> | null;
+          const patch: Partial<GlobalSettings> = {};
+          if (typeof b?.timeZone === "string") {
+            const timeZone = b.timeZone.trim();
+            if (!validTimeZone(timeZone)) return err(400, `invalid timezone "${timeZone}"`);
+            patch.timeZone = timeZone;
+          }
+          return json({ settings: await setGlobalSettings(patch) });
+        }
+        return err(405, "method not allowed");
       }
       if (path === "/api/bootstrap" && req.method === "GET") {
         noteListSessionsClientActivity();
@@ -2055,9 +2090,13 @@ export async function cmdServe() {
           return sessions;
         });
         const reposTask = listRepos();
+        const codingAgentsTask = listCodingAgents();
+        const settingsTask = getGlobalSettings();
         const tasks = {
           agents: listAgentSummaries(),
-          codingAgents: listCodingAgents(),
+          codingAgents: codingAgentsTask,
+          models: codingAgentsTask.then((agents) => listModelCatalog(agents)),
+          settings: settingsTask,
           sessions: sessionsTask,
           users: Promise.resolve(userRoster()),
           repos: reposTask,
@@ -2076,6 +2115,8 @@ export async function cmdServe() {
         ) as {
           agents?: Awaited<ReturnType<typeof listAgentSummaries>> | null;
           codingAgents?: Awaited<ReturnType<typeof listCodingAgents>> | null;
+          models?: ReturnType<typeof listModelCatalog> | null;
+          settings?: GlobalSettings | null;
           sessions?: Awaited<ReturnType<typeof listSessionsCached>> | null;
           users?: ReturnType<typeof userRoster> | null;
           repos?: Awaited<ReturnType<typeof listRepos>> | null;
@@ -2088,6 +2129,8 @@ export async function cmdServe() {
           {
             agents: boot.agents ?? null,
             codingAgents: boot.codingAgents ?? null,
+            models: boot.models ?? null,
+            settings: boot.settings ?? null,
             sessions: boot.sessions ?? null,
             users: boot.users ?? null,
             repos: boot.repos ?? null,
@@ -2096,7 +2139,7 @@ export async function cmdServe() {
               agents: boot.autoAgents
                 ? boot.autoAgents.map(withAutoAgentMeta)
                 : null,
-              tz: process.env.LFG_SCHED_TZ ?? "Asia/Hong_Kong",
+              tz: boot.settings?.timeZone ?? DEFAULT_TIME_ZONE,
               findings: boot.findings ?? null,
             },
             onboarding: boot.onboarding ?? null,
@@ -2124,7 +2167,8 @@ export async function cmdServe() {
           const b = (await req.json().catch(() => null)) as { visible?: unknown } | null;
           if (!b || typeof b.visible !== "boolean") return err(400, "expected { visible: boolean }");
           await setCodingAgentVisibility(kind, b.visible);
-          return json({ agents: await listCodingAgents() });
+          const agents = await listCodingAgents();
+          return json({ agents, models: listModelCatalog(agents) });
         }
       }
       {
@@ -2135,7 +2179,8 @@ export async function cmdServe() {
           void runCodingAgentSetup(kind).catch((e) =>
             console.error(`[coding-agents] ${kind} setup failed:`, e),
           );
-          return json({ ok: true, agents: await listCodingAgents() });
+          const agents = await listCodingAgents();
+          return json({ ok: true, agents, models: listModelCatalog(agents) });
         }
       }
       {
@@ -2364,9 +2409,10 @@ export async function cmdServe() {
       if (path === "/api/auto/agents") {
         if (req.method === "GET") {
           const agents = await listAutoAgents();
+          const settings = await getGlobalSettings();
           return json({
             agents: agents.map(withAutoAgentMeta),
-            tz: process.env.LFG_SCHED_TZ ?? "Asia/Hong_Kong",
+            tz: settings.timeZone,
           });
         }
         if (req.method === "POST") {
@@ -2391,8 +2437,11 @@ export async function cmdServe() {
           }
           const autoBackend = autoAgent || "aisdk";
           const model = b.model?.trim() || undefined;
-          if (autoBackend === "aisdk" && model && !AISDK_MODELS.includes(model))
-            return err(400, `unknown model "${model}" (expected one of ${AISDK_MODELS.join(", ")})`);
+          if (autoBackend === "aisdk" && model) {
+            const allowed = modelsForAgent("aisdk");
+            if (!allowed.includes(model))
+              return err(400, `unknown model "${model}" (expected one of ${allowed.join(", ")})`);
+          }
           if (autoBackend === "codex-aisdk" && model && !/^[A-Za-z0-9_.:-]{1,80}$/.test(model))
             return err(400, "invalid codex model name");
           if (autoBackend === "opencode" && model && !/^[A-Za-z0-9_.:\/-]{1,80}$/.test(model))
@@ -3138,8 +3187,11 @@ export async function cmdServe() {
         }
 
         // claude path: resume drives the claude CLI.
-        if (model && !CLAUDE_MODELS.includes(model))
-          return err(400, `unknown model "${model}" (expected one of ${CLAUDE_MODELS.join(", ")})`);
+        if (model) {
+          const allowed = modelsForAgent("claude");
+          if (!allowed.includes(model))
+            return err(400, `unknown model "${model}" (expected one of ${allowed.join(", ")})`);
+        }
         const cwd = await resolveResumeCwd(await cwdForTranscript(transcript), cachedResume?.project);
         const tmuxName = `lfg-${randomBytes(3).toString("hex")}`;
         const resumePrompt = body?.prompt?.trim() || undefined;
@@ -3333,14 +3385,23 @@ export async function cmdServe() {
           agent === "opencode" && requestedModel && OPENCODE_DISABLED_MODELS.has(requestedModel)
             ? OPENCODE_DEFAULT_MODEL
             : requestedModel;
-        if (agent === "claude" && model && !CLAUDE_MODELS.includes(model))
-          return err(400, `unknown model "${model}" (expected one of ${CLAUDE_MODELS.join(", ")})`);
+        if (agent === "claude" && model) {
+          const allowed = modelsForAgent("claude");
+          if (!allowed.includes(model))
+            return err(400, `unknown model "${model}" (expected one of ${allowed.join(", ")})`);
+        }
         if (agent === "codex" && model && !/^[A-Za-z0-9_.:-]{1,80}$/.test(model))
           return err(400, "invalid codex model name");
-        if (agent === "aisdk" && model && !AISDK_MODELS.includes(model))
-          return err(400, `unknown model "${model}" (expected one of ${AISDK_MODELS.join(", ")})`);
-        if (agent === "grok" && model && !GROK_MODELS.includes(model))
-          return err(400, `unknown model "${model}" (expected one of ${GROK_MODELS.join(", ")})`);
+        if (agent === "aisdk" && model) {
+          const allowed = modelsForAgent("aisdk");
+          if (!allowed.includes(model))
+            return err(400, `unknown model "${model}" (expected one of ${allowed.join(", ")})`);
+        }
+        if (agent === "grok" && model) {
+          const allowed = modelsForAgent("grok");
+          if (!allowed.includes(model))
+            return err(400, `unknown model "${model}" (expected one of ${allowed.join(", ")})`);
+        }
         if (agent === "cursor" && model && !/^[A-Za-z0-9_.:\/-]{1,120}$/.test(model))
           return err(400, "invalid cursor model name");
         if (agent === "hermes" && model && !/^[A-Za-z0-9_.:\/-]{1,120}$/.test(model))
@@ -3371,6 +3432,7 @@ export async function cmdServe() {
           if (!allowed.includes(thinkingLevel))
             return err(400, `unknown thinking level "${thinkingLevel}" for ${agent} (expected one of ${allowed.join(", ")})`);
         }
+        const resolvedModel = resolveModelForAgent(agent, model, thinkingLevel);
         const requestedCwd = body?.cwd?.trim() || undefined;
         const parentId = body?.parentSessionId?.trim() || undefined;
         const spawnedBy = body?.spawnedBy?.trim() || (parentId ? "subagent" : undefined);
@@ -3489,18 +3551,18 @@ export async function cmdServe() {
         const createdAt = Date.now();
         const launchModel =
           agent === "grok"
-            ? model ?? GROK_DEFAULT_MODEL
+            ? resolvedModel ?? GROK_DEFAULT_MODEL
             : agent === "cursor"
-              ? model ?? "auto"
+              ? resolvedModel ?? "auto"
               : agent === "hermes"
-                ? model ?? HERMES_DEFAULT_MODEL
+                ? resolvedModel ?? HERMES_DEFAULT_MODEL
                 : agent === "opencode"
-                  ? model ?? OPENCODE_DEFAULT_MODEL
+                  ? resolvedModel ?? OPENCODE_DEFAULT_MODEL
                   : agent === "codex-aisdk"
-                    ? model ?? "gpt-5.5"
+                    ? resolvedModel ?? "gpt-5.5"
                     : agent === "aisdk"
-                      ? model ?? "opus"
-                      : model;
+                      ? resolvedModel ?? "opus"
+                      : resolvedModel;
         addManaged({
           tmuxName,
           cwd,
@@ -3528,13 +3590,13 @@ export async function cmdServe() {
         if (assignedUser) assignUser(tmuxName, assignedUser);
         const r =
           agent === "codex"
-            ? spawnManagedCodexSession({ name: tmuxName, cwd, prompt, model, thinkingLevel, lfgSessionId: launchId, lfgUser: assignedUser })
+            ? spawnManagedCodexSession({ name: tmuxName, cwd, prompt, model: resolvedModel, thinkingLevel, lfgSessionId: launchId, lfgUser: assignedUser })
             : agent === "grok"
               ? spawnManagedGrokSession({
                   name: tmuxName,
                   cwd,
                   prompt,
-                  model: model ?? GROK_DEFAULT_MODEL,
+                  model: resolvedModel ?? GROK_DEFAULT_MODEL,
                   thinkingLevel,
                   lfgSessionId: launchId,
                   lfgUser: assignedUser,
@@ -3544,7 +3606,7 @@ export async function cmdServe() {
                   name: tmuxName,
                   cwd,
                   prompt,
-                  model: model ?? "auto",
+                  model: resolvedModel ?? "auto",
                   lfgSessionId: launchId,
                   lfgUser: assignedUser,
                 })
@@ -3552,7 +3614,7 @@ export async function cmdServe() {
               ? spawnManagedHermesSession({
                   name: tmuxName,
                   cwd,
-                  model: model ?? HERMES_DEFAULT_MODEL,
+                  model: resolvedModel ?? HERMES_DEFAULT_MODEL,
                   provider: HERMES_PROVIDER,
                   lfgSessionId: launchId,
                   lfgUser: assignedUser,
@@ -3562,7 +3624,7 @@ export async function cmdServe() {
                   name: tmuxName,
                   cwd,
                   prompt,
-                  model: model ?? "opus",
+                  model: resolvedModel ?? "opus",
                   sessionId: aisdkSessionId!,
                   thinkingLevel,
                   lfgSessionId: launchId,
@@ -3573,7 +3635,7 @@ export async function cmdServe() {
                     name: tmuxName,
                     cwd,
                     prompt,
-                    model: model ?? "gpt-5.5",
+                    model: resolvedModel ?? "gpt-5.5",
                     key: codexAisdkKey!,
                     thinkingLevel,
                     lfgSessionId: launchId,
@@ -3584,12 +3646,12 @@ export async function cmdServe() {
                       name: tmuxName,
                       cwd,
                       prompt,
-                      model: model ?? OPENCODE_DEFAULT_MODEL,
+                      model: resolvedModel ?? OPENCODE_DEFAULT_MODEL,
                       key: opencodeKey!,
                       lfgSessionId: launchId,
                   lfgUser: assignedUser,
                     })
-                  : spawnManagedSession({ name: tmuxName, cwd, prompt, model, thinkingLevel, lfgSessionId: launchId, lfgUser: assignedUser });
+                  : spawnManagedSession({ name: tmuxName, cwd, prompt, model: resolvedModel, thinkingLevel, lfgSessionId: launchId, lfgUser: assignedUser });
         if (!r.ok) {
           removeManaged(tmuxName);
           assignUser(tmuxName, null);
@@ -3881,8 +3943,11 @@ export async function cmdServe() {
           }
           if (sess.agent !== "claude")
             return err(409, "mid-session model change is only supported for Claude sessions");
-          if (!CLAUDE_MODELS.includes(model))
-            return err(400, `unknown model "${model}" (expected one of ${CLAUDE_MODELS.join(", ")})`);
+          {
+            const allowed = modelsForAgent("claude");
+            if (!allowed.includes(model))
+              return err(400, `unknown model "${model}" (expected one of ${allowed.join(", ")})`);
+          }
           if (!sess.tmuxTarget)
             return err(409, "session is not in a tmux pane — cannot change model");
           // If the session is FROZEN on an unavailable model, an injected
@@ -4867,6 +4932,7 @@ export async function cmdServe() {
   });
 
   startAutoScheduler((l) => console.log(l));
+  startModelDiscoveryScheduler((l) => console.log(l));
   startWorktreeSweep((l) => console.log(l));
   // Watch the fleet for busy -> idle transitions and fan "completed" events out
   // to voice subscribers (/api/voice/events). Idempotent + best-effort.

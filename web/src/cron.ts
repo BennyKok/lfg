@@ -1,10 +1,10 @@
 // Self-contained, dependency-free cron helpers for the web UI.
 //
 // The schedule is a standard 5-field cron expression (minute hour day-of-month
-// month day-of-week), interpreted by the backend scheduler in a configured
-// timezone (LFG_SCHED_TZ, default Asia/Hong_Kong) — NOT the browser's TZ. So
-// nextRunAt() takes that tz and evaluates wall-clock there, mirroring
-// src/auto/scheduler.ts. describeCron() is a "cronstrue-lite": it turns the
+// month day-of-week), interpreted by the backend scheduler in the user's global
+// settings timezone — NOT the browser's TZ. So nextRunAt() takes that tz and
+// evaluates wall-clock there, mirroring src/auto/scheduler.ts. describeCron() is
+// a "cronstrue-lite": it turns the
 // common patterns the picker produces into locale-aware English; anything it
 // doesn't recognise falls back to the raw expression.
 

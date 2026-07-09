@@ -2,15 +2,16 @@ import { listAgents, loadAgent } from "../agents/registry.ts";
 import { runAgent, runAllAgents } from "../agents/runner.ts";
 import { listAutoAgents, saveAutoAgent } from "../auto/store.ts";
 import {
-  AISDK_MODELS,
   AUTO_AGENT_BACKENDS,
   MODEL_OPTIONS,
   buildAgentBrowserTree,
   listModelCatalog,
+  modelsForAgent,
   thinkingLevelsForAgent,
   type AutoAgentBackend,
 } from "../agent-catalog.ts";
 import { listCodingAgents } from "../coding-agents.ts";
+import { readModelDiscoveryCacheSync, refreshModelCatalog } from "../model-discovery.ts";
 import { listSkillCatalog } from "../skills-catalog.ts";
 
 const HELP = `lfg agents — multi-agent insight runner
@@ -18,6 +19,7 @@ const HELP = `lfg agents — multi-agent insight runner
 Usage:
   lfg agents list                 List agents (name, title, enabled)
   lfg agents models [--json]      List provider/model options
+  lfg agents models --refresh     Refresh provider model catalogs now
   lfg agents browser [--json]     Browse providers, skills, insight agents, auto agents
   lfg agents catalog [--json]     Alias for browser
   lfg agents create-auto          Create a scheduled auto agent
@@ -99,10 +101,19 @@ async function cmdList() {
 }
 
 async function cmdModels(args: string[]) {
+  if (hasFlag(args, "--refresh")) {
+    await refreshModelCatalog({ reason: "manual", onLog: (line) => console.error(line) });
+  }
   const models = listModelCatalog(await listCodingAgents().catch(() => []));
+  const discovery = readModelDiscoveryCacheSync();
   if (hasFlag(args, "--json")) {
-    console.log(JSON.stringify({ models }, null, 2));
+    console.log(JSON.stringify({ models, discovery }, null, 2));
     return;
+  }
+  if (discovery) {
+    console.log(
+      `discovery: ${new Date(discovery.refreshedAt).toISOString()} (${discovery.schedule} ${discovery.timeZone})`,
+    );
   }
   for (const item of models) {
     const scopes = [item.session ? "session" : null, item.auto ? "auto" : null]
@@ -194,9 +205,12 @@ Options:
     process.exit(1);
   }
   const model = option(args, "--model")?.trim();
-  if (backend === "aisdk" && model && !AISDK_MODELS.includes(model)) {
-    console.error(`unknown aisdk model "${model}" (expected one of ${AISDK_MODELS.join(", ")})`);
-    process.exit(1);
+  if (backend === "aisdk" && model) {
+    const allowed = modelsForAgent("aisdk");
+    if (!allowed.includes(model)) {
+      console.error(`unknown aisdk model "${model}" (expected one of ${allowed.join(", ")})`);
+      process.exit(1);
+    }
   }
   if ((backend === "codex-aisdk" || backend === "opencode") && model && !/^[A-Za-z0-9_.:\/-]{1,80}$/.test(model)) {
     console.error(`invalid ${backend} model name`);
