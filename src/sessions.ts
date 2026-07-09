@@ -28,6 +28,12 @@ import {
   type ResumableQuery,
   type ResumableQueryResult,
 } from "./resume-cache";
+import {
+  indexedRecentMessages,
+  sessionHasIndexedMessages,
+  sessionIndexKey,
+  isSessionIndexKey,
+} from "./transcript-index";
 
 const HOME = process.env.HOME ?? homedir();
 const PROJECTS_DIR = join(HOME, ".claude", "projects");
@@ -45,6 +51,11 @@ const TITLE_MAX = 72;
 const TOOL_USE_TEXT_MAX = 4_000;
 const TOOL_RESULT_TEXT_MAX = 8_000;
 const PROFILE_LIST_SESSIONS = process.env.LFG_PROFILE_LIST_SESSIONS === "1";
+const DIRECT_INDEX_MANAGED_AGENTS = new Set<ManagedSession["agent"]>([
+  "aisdk",
+  "codex-aisdk",
+  "opencode",
+]);
 
 type SessionProfile = {
   t0: number;
@@ -370,6 +381,10 @@ function managedLaunchRow(
             : `lfg aisdk-session --model ${m.model ?? ""}`.trim();
   const cmd = pid ? readProcCmd(pid, fallbackCmd) : fallbackCmd;
   const model = m.model ?? cmd.match(/--model\s+(\S+)/)?.[1] ?? null;
+  const transcriptPath =
+    m.agent && DIRECT_INDEX_MANAGED_AGENTS.has(m.agent) && sessionId
+      ? sessionIndexKey(sessionId)
+      : null;
   return {
     agent,
     pid,
@@ -386,7 +401,7 @@ function managedLaunchRow(
     spawnedBy: m.spawnedBy ?? null,
     launching: m.launchState === "launching",
     startedAt: m.createdAt,
-    transcriptPath: null,
+    transcriptPath,
     lastActivityAt: m.createdAt,
     last: null,
     tmuxTarget: isCommandFileAgent(agent) ? null : tmuxTarget,
@@ -1715,7 +1730,6 @@ export async function listSessions(): Promise<Session[]> {
   const codexProcs = profileSync(profile, "listCodexProcs_pgrep_ms", () => listCodexProcs());
   profile?.count("codex_procs", codexProcs.length);
   const needsCodexThreads =
-    aisdkEntries.some((e) => e.agent === "codex" && !e.threadId) ||
     codexProcs.some(
       (p) =>
         !isClosing(p.pid) &&
@@ -2028,53 +2042,41 @@ export async function listSessions(): Promise<Session[]> {
     });
   }
 
-  // "aisdk" sessions: headless AI-SDK harnesses. Discovery is registry-driven
-  // (not pgrep) — the harness owns the control plane and the SDK writes the same
-  // transcript JSONL as a normal claude session, so the live view reads it as-is.
+  // "aisdk" sessions: headless SDK harnesses. Discovery is registry-driven
+  // (not pgrep) and transcripts are direct-indexed into SQLite under lfg:// keys.
   // tmuxName is set (supervisor → kill + managed badge) but tmuxTarget is null
   // (send/interrupt route through the command file, not the pane).
   for (const e of aisdkEntries) {
     const isCodex = e.agent === "codex";
-    // opencode entries own a SELF-WRITTEN Claude-shaped transcript named by the
-    // control-plane key (the harness writes no codex rollout) — so they discover
-    // exactly like a Claude aisdk entry: transcript by sessionId, raw model.
     const isOpencode = e.agent === "opencode";
-    // Claude/opencode entries name their transcript by the (deterministic)
-    // sessionId. Codex entries persist a rollout under ~/.codex/sessions keyed by
-    // the app-server threadId, which we only know after turn 1 — so the transcript
-    // is null until then, and the live-view id is the threadId once available
-    // (deep-links straight to the rollout) else the control-plane key.
-    let codexThreadId = isCodex ? (e.threadId ?? null) : null;
-    if (isCodex && !codexThreadId) {
-      const inferred = inferCodexThreadForHarness(e, codex, claimedCodex);
-      if (inferred) {
-        codexThreadId = inferred.id;
-        claimedCodex.add(inferred.id);
-        patchAisdkEntry(e.sessionId, { threadId: inferred.id });
-      }
-    }
-    const transcriptPath = isCodex
-      ? codexThreadId
-        ? await profileAsync(profile, "findCodexTranscriptById_ms", () => findCodexTranscriptById(codexThreadId))
-        : null
-      : await profileAsync(profile, "findTranscriptById_ms", () => findTranscriptById(e.sessionId));
+    const codexThreadId = isCodex ? (e.threadId ?? null) : null;
     const nativeSessionId = isCodex ? codexThreadId : e.sessionId;
     const managedRec = e.tmuxName ? managedByName.get(e.tmuxName) : undefined;
     rememberNativeSession(managedRec, nativeSessionId);
     const sessionId = managedVisibleId(managedRec, e.sessionId) ?? e.sessionId;
+    const transcriptPath = sessionIndexKey(sessionId);
     let last: SessionMsg | null = null;
     let lastActivityAt: number | null = null;
     let lastUser: string | null = null;
-    if (transcriptPath) {
-      try {
-        lastActivityAt = statSync(transcriptPath).mtimeMs;
-      } catch {}
-      // The transcript helpers handle BOTH claude JSONL and codex rollouts
-      // (normalizeCodexLine is tried first inside each), so they're safe for a
-      // codex rollout path too. Guarded with .catch — never throw out of here.
-      const meta = await profileAsync(profile, "transcriptTailMeta_ms", () => transcriptTailMeta(transcriptPath, lastActivityAt ?? 0));
-      last = meta.last;
-      lastUser = meta.lastUser;
+    const recent = await profileAsync(profile, "directTranscriptTailMeta_ms", () =>
+      indexedRecentMessages(transcriptPath, sessionId, 80).catch(() => [] as SessionMsg[]),
+    );
+    if (recent.length) {
+      last = recent[recent.length - 1] ?? null;
+      lastActivityAt = recent.reduce<number | null>(
+        (max, msg) => (msg.ts == null ? max : Math.max(max ?? 0, msg.ts)),
+        null,
+      );
+      for (let i = recent.length - 1; i >= 0; i--) {
+        const msg = recent[i];
+        if (msg.role === "user" && msg.kind === "text" && msg.text.trim()) {
+          const t = stripConversationPrefix(msg.text).trim().replace(/\s+/g, " ");
+          if (t && !t.startsWith("<")) {
+            lastUser = t.length > 140 ? t.slice(0, 139) + "…" : t;
+            break;
+          }
+        }
+      }
     }
     const project = managedRec?.project || projectName(e.cwd, { repoRoot: managedRec?.repoRoot });
     let title = managedTitle(managedRec, sessionId, nativeSessionId, overrides);
@@ -2100,7 +2102,7 @@ export async function listSessions(): Promise<Session[]> {
       sessionId,
       nativeSessionId,
       ...managedLineage(managedRec),
-      launching: managedRec?.launchState === "launching" && !transcriptPath,
+      launching: managedRec?.launchState === "launching" && !sessionHasIndexedMessages(sessionId),
       startedAt,
       transcriptPath,
       lastActivityAt,
@@ -2237,6 +2239,12 @@ export async function resolveTranscript(sessionId: string): Promise<string | nul
     }
     return managed.cwd ? (await findCursorTranscriptByCwd(managed.cwd))?.path ?? null : null;
   }
+  if (managed?.agent && DIRECT_INDEX_MANAGED_AGENTS.has(managed.agent)) {
+    return sessionIndexKey(managed.sessionId ?? sessionId);
+  }
+  const entry = findAisdkEntryByAnyId(sessionId);
+  if (entry) return sessionIndexKey(entry.sessionId);
+  if (sessionHasIndexedMessages(sessionId)) return sessionIndexKey(sessionId);
   if (managed?.nativeSessionId && managed.nativeSessionId !== sessionId) {
     const native =
       (managed.agent === "grok"
@@ -2260,31 +2268,9 @@ export async function resolveTranscript(sessionId: string): Promise<string | nul
     const grokId = pid ? grokSessionIdForPid(pid) : null;
     if (grokId) return findGrokTranscriptById(grokId);
   }
-  const entry = findAisdkEntryByAnyId(sessionId);
-  let id = entry?.agent === "codex" && entry.threadId ? entry.threadId : sessionId;
-  if (entry?.agent === "codex" && !entry.threadId) {
-    const inferred = inferCodexThreadForHarness(entry, await codexThreads(), new Set());
-    if (inferred) {
-      id = inferred.id;
-      patchAisdkEntry(entry.sessionId, { threadId: inferred.id });
-    }
-  }
   let p =
-    (await findTranscriptById(id)) ?? (await findCodexTranscriptById(id)) ?? findGrokTranscriptById(id);
+    (await findTranscriptById(sessionId)) ?? (await findCodexTranscriptById(sessionId)) ?? findGrokTranscriptById(sessionId);
   if (p) return p;
-
-  // For freshly-created headless "js" (aisdk/opencode) sessions we own the id and
-  // the cwd (from the aisdk registry entry). Return the path the transcript *will*
-  // be written to under ~/.claude/projects/... even if the .jsonl does not exist
-  // on disk yet. This lets /api/live/stream establish a tailer immediately; pump
-  // will deliver lines as soon as the harness/provider writes the first content.
-  // (Codex-aisdk uses separate rollout paths and threadIds assigned after turn 1.)
-  if (entry?.cwd && entry.agent !== "codex") {
-    for (const d of candidateDirs(entry.cwd)) {
-      const cand = join(PROJECTS_DIR, d, `${id}.jsonl`);
-      return cand;
-    }
-  }
   return null;
 }
 
@@ -2292,6 +2278,13 @@ export async function resolveTranscript(sessionId: string): Promise<string | nul
 // top-level `cwd`, so the first parseable line tells us where to relaunch a
 // resumed session. Read only the head — the cwd is stable for the whole file.
 export async function cwdForTranscript(path: string): Promise<string | null> {
+  if (isSessionIndexKey(path)) {
+    const sessionId = path.slice("lfg://session/".length);
+    const entry = findAisdkEntryByAnyId(sessionId);
+    if (entry?.cwd) return entry.cwd;
+    const managed = listManaged().find((m) => m.sessionId === sessionId || m.nativeSessionId === sessionId);
+    return managed?.cwd ?? null;
+  }
   try {
     const text = await Bun.file(path).slice(0, 64 * 1024).text();
     for (const line of text.split("\n")) {
