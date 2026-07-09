@@ -1118,22 +1118,51 @@ export function inputBoxText(target: string): string | null {
   const grokBox = grokInputBoxText(lines);
   if (grokBox != null) return grokBox;
 
-  // Hermes' classic CLI is prompt_toolkit-based and commonly renders a simple
-  // bottom prompt rather than a boxed composer.
+  // Codex renders the composer as a `›`-prefixed prompt line at the bottom.
+  // A multi-line draft (explicit newlines or wrap) continues on the following
+  // lines WITHOUT the `›` prefix, then a blank line separates the draft from
+  // the status footer — so collect continuation lines up to that blank line.
+  // Returning only the `›` line made every multi-line send look "never typed"
+  // and the queue clear-retype-fail'd it. Ignore numbered selector rows
+  // (`› 1. ...`) so open prompts don't look like an editable composer.
+  //
+  // This branch must run BEFORE the generic Hermes `>`-prompt fallback below:
+  // that regex matches any transcript line starting with `>` (quotes, diffs,
+  // shell output), which would hijack composer detection in a codex pane.
   for (let i = lines.length - 1; i >= 0; i--) {
-    const m = lines[i].match(/^\s*(?:You|User|Human|>>>|❯|>)\s*:?\s*(.*?)\s*$/i);
+    const m = lines[i].match(/^\s*›\s*(.*?)\s*$/);
+    if (!m) continue;
+    const text = m[1] ?? "";
+    if (/^\d+\.\s+/.test(text)) return null;
+    const parts = [text];
+    for (let j = i + 1; j < lines.length; j++) {
+      if (!lines[j].trim()) break; // blank line = end of draft, footer follows
+      parts.push(lines[j].trim());
+    }
+    return parts.join("\n");
+  }
+
+  // cursor-agent renders the composer as a single bottom line prefixed with a
+  // right-arrow (U+2192), e.g. `→ message text`, or `→ Add a follow-up` when
+  // empty (the placeholder just won't match the caller's needle). Without this
+  // branch inputBoxText returns null for cursor, boxHasNeedle reads "composer
+  // not visible", and every send retries type-then-clear and fails with
+  // "message never left the input box after retries". Scan bottom-up (the two
+  // status lines below the composer don't start with →) and skip numbered
+  // selector rows the same way the codex branch does.
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const m = lines[i].match(/^\s*→\s*(.*?)\s*$/);
     if (!m) continue;
     const text = m[1] ?? "";
     if (/^\d+\.\s+/.test(text)) return null;
     return text;
   }
 
-  // Codex renders the composer as a single bottom prompt line:
-  //   › message text
-  // Ignore numbered selector rows (`› 1. ...`) so open prompts don't look like
-  // an editable composer to the send queue.
+  // Hermes' classic CLI is prompt_toolkit-based and commonly renders a simple
+  // bottom prompt rather than a boxed composer. Keep this fallback LAST: `>`
+  // also matches quoted/diff lines in other agents' transcripts.
   for (let i = lines.length - 1; i >= 0; i--) {
-    const m = lines[i].match(/^\s*›\s*(.*?)\s*$/);
+    const m = lines[i].match(/^\s*(?:You|User|Human|>>>|❯|>)\s*:?\s*(.*?)\s*$/i);
     if (!m) continue;
     const text = m[1] ?? "";
     if (/^\d+\.\s+/.test(text)) return null;
