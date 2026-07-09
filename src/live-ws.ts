@@ -553,7 +553,7 @@ export function createLiveWsSupport(opts: {
       pollQueue(tail);
       void reconcileQueued(tail.sid).then((changed) => changed && pollQueue(tail));
     }, 1000);
-    tail.draftInterval = setInterval(() => pollDraft(tail), 150);
+    tail.draftInterval = setInterval(() => pollDraft(tail), 400);
     return tail;
   };
 

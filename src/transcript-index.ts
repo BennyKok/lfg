@@ -38,14 +38,49 @@ const DB_PATH = join(PATHS.data, "transcript-index.sqlite");
 const INDEX_TEXT_MAX = 12_000;
 const INDEX_CHUNK_BYTES = 1024 * 1024;
 const BACKGROUND_LIMIT = 8;
+const WAL_CHECKPOINT_INTERVAL_MS = 30_000;
 
 let db: Database | null = null;
 let initialized = false;
 let backgroundRunning = false;
 let monitorStarted = false;
 let monitorRunning = false;
+let walCheckpointStarted = false;
+let walCheckpointRunning = false;
 const enqueued = new Set<string>();
 const imports = new Map<string, Promise<{ indexed: number; offset: number; size: number }>>();
+
+function startWalCheckpointTimer(): void {
+  if (walCheckpointStarted) return;
+  walCheckpointStarted = true;
+  const tick = () => {
+    if (walCheckpointRunning) return;
+    walCheckpointRunning = true;
+    try {
+      const row = database()
+        .query<{ busy: number; log: number; checkpointed: number }, []>("PRAGMA wal_checkpoint(TRUNCATE)")
+        .get();
+      if (row && !row.busy && (row.log || row.checkpointed)) {
+        traceLog("transcript_index_wal_checkpoint", {
+          log: row.log,
+          checkpointed: row.checkpointed,
+        });
+      }
+    } catch {
+      // Best-effort WAL maintenance only. Busy databases will be retried on the
+      // next unref'd timer tick.
+    } finally {
+      walCheckpointRunning = false;
+    }
+  };
+  const loop = () => {
+    tick();
+    const timer = setTimeout(loop, WAL_CHECKPOINT_INTERVAL_MS);
+    (timer as { unref?: () => void }).unref?.();
+  };
+  const timer = setTimeout(loop, WAL_CHECKPOINT_INTERVAL_MS);
+  (timer as { unref?: () => void }).unref?.();
+}
 
 function database(): Database {
   if (db) return db;
@@ -54,6 +89,8 @@ function database(): Database {
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = NORMAL");
   db.exec("PRAGMA busy_timeout = 2500");
+  db.exec("PRAGMA wal_autocheckpoint = 1000");
+  startWalCheckpointTimer();
   return db;
 }
 
@@ -437,7 +474,20 @@ export async function indexTranscript(path: string, sessionId: string): Promise<
 
 async function importTranscriptForRead(path: string, sessionId: string): Promise<void> {
   try {
-    if (transcriptIndexCurrent(path)) return;
+    let st: ReturnType<typeof statSync>;
+    try {
+      st = statSync(path);
+    } catch (err) {
+      const code = (err as { code?: string } | null)?.code;
+      if (code !== "ENOENT") throw err;
+      return;
+    }
+    const cursor = transcriptCursorFor(path);
+    if (cursor && cursor.offset === st.size && cursor.size === st.size && cursor.mtimeMs === st.mtimeMs) return;
+    if (cursor) {
+      enqueueTranscriptIndex(path, sessionId);
+      return;
+    }
     await indexTranscript(path, sessionId);
   } catch (err) {
     const code = (err as { code?: string } | null)?.code;

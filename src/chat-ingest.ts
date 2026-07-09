@@ -47,6 +47,10 @@ class ChatTranscriptTailer {
     this.sessionId = sessionId;
   }
 
+  get subscriberCount(): number {
+    return this.subscribers.size;
+  }
+
   setSession(sessionId: string): void {
     this.sessionId = sessionId;
   }
@@ -235,6 +239,10 @@ function tailerFor(path: string, sessionId: string): ChatTranscriptTailer {
   return tailer;
 }
 
+export function tailerHasSubscribers(path: string): boolean {
+  return (tailers.get(path)?.subscriberCount ?? 0) > 0;
+}
+
 export function subscribeChatTranscript(
   path: string,
   sessionId: string,
@@ -283,9 +291,16 @@ export function startChatIngestMonitor(fetchSessions: () => Promise<Session[]>):
         if (!session.sessionId || !session.transcriptPath) continue;
         targets.set(session.transcriptPath, { sessionId: session.sessionId, path: session.transcriptPath });
       }
+      let swept = 0;
       let imported = 0;
       let indexed = 0;
+      let skipped = 0;
       for (const target of targets.values()) {
+        if (tailerHasSubscribers(target.path)) {
+          skipped++;
+          continue;
+        }
+        swept++;
         try {
           const result = await ensureChatTranscriptCaughtUp(target.path, target.sessionId, "monitor");
           imported++;
@@ -306,7 +321,9 @@ export function startChatIngestMonitor(fetchSessions: () => Promise<Session[]>):
         traceLog("chat_ingest_monitor_tick", {
           sessions: sessions.length,
           targets: targets.size,
+          swept,
           imported,
+          skipped,
           indexed,
           durationMs,
         });

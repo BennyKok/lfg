@@ -413,47 +413,59 @@ function managedLineage(m: ManagedSession | undefined): Pick<
 
 const UUID = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
 
-function listClaudeProcs(): { pid: number; cmd: string }[] {
-  let out = "";
-  try {
-    const r = Bun.spawnSync(["pgrep", "-af", "claude"]);
-    out = new TextDecoder().decode(r.stdout);
-  } catch {
-    return [];
-  }
-  const procs: { pid: number; cmd: string }[] = [];
+type ListedProc = { pid: number; cmd: string };
+type PgrepCache = { at: number; procs: ListedProc[] } | null;
+
+const PGREP_SCAN_CACHE_TTL_MS = 750;
+
+let claudePgrepCache: PgrepCache = null;
+let codexPgrepCache: PgrepCache = null;
+
+function parsePgrepProcs(out: string, binary: string): ListedProc[] {
+  const procs: ListedProc[] = [];
   for (const line of out.split("\n")) {
     const m = line.match(/^(\d+)\s+(.*)$/);
     if (!m) continue;
     const pid = Number(m[1]);
     const cmd = m[2].trim();
     const first = cmd.split(/\s+/)[0] ?? "";
-    // Only real `claude` invocations — not editors/greps that mention "claude".
-    if (basename(first) !== "claude") continue;
+    if (basename(first) !== binary) continue;
     procs.push({ pid, cmd });
   }
   return procs;
 }
 
-function listCodexProcs(): { pid: number; cmd: string }[] {
+function cloneListedProcs(procs: ListedProc[]): ListedProc[] {
+  return procs.map((p) => ({ ...p }));
+}
+
+function cachedPgrepProcs(binary: string, cache: PgrepCache): { cache: PgrepCache; procs: ListedProc[] } {
+  const now = performance.now();
+  if (cache && now - cache.at < PGREP_SCAN_CACHE_TTL_MS) {
+    return { cache, procs: cloneListedProcs(cache.procs) };
+  }
   let out = "";
   try {
-    const r = Bun.spawnSync(["pgrep", "-af", "codex"]);
+    const r = Bun.spawnSync(["pgrep", "-af", binary]);
     out = new TextDecoder().decode(r.stdout);
   } catch {
-    return [];
+    const fresh = { at: now, procs: [] };
+    return { cache: fresh, procs: [] };
   }
-  const procs: { pid: number; cmd: string }[] = [];
-  for (const line of out.split("\n")) {
-    const m = line.match(/^(\d+)\s+(.*)$/);
-    if (!m) continue;
-    const pid = Number(m[1]);
-    const cmd = m[2].trim();
-    const first = cmd.split(/\s+/)[0] ?? "";
-    if (basename(first) !== "codex") continue;
-    procs.push({ pid, cmd });
-  }
-  return procs;
+  const fresh = { at: now, procs: parsePgrepProcs(out, binary) };
+  return { cache: fresh, procs: cloneListedProcs(fresh.procs) };
+}
+
+function listClaudeProcs(): ListedProc[] {
+  const r = cachedPgrepProcs("claude", claudePgrepCache);
+  claudePgrepCache = r.cache;
+  return r.procs;
+}
+
+function listCodexProcs(): ListedProc[] {
+  const r = cachedPgrepProcs("codex", codexPgrepCache);
+  codexPgrepCache = r.cache;
+  return r.procs;
 }
 
 type GrokActiveSession = {

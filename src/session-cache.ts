@@ -1,7 +1,7 @@
 import { listSessions, type Session } from "./sessions.ts";
 
 const LIST_SESSIONS_CACHE_TTL_MS = 900;
-const ACTIVE_REFRESH_INTERVAL_MS = 800;
+const ACTIVE_REFRESH_INTERVAL_MS = 1200;
 const ACTIVE_REFRESH_IDLE_MS = 30_000;
 
 let cached: { at: number; sessions: Session[] } | null = null;
