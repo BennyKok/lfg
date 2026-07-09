@@ -36,9 +36,24 @@ import {
   removeEntry,
   writeEntry,
 } from "../../aisdk-registry.ts";
+import { ensureChatTranscriptCaughtUp } from "../../chat-ingest.ts";
 import { makeDraftPublisher } from "./draft.ts";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { homedir } from "node:os";
+import { join } from "node:path";
+
+const HOME = process.env.HOME ?? homedir();
+const CODEX_SESSIONS_DIR = join(HOME, ".codex", "sessions");
+const CODEX_ROLLOUT_FILES_CACHE_MS = 800;
+const UUID_IN_TEXT =
+  /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
+const UUID_EXACT =
+  /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+let codexFilesCache: { at: number; files: string[] } | null = null;
+let codexFilesInflight: Promise<string[]> | null = null;
+const codexPathById = new Map<string, string>();
+const codexMissById = new Map<string, number>();
 
 function arg(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(name);
@@ -67,6 +82,76 @@ function resolveCodexPath(): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+async function codexRolloutFiles(): Promise<string[]> {
+  const now = Date.now();
+  if (codexFilesCache && now - codexFilesCache.at < CODEX_ROLLOUT_FILES_CACHE_MS) {
+    return codexFilesCache.files;
+  }
+  if (codexFilesInflight) return codexFilesInflight;
+  codexFilesInflight = scanCodexRolloutFiles().finally(() => {
+    codexFilesInflight = null;
+  });
+  return codexFilesInflight;
+}
+
+async function scanCodexRolloutFiles(): Promise<string[]> {
+  const out: string[] = [];
+  let years: string[];
+  try {
+    years = await readdir(CODEX_SESSIONS_DIR);
+  } catch {
+    return out;
+  }
+  for (const y of years) {
+    let months: string[];
+    try {
+      months = await readdir(join(CODEX_SESSIONS_DIR, y));
+    } catch {
+      continue;
+    }
+    for (const m of months) {
+      let days: string[];
+      try {
+        days = await readdir(join(CODEX_SESSIONS_DIR, y, m));
+      } catch {
+        continue;
+      }
+      for (const d of days) {
+        let files: string[];
+        try {
+          files = await readdir(join(CODEX_SESSIONS_DIR, y, m, d));
+        } catch {
+          continue;
+        }
+        for (const f of files) {
+          if (!f.endsWith(".jsonl")) continue;
+          const path = join(CODEX_SESSIONS_DIR, y, m, d, f);
+          out.push(path);
+          const id = path.match(UUID_IN_TEXT)?.[0];
+          if (id) {
+            codexPathById.set(id, path);
+            codexMissById.delete(id);
+          }
+        }
+      }
+    }
+  }
+  codexFilesCache = { at: Date.now(), files: out };
+  return out;
+}
+
+async function findCodexTranscriptById(id: string): Promise<string | null> {
+  if (!UUID_EXACT.test(id)) return null;
+  const hit = codexPathById.get(id);
+  if (hit) return hit;
+  const missAt = codexMissById.get(id);
+  if (missAt && Date.now() - missAt < CODEX_ROLLOUT_FILES_CACHE_MS) return null;
+  await codexRolloutFiles();
+  const found = codexPathById.get(id) ?? null;
+  if (!found) codexMissById.set(id, Date.now());
+  return found;
 }
 
 export async function pipeToCodexAiSdk(
@@ -172,6 +257,28 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
   // first turn resumes that thread. Otherwise it's learned early via
   // onSessionCreated, then reused to resume on later turns.
   let threadId: string | null = resumeThreadId ?? null;
+  let transcriptPath: string | null = null;
+  let transcriptPathInflight: Promise<string | null> | null = null;
+
+  function triggerTranscriptCatchUp(): void {
+    const id = threadId;
+    if (!id) return;
+    void (async () => {
+      let path = transcriptPath;
+      if (!path) {
+        transcriptPathInflight ??= findCodexTranscriptById(id).finally(() => {
+          transcriptPathInflight = null;
+        });
+        path = await transcriptPathInflight;
+      }
+      if (!path) return;
+      transcriptPath = path;
+      // sessionId MUST be the LFG key (what the serve monitor + search use);
+      // threadId is discovery-only. Using threadId here would churn the
+      // session_id column against the monitor and break search-by-session.
+      await ensureChatTranscriptCaughtUp(path, key, "codex-aisdk-stream");
+    })().catch(() => {});
+  }
 
   // One provider per harness: it owns a shared `codex app-server` child process
   // reused across every turn (and resumed thread). Full-access + never-approve
@@ -194,6 +301,7 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
         if (typeof session.threadId === "string" && session.threadId) {
           threadId = session.threadId;
           patchEntry(key, { threadId });
+          triggerTranscriptCatchUp();
         }
       },
       ...(codexPath ? { codexPath } : {}),
@@ -256,6 +364,7 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
       let draft = "";
       publishDraft("", true);
       for await (const part of result.fullStream as any) {
+        triggerTranscriptCatchUp();
         if (part?.type === "text-delta") {
           const delta = String(part.text ?? part.textDelta ?? part.delta ?? "");
           if (delta) {
@@ -277,15 +386,18 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
           if (typeof id === "string" && id) {
             threadId = id;
             patchEntry(key, { threadId });
+            triggerTranscriptCatchUp();
           }
         } catch {}
       }
+      triggerTranscriptCatchUp();
     } catch (e) {
       if (signal.aborted) return; // interrupted on purpose — not an error
       console.error(
         `codex-aisdk-session turn failed: ${e instanceof Error ? e.message : e}`,
       );
     } finally {
+      triggerTranscriptCatchUp();
       publishDraft("", true);
     }
   }

@@ -40,8 +40,10 @@ import {
   removeEntry,
   writeEntry,
 } from "../../aisdk-registry.ts";
+import { normalizeLineMessages } from "../../sessions.ts";
+import { indexTranscriptMessages } from "../../transcript-index.ts";
 import { makeDraftPublisher } from "./draft.ts";
-import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -214,13 +216,34 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
   try {
     mkdirSync(join(transcriptPath, ".."), { recursive: true });
   } catch {}
+  let runningOffset = 0;
+  try {
+    runningOffset = statSync(transcriptPath).size;
+  } catch {}
   let parentUuid: string | null = null; // chain lines like Claude does
 
   // Append one transcript line, tolerating any malformed input (a single bad
   // turn must never crash the harness or corrupt the file).
   function appendLine(obj: Record<string, unknown>): void {
     try {
-      appendFileSync(transcriptPath, JSON.stringify(obj) + "\n");
+      const line = JSON.stringify(obj);
+      const offset = runningOffset;
+      appendFileSync(transcriptPath, line + "\n");
+      runningOffset += Buffer.byteLength(line) + 1;
+      // Pin the cursor mtime to the file's ACTUAL mtime (not Date.now()) so the
+      // read-path currency check (cursor.mtimeMs === st.mtimeMs) matches and no
+      // redundant background catch-up is enqueued back onto serve's loop.
+      let mtimeMs = Date.now();
+      try {
+        mtimeMs = statSync(transcriptPath).mtimeMs;
+      } catch {}
+      try {
+        indexTranscriptMessages(transcriptPath, key, [{ offset, messages: normalizeLineMessages(line) }], {
+          size: runningOffset,
+          offset: runningOffset,
+          mtimeMs,
+        });
+      } catch {}
     } catch {}
   }
   function writeUser(text: string): void {

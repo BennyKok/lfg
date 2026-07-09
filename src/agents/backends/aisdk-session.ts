@@ -25,6 +25,8 @@ import {
   removeEntry,
   writeEntry,
 } from "../../aisdk-registry.ts";
+import { ensureChatTranscriptCaughtUp } from "../../chat-ingest.ts";
+import { resolveTranscript } from "../../sessions.ts";
 import { makeDraftPublisher } from "./draft.ts";
 import { readFileSync } from "node:fs";
 
@@ -90,6 +92,15 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
     title: initialPrompt ? initialPrompt.slice(0, 72) : null,
     createdAt: Date.now(),
   });
+  // Best-effort inline indexing only — never gate the session on it. If the
+  // transcript path can't be resolved, run normally and let the serve monitor
+  // backfill; do NOT exit.
+  const transcriptPath = await resolveTranscript(sessionId);
+  if (!transcriptPath) {
+    console.error(
+      `aisdk-session: transcript path unresolved for ${sessionId}; inline indexing disabled (monitor will backfill)`,
+    );
+  }
 
   const queue: string[] = [];
   let startedOnce = false; // turn 1 sets the session id; later turns resume it
@@ -98,6 +109,10 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
   let closing = false;
 
   const publishDraft = makeDraftPublisher(sessionId);
+  const catchUpTranscript = () => {
+    if (!transcriptPath) return;
+    void ensureChatTranscriptCaughtUp(transcriptPath, sessionId, "aisdk-stream").catch(() => {});
+  };
 
   async function runTurn(prompt: string, signal: AbortSignal): Promise<void> {
     const first = !startedOnce;
@@ -150,10 +165,17 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
           }
         } else if (part?.type === "error") {
           throw new Error(String((part as any).error).slice(0, 800));
+        } else if (
+          part?.type === "finish" ||
+          part?.type === "step-finish" ||
+          part?.type === "finish-step"
+        ) {
+          catchUpTranscript();
         }
       }
       publishDraft(draft, true);
       await result.text; // surfaces a failed generation
+      catchUpTranscript();
     } catch (e) {
       if (signal.aborted) return; // interrupted on purpose — not an error
       console.error(`aisdk-session turn failed: ${e instanceof Error ? e.message : e}`);
