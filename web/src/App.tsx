@@ -34,9 +34,9 @@ import {
 import { liveTransportMode, useLiveSocket } from "./useLiveSocket";
 import {
   LfgChatTransport,
+  appendLfgTranscriptEvent,
   lfgMessagesToUIMessages,
   lfgUIMessagesToMessages,
-  mergeLfgUIMessages,
   type LfgChatMessage,
   type LfgTranscriptSubscribe,
 } from "./lib/lfg-chat-transport";
@@ -4232,12 +4232,7 @@ export function App() {
             busyBySid={liveStream.busyBySid}
             promptsBySid={liveStream.promptsBySid}
             queuesBySid={liveStream.queuesBySid}
-            loadingBySid={liveStream.loadingBySid}
-            onLoadOlderMessages={liveStream.loadOlderMessages}
             onStreamSummary={useWsLive ? wsLiveStream.streamSummary : undefined}
-            onOptimisticMessage={liveStream.addOptimisticMessage}
-            onRemoveOptimisticMessage={liveStream.removeOptimisticMessage}
-            onTrackSendStatus={liveStream.trackSendStatus}
             onSubscribeTranscript={useWsLive ? wsLiveStream.subscribeTranscript : undefined}
             onRefresh={refreshSessions}
             onRemove={removeSession}
@@ -5803,12 +5798,7 @@ function LiveView({
   busyBySid,
   promptsBySid,
   queuesBySid,
-  loadingBySid,
-  onLoadOlderMessages,
   onStreamSummary,
-  onOptimisticMessage,
-  onRemoveOptimisticMessage,
-  onTrackSendStatus,
   onSubscribeTranscript,
   onRefresh,
   onRemove,
@@ -5837,12 +5827,7 @@ function LiveView({
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
   queuesBySid: Record<string, QueueMsg[]>;
-  loadingBySid: Record<string, boolean>;
-  onLoadOlderMessages: LoadOlderMessages;
   onStreamSummary?: StreamSummary;
-  onOptimisticMessage: (sid: string, text: string) => void;
-  onRemoveOptimisticMessage: (sid: string, text: string) => void;
-  onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
   onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
@@ -5932,14 +5917,9 @@ function LiveView({
           users={users}
           messages={messagesBySid[session.sessionId ?? ""] ?? EMPTY_MESSAGES}
           busy={!!busyBySid[session.sessionId ?? ""]}
-          loading={!!loadingBySid[session.sessionId ?? ""]}
           prompt={promptsBySid[session.sessionId ?? ""] ?? null}
           queue={queuesBySid[session.sessionId ?? ""] ?? EMPTY_QUEUE}
-          onLoadOlderMessages={onLoadOlderMessages}
           onStreamSummary={onStreamSummary}
-          onOptimisticMessage={onOptimisticMessage}
-          onRemoveOptimisticMessage={onRemoveOptimisticMessage}
-          onTrackSendStatus={onTrackSendStatus}
           onSubscribeTranscript={onSubscribeTranscript}
           onRefresh={onRefresh}
           onRemove={onRemove}
@@ -6000,12 +5980,7 @@ function LiveView({
         busyBySid={busyBySid}
         promptsBySid={promptsBySid}
         queuesBySid={queuesBySid}
-        loadingBySid={loadingBySid}
-        onLoadOlderMessages={onLoadOlderMessages}
         onStreamSummary={onStreamSummary}
-        onOptimisticMessage={onOptimisticMessage}
-        onRemoveOptimisticMessage={onRemoveOptimisticMessage}
-        onTrackSendStatus={onTrackSendStatus}
         onSubscribeTranscript={onSubscribeTranscript}
         onRefresh={onRefresh}
         onRemove={onRemove}
@@ -6089,16 +6064,10 @@ function LiveView({
         users={users}
         order={sheetOrder}
         origin={sheet.origin}
-        messagesBySid={messagesBySid}
         busyBySid={busyBySid}
-        loadingBySid={loadingBySid}
         promptsBySid={promptsBySid}
         queuesBySid={queuesBySid}
-        onLoadOlderMessages={onLoadOlderMessages}
         onSwitch={(nextSid) => setSheet((s) => (s ? { ...s, sid: nextSid } : s))}
-        onOptimisticMessage={onOptimisticMessage}
-        onRemoveOptimisticMessage={onRemoveOptimisticMessage}
-        onTrackSendStatus={onTrackSendStatus}
         onSubscribeTranscript={onSubscribeTranscript}
         onRefresh={onRefresh}
         onRemove={onRemove}
@@ -6122,12 +6091,7 @@ function RailStage({
   busyBySid,
   promptsBySid,
   queuesBySid,
-  loadingBySid,
-  onLoadOlderMessages,
   onStreamSummary,
-  onOptimisticMessage,
-  onRemoveOptimisticMessage,
-  onTrackSendStatus,
   onSubscribeTranscript,
   onRefresh,
   onRemove,
@@ -6155,12 +6119,7 @@ function RailStage({
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
   queuesBySid: Record<string, QueueMsg[]>;
-  loadingBySid: Record<string, boolean>;
-  onLoadOlderMessages: LoadOlderMessages;
   onStreamSummary?: StreamSummary;
-  onOptimisticMessage: (sid: string, text: string) => void;
-  onRemoveOptimisticMessage: (sid: string, text: string) => void;
-  onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
   onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
@@ -6656,14 +6615,9 @@ function RailStage({
             users={users}
             messages={messagesBySid[sid] ?? EMPTY_MESSAGES}
             busy={!!busyBySid[sid]}
-            loading={!!loadingBySid[sid]}
             prompt={promptsBySid[sid] ?? null}
             queue={queuesBySid[sid] ?? EMPTY_QUEUE}
-            onLoadOlderMessages={onLoadOlderMessages}
             onStreamSummary={onStreamSummary}
-            onOptimisticMessage={onOptimisticMessage}
-            onRemoveOptimisticMessage={onRemoveOptimisticMessage}
-            onTrackSendStatus={onTrackSendStatus}
             onSubscribeTranscript={onSubscribeTranscript}
             onRefresh={onRefresh}
             onRemove={onRemove}
@@ -7503,33 +7457,21 @@ function SkillTextarea({
 
 function SessionChat({
   session,
-  messages,
   busy,
-  loading,
   prompt,
   queue,
-  onLoadOlderMessages,
   error,
   onError,
-  onOptimisticMessage,
-  onRemoveOptimisticMessage,
-  onTrackSendStatus,
   onSubscribeTranscript,
   onRefresh,
   onDictatingChange,
 }: {
   session: Session;
-  messages: Message[];
   busy: boolean;
-  loading: boolean;
   prompt: SessionPrompt | null;
   queue: QueueMsg[];
-  onLoadOlderMessages: LoadOlderMessages;
   error: string | null;
   onError: (error: string | null) => void;
-  onOptimisticMessage: (sid: string, text: string) => void;
-  onRemoveOptimisticMessage: (sid: string, text: string) => void;
-  onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
   onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
   onDictatingChange?: (recording: boolean) => void;
@@ -7540,12 +7482,14 @@ function SessionChat({
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [draggingFiles, setDraggingFiles] = useState(false);
   const [annotatingId, setAnnotatingId] = useState<string | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [nextBefore, setNextBefore] = useState<number | null>(null);
   // Brief one-shot "launch" pulse on the composer as a message is sent, so the
   // send reads as the turn springing out of the input into the transcript.
   const [launching, setLaunching] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const previewUrls = useRef<string[]>([]);
-  const seededMessages = useMemo(() => lfgMessagesToUIMessages(messages), [messages]);
+  const chatStatusRef = useRef<ReturnType<typeof useChat<LfgChatMessage>>["status"]>("ready");
   const chatTransport = useMemo(
     () =>
       sid
@@ -7558,7 +7502,6 @@ function SessionChat({
   );
   const chat = useChat<LfgChatMessage>({
     id: sid ?? "missing-session",
-    messages: seededMessages,
     transport: chatTransport,
     onError: (err) => onError(err.message),
   });
@@ -7567,9 +7510,78 @@ function SessionChat({
   const chatBusy = busy || chatStatus === "submitted" || chatStatus === "streaming";
 
   useEffect(() => {
-    if (!sid) return;
-    setMessages((current) => mergeLfgUIMessages(current, seededMessages));
-  }, [seededMessages, setMessages, sid]);
+    chatStatusRef.current = chatStatus;
+  }, [chatStatus]);
+
+  useEffect(() => {
+    if (!sid) {
+      setMessages([]);
+      setNextBefore(null);
+      setHistoryLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setHistoryLoading(true);
+    setNextBefore(null);
+    setMessages([]);
+    void api<{ messages: Message[]; nextBefore?: number | null }>(
+      `/api/sessions/${encodeURIComponent(sid)}/messages?limit=80`,
+      { cache: "no-store" },
+    )
+      .then((page) => {
+        if (cancelled) return;
+        const history = lfgMessagesToUIMessages(Array.isArray(page.messages) ? page.messages : []);
+        setMessages((current) => {
+          if (!current.length) return history;
+          const historyIds = new Set(history.map((message) => message.id));
+          const liveOnly = current.filter((message) => !historyIds.has(message.id));
+          return liveOnly.length ? [...history, ...liveOnly] : history;
+        });
+        setNextBefore(page.nextBefore ?? null);
+      })
+      .catch((err) => {
+        if (!cancelled) onError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [onError, setMessages, sid]);
+
+  useEffect(() => {
+    if (!sid || !onSubscribeTranscript) return;
+    return onSubscribeTranscript(sid, (event) => {
+      if (event.type === "error") {
+        onError(event.error);
+        return;
+      }
+      setMessages((current) =>
+        appendLfgTranscriptEvent(current, event, {
+          streamActive: chatStatusRef.current === "submitted" || chatStatusRef.current === "streaming",
+        }),
+      );
+    });
+  }, [onError, onSubscribeTranscript, setMessages, sid]);
+
+  const loadOlderMessages = useCallback(async () => {
+    if (!sid || nextBefore == null) return false;
+    const before = nextBefore;
+    const page = await api<{ messages: Message[]; nextBefore: number | null }>(
+      `/api/sessions/${encodeURIComponent(sid)}/messages?page=backward&before=${before}&limit=80`,
+      { cache: "no-store" },
+    );
+    const older = lfgMessagesToUIMessages(Array.isArray(page.messages) ? page.messages : []);
+    setNextBefore(page.nextBefore ?? null);
+    if (!older.length) return (page.nextBefore ?? null) !== null;
+    setMessages((current) => {
+      const existing = new Set(current.map((message) => message.id));
+      const prepend = older.filter((message) => !existing.has(message.id));
+      return prepend.length ? [...prepend, ...current] : current;
+    });
+    return (page.nextBefore ?? null) !== null;
+  }, [nextBefore, setMessages, sid]);
 
   useEffect(() => {
     return () => {
@@ -7671,10 +7683,24 @@ function SessionChat({
       // Pulse the composer so the send visibly launches into the transcript.
       setLaunching(true);
       window.setTimeout(() => setLaunching(false), 480);
-      void sendChatMessage({ text: outgoingText }, { body: { mode } }).catch((err) => {
+      void sendChatMessage(
+        {
+          text: outgoingText,
+          metadata: {
+            lfgMessage: {
+              role: "user",
+              kind: "text",
+              text: outgoingText,
+              html: escapeHtml(outgoingText).replace(/\n/g, "<br>"),
+              ts: Date.now(),
+              pending: true,
+            },
+          },
+        },
+        { body: { mode } },
+      ).catch((err) => {
         onError(err instanceof Error ? err.message : String(err));
       });
-      onTrackSendStatus(sid, outgoingText, null);
       for (const att of files) {
         if (att.previewUrl) URL.revokeObjectURL(att.previewUrl);
       }
@@ -7711,8 +7737,8 @@ function SessionChat({
         sid={sid}
         messages={chatMessages}
         busy={chatBusy}
-        loading={loading}
-        onLoadOlderMessages={onLoadOlderMessages}
+        loading={historyLoading}
+        onLoadOlderMessages={loadOlderMessages}
       />
 
       <PromptPanel prompt={prompt} sid={sid} onError={onError} />
@@ -8127,17 +8153,11 @@ function SessionTitleSheet({
   session,
   users,
   order,
-  messagesBySid,
   busyBySid,
-  loadingBySid,
   promptsBySid,
   queuesBySid,
-  onLoadOlderMessages,
   origin,
   onSwitch,
-  onOptimisticMessage,
-  onRemoveOptimisticMessage,
-  onTrackSendStatus,
   onSubscribeTranscript,
   onRefresh,
   onRemove,
@@ -8151,17 +8171,11 @@ function SessionTitleSheet({
   users: User[];
   // Sid navigation order, matching the on-screen card order (working then idle).
   order: string[];
-  messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
-  loadingBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
   queuesBySid: Record<string, QueueMsg[]>;
-  onLoadOlderMessages: LoadOlderMessages;
   origin: DOMRect;
   onSwitch: (sid: string) => void;
-  onOptimisticMessage: (sid: string, text: string) => void;
-  onRemoveOptimisticMessage: (sid: string, text: string) => void;
-  onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
   onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
@@ -8175,9 +8189,7 @@ function SessionTitleSheet({
   const switchDirRef = useRef<1 | -1 | null>(null);
 
   // Per-session live data, selected for whichever session is active right now.
-  const messages = messagesBySid[sid] ?? EMPTY_MESSAGES;
   const busy = !!busyBySid[sid];
-  const loading = !!loadingBySid[sid];
   const prompt = promptsBySid[sid] ?? null;
   const queue = queuesBySid[sid] ?? EMPTY_QUEUE;
 
@@ -8207,11 +8219,10 @@ function SessionTitleSheet({
   // A stale composer error from the previous session shouldn't bleed across.
   useLayoutEffect(() => setError(null), [sid]);
 
-  // The full-height sheet is a pure consumer of `messages`/`loading`, which only
-  // populate while a sid is in the live SSE stream (driven by collapse state).
-  // Force each session we view into the stream so its transcript loads — via the
-  // in-memory forced-stream channel, NOT the `lfg-collapsed:` key, so the card
-  // behind the sheet keeps its own collapse state and nothing leaks/sticks.
+  // Force each session we view into the shared transcript stream so the chat's
+  // useChat subscription receives idle-time updates. This uses the in-memory
+  // forced-stream channel, NOT the `lfg-collapsed:` key, so the card behind the
+  // sheet keeps its own collapse state and nothing leaks/sticks.
   const touchedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     touchedRef.current.add(sid);
@@ -8640,17 +8651,11 @@ function SessionTitleSheet({
         >
           <SessionChat
             session={session}
-            messages={messages}
             busy={busy}
-            loading={loading}
             prompt={prompt}
             queue={queue}
-            onLoadOlderMessages={onLoadOlderMessages}
             error={error}
             onError={setError}
-            onOptimisticMessage={onOptimisticMessage}
-            onRemoveOptimisticMessage={onRemoveOptimisticMessage}
-            onTrackSendStatus={onTrackSendStatus}
             onSubscribeTranscript={onSubscribeTranscript}
             onRefresh={onRefresh}
           />
@@ -8813,14 +8818,9 @@ const SessionCard = memo(function SessionCard({
   users,
   messages,
   busy,
-  loading,
   prompt,
   queue,
-  onLoadOlderMessages,
   onStreamSummary,
-  onOptimisticMessage,
-  onRemoveOptimisticMessage,
-  onTrackSendStatus,
   onSubscribeTranscript,
   onRefresh,
   onRemove,
@@ -8833,14 +8833,9 @@ const SessionCard = memo(function SessionCard({
   users: User[];
   messages: Message[];
   busy: boolean;
-  loading: boolean;
   prompt: SessionPrompt | null;
   queue: QueueMsg[];
-  onLoadOlderMessages: LoadOlderMessages;
   onStreamSummary?: StreamSummary;
-  onOptimisticMessage: (sid: string, text: string) => void;
-  onRemoveOptimisticMessage: (sid: string, text: string) => void;
-  onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
   onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
@@ -9364,17 +9359,11 @@ const onTouchStart = (e: ReactTouchEvent) => {
       {!collapsedView && (
         <SessionChat
           session={session}
-          messages={messages}
           busy={busy}
-          loading={loading}
           prompt={prompt}
           queue={queue}
-          onLoadOlderMessages={onLoadOlderMessages}
           error={error}
           onError={setError}
-          onOptimisticMessage={onOptimisticMessage}
-          onRemoveOptimisticMessage={onRemoveOptimisticMessage}
-          onTrackSendStatus={onTrackSendStatus}
           onSubscribeTranscript={onSubscribeTranscript}
           onRefresh={onRefresh}
           onDictatingChange={setDictating}

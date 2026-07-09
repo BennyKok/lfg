@@ -378,6 +378,7 @@ export function useLiveSocket(
   const subscribedRef = useRef<Set<string>>(new Set());
   const desiredChannelsRef = useRef<Map<string, LiveChannel>>(new Map());
   const subscribedChannelsRef = useRef<Set<string>>(new Set());
+  const activeTranscriptIdsRef = useRef<Set<string>>(new Set());
   const lastSeqRef = useRef<Record<string, number>>({});
   const agentRunHandlersRef = useRef<Record<string, AgentRunHandler>>({});
   const summaryHandlersRef = useRef<Record<string, SummaryHandler>>({});
@@ -793,7 +794,9 @@ export function useLiveSocket(
   }, []);
 
   useEffect(() => {
-    const active = new Set(ids);
+    const expanded = new Set(ids);
+    activeTranscriptIdsRef.current = expanded;
+    const active = new Set([...expanded, ...Object.keys(transcriptListenersRef.current)]);
     const live = new Set(Object.keys(listBusy));
     const previousActive = desiredRef.current;
     desiredRef.current = active;
@@ -817,7 +820,7 @@ export function useLiveSocket(
     setNextBeforeBySid((prev) => Object.fromEntries(Object.entries(prev).filter(([sid]) => live.has(sid) || active.has(sid))));
     setLoadingBySid((prev) => {
       const next = Object.fromEntries(Object.entries(prev).filter(([sid]) => live.has(sid)));
-      for (const sid of active) {
+      for (const sid of expanded) {
         if (!previousActive.has(sid) && !(messagesRef.current[sid]?.some((message) => !message.seed))) {
           next[sid] = true;
         }
@@ -1042,13 +1045,29 @@ export function useLiveSocket(
   const subscribeTranscript = useCallback<TranscriptSubscribe>((sid, listener) => {
     const listeners = transcriptListenersRef.current[sid] || (transcriptListenersRef.current[sid] = new Set());
     listeners.add(listener);
+    const channel = transcriptChannel(sid);
+    const id = channelId(channel);
+    desiredRef.current.add(sid);
+    desiredChannelsRef.current.set(id, channel);
+    if (enabled && !subscribedChannelsRef.current.has(id) && subscribeChannels([channel])) {
+      subscribedChannelsRef.current.add(id);
+      subscribedRef.current.add(sid);
+    }
     return () => {
       const current = transcriptListenersRef.current[sid];
       if (!current) return;
       current.delete(listener);
-      if (!current.size) delete transcriptListenersRef.current[sid];
+      if (current.size) return;
+      delete transcriptListenersRef.current[sid];
+      if (activeTranscriptIdsRef.current.has(sid)) return;
+      desiredRef.current.delete(sid);
+      desiredChannelsRef.current.delete(id);
+      if (enabled && subscribedChannelsRef.current.has(id) && unsubscribeChannels([channel])) {
+        subscribedChannelsRef.current.delete(id);
+        subscribedRef.current.delete(sid);
+      }
     };
-  }, []);
+  }, [enabled, subscribeChannels, unsubscribeChannels]);
 
   const mergedBusy = useMemo(() => ({ ...listBusy, ...busyBySid }), [listBusy, busyBySid]);
 

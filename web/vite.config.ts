@@ -128,7 +128,7 @@ export default defineConfig({
     allowedHosts: true,
     hmr: { clientPort: 443 },
     proxy: {
-      "/api": { target: API_TARGET, changeOrigin: true },
+      "/api": { target: API_TARGET, changeOrigin: true, ws: true },
     },
   },
   // `vite preview` serves the built app (dist) with NO hot-reload — this is what
@@ -139,7 +139,7 @@ export default defineConfig({
     port: 5174,
     allowedHosts: true,
     proxy: {
-      "/api": { target: API_TARGET, changeOrigin: true },
+      "/api": { target: API_TARGET, changeOrigin: true, ws: true },
     },
   },
 });

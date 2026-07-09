@@ -56,43 +56,12 @@ type LfgChatTransportOptions = {
   fetch?: typeof globalThis.fetch;
 };
 
-type LiveFrame =
-  | { t?: "msg"; sid?: string; message?: LfgMessage; m?: LfgMessage }
-  | { t?: "ai_part"; sid?: string; part?: LfgAiStreamPart }
-  | { t?: "busy"; sid?: string; busy?: boolean }
-  | {
-      t?: "delta";
-      kind?: string;
-      key?: string;
-      delta?: {
-        t?: string;
-        sid?: string;
-        message?: LfgMessage;
-        m?: LfgMessage;
-        part?: LfgAiStreamPart;
-        busy?: boolean;
-        error?: string | null;
-      };
-    }
-  | { t?: "error"; message?: string; error?: string };
-
 function escapeHtml(value: string) {
   return value.replace(/[&<>]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[ch]!);
 }
 
 function normText(value?: string) {
   return (value || "").replace(/\s+/g, " ").trim();
-}
-
-function messageNeedle(value?: string) {
-  return normText(value).slice(0, 48);
-}
-
-function sameMessageNeedle(a?: string, b?: string) {
-  const an = messageNeedle(a);
-  const bn = messageNeedle(b);
-  if (!an || !bn) return false;
-  return an.includes(bn) || bn.includes(an);
 }
 
 function messageTs(message: LfgChatMessage) {
@@ -133,51 +102,6 @@ export function lfgMessagesToUIMessages(messages: LfgMessage[]): LfgChatMessage[
         ? localMessageFromText(message)
         : localMessageFromData(message),
     );
-}
-
-export function mergeLfgUIMessages(current: LfgChatMessage[], incoming: LfgChatMessage[]): LfgChatMessage[] {
-  if (!incoming.length) return current;
-  if (!current.length) return incoming;
-
-  const next = [...current];
-  const byId = new Map(next.map((message, index) => [message.id, index] as const));
-  let changed = false;
-
-  for (const message of incoming) {
-    const existingIndex = byId.get(message.id);
-    if (existingIndex != null) {
-      const existing = next[existingIndex];
-      if (existing.metadata?.lfgMessage?.pending && !message.metadata?.lfgMessage?.pending) {
-        next[existingIndex] = message;
-        changed = true;
-      }
-      continue;
-    }
-
-    const incomingText = textFromUIParts(message);
-    if (
-      incomingText &&
-      next.some((existing) => existing.role === message.role && sameMessageNeedle(textFromUIParts(existing), incomingText))
-    ) {
-      continue;
-    }
-
-    const ts = messageTs(message);
-    const insertAt =
-      ts > 0
-        ? next.findIndex((existing) => {
-            const existingTs = messageTs(existing);
-            return existingTs > 0 && existingTs > ts;
-          })
-        : -1;
-    if (insertAt >= 0) next.splice(insertAt, 0, message);
-    else next.push(message);
-    byId.clear();
-    next.forEach((item, index) => byId.set(item.id, index));
-    changed = true;
-  }
-
-  return changed ? next : current;
 }
 
 export function lfgUIMessagesToMessages(messages: LfgChatMessage[]): LfgMessage[] {
@@ -235,68 +159,141 @@ export function lfgUIMessagesToMessages(messages: LfgChatMessage[]): LfgMessage[
   return out.filter((message) => message.kind !== "text" || !!message.text || message.role !== "assistant");
 }
 
-function wsUrl(apiBase: string, path: string): string {
-  const base = apiBase || (typeof location !== "undefined" ? location.origin : "http://127.0.0.1:8766");
-  const url = new URL(path, base);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url.toString();
+function upsertLfgUIMessage(current: LfgChatMessage[], incoming: LfgChatMessage): LfgChatMessage[] {
+  const byIdIndex = current.findIndex((message) => message.id === incoming.id);
+  if (byIdIndex >= 0) {
+    if (current[byIdIndex] === incoming) return current;
+    const next = [...current];
+    next[byIdIndex] = incoming;
+    return next;
+  }
+
+  let next = current;
+  const incomingLfg = incoming.metadata?.lfgMessage;
+  if (incomingLfg?.role === "user" && incomingLfg.kind === "text") {
+    const incomingText = normText(incomingLfg.text);
+    const pendingIndex = current.findIndex((message) => {
+      const lfg = message.metadata?.lfgMessage;
+      return (
+        message.role === "user" &&
+        !!lfg?.pending &&
+        lfg.kind === "text" &&
+        normText(lfg.text) === incomingText
+      );
+    });
+    if (pendingIndex >= 0) {
+      next = [...current];
+      next[pendingIndex] = incoming;
+      return next;
+    }
+  }
+
+  if (incomingLfg?.role === "assistant" && incomingLfg.kind === "text") {
+    next = current.filter((message) => {
+      if (message.role !== "assistant") return true;
+      return !message.parts.some((part) => part.type === "text" && part.state === "streaming");
+    });
+  }
+
+  const ts = messageTs(incoming);
+  const insertAt =
+    ts > 0
+      ? next.findIndex((existing) => {
+          const existingTs = messageTs(existing);
+          return existingTs > 0 && existingTs > ts;
+        })
+      : -1;
+  const out = [...next];
+  if (insertAt >= 0) out.splice(insertAt, 0, incoming);
+  else out.push(incoming);
+  return out;
 }
 
-function normalizeLiveFrame(frame: LiveFrame, sid: string): LfgTranscriptEvent | null {
-  if (frame.t === "delta" && frame.kind === "transcript") {
-    const delta = frame.delta;
-    if (!delta) return null;
-    const nested = {
-        t: delta.t as LiveFrame["t"],
-        sid: delta.sid ?? frame.key,
-        message: delta.message,
-        m: delta.m,
-        part: delta.part,
-        busy: delta.busy,
-        error: delta.error ?? undefined,
-      } as LiveFrame;
-    return normalizeLiveFrame(nested, sid);
-  }
-  if ("sid" in frame && frame.sid && frame.sid !== sid) return null;
-  if (frame.t === "msg") {
-    const message = frame.message ?? frame.m;
-    return message ? { type: "message", message } : null;
-  }
-  if (frame.t === "ai_part" && frame.part) return { type: "ai_part", part: frame.part };
-  if (frame.t === "busy") return { type: "busy", busy: !!frame.busy };
-  if (frame.t === "error") return { type: "error", error: frame.message || frame.error || "live socket error" };
-  return null;
-}
-
-function createWebSocketSubscriber(apiBase = ""): LfgTranscriptSubscribe {
-  return (sid, listener) => {
-    const WebSocketCtor = globalThis.WebSocket;
-    if (!WebSocketCtor) throw new Error("WebSocket is not available in this runtime");
-    const ws = new WebSocketCtor(wsUrl(apiBase, "/api/live/ws"));
-    let closed = false;
-    ws.addEventListener("open", () => {
-      if (closed) return;
-      ws.send(JSON.stringify({ t: "subscribe", channels: [{ kind: "transcript", key: sid }] }));
-    });
-    ws.addEventListener("message", (event) => {
-      if (typeof event.data !== "string") return;
-      try {
-        const normalized = normalizeLiveFrame(JSON.parse(event.data) as LiveFrame, sid);
-        if (normalized) listener(normalized);
-      } catch {
-        // Ignore malformed live frames; the main socket layer does the same.
-      }
-    });
-    ws.addEventListener("error", () => listener({ type: "error", error: "live socket error" }));
-    return () => {
-      closed = true;
-      try {
-        ws.close();
-      } catch {
-        // noop
-      }
+function updateDraftText(current: LfgChatMessage[], part: LfgAiStreamPart): LfgChatMessage[] {
+  if (!part.id) return current;
+  const existingIndex = current.findIndex(
+    (message) =>
+      message.role === "assistant" &&
+      message.parts.some((item) => item.type === "text" && message.id === part.id),
+  );
+  if (part.type === "text-end") {
+    if (existingIndex < 0) return current;
+    const existing = current[existingIndex];
+    const nextMessage: LfgChatMessage = {
+      ...existing,
+      parts: existing.parts.map((item) =>
+        item.type === "text" ? { ...item, state: "done" as const } : item,
+      ),
     };
-  };
+    const next = [...current];
+    next[existingIndex] = nextMessage;
+    return next;
+  }
+  if (part.type !== "text-delta" && part.type !== "text-start") return current;
+  const incoming = part.reset ? (part.text ?? part.delta ?? "") : (part.delta ?? part.text ?? "");
+  if (!incoming && existingIndex >= 0) return current;
+  if (existingIndex >= 0) {
+    const existing = current[existingIndex];
+    const nextMessage: LfgChatMessage = {
+      ...existing,
+      metadata: {
+        lfgMessage: {
+          ...(existing.metadata?.lfgMessage ?? {}),
+          id: part.id,
+          role: "assistant",
+          kind: "text",
+          ts: part.ts ?? existing.metadata?.lfgMessage?.ts ?? Date.now(),
+        },
+      },
+      parts: existing.parts.map((item) =>
+        item.type === "text"
+          ? {
+              ...item,
+              text: part.reset ? incoming : `${item.text}${incoming}`,
+              state: "streaming" as const,
+            }
+          : item,
+      ),
+    };
+    const next = [...current];
+    next[existingIndex] = nextMessage;
+    return next;
+  }
+  if (!incoming) return current;
+  return [
+    ...current,
+    {
+      id: part.id,
+      role: "assistant",
+      metadata: {
+        lfgMessage: {
+          id: part.id,
+          role: "assistant",
+          kind: "text",
+          text: incoming,
+          ts: part.ts ?? Date.now(),
+        },
+      },
+      parts: [{ type: "text", text: incoming, state: "streaming" }],
+    },
+  ];
+}
+
+export function appendLfgTranscriptEvent(
+  current: LfgChatMessage[],
+  event: LfgTranscriptEvent,
+  opts: { streamActive?: boolean } = {},
+): LfgChatMessage[] {
+  if (event.type === "message") {
+    if (event.message.seed) return current;
+    if (opts.streamActive && event.message.role !== "user") return current;
+    const [message] = lfgMessagesToUIMessages([event.message]);
+    return message ? upsertLfgUIMessage(current, message) : current;
+  }
+  if (event.type === "ai_part") {
+    return opts.streamActive ? current : updateDraftText(current, event.part);
+  }
+  return current;
 }
 
 class LfgChunkEmitter {
@@ -427,7 +424,7 @@ class LfgChunkEmitter {
 }
 
 export class LfgChatTransport implements ChatTransport<LfgChatMessage> {
-  private readonly subscribeTranscript: LfgTranscriptSubscribe;
+  private readonly subscribeTranscript?: LfgTranscriptSubscribe;
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly apiBase: string;
   private readonly sessionId: string;
@@ -435,7 +432,7 @@ export class LfgChatTransport implements ChatTransport<LfgChatMessage> {
   constructor({ sessionId, apiBase = "", subscribeTranscript, fetch: fetchImpl }: LfgChatTransportOptions) {
     this.sessionId = sessionId;
     this.apiBase = apiBase;
-    this.subscribeTranscript = subscribeTranscript ?? createWebSocketSubscriber(apiBase);
+    this.subscribeTranscript = subscribeTranscript;
     this.fetchImpl = fetchImpl ?? globalThis.fetch.bind(globalThis);
   }
 
@@ -474,6 +471,11 @@ export class LfgChatTransport implements ChatTransport<LfgChatMessage> {
           unsubscribe?.();
           unsubscribe = null;
         };
+        if (!this.subscribeTranscript) {
+          controller.enqueue({ type: "error", errorText: "live transcript subscription is unavailable" });
+          controller.close();
+          return;
+        }
         emitter = new LfgChunkEmitter(controller, cleanup);
         unsubscribe = this.subscribeTranscript(sid, (event) => emitter?.handle(event));
         abortSignal?.addEventListener("abort", () => {
