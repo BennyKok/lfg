@@ -479,18 +479,16 @@ export function spawnManagedGrokSession(opts: {
   return { ok: true };
 }
 
-export function spawnManagedCursorSession(opts: {
+export type ManagedCursorSessionOptions = {
   name: string;
   cwd: string;
   prompt?: string;
   model?: string;
   lfgSessionId?: string;
   lfgUser?: string | null;
-}): { ok: boolean; error?: string } {
-  const dec = new TextDecoder();
-  // Pre-accept workspace trust so the TUI doesn't hang on the trust dialog
-  // (which would also block the transcript that the live view streams).
-  ensureCursorFolderTrusted(opts.cwd);
+};
+
+export function managedCursorSessionArgv(opts: ManagedCursorSessionOptions): string[] {
   const argv = [
     "tmux",
     "new-session",
@@ -500,12 +498,24 @@ export function spawnManagedCursorSession(opts: {
     "-c",
     opts.cwd,
     cursorBin(),
+    "--yolo",
     "--sandbox",
     "disabled",
   ];
   if (opts.model && opts.model !== "auto") argv.push("--model", opts.model);
   if (opts.prompt && opts.prompt.trim()) argv.push(opts.prompt);
   addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
+  return argv;
+}
+
+export function spawnManagedCursorSession(opts: ManagedCursorSessionOptions): { ok: boolean; error?: string } {
+  const dec = new TextDecoder();
+  // Pre-accept workspace trust so the TUI doesn't hang on the trust dialog
+  // (which would also block the transcript that the live view streams). `--yolo`
+  // suppresses Cursor's per-command approval selector; `--sandbox disabled`
+  // alone still asks before shell calls and can strand a live session mid-turn.
+  ensureCursorFolderTrusted(opts.cwd);
+  const argv = managedCursorSessionArgv(opts);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -803,8 +813,35 @@ export type PanePrompt = { question: string; options: PromptOption[] };
 // carries the cursor.
 const OPT_RE = /^\s*(❯|›)?\s*(\d+)\.\s+(\S.*?)\s*$/;
 
+function parseCursorApprovalPrompt(lines: string[]): PanePrompt | null {
+  const questionLine = lines.findIndex((line) => /^\s*Run this command\?\s*$/i.test(line));
+  if (questionLine < 0) return null;
+  const window = lines.slice(questionLine + 1, questionLine + 8);
+  if (!window.some((line) => /Not in allowlist/i.test(line))) return null;
+
+  const options: PromptOption[] = [
+    { index: 0, label: "Run once", selected: false },
+    { index: 1, label: "Add command to allowlist", selected: false },
+    { index: 2, label: "Run everything", selected: false },
+    { index: 3, label: "Skip", selected: false },
+  ];
+
+  for (const line of window) {
+    const selected = /^\s*→/.test(line);
+    if (/Run \(once\)/i.test(line)) options[0].selected = selected;
+    else if (/Add Shell\(/i.test(line)) options[1].selected = selected;
+    else if (/Run Everything/i.test(line)) options[2].selected = selected;
+    else if (/Skip/i.test(line)) options[3].selected = selected;
+  }
+
+  return { question: "Run this command?", options };
+}
+
 export function parsePrompt(pane: string): PanePrompt | null {
   const lines = pane.replace(/\s+$/, "").split("\n");
+  const cursorPrompt = parseCursorApprovalPrompt(lines);
+  if (cursorPrompt) return cursorPrompt;
+
   type Hit = { line: number; index: number; label: string; selected: boolean };
   const hits: Hit[] = [];
   for (let i = 0; i < lines.length; i++) {
@@ -929,6 +966,20 @@ export async function answerPrompt(
       return { ok: true };
     }
     return { ok: false, error: "no active prompt in pane" };
+  }
+  if (/^Run this command\?$/i.test(p.question)) {
+    let key: string | null = null;
+    if (index === 0) key = "y";
+    else if (index === 1) key = "Tab";
+    else if (index === 2) key = "BTab";
+    else if (index === 3) key = "n";
+    if (!key) return { ok: false, error: "option not found" };
+    const r = key.length === 1
+      ? Bun.spawnSync(["tmux", "send-keys", "-t", target, "-l", key])
+      : Bun.spawnSync(["tmux", "send-keys", "-t", target, key]);
+    if (r.exitCode !== 0)
+      return { ok: false, error: new TextDecoder().decode(r.stderr) || "answer failed" };
+    return { ok: true };
   }
   const order = p.options.map((o) => o.index);
   const cur = p.options.find((o) => o.selected)?.index ?? order[0];

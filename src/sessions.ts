@@ -17,6 +17,8 @@ import { userAssignments } from "./users";
 import { PATHS } from "./config";
 import { homedir } from "node:os";
 import { projectName } from "./projects";
+import { isCommandFileAgent } from "./coding-agent-adapters";
+import type { CodingAgentKind } from "./coding-agents";
 import {
   cachedFingerprints,
   upsertResumableRows,
@@ -205,7 +207,7 @@ export type SessionMsg = {
 };
 
 export type Session = {
-  agent: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "hermes";
+  agent: CodingAgentKind;
   pid: number;
   cmd: string;
   cwd: string | null;
@@ -387,7 +389,7 @@ function managedLaunchRow(
     transcriptPath: null,
     lastActivityAt: m.createdAt,
     last: null,
-    tmuxTarget: agent === "aisdk" || agent === "codex-aisdk" || agent === "opencode" ? null : tmuxTarget,
+    tmuxTarget: isCommandFileAgent(agent) ? null : tmuxTarget,
     tmuxName: m.tmuxName,
     managed: true,
     assignedUser: assigns[m.tmuxName] ?? null,

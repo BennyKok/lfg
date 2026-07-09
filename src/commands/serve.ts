@@ -77,6 +77,7 @@ import {
   listSessionsCached,
   noteListSessionsClientActivity,
 } from "../session-cache.ts";
+import { isCommandFileAgent } from "../coding-agent-adapters.ts";
 import {
   enqueueTranscriptIndex,
   indexedRecentMessages,
@@ -890,11 +891,7 @@ function sendAiTextDeltaPart(
 function interruptLiveSession(session: Session): { ok: boolean; error?: string; status?: number } {
   const sid = session.sessionId;
   if (!sid) return { ok: false, error: "live session has no id", status: 409 };
-  if (
-    session.agent === "aisdk" ||
-    session.agent === "codex-aisdk" ||
-    session.agent === "opencode"
-  ) {
+  if (isCommandFileAgent(session.agent)) {
     const key = findAisdkEntryByAnyId(sid)?.sessionId ?? sid;
     appendAisdkCmd(key, { type: "interrupt" });
     return { ok: true };
@@ -925,11 +922,7 @@ function sendPromptToLiveSession(
     const interrupted = interruptLiveSession(session);
     if (!interrupted.ok) return interrupted;
   }
-  if (
-    session.agent === "aisdk" ||
-    session.agent === "codex-aisdk" ||
-    session.agent === "opencode"
-  ) {
+  if (isCommandFileAgent(session.agent)) {
     const key = findAisdkEntryByAnyId(sid)?.sessionId ?? sid;
     appendAisdkCmd(key, { type: "send", text: prompt });
     traceLog("session_send_aisdk_cmd", { sessionId: sid, key, chars: prompt.length });
@@ -4272,11 +4265,7 @@ export async function cmdServe() {
             managed: sess?.managed,
           });
           if (!sess) return err(404, "session not found");
-          if (
-            sess.agent === "aisdk" ||
-            sess.agent === "codex-aisdk" ||
-            sess.agent === "opencode"
-          ) {
+          if (isCommandFileAgent(sess.agent)) {
             // Ask the harness to shut down, then tear down its supervisor pane and
             // control-plane files. markClosed tombstones the harness pid so the
             // session drops out of the list immediately. For codex-aisdk the

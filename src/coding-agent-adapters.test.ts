@@ -1,0 +1,131 @@
+import { describe, expect, test } from "bun:test";
+import {
+  CODING_AGENT_ADAPTERS,
+  COMMAND_FILE_AGENT_KINDS,
+  SESSION_AGENT_KINDS,
+  TMUX_AGENT_KINDS,
+  isCommandFileAgent,
+  isTmuxAgent,
+} from "./coding-agent-adapters.ts";
+import { CODING_AGENT_KINDS, CODING_AGENT_LABELS, isCodingAgentKind } from "./coding-agents.ts";
+import { MODEL_OPTIONS, listModelCatalog, thinkingLevelsForAgent } from "./agent-catalog.ts";
+import {
+  spawnManagedAisdkSession,
+  spawnManagedCodexAisdkSession,
+  spawnManagedCodexSession,
+  spawnManagedCursorSession,
+  spawnManagedGrokSession,
+  spawnManagedHermesSession,
+  spawnManagedOpencodeAisdkSession,
+  spawnManagedSession,
+  managedCursorSessionArgv,
+  parsePrompt,
+} from "./tmux.ts";
+
+function sorted(values: Iterable<string>): string[] {
+  return [...values].sort((a, b) => a.localeCompare(b));
+}
+
+const launchers = {
+  claude: spawnManagedSession,
+  aisdk: spawnManagedAisdkSession,
+  codex: spawnManagedCodexSession,
+  "codex-aisdk": spawnManagedCodexAisdkSession,
+  opencode: spawnManagedOpencodeAisdkSession,
+  grok: spawnManagedGrokSession,
+  cursor: spawnManagedCursorSession,
+  hermes: spawnManagedHermesSession,
+} satisfies Record<(typeof SESSION_AGENT_KINDS)[number], unknown>;
+
+describe("coding agent adapter contract", () => {
+  test("every launchable coding agent has one delivery transport", () => {
+    const adapterKinds = Object.keys(CODING_AGENT_ADAPTERS);
+    const transportKinds = [...TMUX_AGENT_KINDS, ...COMMAND_FILE_AGENT_KINDS];
+
+    expect(sorted(adapterKinds)).toEqual(sorted(SESSION_AGENT_KINDS));
+    expect(sorted(transportKinds)).toEqual(sorted(SESSION_AGENT_KINDS));
+    expect(new Set(transportKinds).size).toBe(SESSION_AGENT_KINDS.length);
+
+    for (const agent of SESSION_AGENT_KINDS) {
+      const adapter = CODING_AGENT_ADAPTERS[agent];
+      expect(adapter.managedLaunch).toBe(true);
+      expect(isCommandFileAgent(agent)).toBe(adapter.transport === "command-file");
+      expect(isTmuxAgent(agent)).toBe(adapter.transport === "tmux");
+    }
+  });
+
+  test("visible coding-agent settings only reference real adapters", () => {
+    for (const agent of CODING_AGENT_KINDS) {
+      expect(isCodingAgentKind(agent)).toBe(true);
+      expect(CODING_AGENT_ADAPTERS[agent]).toBeDefined();
+      expect(CODING_AGENT_LABELS[agent]).toBeTruthy();
+    }
+  });
+
+  test("model catalog covers every launchable adapter", () => {
+    const catalog = listModelCatalog([]);
+    const catalogByKey = new Map(catalog.map((item) => [item.key, item]));
+
+    expect(sorted(catalogByKey.keys())).toEqual(sorted(SESSION_AGENT_KINDS));
+
+    for (const agent of SESSION_AGENT_KINDS) {
+      const option = MODEL_OPTIONS[agent];
+      const item = catalogByKey.get(agent);
+      expect(item, agent).toBeDefined();
+      expect(option.models.length, agent).toBeGreaterThan(0);
+      expect(option.defaultModel, agent).toBeTruthy();
+      expect(item!.models.length, agent).toBeGreaterThan(0);
+      expect(item!.defaultModel, agent).toBeTruthy();
+      expect(item!.thinkingLevels).toEqual([...(thinkingLevelsForAgent(agent) ?? [])]);
+    }
+  });
+
+  test("every launchable adapter has a managed session launcher", () => {
+    for (const agent of SESSION_AGENT_KINDS) {
+      expect(typeof launchers[agent], agent).toBe("function");
+    }
+  });
+
+  test("cursor managed sessions launch without command approval prompts", () => {
+    const argv = managedCursorSessionArgv({
+      name: "lfg-test",
+      cwd: "/tmp/lfg-test",
+      prompt: "hello",
+      model: "auto",
+      lfgSessionId: "session-id",
+      lfgUser: "user@example.com",
+    });
+
+    expect(argv).toContain("--yolo");
+    expect(argv.slice(argv.indexOf("--sandbox"), argv.indexOf("--sandbox") + 2)).toEqual([
+      "--sandbox",
+      "disabled",
+    ]);
+    expect(argv).not.toContain("--model");
+    expect(argv).toContain("LFG_SESSION_ID=session-id");
+    expect(argv).toContain("LFG_USER=user@example.com");
+  });
+
+  test("cursor approval prompts are surfaced to the shared prompt UI", () => {
+    const prompt = parsePrompt(`
+ $  cd /home/dev/repos/lfg && git log --oneline -20 in .
+
+ Run this command?
+ Not in allowlist: cd, git log
+  → Run (once) (y)
+    Add Shell(cd), Shell(git log) to allowlist? (tab)
+    Run Everything (shift+tab)
+    Skip (esc or n)
+`);
+
+    expect(prompt).toEqual({
+      question: "Run this command?",
+      options: [
+        { index: 0, label: "Run once", selected: true },
+        { index: 1, label: "Add command to allowlist", selected: false },
+        { index: 2, label: "Run everything", selected: false },
+        { index: 3, label: "Skip", selected: false },
+      ],
+    });
+  });
+});
