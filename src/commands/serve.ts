@@ -107,7 +107,6 @@ import {
   spawnManagedCodexSession,
   spawnManagedGrokSession,
   spawnManagedCursorSession,
-  spawnManagedHermesSession,
   spawnManagedAisdkSession,
   spawnManagedCodexAisdkSession,
   spawnManagedOpencodeAisdkSession,
@@ -295,8 +294,6 @@ function uploadFilename(req: Request, url: URL): string {
 }
 
 const GROK_DEFAULT_MODEL = "grok-composer-2.5-fast";
-const HERMES_DEFAULT_MODEL = "nousresearch/hermes-4-405b";
-const HERMES_PROVIDER = process.env.LFG_HERMES_PROVIDER?.trim() || undefined;
 const OPENCODE_DEFAULT_MODEL = "opencode-go/deepseek-v4-flash";
 // Models whose provider currently rejects our requests (Sakana's fugu returns a
 // hard 403 Forbidden, and the local Novita credential currently 403s too — see
@@ -2439,8 +2436,6 @@ export async function cmdServe() {
             return err(400, "invalid codex model name");
           if (autoBackend === "opencode" && model && !/^[A-Za-z0-9_.:\/-]{1,80}$/.test(model))
             return err(400, "invalid opencode model name");
-          if (autoBackend === "hermes" && model && !/^[A-Za-z0-9_.:\/-]{1,120}$/.test(model))
-            return err(400, "invalid hermes model name");
           const thinkingLevel = b.thinkingLevel?.trim() || undefined;
           if (thinkingLevel) {
             const allowed = thinkingLevelsForAgent(autoBackend);
@@ -3307,6 +3302,9 @@ export async function cmdServe() {
           spawnedBy?: string;
           agent?: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "hermes";
         } | null;
+        if (body?.agent === "hermes") {
+          return err(400, "agent \"hermes\" is temporarily unavailable");
+        }
         // Default flip (Task B): with no agent specified, the default Claude path
         // now goes through the AI SDK ("aisdk") rather than the Claude CLI. Every
         // explicit value still works, INCLUDING explicit "claude" for the CLI.
@@ -3321,9 +3319,7 @@ export async function cmdServe() {
                   ? "grok"
                   : body?.agent === "cursor"
                     ? "cursor"
-                    : body?.agent === "hermes"
-                      ? "hermes"
-                      : body?.agent === "claude"
+                    : body?.agent === "claude"
                         ? "claude"
                         : "aisdk";
         // Allowlist Claude models — they land on a shell argv. Unknown value =
@@ -3353,8 +3349,6 @@ export async function cmdServe() {
         }
         if (agent === "cursor" && model && !/^[A-Za-z0-9_.:\/-]{1,120}$/.test(model))
           return err(400, "invalid cursor model name");
-        if (agent === "hermes" && model && !/^[A-Za-z0-9_.:\/-]{1,120}$/.test(model))
-          return err(400, "invalid hermes model name");
         // codex-aisdk drives codex through the AI SDK, so its model is a codex
         // slug (gpt-5.x-codex …) — provider/catalog driven like the tmux codex.
         // Validate by shape, same as the codex branch.
@@ -3489,13 +3483,11 @@ export async function cmdServe() {
         // Mint a stable lfg id up front; listSessions maps it to Grok's native
         // transcript later once Grok creates one.
         const grokKey = agent === "grok" ? crypto.randomUUID() : null;
-        const hermesKey = agent === "hermes" ? crypto.randomUUID() : null;
         const launchId =
           aisdkSessionId ??
           codexAisdkKey ??
           opencodeKey ??
           grokKey ??
-          hermesKey ??
           crypto.randomUUID();
         const createdAt = Date.now();
         const launchModel =
@@ -3503,9 +3495,7 @@ export async function cmdServe() {
             ? resolvedModel ?? GROK_DEFAULT_MODEL
             : agent === "cursor"
               ? resolvedModel ?? "auto"
-              : agent === "hermes"
-                ? resolvedModel ?? HERMES_DEFAULT_MODEL
-                : agent === "opencode"
+              : agent === "opencode"
                   ? resolvedModel ?? OPENCODE_DEFAULT_MODEL
                   : agent === "codex-aisdk"
                     ? resolvedModel ?? "gpt-5.5"
@@ -3519,7 +3509,7 @@ export async function cmdServe() {
           agent,
           sessionId: launchId,
           nativeSessionId:
-            agent === "aisdk" || agent === "opencode" || agent === "hermes"
+            agent === "aisdk" || agent === "opencode"
               ? launchId
               : undefined,
           launchState: "launching",
@@ -3556,15 +3546,6 @@ export async function cmdServe() {
                   cwd,
                   prompt,
                   model: resolvedModel ?? "auto",
-                  lfgSessionId: launchId,
-                  lfgUser: assignedUser,
-                })
-            : agent === "hermes"
-              ? spawnManagedHermesSession({
-                  name: tmuxName,
-                  cwd,
-                  model: resolvedModel ?? HERMES_DEFAULT_MODEL,
-                  provider: HERMES_PROVIDER,
                   lfgSessionId: launchId,
                   lfgUser: assignedUser,
                 })
@@ -3606,9 +3587,6 @@ export async function cmdServe() {
           assignUser(tmuxName, null);
           return err(502, r.error || "failed to start session");
         }
-        if (agent === "hermes" && hermesKey && prompt?.trim()) {
-          enqueueMessage(hermesKey, prompt);
-        }
         if (agent === "codex") {
           void (async () => {
             for (let i = 0; i < 12; i++) {
@@ -3629,7 +3607,7 @@ export async function cmdServe() {
             }
           })();
         }
-        if (agent === "aisdk" || agent === "opencode" || agent === "hermes" || agent === "cursor")
+        if (agent === "aisdk" || agent === "opencode" || agent === "cursor")
           patchManaged(tmuxName, { launchState: "running" });
         return json({
           ok: true,
@@ -4279,7 +4257,18 @@ export async function cmdServe() {
           // flicker back for a poll or two before pgrep stops seeing it.
           markClosed(sess.pid);
           if (sess.managed && sess.tmuxName) {
-            removeManaged(sess.tmuxName);
+            if (sess.agent === "codex") {
+              const tp = await resolveTranscript(m[1]).catch(() => null);
+              const nativeSessionId =
+                sess.nativeSessionId ??
+                tp?.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/)?.[0];
+              patchManaged(sess.tmuxName, {
+                launchState: "running",
+                nativeSessionId,
+              });
+            } else {
+              removeManaged(sess.tmuxName);
+            }
             assignUser(sess.tmuxName, null); // a managed name is unique + now gone
           }
           clearResolved(m[1]);

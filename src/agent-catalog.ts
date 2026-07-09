@@ -63,8 +63,17 @@ export const OPENCODE_MODELS: string[] = [
   "opencode-go/qwen3.7-plus",
 ];
 
-export const AUTO_AGENT_BACKENDS = ["aisdk", "codex-aisdk", "opencode", "hermes"] as const;
+export const AUTO_AGENT_BACKENDS = ["aisdk", "codex-aisdk", "opencode"] as const;
 export type AutoAgentBackend = (typeof AUTO_AGENT_BACKENDS)[number];
+const MODEL_CATALOG_KEYS: CodingAgentKind[] = [
+  "claude",
+  "aisdk",
+  "codex",
+  "codex-aisdk",
+  "grok",
+  "cursor",
+  "opencode",
+];
 
 export const CODEX_THINKING_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
 export const CLAUDE_THINKING_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
@@ -336,7 +345,7 @@ export function thinkingLevelsForAgent(agent: string): readonly string[] | null 
 
 export function listModelCatalog(codingAgents: CodingAgentInfo[] = []): ModelCatalogItem[] {
   const configured = new Map(codingAgents.map((agent) => [agent.key, agent]));
-  return (Object.keys(MODEL_OPTIONS) as CodingAgentKind[]).map((key) => {
+  return MODEL_CATALOG_KEYS.map((key) => {
     const status = configured.get(key);
     const models = modelsForAgent(key);
     return {

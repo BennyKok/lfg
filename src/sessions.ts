@@ -1010,6 +1010,45 @@ function inferCodexThreadForHarness(
   return matches[0] ?? null;
 }
 
+function inferCodexThreadForManaged(
+  m: ManagedSession,
+  threads: CodexThread[],
+  claimed: Set<string> = new Set(),
+): CodexThread | null {
+  if (m.agent !== "codex") return null;
+  const createdAt = m.createdAt ?? 0;
+  const minTime = createdAt - 5 * 60_000;
+  const maxTime = createdAt + 45 * 60_000;
+  const matches = threads
+    .map((t) => {
+      if (claimed.has(t.id)) return null;
+      const created = t.createdAt ?? 0;
+      const promptMatch = promptStartsWithTitle(t.firstUserText, m.title);
+      const cwdMatch = !!m.cwd && t.cwd === m.cwd;
+      const timeMatch = !!created && created >= minTime && created <= maxTime;
+      if (!promptMatch && !(cwdMatch && timeMatch)) return null;
+      let score = 0;
+      if (promptMatch) score += 100;
+      if (cwdMatch) score += 80;
+      if (timeMatch) score += 60 - Math.min(55, Math.abs(created - createdAt) / 60_000);
+      return { thread: t, score };
+    })
+    .filter((x): x is { thread: CodexThread; score: number } => !!x)
+    .sort((a, b) => b.score - a.score || (b.thread.createdAt ?? 0) - (a.thread.createdAt ?? 0));
+  return matches[0]?.thread ?? null;
+}
+
+async function findManagedCodexTranscript(m: ManagedSession): Promise<string | null> {
+  if (m.nativeSessionId) {
+    const byId = await findCodexTranscriptById(m.nativeSessionId);
+    if (byId) return byId;
+  }
+  const thread = inferCodexThreadForManaged(m, await codexThreads());
+  if (!thread) return null;
+  rememberNativeSession(m, thread.id);
+  return thread.path;
+}
+
 // AI-SDK backed providers can persist a speaker prefix ("Human:" for Claude,
 // "User:" for Codex). Strip it so cards and transcript user messages read like
 // normal CLI sessions.
@@ -1736,7 +1775,8 @@ export async function listSessions(): Promise<Session[]> {
         !/\bapp-server\b/.test(p.cmd) &&
         !p.cmd.match(new RegExp(`(?:resume|fork)\\s+(${UUID.source})`)) &&
         !!codexPromptFromCmd(p.cmd),
-    );
+    ) ||
+    managedSessions.some((m) => m.agent === "codex" && !!m.sessionId && !m.nativeSessionId);
   profile?.count("codexThreads_skipped", needsCodexThreads ? 0 : 1);
   const codex = needsCodexThreads
     ? await profileAsync(profile, "codexThreads_ms", () => codexThreads())
@@ -1792,6 +1832,18 @@ export async function listSessions(): Promise<Session[]> {
       if (thread.cwd) cwd = thread.cwd;
     }
 
+    const tmuxTarget = tmux.targetForPid(p.pid);
+    const tmuxName = tmuxTarget ? tmuxTarget.split(":")[0] : null;
+    const managedRec = tmuxName ? managedByName.get(tmuxName) : undefined;
+    if (!thread && managedRec) {
+      thread = inferCodexThreadForManaged(managedRec, codex, claimedCodex);
+      if (thread) sessionId = thread.id;
+    }
+    if (thread) {
+      claimedCodex.add(thread.id);
+      if (thread.cwd) cwd = thread.cwd;
+    }
+
     const transcriptPath = thread?.path ?? (sessionId ? await profileAsync(profile, "findCodexTranscriptById_ms", () => findCodexTranscriptById(sessionId)) : null);
     let last: SessionMsg | null = null;
     let lastActivityAt: number | null = null;
@@ -1804,9 +1856,6 @@ export async function listSessions(): Promise<Session[]> {
       last = meta.last;
       lastUser = meta.lastUser;
     }
-    const tmuxTarget = tmux.targetForPid(p.pid);
-    const tmuxName = tmuxTarget ? tmuxTarget.split(":")[0] : null;
-    const managedRec = tmuxName ? managedByName.get(tmuxName) : undefined;
     rememberNativeSession(managedRec, sessionId);
     const visibleSessionId = managedVisibleId(managedRec, sessionId);
     const project = sessionProject(cwd, tmuxName);
@@ -2239,6 +2288,9 @@ export async function resolveTranscript(sessionId: string): Promise<string | nul
     }
     return managed.cwd ? (await findCursorTranscriptByCwd(managed.cwd))?.path ?? null : null;
   }
+  if (managed?.agent === "codex") {
+    return await findManagedCodexTranscript(managed);
+  }
   if (managed?.agent && DIRECT_INDEX_MANAGED_AGENTS.has(managed.agent)) {
     return sessionIndexKey(managed.sessionId ?? sessionId);
   }
@@ -2249,14 +2301,14 @@ export async function resolveTranscript(sessionId: string): Promise<string | nul
     const native =
       (managed.agent === "grok"
         ? findGrokTranscriptById(managed.nativeSessionId)
-        : managed.agent === "codex" || managed.agent === "codex-aisdk"
+        : managed.agent === "codex-aisdk"
           ? await findCodexTranscriptById(managed.nativeSessionId)
           : await findTranscriptById(managed.nativeSessionId)) ??
       (await findTranscriptById(managed.nativeSessionId)) ??
       (await findCodexTranscriptById(managed.nativeSessionId)) ??
       findGrokTranscriptById(managed.nativeSessionId);
     if (native) return native;
-    if (managed.cwd && managed.agent !== "codex" && managed.agent !== "codex-aisdk" && managed.agent !== "grok") {
+    if (managed.cwd && managed.agent !== "codex-aisdk" && managed.agent !== "grok") {
       for (const d of candidateDirs(managed.cwd)) {
         return join(PROJECTS_DIR, d, `${managed.nativeSessionId}.jsonl`);
       }

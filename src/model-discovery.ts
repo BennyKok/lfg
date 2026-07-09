@@ -322,7 +322,7 @@ export async function refreshModelCatalog(input: {
   const onLog = input.onLog ?? (() => {});
   onLog(`[models] refreshing catalog${input.reason ? ` (${input.reason})` : ""}`);
   const prior = readCacheFile();
-  const keys: ProviderKey[] = ["claude", "aisdk", "codex", "grok", "cursor", "hermes", "opencode"];
+  const keys: ProviderKey[] = ["claude", "aisdk", "codex", "grok", "cursor", "opencode"];
   const results = await Promise.all(keys.map((key) => discoverProvider(key)));
   const providers: Partial<Record<ProviderKey, DiscoveredModelProvider>> = {};
   for (const result of results) {

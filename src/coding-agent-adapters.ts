@@ -12,11 +12,10 @@ export const CODING_AGENT_ADAPTERS = {
   codex: { transport: "tmux", managedLaunch: true },
   grok: { transport: "tmux", managedLaunch: true },
   cursor: { transport: "tmux", managedLaunch: true },
-  hermes: { transport: "tmux", managedLaunch: true },
   aisdk: { transport: "command-file", managedLaunch: true },
   "codex-aisdk": { transport: "command-file", managedLaunch: true },
   opencode: { transport: "command-file", managedLaunch: true },
-} as const satisfies Record<CodingAgentKind, CodingAgentAdapter>;
+} as const satisfies Record<Exclude<CodingAgentKind, "hermes">, CodingAgentAdapter>;
 
 export const SESSION_AGENT_KINDS = [
   "claude",
@@ -26,7 +25,6 @@ export const SESSION_AGENT_KINDS = [
   "opencode",
   "grok",
   "cursor",
-  "hermes",
 ] as const satisfies readonly CodingAgentKind[];
 
 export const TMUX_AGENT_KINDS = [
@@ -34,7 +32,6 @@ export const TMUX_AGENT_KINDS = [
   "codex",
   "grok",
   "cursor",
-  "hermes",
 ] as const satisfies readonly CodingAgentKind[];
 
 export const COMMAND_FILE_AGENT_KINDS = [

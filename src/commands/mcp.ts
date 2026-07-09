@@ -99,7 +99,7 @@ const SUBAGENT_INPUT_SCHEMA = {
     .string()
     .optional()
     .describe(
-      "Runtime harness: claude, aisdk, codex-aisdk, codex, opencode, grok, or hermes. Defaults to aisdk. Prefer claude for design/frontend polish and codex for backend/server work.",
+      "Runtime harness: claude, aisdk, codex-aisdk, codex, opencode, grok, or cursor. Defaults to aisdk. Prefer claude for design/frontend polish and codex for backend/server work.",
     ),
   model: z.string().optional().describe("Model name. Defaults to the selected agent default."),
   cwd: z.string().optional().describe("Repository cwd for the child session. Defaults to the parent session's project when there is a parent; otherwise the server's default repo."),
@@ -165,6 +165,9 @@ async function createSubagent({
   worktree,
 }: SubagentArgs, defaults: { agent?: string } = {}) {
   const agent = rawAgent?.trim() || defaults.agent || "aisdk";
+  if (agent === "hermes") {
+    throw new Error('agent "hermes" is temporarily unavailable');
+  }
   if (!MODEL_OPTIONS[agent as keyof typeof MODEL_OPTIONS]) {
     throw new Error(`unknown agent "${agent}"`);
   }
@@ -459,7 +462,7 @@ export async function cmdMcp() {
     {
       title: "Delegate To LFG Sub-Agent",
       description:
-        `Delegate work to another coding agent by creating an LFG subagent child session. ${LFG_SUBAGENT_PRIORITY} Prefer this tool over sending a normal message whenever the user says to use another agent, ask Claude/Codex/OpenCode/Grok/Hermes, spin up an agent, or have a subagent do something. For design/frontend polish use lfg_delegate_design_task. For backend/server/API work use lfg_delegate_backend_task. The child is instructed to report progress and exactly one terminal state back to this parent session.`,
+        `Delegate work to another coding agent by creating an LFG subagent child session. ${LFG_SUBAGENT_PRIORITY} Prefer this tool over sending a normal message whenever the user says to use another agent, ask Claude/Codex/OpenCode/Grok/Cursor, spin up an agent, or have a subagent do something. For design/frontend polish use lfg_delegate_design_task. For backend/server/API work use lfg_delegate_backend_task. The child is instructed to report progress and exactly one terminal state back to this parent session.`,
       inputSchema: SUBAGENT_INPUT_SCHEMA,
     },
     async (args) => {

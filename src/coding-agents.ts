@@ -57,12 +57,11 @@ export type SetupCheck = {
   actionLabel: string;
 };
 
-export const CODING_AGENT_KINDS: CodingAgentKind[] = [
+export const CODING_AGENT_KINDS: Exclude<CodingAgentKind, "claude" | "hermes">[] = [
   "aisdk",
   "codex-aisdk",
   "grok",
   "cursor",
-  "hermes",
   "opencode",
 ];
 

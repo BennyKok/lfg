@@ -434,11 +434,6 @@ const CURSOR_MODELS = [
   "gemini-3.1-pro",
   "grok-4.3",
 ];
-const HERMES_MODELS = [
-  "nousresearch/hermes-4-405b",
-  "nousresearch/hermes-4-70b",
-  "nousresearch/hermes-3-llama-3.1-405b",
-];
 const OPENCODE_MODELS = [
   "opencode/big-pickle",
   "opencode/deepseek-v4-flash-free",
@@ -461,19 +456,18 @@ const OPENCODE_MODELS = [
 ];
 const THINKING_LEVELS = ["low", "medium", "high", "xhigh"] as const;
 type ThinkingLevel = string;
-type AutoAgentBackend = "aisdk" | "codex-aisdk" | "opencode" | "hermes";
+type AutoAgentBackend = "aisdk" | "codex-aisdk" | "opencode";
 const AUTO_AGENT_OPTIONS: { key: AutoAgentBackend; label: string }[] = [
   { key: "aisdk", label: "claude" },
   { key: "codex-aisdk", label: "codex" },
   { key: "opencode", label: "opencode" },
-  { key: "hermes", label: "hermes" },
 ];
 function savedThinkingLevel(): ThinkingLevel {
   const value = localStorage.getItem("lfg_thinking_level");
   return value && (THINKING_LEVELS as readonly string[]).includes(value) ? value : "medium";
 }
 
-type AgentKind = "claude" | "aisdk" | "codex" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "hermes";
+type AgentKind = "claude" | "aisdk" | "codex" | "codex-aisdk" | "opencode" | "grok" | "cursor";
 
 // Which agents honor a thinking/reasoning-effort level. Claude (CLI + ai-sdk)
 // takes an `effort`; Codex (CLI + ai-sdk) takes a `reasoning_effort` — both
@@ -500,7 +494,6 @@ const AGENT_MODELS: Record<AgentKind, string[]> = {
   "codex-aisdk": CODEX_AISDK_MODELS,
   grok: GROK_MODELS,
   cursor: CURSOR_MODELS,
-  hermes: HERMES_MODELS,
   opencode: OPENCODE_MODELS,
 };
 const AGENT_DEFAULT_MODEL: Record<AgentKind, string> = {
@@ -510,7 +503,6 @@ const AGENT_DEFAULT_MODEL: Record<AgentKind, string> = {
   "codex-aisdk": "gpt-5.5",
   grok: "grok-composer-2.5-fast",
   cursor: "auto",
-  hermes: "nousresearch/hermes-4-405b",
   opencode: "opencode-go/deepseek-v4-flash",
 };
 const AGENT_THINKING_LEVELS: Record<AgentKind, string[]> = {
@@ -520,7 +512,6 @@ const AGENT_THINKING_LEVELS: Record<AgentKind, string[]> = {
   "codex-aisdk": ["none", "minimal", "low", "medium", "high", "xhigh"],
   grok: ["low", "medium", "high", "xhigh", "max"],
   cursor: ["low", "medium", "high", "xhigh", "max"],
-  hermes: [],
   opencode: [],
 };
 
@@ -578,7 +569,6 @@ const AGENT_OPTIONS: { key: AgentKind; label: string; Icon: typeof Sparkles }[] 
   { key: "codex-aisdk", label: "codex", Icon: Braces },
   { key: "grok", label: "grok", Icon: Bot },
   { key: "cursor", label: "cursor", Icon: TerminalSquare },
-  { key: "hermes", label: "hermes", Icon: Sparkles },
   { key: "opencode", label: "opencode", Icon: Boxes },
 ];
 

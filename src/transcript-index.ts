@@ -641,6 +641,7 @@ async function importTranscriptForRead(path: string, sessionId: string): Promise
 
 export function enqueueTranscriptIndex(path: string, sessionId: string): void {
   if (isSessionIndexKey(path)) return;
+  if (sessionHasIndexedMessages(sessionId)) return;
   if (enqueued.has(path)) return;
   enqueued.add(path);
   traceLog("transcript_index_enqueue", { sessionId, path });
