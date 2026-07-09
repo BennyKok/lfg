@@ -114,6 +114,7 @@ import { SessionDiffBar } from "@/components/SessionDiffView";
 import { Textarea } from "@/components/ui/textarea";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Popover } from "@base-ui/react/popover";
+import { Drawer as VaulDrawer } from "vaul";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -11522,10 +11523,9 @@ function ModelPicker({
   const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
   const [mobileMounted, setMobileMounted] = useState(false);
-  const [mobileVisible, setMobileVisible] = useState(false);
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
-  const mobileTransitionMs = 260;
+  const mobileTransitionMs = 360;
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return models;
@@ -11547,19 +11547,13 @@ function ModelPicker({
   useEffect(() => {
     if (!isMobile) {
       setMobileMounted(false);
-      setMobileVisible(false);
       return;
     }
     if (open) {
       setMobileMounted(true);
-      const frames: number[] = [];
-      frames.push(window.requestAnimationFrame(() => {
-        frames.push(window.requestAnimationFrame(() => setMobileVisible(true)));
-      }));
-      return () => frames.forEach((frame) => window.cancelAnimationFrame(frame));
+      return;
     }
 
-    setMobileVisible(false);
     const timer = window.setTimeout(() => setMobileMounted(false), mobileTransitionMs);
     return () => window.clearTimeout(timer);
   }, [isMobile, open]);
@@ -11661,55 +11655,35 @@ function ModelPicker({
           </span>
           <ChevronDown className="size-4 shrink-0 text-muted-foreground/70" />
         </button>
-        {mobileMounted
-          ? createPortal(
-            <div
-              role="dialog"
-              aria-modal="true"
-              aria-label="Model"
-              className="fixed inset-0 z-[150]"
-              onPointerDown={(event) => event.stopPropagation()}
-              onMouseDown={(event) => event.stopPropagation()}
-              onClick={(event) => event.stopPropagation()}
-            >
-              <button
-                type="button"
-                aria-label="Close model picker"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setOpen(false);
-                }}
-                className={cn(
-                  "absolute inset-0 bg-black/80 transition-opacity duration-200 ease-out",
-                  mobileVisible ? "opacity-100" : "opacity-0",
-                )}
-              />
-              <div
-                className={cn(
-                  "absolute inset-x-0 bottom-0 z-[1] mx-auto flex max-h-[82dvh] max-w-lg transform-gpu flex-col rounded-t-[2rem] border border-border bg-background p-4 pb-[max(env(safe-area-inset-bottom),1rem)] text-foreground shadow-2xl transition-[transform,opacity] duration-[260ms] ease-[cubic-bezier(0.32,0.72,0,1)] will-change-transform",
-                  mobileVisible ? "opacity-100" : "opacity-95",
-                )}
-                style={{
-                  transform: mobileVisible
-                    ? "translate3d(0, 0, 0)"
-                    : "translate3d(0, calc(100% + 1rem), 0)",
-                }}
+        {mobileMounted ? (
+          <VaulDrawer.Root
+            open={open}
+            onOpenChange={setOpen}
+            repositionInputs={false}
+            shouldScaleBackground={false}
+          >
+            <VaulDrawer.Portal>
+              <VaulDrawer.Overlay className="fixed inset-0 z-[149] bg-black/80" />
+              <VaulDrawer.Content
+                data-slot="model-picker-drawer-content"
+                className="fixed inset-x-0 bottom-0 z-[150] mx-auto flex max-h-[82dvh] max-w-lg select-none flex-col rounded-t-[2rem] border border-border bg-background p-4 pb-[max(env(safe-area-inset-bottom),1rem)] text-foreground shadow-2xl outline-none"
+                aria-label="Model"
               >
                 <div className="mx-auto mb-3 h-1.5 w-24 shrink-0 rounded-full bg-muted" />
-                <h2 className="mb-3 text-base font-semibold">Model</h2>
+                <VaulDrawer.Title className="mb-3 text-base font-semibold">
+                  Model
+                </VaulDrawer.Title>
                 <div className="min-h-0 space-y-3">
                   {search}
                   {list}
                 </div>
-              </div>
-            </div>,
-            document.body,
-          )
-          : null}
+              </VaulDrawer.Content>
+            </VaulDrawer.Portal>
+          </VaulDrawer.Root>
+        ) : null}
       </>
     );
   }
-
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger render={trigger} />
