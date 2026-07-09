@@ -2232,15 +2232,6 @@ function isCollapsedSid(sid: string): boolean {
   return DEFAULT_COLLAPSED;
 }
 
-function markExpandedSid(sid: string): void {
-  try {
-    localStorage.setItem(`lfg-collapsed:${sid}`, "0");
-  } catch {
-    /* private mode / quota */
-  }
-  window.dispatchEvent(new Event("lfg-collapse-change"));
-}
-
 function markCollapsedSid(sid: string): void {
   try {
     localStorage.setItem(`lfg-collapsed:${sid}`, "1");
@@ -2248,6 +2239,24 @@ function markCollapsedSid(sid: string): void {
     /* private mode / quota */
   }
   window.dispatchEvent(new Event("lfg-collapse-change"));
+}
+
+// Sids force-streamed by an open consumer (the mobile SessionTitleSheet) that
+// needs a transcript without expanding the underlying card. This is deliberately
+// NOT the `lfg-collapsed:` localStorage key: opening the sheet must not rewrite
+// the card's persisted collapse choice (that leaked as an auto-expand and could
+// stick if the tab was refreshed while the sheet was open). Kept in memory and
+// unioned into `useExpandedIds` so the SSE stream opens; reuses the existing
+// `lfg-collapse-change` event to recompute.
+const forcedStreamSids = new Set<string>();
+function addForcedStreamSid(sid: string): void {
+  forcedStreamSids.add(sid);
+  window.dispatchEvent(new Event("lfg-collapse-change"));
+}
+function removeForcedStreamSid(sid: string): void {
+  if (forcedStreamSids.delete(sid)) {
+    window.dispatchEvent(new Event("lfg-collapse-change"));
+  }
 }
 
 // Sessions created in this tab within the last ~2s — drives the one-shot card
@@ -2271,7 +2280,11 @@ function useExpandedIds(sessions: Session[], forceExpanded = false): string[] {
   );
   const sidKey = sids.join(",");
   const read = useCallback(
-    () => (forceExpanded ? sids : sids.filter((sid) => !isCollapsedSid(sid))),
+    () =>
+      sids.filter(
+        (sid) =>
+          forcedStreamSids.has(sid) || (forceExpanded ? true : !isCollapsedSid(sid)),
+      ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [sidKey, forceExpanded],
   );
@@ -8150,23 +8163,17 @@ function SessionTitleSheet({
 
   // The full-height sheet is a pure consumer of `messages`/`loading`, which only
   // populate while a sid is in the live SSE stream (driven by collapse state).
-  // Force each session we view into the stream so its transcript loads, then
-  // restore every touched sid's real collapse state when the sheet closes.
-  const touchedRef = useRef<Map<string, boolean>>(new Map());
+  // Force each session we view into the stream so its transcript loads — via the
+  // in-memory forced-stream channel, NOT the `lfg-collapsed:` key, so the card
+  // behind the sheet keeps its own collapse state and nothing leaks/sticks.
+  const touchedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!touchedRef.current.has(sid)) touchedRef.current.set(sid, isCollapsedSid(sid));
-    markExpandedSid(sid);
+    touchedRef.current.add(sid);
+    addForcedStreamSid(sid);
   }, [sid]);
   useEffect(
     () => () => {
-      for (const [s, wasCollapsed] of touchedRef.current) {
-        try {
-          localStorage.setItem(`lfg-collapsed:${s}`, wasCollapsed ? "1" : "0");
-        } catch {
-          /* private mode / quota — non-fatal */
-        }
-      }
-      window.dispatchEvent(new Event("lfg-collapse-change"));
+      for (const s of touchedRef.current) removeForcedStreamSid(s);
     },
     [],
   );
