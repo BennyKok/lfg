@@ -4,12 +4,12 @@ import { marked } from "marked";
 import type { ServerWebSocket } from "bun";
 import { PATHS } from "./config.ts";
 import {
-  listSessions,
   resolveTranscript,
   pendingToolPrompt,
   type PendingPrompt,
   type Session,
 } from "./sessions.ts";
+import { listSessionsCached, noteListSessionsClientActivity } from "./session-cache.ts";
 import { indexedMessagePage } from "./transcript-index.ts";
 import { ensureChatTranscriptCaughtUp, subscribeChatTranscript } from "./chat-ingest.ts";
 import {
@@ -374,7 +374,12 @@ export function createLiveWsSupport(opts: {
     statusPublishing = true;
     const t0 = performance.now();
     try {
-      const rows = (await listSessions())
+      // The fleet status broadcast tolerates ≤ cache-TTL staleness and must NOT
+      // rebuild the full session list (~180ms) on the event loop every second.
+      // Keep the shared cache warm while sockets are open, then read the cached
+      // snapshot — a single background refresher owns the real listSessions().
+      noteListSessionsClientActivity();
+      const rows = (await listSessionsCached())
         .filter((s) => s.sessionId)
         .map(slimStatus);
       const sig = JSON.stringify(rows);
@@ -429,7 +434,7 @@ export function createLiveWsSupport(opts: {
   };
 
   const hydrateTarget = async (tail: SidTail) => {
-    const all = await listSessions();
+    const all = await listSessionsCached();
     const bySid = new Map(all.map((s) => [s.sessionId, s.tmuxTarget ?? null]));
     tail.pane.target = bySid.get(tail.sid) ?? null;
   };
