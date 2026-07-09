@@ -4,6 +4,7 @@ import {
   deleteTranscriptIndexForPath,
   indexTranscriptMessages,
   transcriptCursorFor,
+  transcriptIndexCurrent,
 } from "./transcript-index.ts";
 import { traceLog } from "./trace-log.ts";
 
@@ -247,6 +248,14 @@ let monitorStarted = false;
 let monitorRunning = false;
 let warmRunning = false;
 
+// Backends that index their own transcript in-process as messages stream (see
+// src/agents/backends/*-session.ts). The monitor must not re-read/re-index their
+// files on serve's event loop while the index cursor is already current — it only
+// backfills when the in-process indexer has fallen behind or never ran (e.g. a
+// session started before index-at-source shipped, or a best-effort catch-up that
+// dropped). Any residual gap still self-heals via the transcript read path.
+const SELF_INDEXING_AGENTS = new Set<Session["agent"]>(["aisdk", "opencode", "codex-aisdk"]);
+
 function tailerFor(path: string, sessionId: string): ChatTranscriptTailer {
   let tailer = tailers.get(path);
   if (!tailer) {
@@ -305,18 +314,31 @@ export function startChatIngestMonitor(fetchSessions: () => Promise<Session[]>):
     const started = performance.now();
     try {
       const sessions = await fetchSessions();
-      const targets = new Map<string, { sessionId: string; path: string }>();
+      const targets = new Map<string, { sessionId: string; path: string; agent: Session["agent"] }>();
       for (const session of sessions) {
         if (!session.sessionId || !session.transcriptPath) continue;
-        targets.set(session.transcriptPath, { sessionId: session.sessionId, path: session.transcriptPath });
+        targets.set(session.transcriptPath, {
+          sessionId: session.sessionId,
+          path: session.transcriptPath,
+          agent: session.agent,
+        });
       }
       let swept = 0;
       let imported = 0;
       let indexed = 0;
       let skipped = 0;
+      let selfIndexed = 0;
       for (const target of targets.values()) {
         if (tailerHasSubscribers(target.path)) {
           skipped++;
+          continue;
+        }
+        // Self-indexing backend that is already caught up in its own process:
+        // don't re-read/re-index it on serve's loop. Only fall through to catch-up
+        // when its cursor is behind (never self-indexed, or the in-process
+        // best-effort catch-up dropped).
+        if (SELF_INDEXING_AGENTS.has(target.agent) && transcriptIndexCurrent(target.path)) {
+          selfIndexed++;
           continue;
         }
         swept++;
@@ -341,6 +363,7 @@ export function startChatIngestMonitor(fetchSessions: () => Promise<Session[]>):
           sessions: sessions.length,
           targets: targets.size,
           swept,
+          selfIndexed,
           imported,
           skipped,
           indexed,
