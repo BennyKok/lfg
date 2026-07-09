@@ -13,14 +13,16 @@ RUN apt-get update \
 
 WORKDIR /app
 
-# Build from the checked-out source tree (works for any clone/snapshot of
-# the repo — no dependency on a published release bundle).
+COPY package.json bun.lock ./
+RUN bun install
+
+COPY web/package.json web/bun.lock ./web/
+RUN cd web && bun install
+
 COPY . .
 
 RUN set -eux; \
-  bun install; \
   cd web; \
-  bun install; \
   bun run build; \
   cd /app; \
   mkdir -p /data/repos /data/lfg; \
