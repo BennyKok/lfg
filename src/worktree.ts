@@ -74,7 +74,19 @@ export function prepareSessionWorktree(
 
   git(absRoot, ["fetch", "--quiet", "origin", "main"]);
 
-  const add = git(absRoot, ["worktree", "add", "-b", branch, wtPath, MAIN_REF]);
+  // Base the worktree on whichever main is NEWER. origin/main alone made every
+  // subagent blind to unpushed local work — a child spawned minutes after a
+  // local commit landed would base on the last *pushed* commit and reference
+  // (or conflict with) stale code. Local main wins when it's ahead of origin;
+  // origin wins when the local checkout is behind (e.g. a stale clone).
+  let baseRef = MAIN_REF;
+  const localMain = git(absRoot, ["rev-parse", "--verify", "--quiet", "main"]);
+  if (localMain.ok) {
+    const ahead = git(absRoot, ["rev-list", "--count", `${MAIN_REF}..main`]);
+    if (ahead.ok && parseInt(ahead.out.trim(), 10) > 0) baseRef = "main";
+  }
+
+  const add = git(absRoot, ["worktree", "add", "-b", branch, wtPath, baseRef]);
   if (!add.ok) {
     const reuseBranch = git(absRoot, ["worktree", "add", wtPath, branch]);
     if (!reuseBranch.ok) {
