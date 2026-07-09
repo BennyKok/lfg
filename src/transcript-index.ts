@@ -25,6 +25,10 @@ type IndexedMessageRow = {
   byte_offset: number;
 };
 
+type IndexedMessageRowidRow = IndexedMessageRow & {
+  rowid: number;
+};
+
 export type TranscriptIndexCursor = {
   path: string;
   sessionId: string;
@@ -628,6 +632,49 @@ export async function indexedRecentMessages(
 ): Promise<SessionMsg[]> {
   const page = await indexedMessagePage(path, sessionId, { limit });
   return page.messages;
+}
+
+export function indexedMessagesAfterRowid(
+  path: string,
+  sessionId: string,
+  afterRowid: number,
+  limit = 200,
+): { messages: SessionMsg[]; maxRowid: number } {
+  init();
+  const d = database();
+  const bounded = Math.max(0, Math.min(20_000, Math.floor(limit)));
+  const cursor = Math.max(0, Math.floor(afterRowid));
+  const rows = bounded
+    ? d
+        .query<IndexedMessageRowidRow, [string, number, number]>(`
+          SELECT rowid, id, message_id, role, kind, ts, text, byte_offset
+          FROM transcript_messages
+          WHERE path = ? AND rowid > ?
+          ORDER BY rowid ASC
+          LIMIT ?
+        `)
+        .all(path, cursor, bounded)
+    : [];
+  const maxRowid = rows.length
+    ? rows[rows.length - 1].rowid
+    : d
+        .query<{ max_rowid: number | null }, [string]>(
+          "SELECT max(rowid) AS max_rowid FROM transcript_messages WHERE path = ?",
+        )
+        .get(path)?.max_rowid ?? 0;
+  if (rows.length) {
+    traceLog("transcript_after_rowid", {
+      sessionId,
+      path,
+      afterRowid: cursor,
+      messages: rows.length,
+      maxRowid,
+    });
+  }
+  return {
+    messages: rows.map(rowMessage),
+    maxRowid,
+  };
 }
 
 export async function searchTranscriptIndex(

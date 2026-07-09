@@ -10,7 +10,7 @@ import {
   type Session,
 } from "./sessions.ts";
 import { listSessionsCached, noteListSessionsClientActivity } from "./session-cache.ts";
-import { indexedMessagePage } from "./transcript-index.ts";
+import { indexedMessagePage, indexedMessagesAfterRowid } from "./transcript-index.ts";
 import { ensureChatTranscriptCaughtUp, subscribeChatTranscript } from "./chat-ingest.ts";
 import {
   capturePane,
@@ -67,6 +67,7 @@ const BACKLOG_LIMIT = 40;
 const HEARTBEAT_MS = 25_000;
 const IDLE_CLOSE_MS = 60_000;
 const RING_CAP = 256;
+const LIVE_DB_POLL_LIMIT = 500;
 
 const messageHtmlCache = new Map<string, string>();
 const MESSAGE_HTML_CACHE_MAX = 4_000;
@@ -274,6 +275,10 @@ type SidTail = {
   pollInterval: ReturnType<typeof setInterval> | null;
   draftInterval: ReturnType<typeof setInterval> | null;
   transcriptUnsub: (() => void) | null;
+  transcriptSource: "file" | "db" | null;
+  transcriptDbRowid: number | null;
+  transcriptDbSessionId: string | null;
+  transcriptDbPolling: boolean;
 };
 
 export function createLiveWsSupport(opts: {
@@ -439,8 +444,17 @@ export function createLiveWsSupport(opts: {
     tail.pane.target = bySid.get(tail.sid) ?? null;
   };
 
-  const subscribeTailToTranscript = (tail: SidTail, tp: string) => {
-    if (tail.transcriptUnsub) return;
+  const subscribeTailToTranscript = async (tail: SidTail, tp: string) => {
+    if (tail.transcriptSource) return;
+    const entry = findEntryByAnyId(tail.sid);
+    if (entry) {
+      const snapshotCursor = indexedMessagesAfterRowid(tp, entry.sessionId, 0, 0);
+      tail.transcriptSource = "db";
+      tail.transcriptDbRowid = snapshotCursor.maxRowid;
+      tail.transcriptDbSessionId = entry.sessionId;
+      return;
+    }
+    tail.transcriptSource = "file";
     tail.transcriptUnsub = subscribeChatTranscript(tp, tail.sid, (event) => {
       const messages = visibleTranscriptMessages(event.messages);
       if (messages.length) tail.lastMessageAt = Date.now();
@@ -455,11 +469,16 @@ export function createLiveWsSupport(opts: {
         const tp = await resolveTranscript(tail.sid);
         if (!tp) return;
         tail.pane.tp = tp;
-        subscribeTailToTranscript(tail, tp);
+        if (findEntryByAnyId(tail.sid)) {
+          await publishCurrentBatch(tail);
+          await subscribeTailToTranscript(tail, tp);
+          return;
+        }
+        await subscribeTailToTranscript(tail, tp);
         await publishCurrentBatch(tail);
         return;
       }
-      subscribeTailToTranscript(tail, tail.pane.tp);
+      await subscribeTailToTranscript(tail, tail.pane.tp);
     } catch (err) {
       const code = (err as { code?: string } | null)?.code;
       if (code !== "ENOENT") {
@@ -469,6 +488,39 @@ export function createLiveWsSupport(opts: {
           error: err instanceof Error ? err.message : String(err),
         });
       }
+    }
+  };
+
+  const pollIndexedTranscript = async (tail: SidTail) => {
+    if (tail.transcriptSource !== "db" || tail.transcriptDbPolling) return;
+    const tp = tail.pane.tp;
+    const sessionId = tail.transcriptDbSessionId;
+    const afterRowid = tail.transcriptDbRowid;
+    if (!tp || !sessionId || afterRowid == null) return;
+    tail.transcriptDbPolling = true;
+    try {
+      const page = indexedMessagesAfterRowid(tp, sessionId, afterRowid, LIVE_DB_POLL_LIMIT);
+      const messages = visibleTranscriptMessages(page.messages);
+      if (messages.length) {
+        tail.lastMessageAt = Date.now();
+        evlog("ws_db_poll_publish", {
+          sid: tail.sid,
+          transcriptPath: tp,
+          afterRowid,
+          maxRowid: page.maxRowid,
+          messages: messages.length,
+        });
+      }
+      for (const message of messages) publishSid(tail.sid, "msg", { message: msgWithHtml(message) });
+      tail.transcriptDbRowid = page.maxRowid;
+    } catch (err) {
+      evlog("ws_transcript_db_poll_error", {
+        sid: tail.sid,
+        transcriptPath: tp,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      tail.transcriptDbPolling = false;
     }
   };
 
@@ -545,14 +597,18 @@ export function createLiveWsSupport(opts: {
       pollInterval: null,
       draftInterval: null,
       transcriptUnsub: null,
+      transcriptSource: null,
+      transcriptDbRowid: null,
+      transcriptDbSessionId: null,
+      transcriptDbPolling: false,
     };
     sidTails.set(sid, tail);
-    if (tp) subscribeTailToTranscript(tail, tp);
+    if (tp) await subscribeTailToTranscript(tail, tp);
     void hydrateTarget(tail).then(() => void pollOne(tail));
     pollArtifacts(tail);
     pollQueue(tail);
     tail.pollInterval = setInterval(() => {
-      void ensureTranscriptSubscription(tail);
+      void ensureTranscriptSubscription(tail).then(() => pollIndexedTranscript(tail));
       void pollOne(tail);
       pollArtifacts(tail);
       pollQueue(tail);
@@ -587,7 +643,7 @@ export function createLiveWsSupport(opts: {
       tp = await resolveTranscript(tail.sid);
       if (!tp) return;
       tail.pane.tp = tp;
-      subscribeTailToTranscript(tail, tp);
+      await subscribeTailToTranscript(tail, tp);
     }
     await ensureChatTranscriptCaughtUp(tp, tail.sid, "ws-snapshot");
     const backlog = await readBacklog(tail.sid, tp);
