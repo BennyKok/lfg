@@ -315,9 +315,8 @@ function curateModels(agent: CodingAgentKind, models: string[]): string[] {
 export function rawModelsForAgent(agent: CodingAgentKind): string[] {
   const fallback = MODEL_OPTIONS[agent]?.models;
   const provider = readModelDiscoveryCacheSync()?.providers?.[agent];
-  if (provider?.ok && provider.models.length) return [...provider.models];
   const discovered = discoveredModelIdsByProviderSync();
-  return mergeModels(fallback, discovered[agent]);
+  return mergeModels(fallback, provider?.ok ? provider.models : undefined, discovered[agent]);
 }
 
 export function modelsForAgent(agent: CodingAgentKind): string[] {
