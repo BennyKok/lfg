@@ -7503,7 +7503,12 @@ function SessionChat({
   });
   const { messages: uiMessages, setMessages, sendMessage: sendChatMessage, status: chatStatus } = chat;
   const chatMessages = useMemo(() => lfgUIMessagesToMessages(uiMessages), [uiMessages]);
-  const chatBusy = busy || chatStatus === "submitted" || chatStatus === "streaming";
+  // Busy straight from the transcript subscription: the harness flips it the
+  // moment it starts a turn, ahead of the ~1s status-poll row that feeds the
+  // `busy` prop, so the working indicator tracks the session even for turns
+  // driven from another device (where chatStatus never leaves "ready").
+  const [liveBusy, setLiveBusy] = useState(false);
+  const chatBusy = busy || liveBusy || chatStatus === "submitted" || chatStatus === "streaming";
 
   useEffect(() => {
     chatStatusRef.current = chatStatus;
@@ -7548,11 +7553,13 @@ function SessionChat({
 
   useEffect(() => {
     if (!sid || !onSubscribeTranscript) return;
+    setLiveBusy(false); // don't carry a previous session's busy across a switch
     return onSubscribeTranscript(sid, (event) => {
       if (event.type === "error") {
         onError(event.error);
         return;
       }
+      if (event.type === "busy") setLiveBusy(event.busy);
       setMessages((current) =>
         appendLfgTranscriptEvent(current, event, {
           streamActive: chatStatusRef.current === "submitted" || chatStatusRef.current === "streaming",

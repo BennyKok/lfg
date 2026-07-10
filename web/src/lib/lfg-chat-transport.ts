@@ -293,6 +293,19 @@ export function appendLfgTranscriptEvent(
   if (event.type === "ai_part") {
     return opts.streamActive ? current : updateDraftText(current, event.part);
   }
+  if (event.type === "busy" && !event.busy) {
+    // Turn ended: any assistant message still marked streaming is a stale
+    // draft. The server never emits an explicit end for drafts (it just stops
+    // sending deltas — heavy on claude, rare on codex), and the finalized row
+    // for the same text is already indexed/upserted, so a leftover streaming
+    // bubble would sit there animating forever.
+    const next = current.filter(
+      (message) =>
+        message.role !== "assistant" ||
+        !message.parts.some((part) => part.type === "text" && part.state === "streaming"),
+    );
+    return next.length === current.length ? current : next;
+  }
   return current;
 }
 
@@ -317,7 +330,16 @@ class LfgChunkEmitter {
       return;
     }
     if (event.type === "busy") {
-      if (!event.busy && (this.sawContent || Date.now() - this.createdAt > 500)) this.finishSoon();
+      // busy:false only ends the stream promptly once we've actually seen
+      // content. The serve's 1s poll re-emits the CURRENT (still idle) busy
+      // state right after a send — the old 500ms grace let that pre-flip frame
+      // close the stream with zero content, dropping chatStatus to "ready" so
+      // the working indicator never appeared. A content-less stream still gets
+      // a long-grace close so an interrupted/failed turn can't wedge the
+      // composer, and busy:true cancels any pending close.
+      if (event.busy) this.clearFinishTimer();
+      else if (this.sawContent) this.finishSoon();
+      else this.finishSoon(15_000);
       return;
     }
     if (event.type === "ai_part") {
@@ -360,6 +382,7 @@ class LfgChunkEmitter {
   private handleMessage(message: LfgMessage) {
     if (message.role === "user" && message.kind === "text") return;
     this.sawContent = true;
+    this.clearFinishTimer();
     if (message.role === "assistant" && message.kind === "text") {
       const text = message.text ?? "";
       const active = [...this.activeTextIds][0];
@@ -395,13 +418,13 @@ class LfgChunkEmitter {
     this.enqueue({ type: "text-end", id });
   }
 
-  private finishSoon() {
+  private finishSoon(delayMs = 80) {
     this.clearFinishTimer();
     this.finishTimer = setTimeout(() => {
       for (const id of [...this.activeTextIds]) this.endText(id);
       this.enqueue({ type: "finish", finishReason: "stop" });
       this.close();
-    }, 80);
+    }, delayMs);
   }
 
   private clearFinishTimer() {

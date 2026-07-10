@@ -2,6 +2,35 @@
 
 Recent product updates and deployment notes.
 
+## July 9, 2026 - Direct transcript indexing & a single chat state (v0.2.0)
+
+Managed sessions no longer read or write transcript JSONL: all three SDK
+harnesses (Claude, Codex, OpenCode) index their message streams straight into
+SQLite, and the web chat pane now runs entirely on AI SDK `useChat`.
+
+- Claude, Codex, and OpenCode managed sessions run on their official SDKs and
+  index messages directly into SQLite under `lfg://session/<id>` keys — opening
+  a chat is one ~2ms DB read, with no transcript files in the loop.
+- Migrated the web chat pane to `@ai-sdk/react` `useChat` as the single state
+  system: history is fetched per open, live updates append through the shared
+  WebSocket subscription, and duplicate handling lives in exactly one place.
+- Fixed live-view blindness after a serve restart: snapshot/gap/resumed frames
+  are now authoritative resync points instead of being dropped by the stale-seq
+  guard, so long-lived pages recover instead of going silent.
+- Fixed re-entered chats rendering history-less: message state now survives for
+  every subscribed session (not just busy ones), and resume cursors are dropped
+  with their subscriptions.
+- Fixed Codex sessions silently losing every reply after turn 1 (per-turn item
+  id collisions), duplicated transcripts from rollout re-ingestion, and command
+  replay storms after a harness restart.
+- Fixed tmux Codex transcript discovery: rollouts are inferred by prompt, cwd,
+  and time, and the mapping is persisted so transcripts still resolve after the
+  pane is gone.
+- Streaming drafts reset as each assistant message finalizes, so long
+  multi-tool turns no longer accumulate into one duplicated blob.
+- Temporarily de-listed the Hermes agent from all pickers and spawn paths to
+  focus on the core harnesses (`agent=hermes` now returns a clear error).
+
 ## July 5, 2026 - Setup checks & steadier resumes
 
 LFG now exposes setup checks for local MCP registration and keeps resumed

@@ -7,12 +7,13 @@ import {
   thinkingLevelsForAgent,
   type ModelCatalogItem,
 } from "../agent-catalog.ts";
+import { refreshModelCatalog } from "../model-discovery.ts";
 
 const HELP = `lfg subagent — spawn managed worker sessions across harnesses
 
 Usage:
   lfg subagent list [--parent SESSION_ID] [--json]
-  lfg subagent models [--json]
+  lfg subagent models [--json] [--refresh]
   lfg subagent create --prompt "..." --agent codex-aisdk --model gpt-5.5
   lfg subagent create --prompt-file task.md --agent aisdk --model opus --cwd /path/to/repo
 
@@ -113,7 +114,10 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
   return data as T;
 }
 
-function cmdModels(args: string[]) {
+async function cmdModels(args: string[]) {
+  if (hasFlag(args, "--refresh")) {
+    await refreshModelCatalog({ reason: "manual", onLog: (line) => console.error(line) });
+  }
   const models = listModelCatalog();
   if (hasFlag(args, "--json")) {
     console.log(JSON.stringify({ models }, null, 2));
