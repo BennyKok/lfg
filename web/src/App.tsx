@@ -410,6 +410,9 @@ type SlashSkillState = {
 
 const CLAUDE_MODELS = ["sonnet", "opus", "haiku", "fable"];
 const CODEX_MODELS = [
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
   "gpt-5.5",
   "gpt-5.4",
   "gpt-5.4-mini",
@@ -419,6 +422,9 @@ const CODEX_MODELS = [
 // aliases). Kept in sync with the AISDK_MODELS allowlist in serve.ts.
 const AISDK_MODELS = ["fable", "opus", "sonnet", "haiku"];
 const CODEX_AISDK_MODELS = [
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
   "gpt-5.5",
   "gpt-5.4",
   "gpt-5.4-mini",
@@ -499,8 +505,8 @@ const AGENT_MODELS: Record<AgentKind, string[]> = {
 const AGENT_DEFAULT_MODEL: Record<AgentKind, string> = {
   claude: "sonnet",
   aisdk: "opus",
-  codex: "gpt-5.5",
-  "codex-aisdk": "gpt-5.5",
+  codex: "gpt-5.6-sol",
+  "codex-aisdk": "gpt-5.6-sol",
   grok: "grok-composer-2.5-fast",
   cursor: "auto",
   opencode: "opencode-go/deepseek-v4-flash",

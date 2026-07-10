@@ -1,7 +1,7 @@
 import type { Agent } from "./agents/registry.ts";
 import type { AutoAgent } from "./auto/store.ts";
 import type { CodingAgentInfo, CodingAgentKind } from "./coding-agents.ts";
-import { discoveredModelIdsByProviderSync } from "./model-discovery.ts";
+import { discoveredModelIdsByProviderSync, readModelDiscoveryCacheSync } from "./model-discovery.ts";
 import type { Session } from "./sessions.ts";
 
 export type SkillCatalogItem = {
@@ -15,6 +15,9 @@ export type SkillCatalogItem = {
 
 export const CLAUDE_MODELS: string[] = ["fable", "opus", "sonnet", "haiku"];
 export const CODEX_MODELS: string[] = [
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
   "gpt-5.5",
   "gpt-5.4",
   "gpt-5.4-mini",
@@ -22,6 +25,9 @@ export const CODEX_MODELS: string[] = [
 ];
 export const AISDK_MODELS: string[] = ["fable", "opus", "sonnet", "haiku"];
 export const CODEX_AISDK_MODELS: string[] = [
+  "gpt-5.6-sol",
+  "gpt-5.6-terra",
+  "gpt-5.6-luna",
   "gpt-5.5",
   "gpt-5.4",
   "gpt-5.4-mini",
@@ -105,8 +111,8 @@ const LABELS: Record<CodingAgentKind, string> = {
 export const MODEL_OPTIONS: Record<CodingAgentKind, { defaultModel: string; models: readonly string[] }> = {
   claude: { defaultModel: "sonnet", models: CLAUDE_MODELS },
   aisdk: { defaultModel: "opus", models: AISDK_MODELS },
-  codex: { defaultModel: "gpt-5.5", models: CODEX_MODELS },
-  "codex-aisdk": { defaultModel: "gpt-5.5", models: CODEX_AISDK_MODELS },
+  codex: { defaultModel: "gpt-5.6-sol", models: CODEX_MODELS },
+  "codex-aisdk": { defaultModel: "gpt-5.6-sol", models: CODEX_AISDK_MODELS },
   grok: { defaultModel: "grok-composer-2.5-fast", models: GROK_MODELS },
   cursor: { defaultModel: "auto", models: CURSOR_MODELS },
   hermes: { defaultModel: "nousresearch/hermes-4-405b", models: HERMES_MODELS },
@@ -286,6 +292,11 @@ function curateOpenCodeModels(models: string[]): string[] {
 
 function curateCodexModels(models: string[]): string[] {
   const out: string[] = [];
+  const add = (model: string) => {
+    if (models.includes(model) && !out.includes(model)) out.push(model);
+  };
+
+  for (const model of CODEX_MODELS) add(model);
   addLatest(out, models.filter((m) => /^gpt-\d/.test(m) && !m.includes("codex") && !m.includes("mini")));
   addLatest(out, models.filter((m) => /^gpt-\d/.test(m) && m.includes("mini")));
   addLatest(out, models.filter((m) => /^gpt-\d/.test(m) && m.includes("codex") && !m.includes("spark")));
@@ -302,8 +313,11 @@ function curateModels(agent: CodingAgentKind, models: string[]): string[] {
 }
 
 export function rawModelsForAgent(agent: CodingAgentKind): string[] {
+  const fallback = MODEL_OPTIONS[agent]?.models;
+  const provider = readModelDiscoveryCacheSync()?.providers?.[agent];
+  if (provider?.ok && provider.models.length) return [...provider.models];
   const discovered = discoveredModelIdsByProviderSync();
-  return mergeModels(MODEL_OPTIONS[agent]?.models, discovered[agent]);
+  return mergeModels(fallback, discovered[agent]);
 }
 
 export function modelsForAgent(agent: CodingAgentKind): string[] {
