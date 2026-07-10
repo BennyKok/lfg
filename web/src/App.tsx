@@ -3982,10 +3982,20 @@ export function App() {
 
   const refreshCodingAgents = useCallback(async (opts: { refreshModels?: boolean } = {}) => {
     const agentsPath = opts.refreshModels ? "/api/coding-agents?refreshModels=1" : "/api/coding-agents";
-    const [agentsPayload, checksPayload] = await Promise.all([
-      api<{ agents: CodingAgentInfo[]; models?: ModelCatalogItem[] | null }>(agentsPath),
-      api<{ checks: SetupCheckGroup[] }>("/api/setup/checks").catch(() => ({ checks: [] })),
-    ]);
+    // Every caller invokes this fire-and-forget (`void refreshCodingAgents()`),
+    // so a rejection here surfaces as an uncaught unhandledrejection. A transient
+    // backend blip (e.g. a 502 while lfg-serve restarts) must degrade to a no-op
+    // that leaves the current catalog intact rather than crashing the app.
+    let agentsPayload: { agents?: CodingAgentInfo[]; models?: ModelCatalogItem[] | null };
+    let checksPayload: { checks?: SetupCheckGroup[] };
+    try {
+      [agentsPayload, checksPayload] = await Promise.all([
+        api<{ agents: CodingAgentInfo[]; models?: ModelCatalogItem[] | null }>(agentsPath),
+        api<{ checks: SetupCheckGroup[] }>("/api/setup/checks").catch(() => ({ checks: [] })),
+      ]);
+    } catch {
+      return;
+    }
     setCodingAgents(agentsPayload.agents ?? []);
     setModelCatalog(buildAgentModelCatalog(agentsPayload.models));
     setSetupChecks(checksPayload.checks ?? []);
