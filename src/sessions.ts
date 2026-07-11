@@ -1958,7 +1958,7 @@ export async function listSessions(): Promise<Session[]> {
     if (!title && transcriptPath)
       title = await profileAsync(profile, "cachedFirstTitle_ms", () => cachedFirstTitle(transcriptPath));
     if (!title) title = cwd ? basename(cwd) : project;
-    const cmd = readProcCmd(pid, `grok --model ${summary?.current_model_id ?? "grok-composer-2.5-fast"}`);
+    const cmd = readProcCmd(pid, `grok --model ${summary?.current_model_id ?? "grok-4.5"}`);
 
     out.push({
       agent: "grok",

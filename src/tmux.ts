@@ -933,6 +933,15 @@ const BUSY_METER = /\(\d+m?\s?\d*s\b[^)]*\btokens?\b/i;
 const GROK_SPINNER = "[⠋⠙⠹⠸⠼⠴⠦⠧]";
 const GROK_QUEUED_WORK = new RegExp(`${GROK_SPINNER}\\s+MCP\\s+\\(\\d+\\/\\d+\\).*?\\+\\d+`);
 const GROK_TURN_STATUS = new RegExp(`${GROK_SPINNER}\\s+\\S.*\\b\\d+(?:\\.\\d+)?s\\b.*\\[stop\\]`);
+// cursor-agent (not Grok CLI): mid-turn the composer row shows "ctrl+c to stop"
+// on the right of the → prompt, and a status line like "Editing  46.74k tokens"
+// sits above it. Idle drops the stop hint and the live token meter. Distinct
+// from Grok's "Ctrl+c:cancel" footer pair below.
+const CURSOR_STOP_HINT = /ctrl\+c to stop/i;
+// Live activity + token meter (e.g. "Reading  48.19k tokens", "Editing  12k tokens").
+// Keep this secondary: only match when the stop hint is also present, or when the
+// spinner-prefixed status line is clearly the cursor live meter (not a transcript).
+const CURSOR_TOKEN_METER = /\b(?:Reading|Editing|Thinking|Generating|Planning|Searching|Running|Working)\b\s+[\d.]+k?\s+tokens?\b/i;
 export function isBusy(pane: string): boolean {
   return (
     BUSY_METER.test(pane) ||
@@ -940,7 +949,11 @@ export function isBusy(pane: string): boolean {
     GROK_QUEUED_WORK.test(pane) ||
     GROK_TURN_STATUS.test(pane) ||
     (/\b(Thinking|Running|Working|Calling|Executing)\b/i.test(pane) && /\bHermes\b/i.test(pane)) ||
-    (/Ctrl\+c:cancel/i.test(pane) && /Ctrl\+Enter:interject/i.test(pane))
+    (/Ctrl\+c:cancel/i.test(pane) && /Ctrl\+Enter:interject/i.test(pane)) ||
+    // cursor-agent: "ctrl+c to stop" is the stable mid-turn interrupt hint.
+    CURSOR_STOP_HINT.test(pane) ||
+    // Fallback if the stop hint is briefly absent while the token meter is up.
+    CURSOR_TOKEN_METER.test(pane)
   );
 }
 
