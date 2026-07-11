@@ -9619,14 +9619,58 @@ function ToolGroup({ items, live }: { items: Message[]; live: boolean }) {
   const label = toolGroupLabel(items);
   const last = items[items.length - 1];
   const animationKey = `${live ? "live" : "done"}-${items.length}-${last?.id ?? last?.ts ?? label}`;
-  return (
-    <div
-      key={animationKey}
+  const isMobile = useIsMobile();
+  const [open, setOpen] = useState(false);
+  const hoverCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const keepHoverOpen = () => {
+    if (hoverCloseTimer.current) clearTimeout(hoverCloseTimer.current);
+    if (!isMobile) setOpen(true);
+  };
+  const scheduleHoverClose = () => {
+    if (isMobile) return;
+    hoverCloseTimer.current = setTimeout(() => setOpen(false), 120);
+  };
+
+  const details = (
+    <div className="space-y-3">
+      {items.map((item, index) => {
+        const isUse = item.kind === "tool_use";
+        const text = item.text || (isUse ? "No command details" : "No result details");
+        const separator = isUse ? text.indexOf(":") : -1;
+        const title = isUse
+          ? (separator >= 0 ? text.slice(0, separator) : text) || "Command"
+          : `Result${items.filter((entry) => entry.kind === "tool_result").length > 1 ? ` ${index + 1}` : ""}`;
+        const body = isUse && separator >= 0 ? text.slice(separator + 1).trim() : isUse ? "" : text;
+        return (
+          <div key={item.id ?? `${item.kind}-${item.ts}-${index}`} className="min-w-0">
+            <div className="mb-1 flex items-center gap-2 text-xs font-semibold text-foreground">
+              <span className={cn("size-1.5 rounded-full", isUse ? "bg-primary" : "bg-muted-foreground/60")} />
+              <span className="truncate font-mono">{title}</span>
+            </div>
+            {body ? (
+              <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words rounded-xl bg-muted/60 p-2.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                {body}
+              </pre>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  const pill = (
+    <button
+      type="button"
       className={cn(
-        "tool-call-row not-prose flex w-fit max-w-full items-center gap-2 rounded-full px-2.5 py-1 text-xs text-muted-foreground",
+        "tool-call-row not-prose flex w-fit max-w-full cursor-pointer items-center gap-2 rounded-full px-2.5 py-1 text-left text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
         live && "tool-call-row--live text-foreground",
       )}
-      aria-label={`${live ? "Running" : "Completed"} tool call${items.length === 1 ? "" : "s"}: ${label}`}
+      aria-label={`${live ? "Running" : "Completed"} tool call${items.length === 1 ? "" : "s"}: ${label}. Show details`}
+      aria-haspopup="dialog"
+      aria-expanded={open}
+      onClick={() => setOpen((value) => !value)}
+      onMouseEnter={keepHoverOpen}
+      onMouseLeave={scheduleHoverClose}
     >
       <span
         className={cn(
@@ -9636,7 +9680,43 @@ function ToolGroup({ items, live }: { items: Message[]; live: boolean }) {
         aria-hidden="true"
       />
       <span className="truncate font-mono">{label}</span>
-    </div>
+    </button>
+  );
+
+  if (isMobile) {
+    return (
+      <div key={animationKey} className="w-fit max-w-full">
+        {pill}
+        <VaulDrawer.Root open={open} onOpenChange={setOpen} repositionInputs={false} shouldScaleBackground={false}>
+          <VaulDrawer.Portal>
+            <VaulDrawer.Overlay className="fixed inset-0 z-[149] bg-black/80" />
+            <VaulDrawer.Content className="fixed inset-x-0 bottom-0 z-[150] mx-auto flex max-h-[82dvh] max-w-lg flex-col rounded-t-[2rem] border border-border bg-background p-4 pb-[max(env(safe-area-inset-bottom),1rem)] text-foreground shadow-2xl outline-none">
+              <div className="mx-auto mb-3 h-1.5 w-24 shrink-0 rounded-full bg-muted" />
+              <VaulDrawer.Title className="mb-3 text-base font-semibold">Command details</VaulDrawer.Title>
+              <div className="min-h-0 overflow-y-auto">{details}</div>
+            </VaulDrawer.Content>
+          </VaulDrawer.Portal>
+        </VaulDrawer.Root>
+      </div>
+    );
+  }
+
+  return (
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger render={pill} />
+      <Popover.Portal>
+        <Popover.Positioner side="top" align="start" sideOffset={7} className="isolate z-[130] outline-none">
+          <Popover.Popup
+            onMouseEnter={keepHoverOpen}
+            onMouseLeave={scheduleHoverClose}
+            className="w-[min(28rem,calc(100vw-1rem))] rounded-2xl border border-border bg-popover p-3 text-popover-foreground shadow-2xl ring-1 ring-foreground/5 outline-none"
+          >
+            <div className="mb-2 text-xs font-semibold text-muted-foreground">Command details</div>
+            {details}
+          </Popover.Popup>
+        </Popover.Positioner>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }
 
