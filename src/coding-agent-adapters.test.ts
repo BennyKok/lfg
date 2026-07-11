@@ -18,7 +18,6 @@ import {
   spawnManagedOpencodeAisdkSession,
   spawnManagedSession,
   managedCursorSessionArgv,
-  cursorChatIdFromOutput,
   parsePrompt,
 } from "./tmux.ts";
 
@@ -103,23 +102,6 @@ describe("coding agent adapter contract", () => {
     expect(argv).not.toContain("--model");
     expect(argv).toContain("LFG_SESSION_ID=session-id");
     expect(argv).toContain("LFG_USER=user@example.com");
-  });
-
-  test("cursor managed sessions resume their preallocated native chat", () => {
-    const nativeSessionId = "74cb7cba-1e83-4c70-b0e0-248cce3ad5f4";
-    const argv = managedCursorSessionArgv({
-      name: "lfg-test",
-      cwd: "/tmp/lfg-test",
-      prompt: "hello",
-      nativeSessionId,
-    });
-
-    expect(argv.slice(argv.indexOf("--resume"), argv.indexOf("--resume") + 2)).toEqual([
-      "--resume",
-      nativeSessionId,
-    ]);
-    expect(cursorChatIdFromOutput(`Created chat: ${nativeSessionId}\n`)).toBe(nativeSessionId);
-    expect(cursorChatIdFromOutput("chat creation failed")).toBeNull();
   });
 
   test("cursor approval prompts are surfaced to the shared prompt UI", () => {

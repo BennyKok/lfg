@@ -853,7 +853,6 @@ async function findCursorTranscriptById(id: string): Promise<string | null> {
 // can remember the native id for deep-links/title).
 async function findCursorTranscriptByCwd(
   cwd: string,
-  createdAt = 0,
 ): Promise<{ path: string; id: string } | null> {
   const base = join(CURSOR_PROJECTS_DIR, encodeCursorCwd(cwd), "agent-transcripts");
   let dirs: string[];
@@ -868,10 +867,6 @@ async function findCursorTranscriptByCwd(
     const p = join(base, d, `${d}.jsonl`);
     try {
       const st = statSync(p);
-      // A just-created managed session must never borrow an older chat while
-      // Cursor is still creating its own transcript. Allow a small filesystem
-      // timestamp granularity margin, but reject anything predating launch.
-      if (st.mtimeMs < createdAt - 1_000) continue;
       if (!best || st.mtimeMs > best.mtime) best = { path: p, id: d, mtime: st.mtimeMs };
     } catch {}
   }
@@ -2051,10 +2046,10 @@ export async function listSessions(): Promise<Session[]> {
 
   // "cursor" sessions: cursor-agent runs in a tmux pane (like grok) but writes a
   // Claude-ish transcript under ~/.cursor/projects/<enc-cwd>/agent-transcripts.
-  // New launches preallocate and remember Cursor's native chat id. Older managed
-  // records are migrated once via a creation-time-bounded cwd lookup. Resolving
-  // the transcript here lets the live view backfill + tail it and gives the card
-  // its last message / busy state.
+  // Unlike grok there's no active_sessions.json id→pid map, so we discover the
+  // live chat by newest transcript in the session's cwd, which also yields the
+  // native chat id. Resolving the transcript here lets the live-view SSE backfill
+  // + tail it and gives the card its last message / busy state.
   for (const m of managedSessions.filter((row) => row.agent === "cursor" && row.sessionId)) {
     if (!tmux.hasSession(m.tmuxName)) continue;
     const pid = tmux.panePid(m.tmuxName);
@@ -2062,18 +2057,9 @@ export async function listSessions(): Promise<Session[]> {
     const tmuxTarget = tmux.targetForPid(pid) ?? `${m.tmuxName}:0.0`;
     const cmd = readProcCmd(pid, `cursor-agent --model ${m.model ?? ""}`.trim());
     const project = m.project || projectName(m.cwd, { repoRoot: m.repoRoot });
-    const foundById = m.nativeSessionId
-      ? await profileAsync(profile, "findCursorTranscriptById_ms", () => findCursorTranscriptById(m.nativeSessionId!))
+    const found = m.cwd
+      ? await profileAsync(profile, "findCursorTranscript_ms", () => findCursorTranscriptByCwd(m.cwd))
       : null;
-    // A remembered native id is authoritative. Never replace it with another
-    // chat merely because that chat became the newest file in the same repo.
-    // The cwd heuristic exists only to migrate legacy records with no mapping,
-    // and is disabled while a new session is still launching.
-    const found = foundById
-      ? { path: foundById, id: m.nativeSessionId! }
-      : !m.nativeSessionId && m.launchState !== "launching" && m.cwd
-        ? await profileAsync(profile, "findCursorTranscript_ms", () => findCursorTranscriptByCwd(m.cwd, m.createdAt))
-        : null;
     const transcriptPath = found?.path ?? null;
     const nativeSessionId = found?.id ?? m.nativeSessionId ?? null;
     if (found?.id) rememberNativeSession(m, found.id);
@@ -2310,10 +2296,9 @@ export async function resolveTranscript(sessionId: string): Promise<string | nul
   if (managed?.agent === "cursor") {
     if (managed.nativeSessionId) {
       const byId = await findCursorTranscriptById(managed.nativeSessionId);
-      return byId;
+      if (byId) return byId;
     }
-    if (managed.launchState === "launching") return null;
-    return managed.cwd ? (await findCursorTranscriptByCwd(managed.cwd, managed.createdAt))?.path ?? null : null;
+    return managed.cwd ? (await findCursorTranscriptByCwd(managed.cwd))?.path ?? null : null;
   }
   if (managed?.agent === "codex") {
     return await findManagedCodexTranscript(managed);

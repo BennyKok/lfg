@@ -3527,7 +3527,7 @@ export async function cmdServe() {
         // Tag the new session before spawn so a concurrent /api/sessions refresh
         // can show the durable row under the right user filter immediately.
         if (assignedUser) assignUser(tmuxName, assignedUser);
-        const r: { ok: boolean; error?: string; nativeSessionId?: string } =
+        const r =
           agent === "codex"
             ? spawnManagedCodexSession({ name: tmuxName, cwd, prompt, model: resolvedModel, thinkingLevel, lfgSessionId: launchId, lfgUser: assignedUser })
             : agent === "grok"
@@ -3586,9 +3586,6 @@ export async function cmdServe() {
           removeManaged(tmuxName);
           assignUser(tmuxName, null);
           return err(502, r.error || "failed to start session");
-        }
-        if (agent === "cursor" && r.nativeSessionId) {
-          patchManaged(tmuxName, { nativeSessionId: r.nativeSessionId });
         }
         if (agent === "codex") {
           void (async () => {

@@ -486,7 +486,6 @@ export type ManagedCursorSessionOptions = {
   model?: string;
   lfgSessionId?: string;
   lfgUser?: string | null;
-  nativeSessionId?: string;
 };
 
 export function managedCursorSessionArgv(opts: ManagedCursorSessionOptions): string[] {
@@ -503,48 +502,24 @@ export function managedCursorSessionArgv(opts: ManagedCursorSessionOptions): str
     "--sandbox",
     "disabled",
   ];
-  if (opts.nativeSessionId) argv.push("--resume", opts.nativeSessionId);
   if (opts.model && opts.model !== "auto") argv.push("--model", opts.model);
   if (opts.prompt && opts.prompt.trim()) argv.push(opts.prompt);
   addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
   return argv;
 }
 
-export function cursorChatIdFromOutput(output: string): string | null {
-  return output.match(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/i)?.[0] ?? null;
-}
-
-export function spawnManagedCursorSession(opts: ManagedCursorSessionOptions): {
-  ok: boolean;
-  error?: string;
-  nativeSessionId?: string;
-} {
+export function spawnManagedCursorSession(opts: ManagedCursorSessionOptions): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   // Pre-accept workspace trust so the TUI doesn't hang on the trust dialog
   // (which would also block the transcript that the live view streams). `--yolo`
   // suppresses Cursor's per-command approval selector; `--sandbox disabled`
   // alone still asks before shell calls and can strand a live session mid-turn.
   ensureCursorFolderTrusted(opts.cwd);
-  // Allocate Cursor's native chat id before starting the TUI. Discovering it as
-  // "the newest transcript in cwd" races with old chats: until the new file is
-  // created, newest is necessarily a previous session and the live view
-  // backfills that conversation. An explicit id makes the mapping deterministic.
-  const chat = Bun.spawnSync({
-    cmd: [cursorBin(), "create-chat"],
-    cwd: opts.cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (chat.exitCode !== 0) {
-    return { ok: false, error: dec.decode(chat.stderr) || "failed to create cursor chat" };
-  }
-  const nativeSessionId = cursorChatIdFromOutput(dec.decode(chat.stdout));
-  if (!nativeSessionId) return { ok: false, error: "cursor create-chat returned no chat id" };
-  const argv = managedCursorSessionArgv({ ...opts, nativeSessionId });
+  const argv = managedCursorSessionArgv(opts);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
-  return { ok: true, nativeSessionId };
+  return { ok: true };
 }
 
 export function spawnManagedHermesSession(opts: {
