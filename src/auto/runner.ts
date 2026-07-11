@@ -138,6 +138,30 @@ async function runSelectedBackend(
       pipeToOpencodeAiSdk(prompt, onLog, { cwd, model: agent.model }),
     );
   }
+  if (backend === "grok") {
+    onLog(`[auto] grok run (${prompt.length} chars) in ${cwd} [model: ${agent.model ?? "default"}]`);
+    const { pipeToGrokCli } = await import("../agents/backends/grok-cli.ts");
+    return await runInCwd(cwd, () =>
+      pipeToGrokCli(prompt, onLog, {
+        cwd,
+        model: agent.model,
+        thinkingLevel: agent.thinkingLevel,
+        writable: (agent.tools ?? []).includes("Bash"),
+      }),
+    );
+  }
+  if (backend === "cursor") {
+    onLog(`[auto] cursor run (${prompt.length} chars) in ${cwd} [model: ${agent.model ?? "default"}]`);
+    const { pipeToCursorCli } = await import("../agents/backends/cursor-cli.ts");
+    return await runInCwd(cwd, () =>
+      pipeToCursorCli(prompt, onLog, {
+        cwd,
+        model: agent.model,
+        thinkingLevel: agent.thinkingLevel,
+        writable: (agent.tools ?? []).includes("Bash"),
+      }),
+    );
+  }
   if (backend === "hermes") {
     onLog(`[auto] hermes run (${prompt.length} chars) in ${cwd} [model: ${agent.model ?? "default"}]`);
     const { pipeToHermesCli } = await import("../agents/backends/hermes-cli.ts");

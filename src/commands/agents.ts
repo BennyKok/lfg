@@ -177,7 +177,7 @@ Usage:
   lfg agents create-auto --name NAME --prompt "..." --schedule "*/30 * * * *" --backend codex-aisdk --model gpt-5.5
 
 Options:
-  --backend aisdk|codex-aisdk|opencode
+  --backend aisdk|codex-aisdk|grok|cursor|opencode
   --model MODEL
   --thinking-level LEVEL
   --cwd PATH
@@ -212,7 +212,18 @@ Options:
       process.exit(1);
     }
   }
-  if ((backend === "codex-aisdk" || backend === "opencode") && model && !/^[A-Za-z0-9_.:\/-]{1,80}$/.test(model)) {
+  if (backend === "grok" && model) {
+    const allowed = modelsForAgent("grok");
+    if (!allowed.includes(model)) {
+      console.error(`unknown grok model "${model}" (expected one of ${allowed.join(", ")})`);
+      process.exit(1);
+    }
+  }
+  if (
+    (backend === "codex-aisdk" || backend === "opencode" || backend === "cursor") &&
+    model &&
+    !/^[A-Za-z0-9_.:\/-]{1,120}$/.test(model)
+  ) {
     console.error(`invalid ${backend} model name`);
     process.exit(1);
   }

@@ -11,7 +11,13 @@ import { randomBytes } from "node:crypto";
 import { PATHS } from "../config.ts";
 
 export type Severity = "high" | "med" | "low";
-export type AutoAgentBackend = "aisdk" | "codex-aisdk" | "opencode" | "hermes";
+export type AutoAgentBackend =
+  | "aisdk"
+  | "codex-aisdk"
+  | "grok"
+  | "cursor"
+  | "opencode"
+  | "hermes";
 
 export type AutoAgent = {
   id: string;

@@ -69,7 +69,13 @@ export const OPENCODE_MODELS: string[] = [
   "opencode-go/qwen3.7-plus",
 ];
 
-export const AUTO_AGENT_BACKENDS = ["aisdk", "codex-aisdk", "opencode"] as const;
+export const AUTO_AGENT_BACKENDS = [
+  "aisdk",
+  "codex-aisdk",
+  "grok",
+  "cursor",
+  "opencode",
+] as const;
 export type AutoAgentBackend = (typeof AUTO_AGENT_BACKENDS)[number];
 const MODEL_CATALOG_KEYS: CodingAgentKind[] = [
   "claude",

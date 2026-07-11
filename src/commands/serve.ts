@@ -293,7 +293,7 @@ function uploadFilename(req: Request, url: URL): string {
   }
 }
 
-const GROK_DEFAULT_MODEL = "grok-composer-2.5-fast";
+const GROK_DEFAULT_MODEL = "grok-4.5";
 const OPENCODE_DEFAULT_MODEL = "opencode-go/deepseek-v4-flash";
 // Models whose provider currently rejects our requests (Sakana's fugu returns a
 // hard 403 Forbidden, and the local Novita credential currently 403s too — see
@@ -2434,6 +2434,13 @@ export async function cmdServe() {
           }
           if (autoBackend === "codex-aisdk" && model && !/^[A-Za-z0-9_.:-]{1,80}$/.test(model))
             return err(400, "invalid codex model name");
+          if (autoBackend === "grok" && model) {
+            const allowed = modelsForAgent("grok");
+            if (!allowed.includes(model))
+              return err(400, `unknown model "${model}" (expected one of ${allowed.join(", ")})`);
+          }
+          if (autoBackend === "cursor" && model && !/^[A-Za-z0-9_.:\/-]{1,120}$/.test(model))
+            return err(400, "invalid cursor model name");
           if (autoBackend === "opencode" && model && !/^[A-Za-z0-9_.:\/-]{1,80}$/.test(model))
             return err(400, "invalid opencode model name");
           const thinkingLevel = b.thinkingLevel?.trim() || undefined;

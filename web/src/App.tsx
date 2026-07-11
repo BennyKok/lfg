@@ -430,7 +430,7 @@ const CODEX_AISDK_MODELS = [
   "gpt-5.4-mini",
   "gpt-5.3-codex-spark",
 ];
-const GROK_MODELS = ["grok-composer-2.5-fast", "grok-build"];
+const GROK_MODELS = ["grok-4.5", "grok-composer-2.5-fast"];
 const CURSOR_MODELS = [
   "auto",
   "composer-2.5",
@@ -462,10 +462,12 @@ const OPENCODE_MODELS = [
 ];
 const THINKING_LEVELS = ["low", "medium", "high", "xhigh"] as const;
 type ThinkingLevel = string;
-type AutoAgentBackend = "aisdk" | "codex-aisdk" | "opencode";
+type AutoAgentBackend = "aisdk" | "codex-aisdk" | "grok" | "cursor" | "opencode";
 const AUTO_AGENT_OPTIONS: { key: AutoAgentBackend; label: string }[] = [
   { key: "aisdk", label: "claude" },
   { key: "codex-aisdk", label: "codex" },
+  { key: "grok", label: "grok" },
+  { key: "cursor", label: "cursor" },
   { key: "opencode", label: "opencode" },
 ];
 function savedThinkingLevel(): ThinkingLevel {
@@ -507,7 +509,7 @@ const AGENT_DEFAULT_MODEL: Record<AgentKind, string> = {
   aisdk: "opus",
   codex: "gpt-5.6-sol",
   "codex-aisdk": "gpt-5.6-sol",
-  grok: "grok-composer-2.5-fast",
+  grok: "grok-4.5",
   cursor: "auto",
   opencode: "opencode-go/deepseek-v4-flash",
 };
@@ -4339,6 +4341,7 @@ export function App() {
           finding={openFinding}
           agentName={agentName(openFinding.agentId)}
           sourceAgent={autoAgents.find((a) => a.id === openFinding.agentId)}
+          codingAgents={codingAgents}
           onClose={() => setOpenFinding(null)}
           onReply={replyToFinding}
           onDismiss={dismissFinding}
@@ -4349,6 +4352,7 @@ export function App() {
         <NewAutoAgentComposer
           repos={repos}
           scopedProject={projectFilter}
+          codingAgents={codingAgents}
           onClose={() => setEditingAgent(null)}
           onCreate={createAutoAgent}
         />
@@ -4357,6 +4361,7 @@ export function App() {
           agent={editingAgent}
           repos={repos}
           tz={schedTz}
+          codingAgents={codingAgents}
           running={!!autoAgents.find((a) => a.id === editingAgent.id)?.running}
           onClose={() => setEditingAgent(null)}
           onSave={saveAutoAgent}
@@ -7767,7 +7772,7 @@ function SessionChat({
             // the transcript melt into the bar via a soft gradient fade so the
             // composer reads as part of the conversation, not a bolted-on panel.
             "relative overflow-x-clip bg-background px-2 pb-2 pt-1.5 transition-colors",
-            "before:pointer-events-none before:absolute before:inset-x-0 before:-top-6 before:h-[calc(1.5rem+1px)] before:bg-gradient-to-t before:from-background before:to-transparent before:content-['']",
+            "before:pointer-events-none before:absolute before:inset-x-0 before:-top-6 before:h-8 before:bg-gradient-to-t before:from-background before:to-transparent before:content-['']",
             draggingFiles && "bg-primary/8",
             launching && "lfg-composer-launching",
           )}
@@ -11743,6 +11748,7 @@ function AutoAgentModelPicker({
   setModel,
   thinkingLevel,
   setThinkingLevel,
+  codingAgents,
 }: {
   backend: AutoAgentBackend;
   setBackend: (v: AutoAgentBackend) => void;
@@ -11750,19 +11756,50 @@ function AutoAgentModelPicker({
   setModel: (v: string) => void;
   thinkingLevel: ThinkingLevel;
   setThinkingLevel: (v: ThinkingLevel) => void;
+  codingAgents?: CodingAgentInfo[];
 }) {
+  const catalog = useAgentModelCatalog();
   const models = useAgentModels(backend);
   const thinkingLevels = useAgentThinkingLevels(backend);
+  const defaultModelFor = (key: AutoAgentBackend) =>
+    catalog.defaults[key] ?? AGENT_DEFAULT_MODEL[key];
+  const visibleOptions = useMemo(() => {
+    const visible = new Set<string>();
+    for (const item of codingAgents ?? []) {
+      if (item.visible) visible.add(item.key);
+    }
+    const filtered = codingAgents
+      ? AUTO_AGENT_OPTIONS.filter((option) => visible.has(option.key))
+      : AUTO_AGENT_OPTIONS;
+    return filtered.length ? filtered : AUTO_AGENT_OPTIONS;
+  }, [codingAgents]);
+
+  useEffect(() => {
+    if (visibleOptions.some((option) => option.key === backend)) return;
+    const next = visibleOptions[0]?.key ?? "aisdk";
+    setBackend(next);
+    setModel(defaultModelFor(next));
+  }, [backend, setBackend, setModel, visibleOptions]);
+
+  useEffect(() => {
+    if (thinkingLevels.length && !thinkingLevels.includes(thinkingLevel)) {
+      setThinkingLevel(thinkingLevels.includes("high") ? "high" : thinkingLevels[0]);
+    }
+  }, [setThinkingLevel, thinkingLevel, thinkingLevels]);
+
   return (
     <div className="mt-2 flex flex-wrap items-center gap-1.5">
       <div className="inline-flex h-8 items-center rounded-full bg-muted p-0.5 text-xs font-semibold">
-        {AUTO_AGENT_OPTIONS.map(({ key, label }) => (
+        {visibleOptions.map(({ key, label }) => (
           <button
             key={key}
             type="button"
             title={label}
             aria-label={label}
-            onClick={() => setBackend(key)}
+            onClick={() => {
+              setBackend(key);
+              setModel(defaultModelFor(key));
+            }}
             className={cn(
               "flex h-7 w-9 items-center justify-center rounded-full transition",
               backend === key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground",
@@ -11780,7 +11817,7 @@ function AutoAgentModelPicker({
           <select
             value={thinkingLevel}
             onChange={(e) => setThinkingLevel(e.target.value as ThinkingLevel)}
-            aria-label="Auto agent thinking level"
+            aria-label="Thinking level"
             className="max-w-24 appearance-none truncate bg-transparent pr-1 text-xs font-medium outline-none"
           >
             {thinkingLevels.map((item) => (
@@ -11828,6 +11865,7 @@ function FindingSheet({
   finding,
   agentName,
   sourceAgent,
+  codingAgents,
   onClose,
   onReply,
   onDismiss,
@@ -11835,6 +11873,7 @@ function FindingSheet({
   finding: AutoFinding;
   agentName: string;
   sourceAgent?: AutoAgent;
+  codingAgents?: CodingAgentInfo[];
   onClose: () => void;
   onReply: (
     f: AutoFinding,
@@ -11948,6 +11987,7 @@ function FindingSheet({
             setModel={setModel}
             thinkingLevel={thinkingLevel}
             setThinkingLevel={setThinkingLevel}
+            codingAgents={codingAgents}
           />
         </div>
 
@@ -12010,11 +12050,13 @@ function FindingSheet({
 function NewAutoAgentComposer({
   repos,
   scopedProject,
+  codingAgents,
   onClose,
   onCreate,
 }: {
   repos: Repo[];
   scopedProject: string;
+  codingAgents?: CodingAgentInfo[];
   onClose: () => void;
   onCreate: (
     idea: string,
@@ -12058,9 +12100,7 @@ function NewAutoAgentComposer({
       <div className="px-2 pb-4 pt-1">
         <div className="flex items-center gap-2">
           <Sparkles className="size-5 text-primary" />
-          <div className="flex-1 text-[15px] font-semibold">
-            Describe the agent
-          </div>
+          <div className="flex-1 text-[15px] font-semibold">New agent</div>
           <Button
             size="sm"
             variant="brand"
@@ -12074,15 +12114,15 @@ function NewAutoAgentComposer({
         <SkillTextarea
           value={idea}
           onValueChange={setIdea}
-          rows={6}
+          rows={5}
           autoFocus
-          placeholder="What should this agent watch for, and roughly how often? e.g. “Every morning, check our npm dependencies for newly disclosed CVEs and flag anything we actually ship.”"
+          placeholder="What to watch, and how often…"
           className="mt-3 resize-none text-sm leading-relaxed"
         />
 
         <div className="mt-2 flex items-center justify-between rounded-xl border border-border px-3 py-2">
           <div className="flex items-center gap-2 text-sm">
-            <Folder className="size-4 text-muted-foreground" /> Based in (repo)
+            <Folder className="size-4 text-muted-foreground" /> Repo
           </div>
           <select
             value={cwd}
@@ -12106,13 +12146,8 @@ function NewAutoAgentComposer({
           setModel={setModel}
           thinkingLevel={thinkingLevel}
           setThinkingLevel={setThinkingLevel}
+          codingAgents={codingAgents}
         />
-
-        <div className="mt-2 px-1 text-[11px] text-muted-foreground">
-          We'll inspect the selected repo, then name it, pick a schedule, and
-          write a watch prompt grounded in the real files — it keeps working
-          after you close this. Tap the agent afterward to fine-tune any of it.
-        </div>
       </div>
     </BottomSheet>
   );
@@ -12122,6 +12157,7 @@ function AgentEditorSheet({
   agent,
   repos,
   tz,
+  codingAgents,
   running,
   onClose,
   onSave,
@@ -12131,6 +12167,7 @@ function AgentEditorSheet({
   agent: AutoAgent | "new";
   repos: Repo[];
   tz: string;
+  codingAgents?: CodingAgentInfo[];
   running?: boolean;
   onClose: () => void;
   onSave: (input: {
@@ -12299,7 +12336,7 @@ function AgentEditorSheet({
                   className="text-[11px] font-semibold uppercase tracking-wide text-primary disabled:text-muted-foreground"
                   disabled={schedMode === "advanced" && !parseToSimple(schedule)}
                 >
-                  {schedMode === "simple" ? "Advanced (cron)" : "Use picker"}
+                  {schedMode === "simple" ? "Cron" : "Picker"}
                 </button>
               </div>
 
@@ -12411,7 +12448,7 @@ function AgentEditorSheet({
 
         <div className="mt-2 flex items-center justify-between rounded-xl border border-border px-3 py-2">
           <div className="flex items-center gap-2 text-sm">
-            <Folder className="size-4 text-muted-foreground" /> Based in (repo)
+            <Folder className="size-4 text-muted-foreground" /> Repo
           </div>
           <select
             value={cwd}
@@ -12435,6 +12472,7 @@ function AgentEditorSheet({
           setModel={setModel}
           thinkingLevel={thinkingLevel}
           setThinkingLevel={setThinkingLevel}
+          codingAgents={codingAgents}
         />
 
         <button
@@ -12462,14 +12500,14 @@ function AgentEditorSheet({
 
         <div className="mt-3 flex items-center justify-between">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            Prompt — this is the entire agent
+            Prompt
           </div>
           <button
             type="button"
             disabled={enhancing || !prompt.trim()}
             onClick={() => void enhance()}
             className="flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-primary disabled:text-muted-foreground"
-            title="Rewrite your rough idea into a sharp watch-agent prompt"
+            title="Rewrite into a sharper watch prompt"
           >
             {enhancing ? (
               <Loader2 className="size-3.5 animate-spin" />
@@ -12484,16 +12522,12 @@ function AgentEditorSheet({
           onValueChange={setPrompt}
           rows={5}
           disabled={enhancing}
-          placeholder="Jot a rough idea of what to watch for, then hit Enhance — it rewrites it into a sharp watch-agent prompt. Runs on the selected agent provider and gathers its own context."
+          placeholder="What to watch for…"
           className="mt-1.5 resize-none text-sm leading-relaxed"
         />
-        <div className="mt-1.5 px-1 text-[11px] text-muted-foreground">
-          {enhanceErr ? (
-            <span className="text-destructive">{enhanceErr}</span>
-          ) : (
-            "No config files, no sources to wire — just the prompt + a schedule."
-          )}
-        </div>
+        {enhanceErr ? (
+          <div className="mt-1.5 px-1 text-[11px] text-destructive">{enhanceErr}</div>
+        ) : null}
 
         {existing ? (
           <div className="mt-4 flex gap-2">
@@ -13429,7 +13463,7 @@ function AutoManageView({
     <div className="mx-auto flex max-w-3xl flex-col gap-2">
       {autoAgents.length === 0 ? (
         <div className="rounded-xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">
-          No auto agents yet. Create one — it's just a prompt and a schedule.
+          No auto agents yet.
         </div>
       ) : (
         autoAgents.map((a) => (
