@@ -2340,7 +2340,6 @@ function useLiveSessionStream(sessions: Session[], streamIds: string[]) {
   const [messagesBySid, setMessagesBySid] = useState<Record<string, Message[]>>({});
   const [busyBySid, setBusyBySid] = useState<Record<string, boolean>>({});
   const [promptsBySid, setPromptsBySid] = useState<Record<string, SessionPrompt | null>>({});
-  const [queuesBySid, setQueuesBySid] = useState<Record<string, QueueMsg[]>>({});
   const [loadingBySid, setLoadingBySid] = useState<Record<string, boolean>>({});
   const [nextBeforeBySid, setNextBeforeBySid] = useState<Record<string, number | null>>({});
   const seenRef = useRef<Record<string, Set<string>>>({});
@@ -2381,9 +2380,6 @@ function useLiveSessionStream(sessions: Session[], streamIds: string[]) {
       Object.fromEntries(Object.entries(prev).filter(([sid]) => active.has(sid))),
     );
     setPromptsBySid((prev) =>
-      Object.fromEntries(Object.entries(prev).filter(([sid]) => active.has(sid))),
-    );
-    setQueuesBySid((prev) =>
       Object.fromEntries(Object.entries(prev).filter(([sid]) => active.has(sid))),
     );
     setNextBeforeBySid((prev) =>
@@ -2644,12 +2640,6 @@ function useLiveSessionStream(sessions: Session[], streamIds: string[]) {
       setPromptsBySid((prev) => ({ ...prev, [payload.sid]: payload.prompt }));
     });
 
-    es.addEventListener("queue", (event) => {
-      const payload = parseLiveEvent<{ sid: string; queue: QueueMsg[] }>(event.data);
-      if (!payload || !active.has(payload.sid)) return;
-      setQueuesBySid((prev) => ({ ...prev, [payload.sid]: payload.queue ?? [] }));
-    });
-
     es.onerror = () => {
       evlog("live_stream_client_error", {
         rid,
@@ -2746,16 +2736,9 @@ function useLiveSessionStream(sessions: Session[], streamIds: string[]) {
 
   const trackSendStatus = useCallback(
     (sid: string, text: string, initial?: QueueMsg | null) => {
-      if (initial) {
-        setQueuesBySid((prev) => {
-          const current = prev[sid] ?? [];
-          const existing = current.find((item) => item.id === initial.id);
-          const next = existing
-            ? current.map((item) => (item.id === initial.id ? { ...item, ...initial } : item))
-            : [...current, initial];
-          return { ...prev, [sid]: next };
-        });
-      }
+      // Poll until the optimistic bubble can be reconciled with the transcript
+      // or the server queue reports the message as accepted/failed. No separate
+      // "sending" chip — the chat bubble is the in-flight UI.
       void (async () => {
         const targetId = initial?.id;
         for (let attempt = 0; attempt < 45; attempt++) {
@@ -2782,7 +2765,6 @@ function useLiveSessionStream(sessions: Session[], streamIds: string[]) {
               `/api/sessions/${encodeURIComponent(sid)}/queue`,
             );
             const queue = Array.isArray(res.queue) ? res.queue : [];
-            setQueuesBySid((prev) => ({ ...prev, [sid]: queue }));
             const item =
               (targetId ? queue.find((candidate) => candidate.id === targetId) : null) ??
               queue.find((candidate) => sameMessageNeedle(candidate.text, text));
@@ -2849,7 +2831,6 @@ function useLiveSessionStream(sessions: Session[], streamIds: string[]) {
     messagesBySid,
     busyBySid: mergedBusy,
     promptsBySid,
-    queuesBySid,
     loadingBySid,
     addOptimisticMessage,
     removeOptimisticMessage,
@@ -4237,7 +4218,6 @@ export function App() {
             messagesBySid={liveStream.messagesBySid}
             busyBySid={liveStream.busyBySid}
             promptsBySid={liveStream.promptsBySid}
-            queuesBySid={liveStream.queuesBySid}
             onStreamSummary={useWsLive ? wsLiveStream.streamSummary : undefined}
             onSubscribeTranscript={useWsLive ? wsLiveStream.subscribeTranscript : undefined}
             onRefresh={refreshSessions}
@@ -5677,11 +5657,10 @@ function useStableBusy(busyBySid: Record<string, boolean>, delay = 2500) {
   return stable;
 }
 
-// Stable empty fallbacks. A fresh `[]` literal in a prop expression is a new
+// Stable empty fallback. A fresh `[]` literal in a prop expression is a new
 // reference every render, which would defeat SessionCard's memo for any card
-// with no messages/queue — these constants keep the reference identical.
+// with no messages — this constant keeps the reference identical.
 const EMPTY_MESSAGES: Message[] = [];
-const EMPTY_QUEUE: QueueMsg[] = [];
 
 type SessionTreeNode = {
   session: Session;
@@ -5803,7 +5782,6 @@ function LiveView({
   messagesBySid,
   busyBySid,
   promptsBySid,
-  queuesBySid,
   onStreamSummary,
   onSubscribeTranscript,
   onRefresh,
@@ -5832,7 +5810,6 @@ function LiveView({
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
-  queuesBySid: Record<string, QueueMsg[]>;
   onStreamSummary?: StreamSummary;
   onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
@@ -5924,7 +5901,6 @@ function LiveView({
           messages={messagesBySid[session.sessionId ?? ""] ?? EMPTY_MESSAGES}
           busy={!!busyBySid[session.sessionId ?? ""]}
           prompt={promptsBySid[session.sessionId ?? ""] ?? null}
-          queue={queuesBySid[session.sessionId ?? ""] ?? EMPTY_QUEUE}
           onStreamSummary={onStreamSummary}
           onSubscribeTranscript={onSubscribeTranscript}
           onRefresh={onRefresh}
@@ -5985,7 +5961,6 @@ function LiveView({
         messagesBySid={messagesBySid}
         busyBySid={busyBySid}
         promptsBySid={promptsBySid}
-        queuesBySid={queuesBySid}
         onStreamSummary={onStreamSummary}
         onSubscribeTranscript={onSubscribeTranscript}
         onRefresh={onRefresh}
@@ -6072,7 +6047,6 @@ function LiveView({
         origin={sheet.origin}
         busyBySid={busyBySid}
         promptsBySid={promptsBySid}
-        queuesBySid={queuesBySid}
         onSwitch={(nextSid) => setSheet((s) => (s ? { ...s, sid: nextSid } : s))}
         onSubscribeTranscript={onSubscribeTranscript}
         onRefresh={onRefresh}
@@ -6096,7 +6070,6 @@ function RailStage({
   messagesBySid,
   busyBySid,
   promptsBySid,
-  queuesBySid,
   onStreamSummary,
   onSubscribeTranscript,
   onRefresh,
@@ -6124,7 +6097,6 @@ function RailStage({
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
-  queuesBySid: Record<string, QueueMsg[]>;
   onStreamSummary?: StreamSummary;
   onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
@@ -6622,7 +6594,6 @@ function RailStage({
             messages={messagesBySid[sid] ?? EMPTY_MESSAGES}
             busy={!!busyBySid[sid]}
             prompt={promptsBySid[sid] ?? null}
-            queue={queuesBySid[sid] ?? EMPTY_QUEUE}
             onStreamSummary={onStreamSummary}
             onSubscribeTranscript={onSubscribeTranscript}
             onRefresh={onRefresh}
@@ -7154,7 +7125,7 @@ function CategoryHeader({
   );
 }
 
-// The full chat surface — live transcript + prompt/queue panels + composer.
+// The full chat surface — live transcript + prompt panel + composer.
 // Shared verbatim between the in-grid SessionCard and the long-press full-height
 // SessionTitleSheet so both drive the same send pipeline (no duplicated state).
 // It owns the composer's own text/sending state; `error` is lifted to the host
@@ -7465,7 +7436,6 @@ function SessionChat({
   session,
   busy,
   prompt,
-  queue,
   error,
   onError,
   onSubscribeTranscript,
@@ -7475,7 +7445,6 @@ function SessionChat({
   session: Session;
   busy: boolean;
   prompt: SessionPrompt | null;
-  queue: QueueMsg[];
   error: string | null;
   onError: (error: string | null) => void;
   onSubscribeTranscript?: LfgTranscriptSubscribe;
@@ -7755,7 +7724,6 @@ function SessionChat({
       />
 
       <PromptPanel prompt={prompt} sid={sid} onError={onError} />
-      <QueuePanel queue={queue} sid={sid} messages={chatMessages} />
 
       {error ? (
         <div className="border-t border-border/70 px-3 py-1.5 text-xs text-destructive">{error}</div>
@@ -8168,7 +8136,6 @@ function SessionTitleSheet({
   order,
   busyBySid,
   promptsBySid,
-  queuesBySid,
   origin,
   onSwitch,
   onSubscribeTranscript,
@@ -8186,7 +8153,6 @@ function SessionTitleSheet({
   order: string[];
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
-  queuesBySid: Record<string, QueueMsg[]>;
   origin: DOMRect;
   onSwitch: (sid: string) => void;
   onSubscribeTranscript?: LfgTranscriptSubscribe;
@@ -8204,7 +8170,6 @@ function SessionTitleSheet({
   // Per-session live data, selected for whichever session is active right now.
   const busy = !!busyBySid[sid];
   const prompt = promptsBySid[sid] ?? null;
-  const queue = queuesBySid[sid] ?? EMPTY_QUEUE;
 
   // Prev/next neighbours in display order (null at the ends — no wrap-around).
   const idx = order.indexOf(sid);
@@ -8666,7 +8631,6 @@ function SessionTitleSheet({
             session={session}
             busy={busy}
             prompt={prompt}
-            queue={queue}
             error={error}
             onError={setError}
             onSubscribeTranscript={onSubscribeTranscript}
@@ -8824,7 +8788,7 @@ function ForkSessionDialog({
 
 // memo'd: an SSE event for one session replaces the messagesBySid/etc. Record
 // reference, re-rendering LiveView's map. Without memo every card re-renders;
-// with it, only the card whose own message/busy/queue reference changed does —
+// with it, only the card whose own message/busy/prompt reference changed does —
 // so swipe + collapse animations aren't fighting full-list re-renders.
 const SessionCard = memo(function SessionCard({
   session,
@@ -8832,7 +8796,6 @@ const SessionCard = memo(function SessionCard({
   messages,
   busy,
   prompt,
-  queue,
   onStreamSummary,
   onSubscribeTranscript,
   onRefresh,
@@ -8847,7 +8810,6 @@ const SessionCard = memo(function SessionCard({
   messages: Message[];
   busy: boolean;
   prompt: SessionPrompt | null;
-  queue: QueueMsg[];
   onStreamSummary?: StreamSummary;
   onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
@@ -9374,7 +9336,6 @@ const onTouchStart = (e: ReactTouchEvent) => {
           session={session}
           busy={busy}
           prompt={prompt}
-          queue={queue}
           error={error}
           onError={setError}
           onSubscribeTranscript={onSubscribeTranscript}
@@ -9938,83 +9899,6 @@ function PromptPanel({
             {pending === option.index ? <Loader2 className="size-3.5 animate-spin" /> : null}
             {option.label}
           </Button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function QueuePanel({
-  queue,
-  sid,
-  messages,
-}: {
-  queue: QueueMsg[];
-  sid: string | null;
-  messages: Message[];
-}) {
-  // Only surface messages that are genuinely still in transit or have failed.
-  // "delivered" and "queued" both mean the agent already accepted the message
-  // (it left the input box) — to the user that's "sent", so showing a lingering
-  // chip is just noise, and the server's lazy promotion to "delivered" can lag
-  // or miss entirely, stranding a "queued" chip forever. Drop both.
-  // pending/sending are dropped the moment their text surfaces in the live
-  // transcript too, in case the status update is slow to arrive.
-  const isInTranscript = useMemo(() => {
-    const needles: string[] = [];
-    for (const message of messages) {
-      if (message.role !== "user" || message.kind !== "text" || message.pending) continue;
-      const needle = messageNeedle(message.text);
-      if (needle) needles.push(needle);
-    }
-    return (text: string) => {
-      const needle = messageNeedle(text);
-      if (!needle) return false;
-      return needles.some((other) => other.includes(needle) || needle.includes(other));
-    };
-  }, [messages]);
-
-  const live = queue.filter((item) => {
-    if (item.status === "failed") return true;
-    if (item.status === "delivered" || item.status === "queued") return false;
-    return !isInTranscript(item.text); // pending / sending still in flight
-  });
-  if (!live.length || !sid) return null;
-  const labelFor = (status: QueueMsg["status"]) =>
-    status === "sending" ? "sending" : status;
-  return (
-    <div className="send-queue border-t border-border/70 px-3 py-2">
-      <div className="flex flex-col gap-1">
-        {live.map((item) => (
-            <div
-              key={item.id}
-              className={cn(
-                "send-queue-card flex items-center gap-2 border text-xs",
-                item.status === "failed"
-                  ? "border-destructive/30 bg-destructive/10 text-destructive"
-                  : item.status === "queued"
-                  ? "border-warning/30 bg-warning/12 text-warning"
-                  : "border-primary/30 bg-primary/10 text-primary",
-            )}
-            title={item.error || item.text}
-          >
-            {item.status === "pending" || item.status === "sending" ? (
-              <Loader2 className="size-3 shrink-0 animate-spin" />
-            ) : null}
-            <span className="shrink-0 font-medium">{labelFor(item.status)}</span>
-            <span className="min-w-0 flex-1 truncate text-foreground">{normText(item.text)}</span>
-            {item.status === "failed" ? (
-              <button
-                type="button"
-                className="shrink-0 font-semibold"
-                onClick={() => {
-                  void api(`/api/sessions/${sid}/queue/${item.id}/retry`, { method: "POST" });
-                }}
-              >
-                retry
-              </button>
-            ) : null}
-          </div>
         ))}
       </div>
     </div>

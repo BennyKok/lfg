@@ -369,7 +369,6 @@ export function useLiveSocket(
   const [messagesBySid, setMessagesBySid] = useState<Record<string, Message[]>>({});
   const [busyBySid, setBusyBySid] = useState<Record<string, boolean>>({});
   const [promptsBySid, setPromptsBySid] = useState<Record<string, SessionPrompt | null>>({});
-  const [queuesBySid, setQueuesBySid] = useState<Record<string, QueueMsg[]>>({});
   const [loadingBySid, setLoadingBySid] = useState<Record<string, boolean>>({});
   const [nextBeforeBySid, setNextBeforeBySid] = useState<Record<string, number | null>>({});
 
@@ -653,7 +652,8 @@ export function useLiveSocket(
       return;
     }
     if (payload.t === "prompt") setPromptsBySid((prev) => ({ ...prev, [sid]: payload.prompt ?? null }));
-    if (payload.t === "queue") setQueuesBySid((prev) => ({ ...prev, [sid]: payload.queue ?? [] }));
+    // queue events are intentionally ignored — send status is polled by
+    // trackSendStatus for optimistic-bubble reconciliation; no composer chip.
   }, [emitTranscriptEvent, markFirst, send]);
 
   useEffect(() => {
@@ -816,7 +816,6 @@ export function useLiveSocket(
     });
     setBusyBySid((prev) => Object.fromEntries(Object.entries(prev).filter(([sid]) => active.has(sid))));
     setPromptsBySid((prev) => Object.fromEntries(Object.entries(prev).filter(([sid]) => active.has(sid))));
-    setQueuesBySid((prev) => Object.fromEntries(Object.entries(prev).filter(([sid]) => active.has(sid))));
     setNextBeforeBySid((prev) => Object.fromEntries(Object.entries(prev).filter(([sid]) => live.has(sid) || active.has(sid))));
     setLoadingBySid((prev) => {
       const next = Object.fromEntries(Object.entries(prev).filter(([sid]) => live.has(sid)));
@@ -934,14 +933,9 @@ export function useLiveSocket(
   }, []);
 
   const trackSendStatus = useCallback((sid: string, text: string, initial?: QueueMsg | null) => {
-    if (initial) {
-      setQueuesBySid((prev) => {
-        const current = prev[sid] ?? [];
-        const existing = current.find((item) => item.id === initial.id);
-        const next = existing ? current.map((item) => (item.id === initial.id ? { ...item, ...initial } : item)) : [...current, initial];
-        return { ...prev, [sid]: next };
-      });
-    }
+    // Poll until the optimistic bubble can be reconciled with the transcript
+    // or the server queue reports the message as accepted/failed. No separate
+    // "sending" chip — the chat bubble is the in-flight UI.
     void (async () => {
       const targetId = initial?.id;
       for (let attempt = 0; attempt < 45; attempt++) {
@@ -954,7 +948,6 @@ export function useLiveSocket(
           }
           const res = await api<{ queue: QueueMsg[] }>(`/api/sessions/${encodeURIComponent(sid)}/queue`);
           const queue = Array.isArray(res.queue) ? res.queue : [];
-          setQueuesBySid((prev) => ({ ...prev, [sid]: queue }));
           const item = (targetId ? queue.find((candidate) => candidate.id === targetId) : null) ?? queue.find((candidate) => sameMessageNeedle(candidate.text, text));
           if (!item) {
             await refreshMessagesForSid(sid, text, { dropOptimistic: true }).catch(() => null);
@@ -1075,7 +1068,6 @@ export function useLiveSocket(
     messagesBySid,
     busyBySid: mergedBusy,
     promptsBySid,
-    queuesBySid,
     loadingBySid,
     addOptimisticMessage,
     removeOptimisticMessage,

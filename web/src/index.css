@@ -547,12 +547,6 @@ html.lfg-keyboard-open {
     color: var(--foreground);
   }
 
-  .send-queue-card {
-    --user-bubble-padding: 8px 12px;
-    border-radius: 22px;
-    padding: var(--user-bubble-padding);
-  }
-
   .dark .user-bubble.markdown {
     --user-bubble-fill: color-mix(in oklab, var(--card) 94%, white 6%);
     background:
