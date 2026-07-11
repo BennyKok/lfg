@@ -33,7 +33,7 @@ export const CODEX_AISDK_MODELS: string[] = [
   "gpt-5.4-mini",
   "gpt-5.3-codex-spark",
 ];
-export const GROK_MODELS: string[] = ["grok-composer-2.5-fast", "grok-build"];
+export const GROK_MODELS: string[] = ["grok-4.5", "grok-composer-2.5-fast"];
 export const CURSOR_MODELS: string[] = [
   "auto",
   "composer-2.5",
@@ -113,7 +113,7 @@ export const MODEL_OPTIONS: Record<CodingAgentKind, { defaultModel: string; mode
   aisdk: { defaultModel: "opus", models: AISDK_MODELS },
   codex: { defaultModel: "gpt-5.6-sol", models: CODEX_MODELS },
   "codex-aisdk": { defaultModel: "gpt-5.6-sol", models: CODEX_AISDK_MODELS },
-  grok: { defaultModel: "grok-composer-2.5-fast", models: GROK_MODELS },
+  grok: { defaultModel: "grok-4.5", models: GROK_MODELS },
   cursor: { defaultModel: "auto", models: CURSOR_MODELS },
   hermes: { defaultModel: "nousresearch/hermes-4-405b", models: HERMES_MODELS },
   opencode: { defaultModel: "opencode-go/deepseek-v4-flash", models: OPENCODE_MODELS },
@@ -305,10 +305,25 @@ function curateCodexModels(models: string[]): string[] {
   return out.length ? out : models;
 }
 
+function curateGrokModels(models: string[]): string[] {
+  const out: string[] = [];
+  const add = (model: string) => {
+    if (models.includes(model) && !out.includes(model)) out.push(model);
+  };
+
+  for (const model of GROK_MODELS) add(model);
+  addLatest(out, models.filter((m) => /^grok-\d/.test(m)));
+  addLatest(out, models.filter((m) => /^grok-composer/.test(m)));
+  addLatest(out, models.filter((m) => /^grok-build/.test(m)));
+  for (const model of models) add(model);
+  return out.length ? out : models;
+}
+
 function curateModels(agent: CodingAgentKind, models: string[]): string[] {
   if (agent === "cursor") return curateCursorModels(models);
   if (agent === "opencode") return curateOpenCodeModels(models);
   if (agent === "codex" || agent === "codex-aisdk") return curateCodexModels(models);
+  if (agent === "grok") return curateGrokModels(models);
   return models;
 }
 

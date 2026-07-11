@@ -9456,8 +9456,11 @@ const ChatStream = memo(function ChatStream({
   const preserveScrollRef = useRef<{ height: number; top: number } | null>(null);
   const visibleMessages = useMemo(() => messages.filter((message) => !message.seed), [messages]);
   const items = useMemo(() => buildRenderItems(visibleMessages), [visibleMessages]);
-  const showTypingIndicator =
-    busy && !visibleMessages.some((message) => message.kind === "thinking");
+  // Historical reasoning can remain in the transcript after its turn is done.
+  // Only let reasoning at the active tail replace the typing dots; otherwise an
+  // old thinking block would make a newly-busy session look idle.
+  const tailMessage = visibleMessages[visibleMessages.length - 1];
+  const showTypingIndicator = busy && tailMessage?.kind !== "thinking";
 
   // One-shot entrance for freshly-arrived assistant turns so the draft→final
   // swap (and non-streaming arrivals) fade in instead of popping. Ref-based —

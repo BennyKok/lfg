@@ -75,12 +75,40 @@ function codexPath(): string | null {
 function grokPath(): string | null {
   if (process.env.LFG_GROK_PATH) return process.env.LFG_GROK_PATH;
   const home = userHome();
+  // Prefer the native ~/.grok/bin binary over the npm/bun node trampoline.
   return which("grok", [
+    `${home}/.grok/bin/grok`,
     `${home}/.local/bin/grok`,
     `${home}/.bun/bin/grok`,
     `${home}/.grok/downloads/grok-linux-x86_64`,
     "/usr/local/bin/grok",
   ]);
+}
+
+/** Models last fetched by the Grok CLI into ~/.grok/models_cache.json (auth-gated). */
+function readGrokModelsCache(): { models: string[]; labels: Record<string, string> } {
+  const ids: string[] = [];
+  const labels: Record<string, string> = {};
+  try {
+    const raw = JSON.parse(
+      readFileSync(join(userHome(), ".grok", "models_cache.json"), "utf8"),
+    ) as {
+      models?: Record<
+        string,
+        { info?: { id?: unknown; name?: unknown; hidden?: unknown; supported_in_api?: unknown } }
+      >;
+    };
+    for (const [key, entry] of Object.entries(raw.models ?? {})) {
+      const info = entry?.info ?? {};
+      if (info.hidden === true) continue;
+      if (info.supported_in_api === false) continue;
+      const id = cleanId(typeof info.id === "string" ? info.id : key);
+      addModel(ids, labels, id, typeof info.name === "string" ? info.name : undefined);
+    }
+  } catch {
+    // Cache is optional — discovery still works from `grok models`.
+  }
+  return { models: ids, labels };
 }
 
 function cursorPath(): string | null {
@@ -164,7 +192,9 @@ function parseBulletModels(text: string): { models: string[]; labels: Record<str
   for (const line of cleanText(text).split("\n")) {
     const match = line.match(/^\s*[-*]\s+([^\s(]+)(?:\s+\(([^)]+)\))?/);
     if (!match) continue;
-    addModel(ids, labels, cleanId(match[1] ?? ""), match[2]);
+    const label = match[2]?.trim();
+    // `grok models` marks the default with "(default)" — not a display name.
+    addModel(ids, labels, cleanId(match[1] ?? ""), label && label.toLowerCase() !== "default" ? label : undefined);
   }
   return { models: ids, labels };
 }
@@ -251,6 +281,20 @@ async function discoverProvider(key: ProviderKey): Promise<DiscoveredModelProvid
   try {
     const out = await runCommand(command);
     if (!out.ok) {
+      if (key === "grok") {
+        const cached = readGrokModelsCache();
+        if (cached.models.length) {
+          return {
+            key,
+            ok: true,
+            command,
+            models: cached.models,
+            labels: Object.keys(cached.labels).length ? cached.labels : undefined,
+            refreshedAt,
+            durationMs: Math.round((performance.now() - started) * 1000) / 1000,
+          };
+        }
+      }
       return {
         key,
         ok: false,
@@ -264,6 +308,13 @@ async function discoverProvider(key: ProviderKey): Promise<DiscoveredModelProvid
       };
     }
     const parsed = parseModels(key, out.stdout);
+    // Unauthenticated `grok models` only prints the built-in default. Merge the
+    // CLI's on-disk models_cache (last successful auth fetch) so Composer etc.
+    // stay visible in the picker.
+    if (key === "grok") {
+      const cached = readGrokModelsCache();
+      for (const id of cached.models) addModel(parsed.models, parsed.labels, id, cached.labels[id]);
+    }
     return {
       key,
       ok: true,
