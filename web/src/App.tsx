@@ -930,6 +930,15 @@ function collapseThinkingRuns(messages: Message[]) {
   return out;
 }
 
+function insertMediaByTimestamp(messages: Message[], message: Message): Message[] {
+  if ((message.kind !== "image" && message.kind !== "video") || message.ts == null) {
+    return [...messages, message];
+  }
+  const insertAt = messages.findIndex((item) => item.ts != null && item.ts > message.ts!);
+  if (insertAt < 0) return [...messages, message];
+  return [...messages.slice(0, insertAt), message, ...messages.slice(insertAt)];
+}
+
 function reconcileSnapshotMessages(current: Message[], incoming: Message[]): Message[] {
   const authoritative = collapseThinkingRuns(incoming);
   const next = authoritative.filter((message) => !message.seed);
@@ -2472,7 +2481,7 @@ function useLiveSessionStream(sessions: Session[], streamIds: string[]) {
                 }
                 return true;
               });
-          next = [...next, message];
+          next = insertMediaByTimestamp(next, message);
         }
         return { ...prev, [sid]: next.slice(-80) };
       });
