@@ -5861,7 +5861,7 @@ function LiveView({
   // hook order stays identical whether or not sessions/findings are present —
   // returning earlier made `useMemo` conditional and tripped React error #310
   // ("rendered fewer hooks than expected") when the live list emptied out.
-  if (!sessions.length && !findings.length) {
+  if (!isWide && !sessions.length && !findings.length) {
     return (
       <div className="flex min-h-[60dvh] flex-col items-center justify-center">
         <div className="lfg-gborder flex flex-col items-center gap-3 rounded-3xl border border-transparent bg-card px-8 py-10 text-center shadow-[0_12px_40px_-24px_rgba(0,0,0,0.5)]">
