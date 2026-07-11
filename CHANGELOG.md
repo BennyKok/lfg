@@ -2,6 +2,19 @@
 
 Recent product updates and deployment notes.
 
+## July 11, 2026 - Auto-agent picker parity (v0.1.20)
+
+Auto agents can use the same providers as new sessions, and the settings sheets
+use shorter copy.
+
+- Auto-agent create/edit/finding sheets now offer Claude, Codex, Grok, Cursor,
+  and OpenCode (filtered by coding-agent visibility), matching the session
+  picker.
+- Added headless runners for Grok and Cursor auto agents.
+- Tightened auto-agent settings labels and placeholders.
+- Kept display images in transcript order, and improved cursor-agent busy
+  detection plus the Grok session model fallback.
+
 ## July 9, 2026 - Direct transcript indexing & a single chat state (v0.2.0)
 
 Managed sessions no longer read or write transcript JSONL: all three SDK
