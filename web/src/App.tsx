@@ -7790,7 +7790,7 @@ function SessionChat({
             // the transcript melt into the bar via a soft gradient fade so the
             // composer reads as part of the conversation, not a bolted-on panel.
             "relative overflow-x-clip bg-background px-2 pb-2 pt-1.5 transition-colors",
-            "before:pointer-events-none before:absolute before:inset-x-0 before:-top-6 before:h-[calc(1.5rem+1px)] before:bg-gradient-to-t before:from-background before:to-transparent before:content-['']",
+            "before:pointer-events-none before:absolute before:inset-x-0 before:-top-6 before:h-8 before:bg-gradient-to-t before:from-background before:to-transparent before:content-['']",
             draggingFiles && "bg-primary/8",
             launching && "lfg-composer-launching",
           )}
