@@ -124,6 +124,15 @@ function codexCompletedItemMessage(item: Record<string, unknown>, turnNonce: str
     const text = stringifyValue(item.summary ?? item.text).trim();
     return text ? { id, role: "assistant", kind: "thinking", text: compactText(text), ts } : null;
   }
+  if (type === "error") {
+    // Surface codex error items (e.g. "Model metadata for `X` not found") as a
+    // readable assistant error line, not a raw tool_result JSON blob. apiError
+    // marks it as a genuine upstream failure for status classification.
+    const msg = (typeof item.message === "string" ? item.message : stringifyValue(item)).trim();
+    return msg
+      ? { id, role: "assistant", kind: "text", text: `⚠️ Codex error: ${msg}`, ts, apiError: true }
+      : null;
+  }
   const text = compactText([type, stringifyValue(item).trim()].filter(Boolean).join("\n"));
   return text.trim() ? { id, role: "tool", kind: "tool_result", text, ts } : null;
 }
@@ -275,9 +284,21 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
       }
     } catch (e) {
       if (signal.aborted) return; // interrupted on purpose — not an error
-      console.error(
-        `codex-aisdk-session turn failed: ${e instanceof Error ? e.message : e}`,
-      );
+      const msg = (e instanceof Error ? e.message : String(e)).trim() || "unknown error";
+      console.error(`codex-aisdk-session turn failed: ${msg}`);
+      // Surface the failure in the transcript — a turn that dies silently
+      // (turn.failed, thread error, SDK crash) otherwise leaves the user
+      // staring at a session that just "stopped" with no visible reason.
+      indexSessionMessagesDirect(key, [
+        {
+          id: `${turnNonce}/turn_failed`,
+          role: "assistant",
+          kind: "text",
+          text: `⚠️ Codex turn failed: ${msg.slice(0, 800)}`,
+          ts: Date.now(),
+          apiError: true,
+        },
+      ]);
     } finally {
       publishDraft("", true);
     }

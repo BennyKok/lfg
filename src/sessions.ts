@@ -1799,6 +1799,18 @@ export async function listSessions(): Promise<Session[]> {
     // no `--` prompt), so it would otherwise show as a bare, transcript-less
     // phantom alongside the registry-driven codex-aisdk entry.
     if (/\bapp-server\b/.test(p.cmd)) continue;
+    // Same idea for the `codex exec --experimental-json …` child the codex SDK
+    // spawns per turn: it lives inside the harness's own tmux pane. If that
+    // pane belongs to a command-file managed session (codex-aisdk/opencode),
+    // this process is the AI-SDK engine, not a standalone codex — listing it
+    // would emit a SECOND row with the SAME visible sessionId (via
+    // managedVisibleId) whose busy flag comes from the log pane (always idle),
+    // clobbering the registry row's live busy state in the client.
+    {
+      const t = tmux.targetForPid(p.pid);
+      const rec = t ? managedByName.get(t.split(":")[0]) : undefined;
+      if (rec && isCommandFileAgent(rec.agent)) continue;
+    }
 
     let cwd: string | null = null;
     let startedAt: number | null = null;
