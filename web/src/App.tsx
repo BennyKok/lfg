@@ -13149,7 +13149,8 @@ function UsageLimitsSection() {
       </div>
       <p className="px-4 text-xs text-muted-foreground">
         Claude reads the live subscription usage endpoint; Codex reflects the latest rate-limit
-        snapshot from its most recent session.
+        snapshot from its most recent session; Grok pulls monthly and weekly credits from the
+        cli-chat-proxy billing API.
       </p>
     </section>
   );

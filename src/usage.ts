@@ -6,7 +6,10 @@
 //               rate-limit snapshot into each session rollout. We read the
 //               newest rollout and surface its last `rate_limits` block, plus
 //               the ChatGPT plan decoded from the local auth token.
-//   - Grok / OpenCode : no usage data is exposed locally — reported as such.
+//   - Grok    : cli-chat-proxy billing endpoints (monthly credits + weekly
+//               creditUsagePercent). Auth is the OIDC access token in
+//               ~/.grok/auth.json (same token the CLI uses for /usage).
+//   - OpenCode: estimated from local opencode.db spend vs Go plan caps.
 //
 // Results are cached for 60s so reopening Settings doesn't hammer Anthropic or
 // re-walk the Codex sessions tree.
@@ -209,7 +212,188 @@ async function codexUsage(): Promise<ProviderUsage> {
   }
 }
 
-// ------------------------------------------------------- Grok / OpenCode ----
+// ------------------------------------------------------------------ Grok ----
+
+// Grok CLI /usage hits cli-chat-proxy (not api.x.ai):
+//   GET /v1/billing                 → monthly credits used/limit + period end
+//   GET /v1/billing?format=credits  → weekly creditUsagePercent + period end
+// Nested money fields use `{ val: number }` wrappers. The access token lives
+// in ~/.grok/auth.json under the OIDC entry (key + refresh_token).
+const GROK_BILLING_BASE = "https://cli-chat-proxy.grok.com/v1";
+const GROK_OIDC_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
+const GROK_TOKEN_ENDPOINT = "https://auth.x.ai/oauth2/token";
+
+type GrokAuthEntry = {
+  key?: string;
+  refresh_token?: string;
+  expires_at?: string;
+  email?: string;
+  auth_mode?: string;
+  oidc_client_id?: string;
+};
+
+function nestedVal(obj: unknown): number | null {
+  if (typeof obj === "number" && Number.isFinite(obj)) return obj;
+  if (obj && typeof obj === "object" && typeof (obj as { val?: unknown }).val === "number") {
+    const n = (obj as { val: number }).val;
+    return Number.isFinite(n) ? n : null;
+  }
+  return null;
+}
+
+async function grokRefreshAccessToken(
+  entry: GrokAuthEntry,
+  authPath: string,
+  authRoot: Record<string, GrokAuthEntry>,
+  entryKey: string,
+): Promise<string | null> {
+  if (!entry.refresh_token) return null;
+  try {
+    const body = new URLSearchParams({
+      grant_type: "refresh_token",
+      client_id: entry.oidc_client_id || GROK_OIDC_CLIENT_ID,
+      refresh_token: entry.refresh_token,
+    });
+    const r = await fetch(GROK_TOKEN_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Accept: "application/json",
+      },
+      body,
+    });
+    if (!r.ok) return null;
+    const payload = (await r.json()) as {
+      access_token?: string;
+      refresh_token?: string;
+      expires_in?: number;
+    };
+    if (!payload.access_token) return null;
+    entry.key = payload.access_token;
+    if (payload.refresh_token) entry.refresh_token = payload.refresh_token;
+    if (typeof payload.expires_in === "number" && Number.isFinite(payload.expires_in)) {
+      entry.expires_at = new Date(Date.now() + payload.expires_in * 1000).toISOString();
+    }
+    authRoot[entryKey] = entry;
+    try {
+      await Bun.write(authPath, JSON.stringify(authRoot, null, 2) + "\n");
+    } catch {
+      /* best-effort persist; still use refreshed token this request */
+    }
+    return payload.access_token;
+  } catch {
+    return null;
+  }
+}
+
+async function grokFetchBilling(token: string): Promise<{
+  monthly: Response;
+  weekly: Response;
+}> {
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/json",
+    "x-xai-token-auth": "xai-grok-cli",
+  };
+  const [monthly, weekly] = await Promise.all([
+    fetch(`${GROK_BILLING_BASE}/billing`, { headers }),
+    fetch(`${GROK_BILLING_BASE}/billing?format=credits`, { headers }),
+  ]);
+  return { monthly, weekly };
+}
+
+async function grokUsage(): Promise<ProviderUsage> {
+  const base = { kind: "grok", label: "Grok", plan: null as string | null };
+  try {
+    const authPath = join(HOME, ".grok", "auth.json");
+    const authRoot = (await Bun.file(authPath).json()) as Record<string, GrokAuthEntry>;
+    const entryKey = Object.keys(authRoot).find((k) => {
+      const e = authRoot[k];
+      return e && typeof e.key === "string" && e.key.length > 0;
+    });
+    if (!entryKey) return { ...base, available: false, note: "Not signed in on this box" };
+    const entry = authRoot[entryKey];
+    let token = entry.key!;
+
+    // Refresh a bit early if we know expiry; also retry once on 401.
+    const expMs = entry.expires_at ? Date.parse(entry.expires_at) : NaN;
+    if (Number.isFinite(expMs) && expMs - Date.now() < 60_000) {
+      const refreshed = await grokRefreshAccessToken(entry, authPath, authRoot, entryKey);
+      if (refreshed) token = refreshed;
+    }
+
+    let { monthly, weekly } = await grokFetchBilling(token);
+    if (monthly.status === 401 || weekly.status === 401) {
+      const refreshed = await grokRefreshAccessToken(entry, authPath, authRoot, entryKey);
+      if (!refreshed)
+        return { ...base, available: false, note: "Grok auth expired — run `grok login`" };
+      token = refreshed;
+      ({ monthly, weekly } = await grokFetchBilling(token));
+    }
+
+    if (!monthly.ok)
+      return { ...base, available: false, note: `Billing endpoint returned ${monthly.status}` };
+
+    const monthlyJson = (await monthly.json()) as {
+      config?: {
+        monthlyLimit?: unknown;
+        used?: unknown;
+        billingPeriodEnd?: string;
+      };
+    };
+    const limit = nestedVal(monthlyJson.config?.monthlyLimit);
+    const used = nestedVal(monthlyJson.config?.used);
+    const monthlyEnd = monthlyJson.config?.billingPeriodEnd;
+
+    const windows: UsageWindow[] = [];
+    if (limit != null && used != null && limit > 0) {
+      windows.push({
+        label: "Monthly",
+        pct: Math.min(100, (used / limit) * 100),
+        resetsAt: isoToMs(monthlyEnd),
+      });
+    }
+
+    if (weekly.ok) {
+      try {
+        const weeklyJson = (await weekly.json()) as {
+          config?: {
+            currentPeriod?: { type?: string };
+            creditUsagePercent?: number;
+            billingPeriodEnd?: string;
+          };
+        };
+        const cfg = weeklyJson.config;
+        const pct = cfg?.creditUsagePercent;
+        if (typeof pct === "number" && Number.isFinite(pct)) {
+          const periodType = cfg?.currentPeriod?.type ?? "";
+          const label =
+            periodType === "USAGE_PERIOD_TYPE_WEEKLY"
+              ? "Weekly"
+              : periodType === "USAGE_PERIOD_TYPE_MONTHLY"
+                ? "Monthly credits"
+                : "Credits";
+          windows.unshift({
+            label,
+            pct: Math.min(100, pct),
+            resetsAt: isoToMs(cfg?.billingPeriodEnd),
+          });
+        }
+      } catch {
+        /* weekly is optional enrichment */
+      }
+    }
+
+    if (!windows.length)
+      return { ...base, available: false, note: "Billing response had no usage windows" };
+
+    return { ...base, available: true, windows };
+  } catch (e) {
+    return { ...base, available: false, note: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+// -------------------------------------------------------------- OpenCode ----
 
 function staticProvider(kind: string, label: string, note: string): ProviderUsage {
   return { kind, label, available: false, plan: null, note };
@@ -349,9 +533,7 @@ export async function getAllUsage(): Promise<ProviderUsage[]> {
   const data = await Promise.all([
     claudeUsage(),
     codexUsage(),
-    Promise.resolve(
-      staticProvider("grok", "Grok", "No usage data exposed by the Grok CLI"),
-    ),
+    grokUsage(),
     Promise.resolve(
       staticProvider("hermes", "Hermes", "Usage is stored in Hermes' own state database"),
     ),
