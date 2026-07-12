@@ -415,8 +415,24 @@ html.lfg-keyboard-open {
     min-width: 0;
   }
 
+  /* Sonner only fades non-front content for data-styled=true toasts. Custom
+     toasts (toast.custom / jsx) set data-styled=false, so stacked finding
+     toasts kept their content visible and overflowed when height was forced
+     to --front-toast-height. Mirror Sonner's stacked-shell behavior for all
+     toasts — shell scales, content hides, overflow is clipped. */
+  [data-sonner-toast][data-expanded="false"][data-front="false"] {
+    overflow: hidden;
+  }
+
+  [data-sonner-toast][data-expanded="false"][data-front="false"] > * {
+    opacity: 0;
+  }
+
   .lfg-finding-toast {
     width: var(--lfg-toast-max, min(27rem, calc(100vw - 2rem))) !important;
+    /* Match .cn-toast chrome so the custom shell stacks cleanly with styled
+       toasts (same padding/radius already come from toastOptions.classNames). */
+    overflow: hidden;
   }
 
   /* Wide report tables scroll inside their own region instead of forcing the

@@ -71,6 +71,7 @@ import {
   cwdForCodexTranscript,
   type PendingPrompt,
   type Session,
+  type SessionMsg,
 } from "../sessions.ts";
 import {
   invalidateListSessionsCache,
@@ -82,7 +83,9 @@ import {
   enqueueTranscriptIndex,
   indexedRecentMessages,
   indexedMessagePage,
+  indexSessionArtifactMessages,
   indexTranscript,
+  sessionIndexKey,
   searchAllTranscriptIndexes,
   searchTranscriptIndex,
 } from "../transcript-index.ts";
@@ -150,7 +153,14 @@ import {
   type Viewport,
 } from "../browser/session.ts";
 import { testProfile } from "../browser/tool.ts";
-import { listCustomRepos, addCustomRepo, removeCustomRepo, cloneRepo } from "../repos-store.ts";
+import {
+  listCustomRepos,
+  addCustomRepo,
+  removeCustomRepo,
+  cloneRepo,
+  createProjectFolder,
+  useProjectFolder,
+} from "../repos-store.ts";
 import { projectName, reposRoot } from "../projects.ts";
 import { resolveSessionCwd, startWorktreeSweep } from "../worktree.ts";
 import {
@@ -196,6 +206,7 @@ import {
   createImageArtifact,
   createVideoArtifact,
   getImageArtifact,
+  hydrateImageArtifactMessage,
   imageArtifactMessagesSince,
   imageArtifactToMessage,
   listImageArtifacts,
@@ -696,6 +707,53 @@ const STATIC_FILES: Record<string, { path: string; type: string }> = {
   "/apple-touch-icon.png": { path: join(WEB_DIR, "icon.svg"), type: "image/svg+xml" },
 };
 
+// Serve a small static asset (manifest, PWA icons, agent SVGs) with proper
+// cache validators. Previously these went out as `max-age=300` with no ETag /
+// Last-Modified, so every 5 minutes the browser did a full re-download instead
+// of a cheap revalidation — and agent icons, referenced on every composer
+// render, felt like a fresh network hit. Now:
+//   - versioned URLs (`?v=…`, content-addressed by the caller) → cached hard
+//     for a year, immutable, so repeat renders never touch the network.
+//   - un-versioned URLs → 1-day cache + stale-while-revalidate, and an ETag /
+//     Last-Modified pair so revalidation returns a tiny 304 instead of the body.
+async function staticAssetResponse(
+  req: Request,
+  url: URL,
+  filePath: string,
+  type: string,
+): Promise<Response> {
+  const f = Bun.file(filePath);
+  if (!(await f.exists())) return new Response("Not found", { status: 404 });
+  const size = f.size;
+  const mtimeMs = Math.floor(f.lastModified);
+  const mtimeSec = Math.floor(mtimeMs / 1000) * 1000;
+  const etag = `"${size.toString(16)}-${mtimeMs.toString(16)}"`;
+  const cacheControl = url.searchParams.has("v")
+    ? "public, max-age=31536000, immutable"
+    : "public, max-age=86400, stale-while-revalidate=604800";
+  const headers: Record<string, string> = {
+    "Content-Type": type,
+    "Cache-Control": cacheControl,
+    ETag: etag,
+    "Last-Modified": new Date(mtimeSec).toUTCString(),
+    Vary: "Accept-Encoding",
+  };
+
+  const ifNoneMatch = req.headers.get("if-none-match");
+  const ifModifiedSince = req.headers.get("if-modified-since");
+  const matchesEtag =
+    !!ifNoneMatch && ifNoneMatch.split(",").some((tag) => tag.trim() === etag);
+  const notModifiedByDate =
+    !ifNoneMatch &&
+    !!ifModifiedSince &&
+    Number.isFinite(Date.parse(ifModifiedSince)) &&
+    Date.parse(ifModifiedSince) >= mtimeSec;
+  if (matchesEtag || notModifiedByDate) {
+    return new Response(null, { status: 304, headers });
+  }
+  return new Response(f, { headers });
+}
+
 async function webIndexResponse() {
   // Runtime extension injection: LFG core ships no proprietary UI. Our
   // deployments set LFG_EXTENSIONS (comma-separated ESM URLs) — each is
@@ -829,18 +887,14 @@ function visibleTranscriptMessages<T extends { kind: string }>(messages: T[]): T
   return messages.filter((message) => message.kind !== "tool_result");
 }
 
-function withImageArtifacts<T extends { text: string; ts?: number | null; id?: string | null }>(
-  sessionId: string,
+function withImageArtifacts<T extends { role: string; kind: string; text: string; ts?: number | null; id?: string | null }>(
+  _sessionId: string,
   messages: T[],
 ): Array<T | ImageArtifactMessage> {
-  const artifacts = listImageArtifacts(sessionId).map(imageArtifactToMessage);
-  if (!artifacts.length) return messages;
-  const seen = new Set(messages.map((message) => message.id).filter(Boolean));
-  return [...messages, ...artifacts.filter((artifact) => !seen.has(artifact.id))]
-    .sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0));
+  return messages.map((message) => hydrateImageArtifactMessage(message as unknown as SessionMsg) as T | ImageArtifactMessage);
 }
 
-function transcriptMessagesForClient<T extends { kind: string; text: string; ts?: number | null; id?: string | null }>(
+function transcriptMessagesForClient<T extends { role: string; kind: string; text: string; ts?: number | null; id?: string | null }>(
   sessionId: string,
   messages: T[],
 ): Array<T | ImageArtifactMessage> {
@@ -1807,12 +1861,7 @@ export async function cmdServe() {
       }
       const staticFile = STATIC_FILES[path];
       if (staticFile) {
-        return new Response(Bun.file(staticFile.path), {
-          headers: {
-            "Content-Type": staticFile.type,
-            "Cache-Control": "public, max-age=300",
-          },
-        });
+        return staticAssetResponse(req, url, staticFile.path, staticFile.type);
       }
 
       // Hashed, content-addressed Vite bundles from the v2 build. Filenames
@@ -2961,6 +3010,64 @@ export async function cmdServe() {
       }
 
       // ---- running claude sessions ----
+      if (path === "/api/filesystem/directories" && req.method === "GET") {
+        const home = await realpath(homedir());
+        const requested = url.searchParams.get("path") || REPOS_ROOT;
+        let current: string;
+        try {
+          current = await realpath(resolve(requested.replace(/^~(?=\/|$)/, home)));
+        } catch {
+          return err(400, "folder does not exist");
+        }
+        if (current !== home && !current.startsWith(`${home}/`)) {
+          return err(403, "folder browsing is limited to your home directory");
+        }
+        const entries = (await readdir(current, { withFileTypes: true }))
+          .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+          .sort((a, b) => a.name.localeCompare(b.name));
+        const directories = await Promise.all(
+          entries.map(async (entry) => {
+            const cwd = join(current, entry.name);
+            const isGitRepo = await stat(join(cwd, ".git")).then(() => true).catch(() => false);
+            return { name: entry.name, path: cwd, isGitRepo };
+          }),
+        );
+        const isGitRepo = await stat(join(current, ".git")).then(() => true).catch(() => false);
+        return json({
+          current,
+          parent: current === home ? null : dirname(current),
+          isGitRepo,
+          directories,
+        });
+      }
+
+      if (path === "/api/projects/use-folder" && req.method === "POST") {
+        const b = (await req.json().catch(() => null)) as { path?: unknown } | null;
+        if (typeof b?.path !== "string") return err(400, "path is required");
+        try {
+          const repo = await useProjectFolder(b.path);
+          return json({ repo, repos: await listRepos() });
+        } catch (e) {
+          return err(400, e instanceof Error ? e.message : String(e));
+        }
+      }
+
+      if (path === "/api/projects/create-folder" && req.method === "POST") {
+        const b = (await req.json().catch(() => null)) as {
+          parent?: unknown;
+          name?: unknown;
+        } | null;
+        if (typeof b?.parent !== "string" || typeof b?.name !== "string") {
+          return err(400, "parent and name are required");
+        }
+        try {
+          const repo = await createProjectFolder(b.parent, b.name);
+          return json({ repo, repos: await listRepos() });
+        } catch (e) {
+          return err(400, e instanceof Error ? e.message : String(e));
+        }
+      }
+
       if (path === "/api/repos") {
         if (req.method === "POST") {
           const b = (await req.json().catch(() => null)) as {
@@ -3762,6 +3869,8 @@ export async function cmdServe() {
               caption: body.caption,
               alt: body.alt,
             });
+            const transcriptPath = await resolveTranscript(m[1]);
+            indexSessionArtifactMessages(transcriptPath ?? sessionIndexKey(m[1]), m[1]);
             return json({ ok: true, artifact, message: imageArtifactToMessage(artifact) });
           } catch (e) {
             return err(400, e instanceof Error ? e.message : "could not create image artifact");
@@ -3785,6 +3894,8 @@ export async function cmdServe() {
               caption: body.caption,
               alt: body.alt,
             });
+            const transcriptPath = await resolveTranscript(m[1]);
+            indexSessionArtifactMessages(transcriptPath ?? sessionIndexKey(m[1]), m[1]);
             return json({ ok: true, artifact, message: imageArtifactToMessage(artifact) });
           } catch (e) {
             return err(400, e instanceof Error ? e.message : "could not create video artifact");

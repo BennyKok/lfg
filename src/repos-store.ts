@@ -77,6 +77,54 @@ export async function addCustomRepo(
   return repo;
 }
 
+async function gitInit(cwd: string): Promise<void> {
+  try {
+    await stat(join(cwd, ".git"));
+    return;
+  } catch {}
+  const proc = Bun.spawn({
+    cmd: ["git", "init", "--", cwd],
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+  });
+  const code = await proc.exited;
+  if (code !== 0) {
+    const stderr = await new Response(proc.stderr).text();
+    throw new Error(stderr.trim() || `git init exited ${code}`);
+  }
+}
+
+export async function useProjectFolder(rawPath: string): Promise<CustomRepo> {
+  const cwd = await canonical(rawPath);
+  const info = await stat(cwd);
+  if (!info.isDirectory()) throw new Error(`not a directory: ${cwd}`);
+  await gitInit(cwd);
+  return addCustomRepo(cwd);
+}
+
+export async function createProjectFolder(
+  rawParent: string,
+  rawName: string,
+): Promise<CustomRepo> {
+  const parent = await canonical(rawParent);
+  const name = rawName.trim();
+  if (!name || !/^[\w .-]+$/.test(name) || name === "." || name === "..") {
+    throw new Error("enter a valid folder name");
+  }
+  const cwd = join(parent, name);
+  try {
+    await stat(cwd);
+    throw new Error(`${name} already exists`);
+  } catch (e) {
+    if (e instanceof Error && e.message.includes("already exists")) throw e;
+  }
+  await mkdir(cwd);
+  await Bun.write(join(cwd, "README.md"), `# ${name}\n`);
+  await gitInit(cwd);
+  return addCustomRepo(cwd, name);
+}
+
 // Clone a remote git repository into the repos root (LFG_REPOS_ROOT), so a
 // fresh install with zero local repos can get one during onboarding. Only
 // https:// and git@host:path URLs are accepted — everything else (file://,

@@ -22,7 +22,7 @@ import {
   findEntryByAnyId,
   isEntryBusy as isAisdkEntryBusy,
 } from "./aisdk-registry.ts";
-import { imageArtifactMessagesSince, imageArtifactToMessage, listImageArtifacts, type ImageArtifactMessage } from "./artifacts.ts";
+import { hydrateImageArtifactMessage, imageArtifactMessagesSince, type ImageArtifactMessage } from "./artifacts.ts";
 import { listQueue, reconcileQueued } from "./sendq.ts";
 import { traceLog } from "./trace-log.ts";
 
@@ -170,19 +170,16 @@ function visibleTranscriptMessages<T extends { kind: string }>(messages: T[]): T
   return messages.filter((message) => message.kind !== "tool_result");
 }
 
-function withImageArtifacts<T extends { kind: string; text: string; ts?: number | null; id?: string | null }>(
-  sessionId: string,
+function withImageArtifacts<T extends { role: string; kind: string; text: string; ts?: number | null; id?: string | null }>(
+  _sessionId: string,
   messages: T[],
 ): Array<T | ImageArtifactMessage> {
-  const normalizedMessages = messages.map((message) => normalizeMediaIdentity(message));
-  const artifacts = listImageArtifacts(sessionId).map((artifact) => normalizeMediaIdentity(imageArtifactToMessage(artifact)));
-  if (!artifacts.length) return normalizedMessages;
-  const seen = new Set(normalizedMessages.map(mediaIdentity).filter(Boolean));
-  return [...normalizedMessages, ...artifacts.filter((artifact) => !seen.has(mediaIdentity(artifact)))]
-    .sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0) || String(mediaIdentity(a) ?? "").localeCompare(String(mediaIdentity(b) ?? "")));
+  return messages.map((message) =>
+    normalizeMediaIdentity(hydrateImageArtifactMessage(message as unknown as import("./sessions.ts").SessionMsg)) as T | ImageArtifactMessage
+  );
 }
 
-function transcriptMessagesForClient<T extends { kind: string; text: string; ts?: number | null; id?: string | null }>(
+function transcriptMessagesForClient<T extends { role: string; kind: string; text: string; ts?: number | null; id?: string | null }>(
   sessionId: string,
   messages: T[],
 ): Array<T | ImageArtifactMessage> {

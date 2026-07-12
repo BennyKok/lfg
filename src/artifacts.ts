@@ -194,3 +194,11 @@ export function imageArtifactMessagesSince(sessionId: string, after: number): Im
     .filter((artifact) => artifact.createdAt > after)
     .map(imageArtifactToMessage);
 }
+
+export function hydrateImageArtifactMessage(message: SessionMsg): SessionMsg | ImageArtifactMessage {
+  if (message.kind !== "image" && message.kind !== "video") return message;
+  const artifactId = message.id?.startsWith("artifact-") ? message.id.slice("artifact-".length) : null;
+  if (!artifactId) return message;
+  const artifact = getImageArtifact(artifactId);
+  return artifact ? imageArtifactToMessage(artifact) : message;
+}

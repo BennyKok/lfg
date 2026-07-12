@@ -4,6 +4,7 @@ import { Database } from "bun:sqlite";
 import { PATHS } from "./config.ts";
 import { isCursorTurnEndedLine, normalizeLineMessages, type Session, type SessionMsg } from "./sessions.ts";
 import { traceLog } from "./trace-log.ts";
+import { imageArtifactToMessage, listImageArtifacts } from "./artifacts.ts";
 
 export type IndexedTranscriptMatch = {
   sessionId: string;
@@ -54,6 +55,70 @@ let walCheckpointRunning = false;
 const enqueued = new Set<string>();
 const imports = new Map<string, Promise<{ indexed: number; offset: number; size: number }>>();
 const directNextOffset = new Map<string, number>();
+
+// Media files live in the artifact store, but their message identity and order
+// belong in the transcript index.  Keeping the row here makes media obey the
+// same pagination boundary as prose instead of appending every session image to
+// whichever transcript page happened to be requested.
+function indexMissingArtifactMessages(path: string, sessionId: string): number {
+  const artifacts = listImageArtifacts(sessionId);
+  if (!artifacts.length) return 0;
+  const d = database();
+  const exists = d.query<{ one: number }, [string]>(
+    "SELECT 1 AS one FROM transcript_messages WHERE message_id = ? LIMIT 1",
+  );
+  const nextRow = d.query<{ byte_offset: number }, [string, number]>(`
+    SELECT byte_offset FROM transcript_messages
+    WHERE path = ? AND ts > ? AND kind NOT IN ('image', 'video')
+    ORDER BY ts ASC, byte_offset ASC LIMIT 1
+  `);
+  const maxRow = d.query<{ byte_offset: number | null }, [string]>(
+    "SELECT max(byte_offset) AS byte_offset FROM transcript_messages WHERE path = ?",
+  );
+  const msgStmt = d.query(`
+    INSERT OR IGNORE INTO transcript_messages
+      (id, session_id, path, message_id, byte_offset, ts, role, kind, text)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `);
+  const ftsStmt = d.query(`
+    INSERT INTO transcript_messages_fts (id, session_id, text)
+    SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM transcript_messages_fts WHERE id = ?)
+  `);
+  let inserted = 0;
+  let suffix = 0;
+  d.transaction(() => {
+    for (const artifact of artifacts) {
+      const message = imageArtifactToMessage(artifact);
+      if (exists.get(message.id!)) continue;
+      const next = nextRow.get(path, artifact.createdAt)?.byte_offset;
+      const end = maxRow.get(path)?.byte_offset ?? -1;
+      // SQLite accepts REAL values in this INTEGER-affinity column. A media row
+      // sits immediately before the next timestamped transcript row, or just
+      // after the current tail. Tiny increments preserve multiple-image order.
+      const offset = (next == null ? end + 0.5 : next - 0.5) + (suffix++ * 0.000001);
+      const id = `${path}\0artifact\0${artifact.id}`;
+      const result = msgStmt.run(
+        id, sessionId, path, message.id, offset, message.ts,
+        message.role, message.kind, clippedText(message),
+      );
+      inserted += Number(result.changes ?? 0);
+      ftsStmt.run(id, sessionId, clippedText(message), id);
+    }
+  })();
+  if (inserted) {
+    pageTotalCache.delete(path);
+    if (isSessionIndexKey(path)) {
+      const next = Math.floor((maxRow.get(path)?.byte_offset ?? -1) + 1);
+      directNextOffset.set(path, Math.max(directNextOffset.get(path) ?? 0, next));
+    }
+  }
+  return inserted;
+}
+
+export function indexSessionArtifactMessages(path: string, sessionId: string): number {
+  init();
+  return indexMissingArtifactMessages(path, sessionId);
+}
 
 export function sessionIndexKey(sessionId: string): string {
   return `lfg://session/${sessionId}`;
@@ -684,6 +749,7 @@ export async function indexedMessagePage(
   init();
   await importTranscriptForRead(path, sessionId);
   const d = database();
+  indexMissingArtifactMessages(path, sessionId);
   const cursor = cursorFor(path);
   const limit = Math.max(1, Math.min(20_000, opts.limit ?? 220));
   const before = Math.max(0, opts.before ?? Number.MAX_SAFE_INTEGER);

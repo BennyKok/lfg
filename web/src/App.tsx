@@ -180,6 +180,7 @@ type CodingAgentInfo = {
   status: {
     configured: boolean;
     setupRunning: boolean;
+    setupProgress?: { percent: number; label: string };
     canAutoSetup: boolean;
     canLoginInTerminal: boolean;
     checks: { label: string; ok: boolean; detail?: string }[];
@@ -580,15 +581,21 @@ const AGENT_OPTIONS: { key: AgentKind; label: string; Icon: typeof Sparkles }[] 
   { key: "opencode", label: "opencode", Icon: Boxes },
 ];
 
+// Bump when any agent SVG's artwork changes. The version rides on every icon
+// URL so the backend can serve them `immutable` for a year — repeat renders hit
+// the browser cache, never the network — while a redeploy that changes an icon
+// busts the cache by changing the URL.
+const AGENT_ICON_VERSION = "20260712";
 // Maps an agent-kind to its session-card / picker icon. codex variants share the
 // codex mark; claude variants (incl. aisdk) share the claude mark.
 function agentIconSrc(agent?: string): string {
-  if (agent === "codex" || agent === "codex-aisdk") return "/agent-codex.svg";
-  if (agent === "grok") return "/agent-grok.svg";
-  if (agent === "cursor") return "/agent-cursor.svg";
-  if (agent === "hermes") return "/agent-hermes.svg?v=20260629";
-  if (agent === "opencode") return "/agent-opencode.svg";
-  return "/agent-claude.svg";
+  const v = `?v=${AGENT_ICON_VERSION}`;
+  if (agent === "codex" || agent === "codex-aisdk") return `/agent-codex.svg${v}`;
+  if (agent === "grok") return `/agent-grok.svg${v}`;
+  if (agent === "cursor") return `/agent-cursor.svg${v}`;
+  if (agent === "hermes") return `/agent-hermes.svg${v}`;
+  if (agent === "opencode") return `/agent-opencode.svg${v}`;
+  return `/agent-claude.svg${v}`;
 }
 function agentIconAlt(agent?: string): string {
   if (agent === "codex" || agent === "codex-aisdk") return "Codex";
@@ -3196,6 +3203,9 @@ export function App() {
       hideToastedFinding(f.id);
       const name = agentNames.get(f.agentId) ?? f.agentId;
       // Announce the finding via the shared Sonner toast system.
+      // Custom layout (icon + title/subtitle + View). toast.custom leaves
+      // data-styled=false, so stack fade/overflow is handled in index.css —
+      // keep this row close to .cn-toast height so stacked peeks match.
       toast.custom(
         (id) => (
           <button
@@ -3206,18 +3216,20 @@ export function App() {
               showToastedFinding(f.id);
               toast.dismiss(id);
             }}
-            className="pointer-events-auto flex w-full min-w-0 items-center gap-3 text-left"
+            className="pointer-events-auto flex w-full min-w-0 items-center gap-2.5 text-left"
           >
-            <span className="grid size-8 shrink-0 place-items-center rounded-full bg-primary/12 text-primary">
-              <Sparkles className="size-4" />
+            <span className="grid size-7 shrink-0 place-items-center rounded-full bg-primary/12 text-primary">
+              <Sparkles className="size-3.5" />
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block text-[13.5px] font-semibold leading-tight">
+              <span className="block truncate text-[13px] font-medium leading-snug">
                 {name} responded
               </span>
-              <span className="block truncate text-xs text-muted-foreground">{f.title}</span>
+              <span className="block truncate text-[12px] leading-snug text-muted-foreground">
+                {f.title}
+              </span>
             </span>
-            <span className="shrink-0 rounded-full bg-primary px-3 py-1.5 text-xs font-semibold text-white">
+            <span className="shrink-0 rounded-lg bg-primary px-2.5 py-1 text-[12px] font-medium text-white">
               View
             </span>
           </button>
@@ -5069,6 +5081,7 @@ function OnboardingFlow({
     if (repos.length) setRepoList((prev) => (prev.length ? prev : repos));
   }, [repos]);
   const [cloneUrl, setCloneUrl] = useState("");
+  const [folderBrowserOpen, setFolderBrowserOpen] = useState(false);
 
   // Step 4 — first session
   const [cwd, setCwd] = useState(() => localStorage.getItem("lfg_v2_repo") || "");
@@ -5076,6 +5089,12 @@ function OnboardingFlow({
   const repoCwd = cwd || repoList[0]?.cwd || "";
 
   const configuredAgents = codingAgents.filter((a) => a.status.configured);
+  const agentSetupRunning = codingAgents.some((a) => a.status.setupRunning);
+  useEffect(() => {
+    if (step !== "agents" || !agentSetupRunning) return;
+    const id = window.setInterval(onRefreshAgents, 1000);
+    return () => window.clearInterval(id);
+  }, [agentSetupRunning, onRefreshAgents, step]);
   // Agent for the first session: Claude when it's connected (the default
   // recommendation), else the first configured agent, else whatever the
   // backend defaults to.
@@ -5158,7 +5177,7 @@ function OnboardingFlow({
     setError(null);
     try {
       await api(`/api/coding-agents/${kind}/setup`, { method: "POST" });
-      window.setTimeout(onRefreshAgents, 2000);
+      onRefreshAgents();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Setup failed");
     }
@@ -5292,10 +5311,20 @@ function OnboardingFlow({
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium">{a.label}</span>
                     <span className="block truncate text-xs text-muted-foreground">
-                      {a.status.configured
+                      {a.status.setupRunning
+                        ? a.status.setupProgress?.label || "Starting setup…"
+                        : a.status.configured
                         ? "Connected"
                         : a.status.checks.find((c) => !c.ok)?.label || "Not set up"}
                     </span>
+                    {a.status.setupRunning ? (
+                      <span className="mt-1.5 block h-1 overflow-hidden rounded-full bg-border">
+                        <span
+                          className="block h-full rounded-full bg-foreground transition-[width] duration-500"
+                          style={{ width: `${a.status.setupProgress?.percent ?? 10}%` }}
+                        />
+                      </span>
+                    ) : null}
                   </span>
                   {a.status.configured ? (
                     <Check className="size-4 shrink-0 text-emerald-500" />
@@ -5306,7 +5335,9 @@ function OnboardingFlow({
                       onClick={() => void setupAgent(a.key)}
                       className="shrink-0 rounded-lg border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted disabled:opacity-50"
                     >
-                      {a.status.setupRunning ? "Setting up…" : "Set up"}
+                      {a.status.setupRunning
+                        ? `${a.status.setupProgress?.percent ?? 10}%`
+                        : "Set up"}
                     </button>
                   ) : null}
                 </div>
@@ -5362,6 +5393,14 @@ function OnboardingFlow({
                   ))}
                 </div>
               )}
+              <button
+                type="button"
+                onClick={() => setFolderBrowserOpen(true)}
+                className="flex items-center justify-center gap-2 rounded-xl border border-border px-3 py-2.5 text-sm font-medium hover:bg-muted"
+              >
+                <Folder className="size-4" />
+                Browse or create a project
+              </button>
               <div className="flex gap-2">
                 <input
                   value={cloneUrl}
@@ -5384,11 +5423,24 @@ function OnboardingFlow({
               </div>
               <button
                 type="button"
+                disabled={!repoList.length}
                 onClick={continueFromRepo}
-                className="mt-2 rounded-xl bg-foreground px-3 py-2.5 text-sm font-medium text-background"
+                className="mt-2 rounded-xl bg-foreground px-3 py-2.5 text-sm font-medium text-background disabled:opacity-40"
               >
-                {repoList.length ? "Continue" : "Continue without a repo"}
+                {repoList.length ? "Continue" : "Choose a project to continue"}
               </button>
+              <ProjectFolderBrowser
+                open={folderBrowserOpen}
+                initialPath={repoCwd || undefined}
+                onOpenChange={setFolderBrowserOpen}
+                onSelected={(project) => {
+                  setRepoList((current) => [
+                    ...current.filter((repo) => repo.cwd !== project.cwd),
+                    project,
+                  ]);
+                  setCwd(project.cwd);
+                }}
+              />
             </div>
           </>
         )}
@@ -10176,6 +10228,168 @@ type ResumableResponse = {
   facets: ResumableFacets;
 };
 
+type FolderBrowserPayload = {
+  current: string;
+  parent: string | null;
+  isGitRepo: boolean;
+  directories: { name: string; path: string; isGitRepo: boolean }[];
+};
+
+function ProjectFolderBrowser({
+  open,
+  initialPath,
+  onOpenChange,
+  onSelected,
+}: {
+  open: boolean;
+  initialPath?: string;
+  onOpenChange: (open: boolean) => void;
+  onSelected: (project: Repo) => void | Promise<void>;
+}) {
+  const [browser, setBrowser] = useState<FolderBrowserPayload | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [folderName, setFolderName] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  const browse = useCallback(async (path?: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const query = path ? `?path=${encodeURIComponent(path)}` : "";
+      setBrowser(await api<FolderBrowserPayload>(`/api/filesystem/directories${query}`));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't open this folder");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    setCreating(false);
+    setFolderName("");
+    void browse(initialPath);
+  }, [browse, initialPath, open]);
+
+  async function finish(endpoint: string, body: object) {
+    setLoading(true);
+    setError(null);
+    try {
+      const payload = await api<{ repo: Repo; repos?: Repo[] }>(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      await onSelected(payload.repos?.find((repo) => repo.cwd === payload.repo.cwd) ?? payload.repo);
+      onOpenChange(false);
+      toast.success("Project ready");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't create project");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <Drawer open={open} onOpenChange={onOpenChange} shouldScaleBackground={false}>
+      <DrawerContent className="mx-auto h-[min(82dvh,42rem)] max-w-lg overflow-hidden">
+        <DrawerTitle className="sr-only">Choose a project folder</DrawerTitle>
+        <div className="flex min-h-0 flex-1 flex-col px-4 pb-[max(env(safe-area-inset-bottom),1rem)]">
+          <div className="mb-3 flex items-center justify-between">
+            <div className="min-w-0">
+              <h2 className="text-lg font-semibold">Choose a project</h2>
+              <p className="truncate text-xs text-muted-foreground">{browser?.current || "Opening…"}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted"
+              aria-label="Close"
+            >
+              <X className="size-4" />
+            </button>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto rounded-2xl border border-border bg-muted/25">
+            {browser?.parent ? (
+              <button
+                type="button"
+                onClick={() => void browse(browser.parent!)}
+                className="flex w-full items-center gap-3 border-b border-border px-3 py-3 text-left active:bg-muted"
+              >
+                <span className="flex size-9 items-center justify-center rounded-xl bg-muted">
+                  <ChevronLeft className="size-4" />
+                </span>
+                <span className="text-sm font-medium">Back</span>
+              </button>
+            ) : null}
+            {browser?.directories.map((directory) => (
+              <button
+                key={directory.path}
+                type="button"
+                onClick={() => void browse(directory.path)}
+                className="flex w-full items-center gap-3 border-b border-border px-3 py-3 text-left last:border-0 active:bg-muted"
+              >
+                <span className="flex size-9 items-center justify-center rounded-xl bg-blue-500/10 text-blue-500">
+                  <Folder className="size-4" />
+                </span>
+                <span className="min-w-0 flex-1 truncate text-sm font-medium">{directory.name}</span>
+                {directory.isGitRepo ? (
+                  <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-500">Git</span>
+                ) : null}
+                <ChevronRight className="size-4 text-muted-foreground" />
+              </button>
+            ))}
+            {!loading && browser?.directories.length === 0 ? (
+              <div className="px-4 py-10 text-center text-sm text-muted-foreground">This folder is empty</div>
+            ) : null}
+            {loading ? (
+              <div className="flex justify-center py-10"><Loader2 className="size-5 animate-spin text-muted-foreground" /></div>
+            ) : null}
+          </div>
+
+          {error ? <p className="mt-2 text-sm text-destructive">{error}</p> : null}
+          {creating ? (
+            <div className="mt-3 flex gap-2">
+              <input
+                value={folderName}
+                onChange={(e) => setFolderName(e.target.value)}
+                placeholder="Project name"
+                autoFocus
+                className="min-w-0 flex-1 rounded-xl border border-border bg-muted/40 px-3 py-2.5 text-sm outline-none"
+              />
+              <Button
+                type="button"
+                disabled={loading || !folderName.trim() || !browser}
+                onClick={() => browser && void finish("/api/projects/create-folder", { parent: browser.current, name: folderName })}
+              >
+                Create
+              </Button>
+            </div>
+          ) : (
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <Button type="button" variant="outline" onClick={() => setCreating(true)} disabled={!browser || loading}>
+                <Plus className="size-4" /> New Folder
+              </Button>
+              <Button
+                type="button"
+                disabled={!browser || loading}
+                onClick={() => browser && void finish("/api/projects/use-folder", { path: browser.current })}
+              >
+                <Check className="size-4" /> Use This Folder
+              </Button>
+            </div>
+          )}
+          {!browser?.isGitRepo && browser ? (
+            <p className="mt-2 text-center text-[11px] text-muted-foreground">Git will be initialized in this folder.</p>
+          ) : null}
+        </div>
+      </DrawerContent>
+    </Drawer>
+  );
+}
+
 function NewSessionDialog({
   open,
   repos,
@@ -10263,17 +10477,104 @@ function NewSessionDialog({
   const [resumeOpen, setResumeOpen] = useState(false);
   const [resumable, setResumable] = useState<ResumableSession[] | null>(null);
   const [agentPopoverOpen, setAgentPopoverOpen] = useState(false);
+  const [folderBrowserOpen, setFolderBrowserOpen] = useState(false);
   const [modelLayerOpen, setModelLayerOpen] = useState(false);
+  // Swipe-to-switch state for the inline composer's agent icon. `suppress`
+  // vetoes the popover-open request that Base UI's trigger fires on the same
+  // gesture; `dir`/`nonce` drive the slide+fade animation when the icon swaps.
+  const suppressAgentOpenRef = useRef(false);
+  const agentIconBtnRef = useRef<HTMLButtonElement>(null);
+  const cycleAgentRef = useRef<(dir: 1 | -1) => void>(() => {});
+  const [agentIconDir, setAgentIconDir] = useState<1 | -1>(1);
+  const [agentIconNonce, setAgentIconNonce] = useState(0);
   const handleModelLayerOpenChange = useCallback((next: boolean) => {
     setModelLayerOpen(next);
   }, []);
   const handleAgentPopoverOpenChange = useCallback(
     (next: boolean) => {
+      // A swipe just fired on the icon — swallow the open the trigger would
+      // otherwise request (mousedown/compat click) so switching never also
+      // pops the menu.
+      if (next && suppressAgentOpenRef.current) {
+        suppressAgentOpenRef.current = false;
+        return;
+      }
       if (!next && modelLayerOpen) return;
       setAgentPopoverOpen(next);
     },
     [modelLayerOpen],
   );
+
+  // Native (non-passive) gesture listeners on the agent icon. React makes
+  // onTouchMove/onWheel passive, so preventDefault() there is ignored — we need
+  // raw listeners to (a) cancel the synthetic mousedown/click that would open
+  // the popover mid-swipe and (b) stop the page scrolling under a trackpad
+  // swipe. All state is read through refs so a mid-gesture agent change (which
+  // re-renders) doesn't tear down the listeners and lose the in-flight touch.
+  useEffect(() => {
+    const el = agentIconBtnRef.current;
+    if (!el) return;
+    const SWIPE_PX = 24;
+    const WHEEL_PX = 40;
+    let touch: { x: number; y: number; fired: boolean } | null = null;
+    const release = () => {
+      window.setTimeout(() => {
+        suppressAgentOpenRef.current = false;
+      }, 350);
+    };
+    const onTouchStart = (e: TouchEvent) => {
+      const t = e.touches[0];
+      if (!t) return;
+      touch = { x: t.clientX, y: t.clientY, fired: false };
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      if (!touch || touch.fired) return;
+      const t = e.touches[0];
+      if (!t) return;
+      const dy = t.clientY - touch.y;
+      const dx = t.clientX - touch.x;
+      if (Math.abs(dy) >= SWIPE_PX && Math.abs(dy) > Math.abs(dx)) {
+        touch.fired = true;
+        suppressAgentOpenRef.current = true;
+        e.preventDefault(); // suppress the compat mousedown/click → no popover
+        cycleAgentRef.current(dy < 0 ? 1 : -1); // swipe up = next agent
+      }
+    };
+    const onTouchEnd = () => {
+      const fired = touch?.fired;
+      touch = null;
+      if (fired) release();
+    };
+    let wheelAcc = 0;
+    let wheelTs = 0;
+    const onWheel = (e: WheelEvent) => {
+      if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+      e.preventDefault();
+      const now = e.timeStamp;
+      if (now - wheelTs > 250) wheelAcc = 0;
+      wheelTs = now;
+      wheelAcc += e.deltaY;
+      if (Math.abs(wheelAcc) >= WHEEL_PX) {
+        const dir = wheelAcc < 0 ? 1 : -1; // scroll/swipe up = next agent
+        wheelAcc = 0;
+        suppressAgentOpenRef.current = true;
+        cycleAgentRef.current(dir);
+        release();
+      }
+    };
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: false });
+    el.addEventListener("touchend", onTouchEnd, { passive: true });
+    el.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("touchend", onTouchEnd);
+      el.removeEventListener("touchcancel", onTouchEnd);
+      el.removeEventListener("wheel", onWheel);
+    };
+  }, [open, variant]);
   // Close the resume sheet and drop the cached list so the next open refetches
   // (and shows the skeleton) instead of flashing a stale roster.
   const closeResume = useCallback(() => {
@@ -10531,26 +10832,7 @@ function NewSessionDialog({
   // picker. The path is resolved/validated server-side; on success we refresh
   // the repo list and select the freshly added path.
   function addCustomPath() {
-    const input = window.prompt("Absolute path to a git repo (e.g. ~/work/api):");
-    if (input === null) return;
-    const path = input.trim();
-    if (!path) return;
-    toast.promise(
-      api<{ repos: Repo[] }>("/api/repos", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path }),
-      }).then(async (r) => {
-        const added = r.repos.find((x) => x.custom && !repos.some((p) => p.cwd === x.cwd));
-        await onReposChanged();
-        if (added) setRepo(added.cwd);
-      }),
-      {
-        loading: "Adding project…",
-        success: "Project added",
-        error: (e) => (e instanceof Error ? e.message : "Couldn't add project"),
-      },
-    );
+    setFolderBrowserOpen(true);
   }
 
   function removeCustomPath(cwd: string) {
@@ -10749,6 +11031,27 @@ function NewSessionDialog({
   // icons. The selected agent is highlighted in place rather than hoisted out.
   const agentButtons = visibleAgentOptions;
 
+  // Swipe/scroll the composer's agent icon to step through the visible agents.
+  // dir +1 = next (swipe up), -1 = previous (swipe down); wraps around. Mirrors
+  // the popover buttons' behaviour (also re-syncs the model) and records the
+  // direction + a nonce so the icon replays a slide+fade in the swiped
+  // direction. Kept in a ref so the native gesture listeners always call the
+  // latest closure.
+  const cycleAgent = (dir: 1 | -1) => {
+    const opts = visibleAgentOptions;
+    if (opts.length < 2) return;
+    const idx = opts.findIndex((option) => option.key === agent);
+    const nextIdx = ((idx < 0 ? 0 : idx) + dir + opts.length) % opts.length;
+    const nextKey = opts[nextIdx].key;
+    if (nextKey === agent) return;
+    setAgentIconDir(dir);
+    setAgentIconNonce((n) => n + 1);
+    setAgent(nextKey);
+    setModel(localStorage.getItem(`lfg_model_${nextKey}`) || defaultModelFor(nextKey));
+    haptic();
+  };
+  cycleAgentRef.current = cycleAgent;
+
   // The agent switcher + model / thinking / repo pills. Shared between the
   // inline composer (revealed in its own row when expanded) and the always-open
   // drawer variant, so the markup lives in one place.
@@ -10886,12 +11189,27 @@ function NewSessionDialog({
       <DropdownMenuTrigger
         render={
           <button
+            ref={agentIconBtnRef}
             type="button"
-            title={selectedAgentOption.label}
-            aria-label={`Agent: ${selectedAgentOption.label}`}
-            className="flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-background text-foreground shadow-sm transition active:scale-[0.96]"
+            title={`${selectedAgentOption.label} — swipe to switch agent`}
+            aria-label={`Agent: ${selectedAgentOption.label}. Swipe up or down to switch.`}
+            style={{ touchAction: "none" }}
+            className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border bg-background text-foreground shadow-sm transition active:scale-[0.96]"
           >
-            <img src={agentIconSrc(agent)} alt="" className="size-5" />
+            <span className="relative flex size-5 items-center justify-center overflow-hidden">
+              <img
+                key={`${agent}-${agentIconNonce}`}
+                src={agentIconSrc(agent)}
+                alt=""
+                className={cn(
+                  "size-5",
+                  agentIconNonce > 0 &&
+                    (agentIconDir === 1
+                      ? "animate-in fade-in-0 slide-in-from-bottom-2 duration-200"
+                      : "animate-in fade-in-0 slide-in-from-top-2 duration-200"),
+                )}
+              />
+            </span>
           </button>
         }
       />
@@ -11116,6 +11434,15 @@ function NewSessionDialog({
           onClose={closeResume}
         />
       ) : null}
+      <ProjectFolderBrowser
+        open={folderBrowserOpen}
+        initialPath={selectedRepo || undefined}
+        onOpenChange={setFolderBrowserOpen}
+        onSelected={async (project) => {
+          setRepo(project.cwd);
+          await onReposChanged();
+        }}
+      />
     </form>
     <ImageAnnotator
       open={!!annotatingId}

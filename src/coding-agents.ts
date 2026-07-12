@@ -35,6 +35,10 @@ export type CodingAgentStatus = {
   canAutoSetup: boolean;
   canLoginInTerminal: boolean;
   setupRunning: boolean;
+  setupProgress?: {
+    percent: number;
+    label: string;
+  };
   installCommand?: string;
   loginCommand?: string;
 };
@@ -78,6 +82,7 @@ export const CODING_AGENT_LABELS: Record<CodingAgentKind, string> = {
 
 const CONFIG_PATH = join(PATHS.data, "coding-agents.json");
 const setupRuns = new Map<CodingAgentKind, Promise<void>>();
+const setupProgress = new Map<CodingAgentKind, { percent: number; label: string }>();
 const systemSetupRuns = new Map<string, Promise<void>>();
 
 function shellQuote(value: string): string {
@@ -222,7 +227,7 @@ function hasCodexAuth(): boolean {
   return (
     !!process.env.OPENAI_API_KEY ||
     existsSync(`${home}/.codex/auth.json`) ||
-    existsSync(`${home}/.codex/config.toml`)
+    !!(codexPath() && commandOutput([codexPath()!, "login", "status"]).ok)
   );
 }
 
@@ -290,8 +295,12 @@ function installCommandFor(kind: CodingAgentKind): string | null {
 }
 
 function loginCommandPartsFor(kind: CodingAgentKind): string[] | null {
-  if (kind === "claude" || kind === "aisdk") return [claudePath() ?? "claude"];
-  if (kind === "codex" || kind === "codex-aisdk") return [codexPath() ?? "codex"];
+  if (kind === "claude" || kind === "aisdk") {
+    return [claudePath() ?? "claude", "auth", "login", "--claudeai"];
+  }
+  if (kind === "codex" || kind === "codex-aisdk") {
+    return [codexPath() ?? "codex", "login", "--device-auth"];
+  }
   if (kind === "opencode") return [opencodePath() ?? "opencode"];
   if (kind === "grok") return [grokPath() ?? "grok"];
   if (kind === "cursor") return [cursorPath() ?? "cursor-agent", "login"];
@@ -349,6 +358,7 @@ function statusFor(kind: CodingAgentKind): CodingAgentStatus {
     canAutoSetup,
     canLoginInTerminal,
     setupRunning: setupRuns.has(kind),
+    setupProgress: setupProgress.get(kind),
     installCommand: installCommandFor(kind) ?? undefined,
     loginCommand: loginCommandFor(kind) ?? undefined,
   };
@@ -455,23 +465,53 @@ export async function runCodingAgentSetup(kind: CodingAgentKind): Promise<void> 
   const setupEnv = setupEnvFor(kind);
   if (!setupEnv) throw new Error(`${kind} does not have an automatic setup path`);
   const script = join(PATHS.root, "scripts", "setup.sh");
+  setupProgress.set(kind, { percent: 10, label: "Starting…" });
   const run = (async () => {
     const proc = Bun.spawn(["bash", script], {
       cwd: PATHS.root,
-      stdout: "ignore",
+      stdout: "pipe",
       stderr: "pipe",
       env: { ...process.env, ...setupEnv },
     });
-    const [stderr, code] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+    const stdout = (async () => {
+      const reader = proc.stdout.getReader();
+      const decoder = new TextDecoder();
+      let buffered = "";
+      let installSeen = false;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffered += decoder.decode(value, { stream: true });
+        const lines = buffered.split("\n");
+        buffered = lines.pop() ?? "";
+        for (const line of lines) {
+          const message = line.replace(/\x1b\[[0-9;]*m/g, "").replace(/^==>\s*/, "").trim();
+          if (!message) continue;
+          if (/Installing .*CLI|Installing OpenCode/i.test(message)) {
+            installSeen = true;
+            setupProgress.set(kind, { percent: 55, label: message });
+          } else if (installSeen) {
+            setupProgress.set(kind, { percent: 80, label: message });
+          }
+        }
+      }
+    })();
+    const [stderr, code] = await Promise.all([
+      new Response(proc.stderr).text(),
+      proc.exited,
+      stdout,
+    ]);
     if (code !== 0) {
       throw new Error(stderr.trim().slice(0, 1000) || `setup exited ${code}`);
     }
+    setupProgress.set(kind, { percent: 95, label: "Verifying installation…" });
   })();
   setupRuns.set(kind, run);
   try {
     await run;
   } finally {
     setupRuns.delete(kind);
+    setupProgress.delete(kind);
   }
 }
 
