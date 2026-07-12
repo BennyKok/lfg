@@ -2,6 +2,25 @@
 
 Recent product updates and deployment notes.
 
+## July 12, 2026 - Swipe-to-switch agent & cached agent icons (v0.1.21)
+
+The composer's agent icon is now a quick gesture target, and agent icons stop
+re-downloading on a timer.
+
+- Swipe up/down (or trackpad-scroll) on the inline composer's agent icon to step
+  through the visible agents, with a slide+fade animation; tapping still opens
+  the full agent/model popover.
+- Agent icons are now versioned (`?v=…`) and served `immutable` for a year, so
+  they load once and never re-fetch on subsequent renders. Other static assets
+  gained `ETag`/`Last-Modified` revalidation (cheap 304s) instead of a bare
+  5-minute `max-age` that forced full re-downloads.
+- Media artifacts are indexed into the transcript index so images obey the same
+  pagination boundary as prose instead of appending to whichever page loaded.
+- Added "use this folder" / "create new folder" project onboarding (with
+  `git init`) in the repo store.
+- Coding-agent setup reports progress, and Claude/Codex login commands use the
+  device-auth / `--claudeai` flows.
+
 ## July 11, 2026 - Auto-agent picker parity (v0.1.20)
 
 Auto agents can use the same providers as new sessions, and the settings sheets
