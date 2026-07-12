@@ -10479,10 +10479,9 @@ function NewSessionDialog({
   const [agentPopoverOpen, setAgentPopoverOpen] = useState(false);
   const [folderBrowserOpen, setFolderBrowserOpen] = useState(false);
   const [modelLayerOpen, setModelLayerOpen] = useState(false);
-  // Swipe-to-switch state for the inline composer's agent icon. `suppress`
-  // vetoes the popover-open request that Base UI's trigger fires on the same
-  // gesture; `dir`/`nonce` drive the slide+fade animation when the icon swaps.
-  const suppressAgentOpenRef = useRef(false);
+  // Swipe-to-switch state for the inline composer's agent icon. `dir`/`nonce`
+  // drive the slide+fade animation when the icon swaps; the button ref lets us
+  // own the gesture with native listeners.
   const agentIconBtnRef = useRef<HTMLButtonElement>(null);
   const cycleAgentRef = useRef<(dir: 1 | -1) => void>(() => {});
   const [agentIconDir, setAgentIconDir] = useState<1 | -1>(1);
@@ -10492,58 +10491,84 @@ function NewSessionDialog({
   }, []);
   const handleAgentPopoverOpenChange = useCallback(
     (next: boolean) => {
-      // A swipe just fired on the icon — swallow the open the trigger would
-      // otherwise request (mousedown/compat click) so switching never also
-      // pops the menu.
-      if (next && suppressAgentOpenRef.current) {
-        suppressAgentOpenRef.current = false;
-        return;
-      }
+      // Keep the agent popover open while its nested model layer is open.
       if (!next && modelLayerOpen) return;
       setAgentPopoverOpen(next);
     },
     [modelLayerOpen],
   );
 
-  // Native (non-passive) gesture listeners on the agent icon. React makes
-  // onTouchMove/onWheel passive, so preventDefault() there is ignored — we need
-  // raw listeners to (a) cancel the synthetic mousedown/click that would open
-  // the popover mid-swipe and (b) stop the page scrolling under a trackpad
-  // swipe. All state is read through refs so a mid-gesture agent change (which
-  // re-renders) doesn't tear down the listeners and lose the in-flight touch.
+  // Own the agent-icon gesture end-to-end with pointer events (one code path
+  // for mouse-drag, touch and pen) plus wheel/trackpad. Base UI's trigger opens
+  // the menu on press-*down* (useClick event:'mousedown'), which fires before we
+  // can tell a tap from a swipe — so we swallow its native mousedown/click
+  // (stopPropagation keeps the event from bubbling to React's root, where Base
+  // UI's handler lives) and instead open the popover ourselves on a clean tap.
+  // A vertical drag past threshold steps through agents (repeatably within one
+  // drag) and never opens the menu. `touch-action: none` on the button keeps a
+  // vertical drag from scrolling the page. Callbacks read cycle/open through
+  // refs/functional-setState, so a mid-gesture re-render never drops the drag.
   useEffect(() => {
     const el = agentIconBtnRef.current;
     if (!el) return;
-    const SWIPE_PX = 24;
+    const SWIPE_PX = 22;
     const WHEEL_PX = 40;
-    let touch: { x: number; y: number; fired: boolean } | null = null;
-    const release = () => {
-      window.setTimeout(() => {
-        suppressAgentOpenRef.current = false;
-      }, 350);
+    let drag:
+      | { x: number; y: number; lastStepY: number; dragged: boolean; pointerId: number }
+      | null = null;
+    const blockNativeMouseDown = (e: Event) => {
+      // Stop Base UI's mousedown-to-open; we drive open on pointerup instead.
+      e.stopPropagation();
     };
-    const onTouchStart = (e: TouchEvent) => {
-      const t = e.touches[0];
-      if (!t) return;
-      touch = { x: t.clientX, y: t.clientY, fired: false };
+    const blockNativeClick = (e: MouseEvent) => {
+      // Swallow pointer-derived clicks (detail > 0) so they can't open the menu,
+      // but let keyboard-activated clicks (Enter/Space → detail 0) through so
+      // Base UI still opens the popover for keyboard users.
+      if (e.detail > 0) e.stopPropagation();
     };
-    const onTouchMove = (e: TouchEvent) => {
-      if (!touch || touch.fired) return;
-      const t = e.touches[0];
-      if (!t) return;
-      const dy = t.clientY - touch.y;
-      const dx = t.clientX - touch.x;
-      if (Math.abs(dy) >= SWIPE_PX && Math.abs(dy) > Math.abs(dx)) {
-        touch.fired = true;
-        suppressAgentOpenRef.current = true;
-        e.preventDefault(); // suppress the compat mousedown/click → no popover
-        cycleAgentRef.current(dy < 0 ? 1 : -1); // swipe up = next agent
+    // Move/up are tracked on window, not the 32px button: the pointer leaves
+    // the tiny target within ~16px, well under the swipe threshold, so listening
+    // on the element alone drops the drag. setPointerCapture is unreliable for
+    // this (and no-ops in some engines), so window listeners are the robust path.
+    const onPointerMove = (e: PointerEvent) => {
+      if (!drag || e.pointerId !== drag.pointerId) return;
+      const totalDy = e.clientY - drag.y;
+      const totalDx = e.clientX - drag.x;
+      if (!drag.dragged && Math.abs(totalDy) >= SWIPE_PX && Math.abs(totalDy) > Math.abs(totalDx)) {
+        drag.dragged = true;
+      }
+      if (drag.dragged) {
+        const stepDy = e.clientY - drag.lastStepY;
+        if (Math.abs(stepDy) >= SWIPE_PX) {
+          drag.lastStepY = e.clientY;
+          cycleAgentRef.current(stepDy < 0 ? 1 : -1); // drag up = next agent
+        }
       }
     };
-    const onTouchEnd = () => {
-      const fired = touch?.fired;
-      touch = null;
-      if (fired) release();
+    const endDrag = (e: PointerEvent) => {
+      if (drag && e.pointerId !== drag.pointerId) return;
+      const d = drag;
+      drag = null;
+      window.removeEventListener("pointermove", onPointerMove, true);
+      window.removeEventListener("pointerup", endDrag, true);
+      window.removeEventListener("pointercancel", endDrag, true);
+      // A clean press with no drag is a tap → toggle the popover ourselves.
+      if (d && !d.dragged && e.type === "pointerup") {
+        setAgentPopoverOpen((current) => !current);
+      }
+    };
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.button > 0) return; // ignore right/middle press
+      drag = {
+        x: e.clientX,
+        y: e.clientY,
+        lastStepY: e.clientY,
+        dragged: false,
+        pointerId: e.pointerId,
+      };
+      window.addEventListener("pointermove", onPointerMove, true);
+      window.addEventListener("pointerup", endDrag, true);
+      window.addEventListener("pointercancel", endDrag, true);
     };
     let wheelAcc = 0;
     let wheelTs = 0;
@@ -10557,22 +10582,22 @@ function NewSessionDialog({
       if (Math.abs(wheelAcc) >= WHEEL_PX) {
         const dir = wheelAcc < 0 ? 1 : -1; // scroll/swipe up = next agent
         wheelAcc = 0;
-        suppressAgentOpenRef.current = true;
         cycleAgentRef.current(dir);
-        release();
       }
     };
-    el.addEventListener("touchstart", onTouchStart, { passive: true });
-    el.addEventListener("touchmove", onTouchMove, { passive: false });
-    el.addEventListener("touchend", onTouchEnd, { passive: true });
-    el.addEventListener("touchcancel", onTouchEnd, { passive: true });
+    el.addEventListener("mousedown", blockNativeMouseDown);
+    el.addEventListener("click", blockNativeClick);
+    el.addEventListener("pointerdown", onPointerDown);
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => {
-      el.removeEventListener("touchstart", onTouchStart);
-      el.removeEventListener("touchmove", onTouchMove);
-      el.removeEventListener("touchend", onTouchEnd);
-      el.removeEventListener("touchcancel", onTouchEnd);
+      el.removeEventListener("mousedown", blockNativeMouseDown);
+      el.removeEventListener("click", blockNativeClick);
+      el.removeEventListener("pointerdown", onPointerDown);
       el.removeEventListener("wheel", onWheel);
+      // Drop any window listeners left over from an in-flight drag.
+      window.removeEventListener("pointermove", onPointerMove, true);
+      window.removeEventListener("pointerup", endDrag, true);
+      window.removeEventListener("pointercancel", endDrag, true);
     };
   }, [open, variant]);
   // Close the resume sheet and drop the cached list so the next open refetches
@@ -11196,13 +11221,14 @@ function NewSessionDialog({
             style={{ touchAction: "none" }}
             className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border bg-background text-foreground shadow-sm transition active:scale-[0.96]"
           >
-            <span className="relative flex size-5 items-center justify-center overflow-hidden">
+            <span className="pointer-events-none relative flex size-5 items-center justify-center overflow-hidden">
               <img
                 key={`${agent}-${agentIconNonce}`}
                 src={agentIconSrc(agent)}
                 alt=""
+                draggable={false}
                 className={cn(
-                  "size-5",
+                  "size-5 select-none",
                   agentIconNonce > 0 &&
                     (agentIconDir === 1
                       ? "animate-in fade-in-0 slide-in-from-bottom-2 duration-200"
