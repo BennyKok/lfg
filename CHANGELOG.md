@@ -2,6 +2,22 @@
 
 Recent product updates and deployment notes.
 
+## July 12, 2026 - Fix agent-icon swipe gesture (v0.1.22)
+
+Follow-up to v0.1.21: the swipe-to-switch gesture didn't actually fire.
+
+- The agent icon `<img>` is draggable by default, so a press-drag started a
+  native image drag and fired `pointercancel` after the first move — killing
+  the swipe before it crossed threshold. The icon is now `draggable={false}` /
+  `pointer-events-none`.
+- Reworked the gesture to pointer events (one path for mouse-drag, touch and
+  pen) tracked on `window` so the drag survives the pointer leaving the 32px
+  target, and Base UI's press-to-open is suppressed so a swipe never also opens
+  the popover (tap still opens it). Verified end-to-end in a headless browser.
+- Note: the inline composer that hosts this icon is the mobile home screen
+  (viewport ≤ 767px); on wider/desktop layouts the agent switcher is the
+  button row inside the composer controls.
+
 ## July 12, 2026 - Swipe-to-switch agent & cached agent icons (v0.1.21)
 
 The composer's agent icon is now a quick gesture target, and agent icons stop
