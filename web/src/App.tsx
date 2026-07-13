@@ -62,6 +62,8 @@ import {
   Braces,
   CalendarClock,
   ClipboardList,
+  Copy,
+  ExternalLink,
   Flag,
   Check,
   ChevronDown,
@@ -69,6 +71,7 @@ import {
   ChevronRight,
   Folder,
   GitFork,
+  KeyRound,
   Loader2,
   MessageSquare,
   Mic,
@@ -106,9 +109,21 @@ import { feedback } from "@/lib/feedback";
 import { useUiFeedbackPrefs, setUiFeedbackPrefs } from "@/lib/ui-feedback-prefs";
 import { reportError } from "./lib/report-error";
 import { lazyWithReload } from "./lib/lazy-with-reload";
+import {
+  ensureVoiceConfigured,
+  showVoiceSetup,
+  VoiceSetupDialog,
+} from "./voice-setup";
 import { fetchBootstrap } from "./bootstrap";
 import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 // Code-split: the terminal pulls in ghostty-web's ~400KB WASM, so only load it
 // when the Terminal tab is actually opened — keeps the initial bundle lean.
@@ -192,6 +207,17 @@ type CodingAgentInfo = {
     installCommand?: string;
     loginCommand?: string;
   };
+};
+
+type CodingAgentAuthSession = {
+  id: string;
+  kind: AgentKind;
+  provider: "claude" | "codex";
+  status: "starting" | "waiting" | "complete" | "error";
+  authorizationUrl?: string;
+  userCode?: string;
+  needsCode: boolean;
+  error?: string;
 };
 
 type SetupCheckGroup = {
@@ -1402,6 +1428,10 @@ function useDictation(opts: {
     pendingStopRef.current = null;
     capturedBaseRef.current = baseTextRef.current;
     try {
+      if (!(await ensureVoiceConfigured("input"))) {
+        startingRef.current = false;
+        return;
+      }
       // A new take cancels any pending idle-release so we keep the same grant.
       if (idleReleaseRef.current !== null) {
         clearTimeout(idleReleaseRef.current);
@@ -2943,6 +2973,7 @@ export function App() {
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [codingAgents, setCodingAgents] = useState<CodingAgentInfo[]>([]);
+  const [codingAgentAuth, setCodingAgentAuth] = useState<CodingAgentAuthSession | null>(null);
   const [modelCatalog, setModelCatalog] = useState<AgentModelCatalog>(() =>
     buildAgentModelCatalog(),
   );
@@ -4095,22 +4126,47 @@ export function App() {
     );
   }
 
-  function loginCodingAgent(kind: AgentKind) {
-    toast.promise(
-      api<{ terminalSession: string; command: string }>(`/api/coding-agents/${kind}/login-terminal`, {
+  async function loginCodingAgent(kind: AgentKind) {
+    const browserAuth = kind === "aisdk" || kind === "claude" || kind === "codex" || kind === "codex-aisdk";
+    if (!browserAuth) {
+      toast.promise(
+        api<{ terminalSession: string }>(`/api/coding-agents/${kind}/login-terminal`, { method: "POST" })
+          .then((payload) => {
+            localStorage.setItem("lfg_term_session", payload.terminalSession || `login-${kind}`);
+            window.dispatchEvent(new Event("lfg:term-session"));
+            setTab("term");
+          }),
+        {
+          loading: "Opening login…",
+          success: "Login opened",
+          error: (e) => (e instanceof Error ? e.message : "Couldn't open login"),
+        },
+      );
+      return;
+    }
+    const authWindow = window.open("about:blank", "_blank");
+    try {
+      const session = await api<CodingAgentAuthSession>(`/api/coding-agents/${kind}/auth`, {
         method: "POST",
-      }).then((payload) => {
-        localStorage.setItem("lfg_term_session", payload.terminalSession || `login-${kind}`);
-        window.dispatchEvent(new Event("lfg:term-session"));
-        setTab("term");
-        window.setTimeout(() => void refreshCodingAgents(), 3000);
-      }),
-      {
-        loading: "Opening login terminal…",
-        success: "Login terminal opened",
-        error: (e) => (e instanceof Error ? e.message : "Couldn't open login terminal"),
-      },
-    );
+      });
+      if (session.status === "error") throw new Error(session.error || "Couldn't start login");
+      if (session.status === "complete") {
+        authWindow?.close();
+        toast.success(`${session.provider === "claude" ? "Claude" : "Codex"} connected`);
+        await refreshCodingAgents({ refreshModels: true });
+        return;
+      }
+      setCodingAgentAuth(session);
+      if (session.authorizationUrl && authWindow) {
+        authWindow.location.replace(session.authorizationUrl);
+        authWindow.focus();
+      } else if (!session.authorizationUrl) {
+        authWindow?.close();
+      }
+    } catch (e) {
+      authWindow?.close();
+      toast.error(e instanceof Error ? e.message : "Couldn't start login");
+    }
   }
 
   if (loading) {
@@ -4453,9 +4509,19 @@ export function App() {
         onRefresh={refreshSessions}
       />
 
+      <CodingAgentAuthDialog
+        session={codingAgentAuth}
+        onSessionChange={setCodingAgentAuth}
+        onComplete={async () => {
+          setCodingAgentAuth(null);
+          await refreshCodingAgents({ refreshModels: true });
+        }}
+      />
+
       {useWsLive ? (
         <ConnectionStatusToasts connection={wsLiveStream.connection} onRetry={wsLiveStream.reconnectNow} />
       ) : null}
+      <VoiceSetupDialog />
       <Toaster position="bottom-center" />
     </div>
     </AskProvider>
@@ -5117,6 +5183,12 @@ function OnboardingFlow({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedAgents, setSelectedAgents] = useState<Set<AgentKind>>(() => new Set());
+  const [installLog, setInstallLog] = useState<{
+    lines: string[];
+    running: boolean;
+    error: string | null;
+  }>({ lines: [], running: false, error: null });
+  const installLogRef = useRef<HTMLPreElement>(null);
 
   // Step 1 — profile (+ optional photo; uploaded right after the profile is
   // created, since the avatar is keyed to the profile's email server-side)
@@ -5161,6 +5233,39 @@ function OnboardingFlow({
     const id = window.setInterval(onRefreshAgents, 1000);
     return () => window.clearInterval(id);
   }, [agentSetupRunning, onRefreshAgents, step]);
+  // Stream the shared installer log while a batch install is in flight. One
+  // setup.sh runs for all selected agents, so a single log is the honest view —
+  // far clearer than painting the same fake progress bar on every agent row.
+  useEffect(() => {
+    if (step !== "agents" || (!agentSetupRunning && !installLog.running)) return;
+    let cancelled = false;
+    const fetchLog = async () => {
+      try {
+        const res = await api<{ running: boolean; lines: string[]; error: string | null }>(
+          "/api/coding-agents/setup/log",
+        );
+        if (!cancelled) {
+          setInstallLog({
+            lines: res.lines ?? [],
+            running: !!res.running,
+            error: res.error ?? null,
+          });
+        }
+      } catch {
+        // Transient blip (e.g. serve restarting mid-install) — keep last log.
+      }
+    };
+    void fetchLog();
+    const id = window.setInterval(fetchLog, 800);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [step, agentSetupRunning, installLog.running]);
+  useEffect(() => {
+    const el = installLogRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [installLog.lines]);
   // Agent for the first session: Claude when it's connected (the default
   // recommendation), else the first configured agent, else whatever the
   // backend defaults to.
@@ -5263,6 +5368,7 @@ function OnboardingFlow({
     if (!kinds.length) return;
     setBusy(true);
     setError(null);
+    setInstallLog({ lines: [], running: true, error: null });
     try {
       await api("/api/coding-agents/setup", {
         method: "POST",
@@ -5445,26 +5551,16 @@ function OnboardingFlow({
                     <span className="block truncate text-sm font-medium">{a.label}</span>
                     <span className="block truncate text-xs text-muted-foreground">
                       {a.status.setupRunning
-                        ? a.status.setupProgress?.label || "Starting setup…"
+                        ? "Installing…"
                         : a.status.configured
                         ? "Connected"
                         : a.status.checks.find((c) => !c.ok)?.label || "Not set up"}
                     </span>
-                    {a.status.setupRunning ? (
-                      <span className="mt-1.5 block h-1 overflow-hidden rounded-full bg-border">
-                        <span
-                          className="block h-full rounded-full bg-foreground transition-[width] duration-500"
-                          style={{ width: `${a.status.setupProgress?.percent ?? 10}%` }}
-                        />
-                      </span>
-                    ) : null}
                   </span>
                   {a.status.configured ? (
                     <Check className="size-4 shrink-0 text-emerald-500" />
                   ) : a.status.setupRunning ? (
-                    <span className="shrink-0 text-xs font-medium text-muted-foreground">
-                      {a.status.setupProgress?.percent ?? 10}%
-                    </span>
+                    <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />
                   ) : null}
                 </label>
               ))}
@@ -5474,6 +5570,30 @@ function OnboardingFlow({
                 </p>
               )}
             </div>
+            {installLog.lines.length > 0 && (
+              <div className="mt-3 overflow-hidden rounded-xl border border-border bg-muted/40">
+                <div className="flex items-center gap-2 border-b border-border px-3 py-1.5 text-xs font-medium text-muted-foreground">
+                  {installLog.running ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : installLog.error ? (
+                    <span className="size-2 rounded-full bg-red-500" />
+                  ) : (
+                    <Check className="size-3.5 text-emerald-500" />
+                  )}
+                  {installLog.running
+                    ? "Installing agents…"
+                    : installLog.error
+                    ? "Install failed"
+                    : "Install complete"}
+                </div>
+                <pre
+                  ref={installLogRef}
+                  className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-[11px] leading-relaxed text-muted-foreground"
+                >
+                  {installLog.lines.join("\n")}
+                </pre>
+              </div>
+            )}
             {installableAgents.length > 0 && (
               <button
                 type="button"
@@ -13289,6 +13409,10 @@ function VoiceSettingsSection() {
     }
   };
 
+  const selectedInput = cfg?.providers.stt.find((p) => p.id === cfg.settings.sttProvider);
+  const selectedOutput = cfg?.providers.tts.find((p) => p.id === cfg.settings.ttsProvider);
+  const needsSetup = !!cfg && (!selectedInput?.available || !selectedOutput?.available);
+
   return (
     <section className="space-y-2">
       <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -13316,6 +13440,18 @@ function VoiceSettingsSection() {
         Applies to the voice orb and every mic button. Greyed-out providers need an API key set on
         the server.
       </p>
+      {needsSetup ? (
+        <div className="px-4 pt-1">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => showVoiceSetup("call")}
+          >
+            <KeyRound className="size-4" /> Set up voice API key
+          </Button>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -13407,6 +13543,156 @@ function TimeZoneSettingsSection({
         Auto-agent runs and model-refresh schedules use this timezone.
       </p>
     </section>
+  );
+}
+
+function CodingAgentAuthDialog({
+  session,
+  onSessionChange,
+  onComplete,
+}: {
+  session: CodingAgentAuthSession | null;
+  onSessionChange: (session: CodingAgentAuthSession | null) => void;
+  onComplete: () => void | Promise<void>;
+}) {
+  const [code, setCode] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    setCode("");
+    setSubmitting(false);
+  }, [session?.id]);
+
+  useEffect(() => {
+    if (!session || session.status === "complete" || session.status === "error") return;
+    let stopped = false;
+    const poll = async () => {
+      try {
+        const next = await api<CodingAgentAuthSession>(`/api/coding-agents/auth/${session.id}`);
+        if (stopped) return;
+        if (next.status === "complete") {
+          toast.success(`${next.provider === "claude" ? "Claude" : "Codex"} connected`);
+          await onComplete();
+          return;
+        }
+        onSessionChange(next);
+      } catch (e) {
+        if (!stopped) {
+          onSessionChange({ ...session, status: "error", error: e instanceof Error ? e.message : "Login check failed" });
+        }
+      }
+    };
+    const timer = window.setInterval(() => void poll(), 1_500);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [session?.id, session?.status, onComplete, onSessionChange]);
+
+  async function close() {
+    if (session && session.status !== "complete") {
+      await api(`/api/coding-agents/auth/${session.id}`, { method: "DELETE" }).catch(() => {});
+    }
+    onSessionChange(null);
+  }
+
+  async function submitCode(event: FormEvent) {
+    event.preventDefault();
+    if (!session || !code.trim() || submitting) return;
+    setSubmitting(true);
+    try {
+      const next = await api<CodingAgentAuthSession>(`/api/coding-agents/auth/${session.id}/code`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: code.trim() }),
+      });
+      onSessionChange(next);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't submit the code");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const providerLabel = session?.provider === "claude" ? "Claude" : "Codex";
+  return (
+    <Dialog open={!!session} onOpenChange={(open) => { if (!open) void close(); }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Connect {providerLabel}</DialogTitle>
+          <DialogDescription>
+            Finish signing in in the browser. LFG will detect approval automatically.
+          </DialogDescription>
+        </DialogHeader>
+
+        {session?.status === "error" ? (
+          <div className="space-y-3">
+            <p className="rounded-2xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
+              {session.error || "Login failed. Please try again."}
+            </p>
+            <Button variant="outline" className="w-full" onClick={() => void close()}>Close</Button>
+          </div>
+        ) : session ? (
+          <div className="space-y-4">
+            {session.userCode ? (
+              <div className="rounded-2xl bg-muted px-4 py-4 text-center">
+                <p className="mb-2 text-xs text-muted-foreground">Enter this one-time code</p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(session.userCode!);
+                    toast.success("Code copied");
+                  }}
+                  className="inline-flex items-center gap-2 font-mono text-2xl font-semibold tracking-[0.15em]"
+                >
+                  {session.userCode}
+                  <Copy className="size-4 text-muted-foreground" />
+                </button>
+              </div>
+            ) : null}
+
+            {session.authorizationUrl ? (
+              <Button
+                variant="brand"
+                className="w-full"
+                onClick={() => window.open(session.authorizationUrl, "_blank", "noopener,noreferrer")}
+              >
+                <ExternalLink className="size-4" />
+                Open {providerLabel} sign in
+              </Button>
+            ) : null}
+
+            {session.provider === "claude" && session.needsCode ? (
+              <form className="space-y-2" onSubmit={(event) => void submitCode(event)}>
+                <label className="block text-xs font-medium text-muted-foreground" htmlFor="claude-auth-code">
+                  Paste the code Claude shows after approval
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    id="claude-auth-code"
+                    value={code}
+                    onChange={(event) => setCode(event.target.value)}
+                    autoComplete="off"
+                    autoCapitalize="none"
+                    spellCheck={false}
+                    placeholder="Authorization code"
+                    className="min-w-0 flex-1 rounded-2xl border border-border bg-input/30 px-3 py-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
+                  />
+                  <Button type="submit" disabled={!code.trim() || submitting}>
+                    {submitting ? <Loader2 className="size-4 animate-spin" /> : "Continue"}
+                  </Button>
+                </div>
+              </form>
+            ) : (
+              <div className="flex items-center justify-center gap-2 py-1 text-xs text-muted-foreground">
+                <Loader2 className="size-3.5 animate-spin" />
+                Waiting for approval…
+              </div>
+            )}
+          </div>
+        ) : null}
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -13588,7 +13874,7 @@ function CodingAgentsPage({
                       Install: <code>{agent.status.installCommand}</code>
                     </div>
                   ) : null}
-                  {agent.status.loginCommand ? (
+                  {agent.status.loginCommand && agent.key !== "aisdk" && agent.key !== "codex-aisdk" ? (
                     <div className="truncate">
                       Login: <code>{agent.status.loginCommand}</code>
                     </div>
@@ -13618,12 +13904,18 @@ function CodingAgentsPage({
                   disabled={!agent.status.canLoginInTerminal || agent.status.setupRunning}
                   onClick={() => onLogin(agent.key)}
                   title={
-                    agent.status.loginCommand
-                      ? `Open terminal and run ${agent.status.loginCommand}`
+                    agent.key === "aisdk" || agent.key === "codex-aisdk"
+                      ? `Sign in to ${agent.label} in your browser`
+                      : agent.status.loginCommand
+                        ? `Open terminal and run ${agent.status.loginCommand}`
                       : "No terminal login command is available"
                   }
                 >
-                  <TerminalSquare className="size-4" />
+                  {agent.key === "aisdk" || agent.key === "codex-aisdk" ? (
+                    <Globe className="size-4" />
+                  ) : (
+                    <TerminalSquare className="size-4" />
+                  )}
                   Login
                 </Button>
               </div>

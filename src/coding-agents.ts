@@ -2,6 +2,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 import { PATHS } from "./config.ts";
 
 export type CodingAgentKind =
@@ -50,6 +51,25 @@ export type CodingAgentInfo = {
   status: CodingAgentStatus;
 };
 
+export type CodingAgentAuthSession = {
+  id: string;
+  kind: CodingAgentKind;
+  provider: "claude" | "codex";
+  status: "starting" | "waiting" | "complete" | "error";
+  authorizationUrl?: string;
+  userCode?: string;
+  needsCode: boolean;
+  error?: string;
+};
+
+type InternalAuthSession = CodingAgentAuthSession & {
+  process: ReturnType<typeof Bun.spawn>;
+  output: string;
+  ready: Promise<void>;
+  markReady: () => void;
+  expiresAt: number;
+};
+
 export type SetupCheck = {
   key: string;
   label: string;
@@ -83,7 +103,39 @@ export const CODING_AGENT_LABELS: Record<CodingAgentKind, string> = {
 const CONFIG_PATH = join(PATHS.data, "coding-agents.json");
 const setupRuns = new Map<CodingAgentKind, Promise<void>>();
 const setupProgress = new Map<CodingAgentKind, { percent: number; label: string }>();
+
+export type CodingAgentSetupLog = {
+  running: boolean;
+  kinds: CodingAgentKind[];
+  lines: string[];
+  error: string | null;
+  finishedAt: number | null;
+};
+const SETUP_LOG_LINE_LIMIT = 600;
+let setupLog: CodingAgentSetupLog = {
+  running: false,
+  kinds: [],
+  lines: [],
+  error: null,
+  finishedAt: null,
+};
+
+export function getCodingAgentSetupLog(): CodingAgentSetupLog {
+  return { ...setupLog, kinds: [...setupLog.kinds], lines: [...setupLog.lines] };
+}
+
+function appendSetupLog(line: string): void {
+  const clean = line.replace(/\x1b\[[0-9;]*m/g, "").replace(/\r/g, "").trimEnd();
+  if (!clean.trim()) return;
+  setupLog.lines.push(clean);
+  if (setupLog.lines.length > SETUP_LOG_LINE_LIMIT) {
+    setupLog.lines.splice(0, setupLog.lines.length - SETUP_LOG_LINE_LIMIT);
+  }
+}
 const systemSetupRuns = new Map<string, Promise<void>>();
+const authSessions = new Map<string, InternalAuthSession>();
+const AUTH_SESSION_TTL_MS = 15 * 60 * 1000;
+const AUTH_OUTPUT_LIMIT = 32_000;
 
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -308,6 +360,182 @@ function loginCommandPartsFor(kind: CodingAgentKind): string[] | null {
   return null;
 }
 
+function authProviderFor(kind: CodingAgentKind): "claude" | "codex" | null {
+  if (kind === "claude" || kind === "aisdk") return "claude";
+  if (kind === "codex" || kind === "codex-aisdk") return "codex";
+  return null;
+}
+
+/** Remove terminal control sequences before parsing or showing CLI output. */
+export function cleanAuthOutput(value: string): string {
+  return value
+    .replace(/\x1b\]8;;[^\x07\x1b]*(?:\x07|\x1b\\)/g, "")
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\r/g, "");
+}
+
+export function parseAuthOutput(
+  provider: "claude" | "codex",
+  raw: string,
+): Pick<CodingAgentAuthSession, "authorizationUrl" | "userCode" | "needsCode"> {
+  const output = cleanAuthOutput(raw);
+  const authorizationUrl = output.match(/https:\/\/[^\s\x07\x1b]+/)?.[0];
+  if (provider === "codex") {
+    const userCode = output.match(/one-time code[\s\S]{0,160}?\b([A-Z0-9]{4,}-[A-Z0-9]{4,})\b/i)?.[1];
+    return { authorizationUrl, userCode, needsCode: false };
+  }
+  return {
+    authorizationUrl,
+    needsCode: /paste code here/i.test(output),
+  };
+}
+
+function publicAuthSession(session: InternalAuthSession): CodingAgentAuthSession {
+  const { process: _process, output: _output, ready: _ready, markReady: _markReady, expiresAt: _expiresAt, ...result } = session;
+  return result;
+}
+
+function stopAuthSession(session: InternalAuthSession): void {
+  if (session.status === "starting" || session.status === "waiting") {
+    try { session.process.kill(); } catch {}
+  }
+}
+
+function updateAuthSessionFromOutput(session: InternalAuthSession): void {
+  const parsed = parseAuthOutput(session.provider, session.output);
+  if (parsed.authorizationUrl) session.authorizationUrl = parsed.authorizationUrl;
+  if (parsed.userCode) session.userCode = parsed.userCode;
+  session.needsCode = parsed.needsCode;
+  const ready = !!session.authorizationUrl && (session.provider === "claude" || !!session.userCode);
+  if (ready && session.status === "starting") {
+    session.status = "waiting";
+    session.markReady();
+  }
+}
+
+async function collectAuthOutput(
+  session: InternalAuthSession,
+  stream: ReadableStream<Uint8Array> | number | undefined,
+): Promise<void> {
+  if (!stream || typeof stream === "number") return;
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      session.output = (session.output + decoder.decode(value, { stream: true })).slice(-AUTH_OUTPUT_LIMIT);
+      updateAuthSessionFromOutput(session);
+    }
+  } catch {}
+}
+
+export async function startCodingAgentAuth(kind: CodingAgentKind): Promise<CodingAgentAuthSession> {
+  const provider = authProviderFor(kind);
+  if (!provider) throw new Error(`${CODING_AGENT_LABELS[kind]} does not support browser login yet`);
+  const binary = provider === "claude" ? claudePath() : codexPath();
+  if (!binary) throw new Error(`Install ${provider === "claude" ? "Claude" : "Codex"} before signing in`);
+
+  for (const existing of authSessions.values()) {
+    if (existing.provider === provider && (existing.status === "starting" || existing.status === "waiting")) {
+      stopAuthSession(existing);
+      authSessions.delete(existing.id);
+    }
+  }
+
+  const argv = provider === "claude"
+    ? [binary, "auth", "login", "--claudeai"]
+    : [binary, "login", "--device-auth"];
+  const proc = Bun.spawn(argv, {
+    cwd: userHome(),
+    env: { ...process.env, BROWSER: "true" },
+    stdin: "pipe",
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  let markReady = () => {};
+  const ready = new Promise<void>((resolve) => { markReady = resolve; });
+  const session: InternalAuthSession = {
+    id: randomUUID(),
+    kind,
+    provider,
+    status: "starting",
+    needsCode: false,
+    process: proc,
+    output: "",
+    ready,
+    markReady,
+    expiresAt: Date.now() + AUTH_SESSION_TTL_MS,
+  };
+  authSessions.set(session.id, session);
+  void collectAuthOutput(session, proc.stdout);
+  void collectAuthOutput(session, proc.stderr);
+  void proc.exited.then((exitCode) => {
+    if (session.status === "error") return;
+    if (exitCode === 0) {
+      session.status = "complete";
+    } else if (session.status !== "complete") {
+      const output = cleanAuthOutput(session.output).trim().split("\n").slice(-3).join(" ");
+      session.status = "error";
+      session.error = output || `${provider === "claude" ? "Claude" : "Codex"} login was cancelled`;
+    }
+    session.markReady();
+  });
+  setTimeout(() => {
+    if (!authSessions.has(session.id)) return;
+    if (session.status === "starting" || session.status === "waiting") {
+      session.status = "error";
+      session.error = "Login expired. Start again for a new code.";
+      stopAuthSession(session);
+      session.markReady();
+    }
+  }, AUTH_SESSION_TTL_MS);
+
+  await Promise.race([
+    session.ready,
+    new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+  ]);
+  if (session.status === "starting" && !session.authorizationUrl) {
+    stopAuthSession(session);
+    session.status = "error";
+    session.error = "The login page could not be prepared. Please try again.";
+  }
+  return publicAuthSession(session);
+}
+
+export function getCodingAgentAuth(id: string): CodingAgentAuthSession | null {
+  const session = authSessions.get(id);
+  if (!session) return null;
+  if (Date.now() > session.expiresAt && session.status !== "complete") {
+    session.status = "error";
+    session.error = "Login expired. Start again for a new code.";
+    stopAuthSession(session);
+  }
+  return publicAuthSession(session);
+}
+
+export async function submitCodingAgentAuthCode(id: string, code: string): Promise<CodingAgentAuthSession> {
+  const session = authSessions.get(id);
+  if (!session) throw new Error("Login session not found. Start again.");
+  if (session.provider !== "claude" || !session.needsCode) throw new Error("This login does not accept a code");
+  if (session.status !== "waiting") throw new Error("This login is no longer waiting for a code");
+  const value = code.trim();
+  if (!value) throw new Error("Enter the code from Claude");
+  const stdin = session.process.stdin;
+  if (!stdin || typeof stdin === "number") throw new Error("Claude login is no longer accepting a code");
+  session.needsCode = false;
+  stdin.write(`${value}\n`);
+  await stdin.flush();
+  return publicAuthSession(session);
+}
+
+export function cancelCodingAgentAuth(id: string): void {
+  const session = authSessions.get(id);
+  if (!session) return;
+  stopAuthSession(session);
+  authSessions.delete(id);
+}
+
 export function loginCommandFor(kind: CodingAgentKind): string | null {
   const parts = loginCommandPartsFor(kind);
   return parts ? parts.map(shellQuote).join(" ") : null;
@@ -328,12 +556,12 @@ function statusFor(kind: CodingAgentKind): CodingAgentStatus {
 
   if (kind === "claude" || kind === "aisdk") {
     addBinary("Claude CLI", claudePath());
-    addAuth("Claude auth", hasClaudeAuth(), "run `claude` once or set ANTHROPIC_API_KEY");
-    instructions.push("Run `claude` once and finish the browser sign-in, or set ANTHROPIC_API_KEY.");
+    addAuth("Claude auth", hasClaudeAuth(), "use Login below or set ANTHROPIC_API_KEY");
+    instructions.push("Use Login to sign in with Claude in your browser, or set ANTHROPIC_API_KEY.");
   } else if (kind === "codex" || kind === "codex-aisdk") {
     addBinary("Codex CLI", codexPath());
-    addAuth("Codex auth", hasCodexAuth(), "run `codex` once or set OPENAI_API_KEY");
-    instructions.push("Run `codex` once and sign in, or set OPENAI_API_KEY.");
+    addAuth("Codex auth", hasCodexAuth(), "use Login below or set OPENAI_API_KEY");
+    instructions.push("Use Login to connect ChatGPT in your browser, or set OPENAI_API_KEY.");
   } else if (kind === "opencode") {
     addBinary("OpenCode CLI", opencodePath());
     instructions.push("Install/authenticate OpenCode, then verify `opencode` works from this user.");
@@ -474,6 +702,17 @@ export async function runCodingAgentSetups(kinds: CodingAgentKind[]): Promise<vo
     setupProgress.set(kind, { percent: 10, label: "Starting…" });
   }
 
+  setupLog = {
+    running: true,
+    kinds: [...uniqueKinds],
+    lines: [],
+    error: null,
+    finishedAt: null,
+  };
+  appendSetupLog(
+    `Installing ${uniqueKinds.map((kind) => CODING_AGENT_LABELS[kind]).join(", ")}…`,
+  );
+
   const script = join(PATHS.root, "scripts", "setup.sh");
   const run = (async () => {
     const proc = Bun.spawn(["bash", script], {
@@ -482,40 +721,52 @@ export async function runCodingAgentSetups(kinds: CodingAgentKind[]): Promise<vo
       stderr: "pipe",
       env: { ...process.env, ...setupEnv },
     });
-    const stdout = (async () => {
-      const reader = proc.stdout.getReader();
+    const readLines = async (
+      stream: ReadableStream<Uint8Array>,
+      onLine: (line: string) => void,
+    ) => {
+      const reader = stream.getReader();
       const decoder = new TextDecoder();
       let buffered = "";
-      let installSeen = false;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
         buffered += decoder.decode(value, { stream: true });
         const lines = buffered.split("\n");
         buffered = lines.pop() ?? "";
-        for (const line of lines) {
-          const message = line.replace(/\x1b\[[0-9;]*m/g, "").replace(/^==>\s*/, "").trim();
-          if (!message) continue;
-          if (/Installing .*CLI|Installing OpenCode/i.test(message)) {
-            installSeen = true;
-            for (const kind of uniqueKinds) {
-              setupProgress.set(kind, { percent: 55, label: message });
-            }
-          } else if (installSeen) {
-            for (const kind of uniqueKinds) {
-              setupProgress.set(kind, { percent: 80, label: message });
-            }
-          }
+        for (const line of lines) onLine(line);
+      }
+      if (buffered.length) onLine(buffered);
+    };
+    let installSeen = false;
+    const stderrLines: string[] = [];
+    const stdout = readLines(proc.stdout, (line) => {
+      appendSetupLog(line);
+      const message = line.replace(/\x1b\[[0-9;]*m/g, "").replace(/^==>\s*/, "").trim();
+      if (!message) return;
+      if (/Installing .*CLI|Installing OpenCode/i.test(message)) {
+        installSeen = true;
+        for (const kind of uniqueKinds) {
+          setupProgress.set(kind, { percent: 55, label: message });
+        }
+      } else if (installSeen) {
+        for (const kind of uniqueKinds) {
+          setupProgress.set(kind, { percent: 80, label: message });
         }
       }
-    })();
-    const [stderr, code] = await Promise.all([
-      new Response(proc.stderr).text(),
-      proc.exited,
-      stdout,
-    ]);
+    });
+    const stderr = readLines(proc.stderr, (line) => {
+      appendSetupLog(line);
+      stderrLines.push(line);
+    });
+    const [, , code] = await Promise.all([stdout, stderr, proc.exited]);
     if (code !== 0) {
-      throw new Error(stderr.trim().slice(0, 1000) || `setup exited ${code}`);
+      const detail = stderrLines
+        .join("\n")
+        .replace(/\x1b\[[0-9;]*m/g, "")
+        .trim()
+        .slice(0, 1000);
+      throw new Error(detail || `setup exited ${code}`);
     }
     for (const kind of uniqueKinds) {
       setupProgress.set(kind, { percent: 95, label: "Verifying installation…" });
@@ -524,7 +775,14 @@ export async function runCodingAgentSetups(kinds: CodingAgentKind[]): Promise<vo
   for (const kind of uniqueKinds) setupRuns.set(kind, run);
   try {
     await run;
+    appendSetupLog("Done.");
+  } catch (e) {
+    setupLog.error = e instanceof Error ? e.message : String(e);
+    appendSetupLog(`Error: ${setupLog.error}`);
+    throw e;
   } finally {
+    setupLog.running = false;
+    setupLog.finishedAt = Date.now();
     for (const kind of uniqueKinds) {
       if (setupRuns.get(kind) === run) setupRuns.delete(kind);
       setupProgress.delete(kind);

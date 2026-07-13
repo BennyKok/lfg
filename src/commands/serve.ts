@@ -176,6 +176,7 @@ import {
   getVoiceSettings,
   setVoiceSettings,
   listProviders,
+  voiceSetupInfo,
   openSttStream,
   type VoiceSettings,
   type SttStreamBridge,
@@ -184,11 +185,16 @@ import {
   isCodingAgentKind,
   listCodingAgents,
   listSetupChecks,
+  cancelCodingAgentAuth,
+  getCodingAgentAuth,
+  getCodingAgentSetupLog,
   loginCommandFor,
   runCodingAgentSetup,
   runCodingAgentSetups,
   runSetupAction,
   setCodingAgentVisibility,
+  startCodingAgentAuth,
+  submitCodingAgentAuthCode,
 } from "../coding-agents.ts";
 import {
   AUTO_AGENT_BACKENDS,
@@ -1571,15 +1577,7 @@ function prepareLoginTerminal(kind: string, command: string): string {
   const sessionId = `login-${kind}`;
   const sessionName = termSessionName(sessionId);
   if (!tmuxHasSession(sessionName)) {
-    const created = Bun.spawnSync([
-      "tmux",
-      "new-session",
-      "-d",
-      "-s",
-      sessionName,
-      "-c",
-      homedir(),
-    ]);
+    const created = Bun.spawnSync(["tmux", "new-session", "-d", "-s", sessionName, "-c", homedir()]);
     if (created.exitCode !== 0) {
       throw new Error(new TextDecoder().decode(created.stderr) || "failed to create terminal session");
     }
@@ -2008,7 +2006,11 @@ export async function cmdServe() {
       // stores the *choice*. GET returns current settings + the provider list
       // (with availability) so the UI can grey out unconfigured ones.
       if (path === "/api/voice/config" && req.method === "GET") {
-        return json({ settings: await getVoiceSettings(), providers: listProviders() });
+        return json({
+          settings: await getVoiceSettings(),
+          providers: listProviders(),
+          setup: voiceSetupInfo(),
+        });
       }
       if (path === "/api/voice/config" && req.method === "POST") {
         const b = (await req.json().catch(() => null)) as Partial<VoiceSettings> | null;
@@ -2209,6 +2211,9 @@ export async function cmdServe() {
         const repoRoots = (await listRepos().catch(() => [])).map((repo) => repo.cwd);
         return json({ skills: await listSkillCatalog(repoRoots) });
       }
+      if (path === "/api/coding-agents/setup/log" && req.method === "GET") {
+        return json(getCodingAgentSetupLog());
+      }
       {
         // Keep the collection action ahead of the generic /:kind route below.
         // Otherwise "setup" is parsed as an agent kind and batch onboarding
@@ -2255,6 +2260,18 @@ export async function cmdServe() {
         }
       }
       {
+        const m = path.match(/^\/api\/coding-agents\/([a-z0-9_-]+)\/auth$/);
+        if (m && req.method === "POST") {
+          const kind = m[1];
+          if (!isCodingAgentKind(kind)) return err(404, "unknown coding agent");
+          try {
+            return json(await startCodingAgentAuth(kind));
+          } catch (e) {
+            return err(502, e instanceof Error ? e.message : "failed to start login");
+          }
+        }
+      }
+      {
         const m = path.match(/^\/api\/coding-agents\/([a-z0-9_-]+)\/login-terminal$/);
         if (m && req.method === "POST") {
           const kind = m[1];
@@ -2266,6 +2283,29 @@ export async function cmdServe() {
             return json({ ok: true, terminalSession, command });
           } catch (e) {
             return err(502, e instanceof Error ? e.message : "failed to open login terminal");
+          }
+        }
+      }
+      {
+        const m = path.match(/^\/api\/coding-agents\/auth\/([a-f0-9-]+)$/);
+        if (m && req.method === "GET") {
+          const session = getCodingAgentAuth(m[1]);
+          return session ? json(session) : err(404, "login session not found");
+        }
+        if (m && req.method === "DELETE") {
+          cancelCodingAgentAuth(m[1]);
+          return json({ ok: true });
+        }
+      }
+      {
+        const m = path.match(/^\/api\/coding-agents\/auth\/([a-f0-9-]+)\/code$/);
+        if (m && req.method === "POST") {
+          const body = (await req.json().catch(() => null)) as { code?: unknown } | null;
+          if (!body || typeof body.code !== "string") return err(400, "expected { code: string }");
+          try {
+            return json(await submitCodingAgentAuthCode(m[1], body.code));
+          } catch (e) {
+            return err(400, e instanceof Error ? e.message : "could not submit login code");
           }
         }
       }
