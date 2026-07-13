@@ -2,9 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sourceUpdateStatus } from "./self-update.ts";
+import { releaseUpdateStatus, sourceUpdateStatus } from "./self-update.ts";
 
 const cleanup: string[] = [];
+const realFetch = globalThis.fetch;
 
 function git(cwd: string, ...args: string[]) {
   const result = Bun.spawnSync(["git", "-C", cwd, ...args], { stdout: "pipe", stderr: "pipe" });
@@ -30,6 +31,7 @@ function fixture() {
 }
 
 afterEach(() => {
+  globalThis.fetch = realFetch;
   for (const path of cleanup.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 
@@ -65,5 +67,29 @@ describe("source update status", () => {
     const status = await sourceUpdateStatus(checkout, false);
     expect(status.state).toBe("blocked");
     expect(status.message).toContain("feature");
+  });
+});
+
+describe("release update status", () => {
+  test("compares the installed package version with the latest release tag", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lfg-release-update-"));
+    cleanup.push(root);
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "lfg", version: "1.2.3" }));
+    globalThis.fetch = (async () => Response.json({ tag_name: "v1.3.0" })) as unknown as typeof fetch;
+
+    const status = await releaseUpdateStatus(root, { repoSlug: "example/lfg-release-test" });
+    expect(status.state).toBe("available");
+    expect(status.currentVersion).toBe("1.2.3");
+    expect(status.latestVersion).toBe("1.3.0");
+  });
+
+  test("recognizes a matching v-prefixed release tag", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lfg-release-update-"));
+    cleanup.push(root);
+    writeFileSync(join(root, "package.json"), JSON.stringify({ name: "lfg", version: "2.0.0" }));
+    globalThis.fetch = (async () => Response.json({ tag_name: "v2.0.0" })) as unknown as typeof fetch;
+
+    const status = await releaseUpdateStatus(root, { repoSlug: "example/lfg-current-test" });
+    expect(status.state).toBe("up-to-date");
   });
 });

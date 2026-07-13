@@ -1,6 +1,14 @@
-import { accessSync, constants, existsSync } from "node:fs";
-import { homedir } from "node:os";
+import {
+  accessSync,
+  constants,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 
 export type SourceUpdateStatus = {
   channel: "source";
@@ -10,6 +18,23 @@ export type SourceUpdateStatus = {
   commitsBehind?: number;
   message: string;
   restartSupported: boolean;
+};
+
+export type ReleaseUpdateStatus = {
+  channel: "release";
+  state: "up-to-date" | "available" | "blocked";
+  currentVersion?: string;
+  latestVersion?: string;
+  latestTag?: string;
+  message: string;
+  restartSupported: boolean;
+};
+
+export type LfgUpdateStatus = SourceUpdateStatus | ReleaseUpdateStatus;
+
+export type ReleaseInstall = {
+  repoSlug?: string;
+  releaseAsset?: string;
 };
 
 type CommandResult = { ok: boolean; stdout: string; stderr: string };
@@ -26,6 +51,93 @@ async function run(cmd: string[], cwd: string): Promise<CommandResult> {
 
 function short(sha: string): string {
   return sha.slice(0, 7);
+}
+
+function cleanVersion(value: string): string {
+  return value.trim().replace(/^v/i, "");
+}
+
+function installedVersion(root: string): string | null {
+  try {
+    const parsed = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version?: unknown };
+    return typeof parsed.version === "string" ? parsed.version : null;
+  } catch {
+    return null;
+  }
+}
+
+type GithubRelease = { tag_name?: unknown };
+const releaseTagCache = new Map<string, { tag: string; expiresAt: number }>();
+
+async function latestReleaseTag(repoSlug: string): Promise<string> {
+  if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repoSlug)) {
+    throw new Error("The configured GitHub repository is invalid.");
+  }
+  const cached = releaseTagCache.get(repoSlug);
+  if (cached && cached.expiresAt > Date.now()) return cached.tag;
+  const response = await fetch(`https://api.github.com/repos/${repoSlug}/releases/latest`, {
+    headers: { Accept: "application/vnd.github+json", "User-Agent": "lfg-self-update" },
+  });
+  if (!response.ok) throw new Error(`GitHub release check failed (${response.status}).`);
+  const parsed = (await response.json()) as GithubRelease;
+  if (typeof parsed.tag_name !== "string" || !parsed.tag_name.trim()) {
+    throw new Error("The latest GitHub release has no tag.");
+  }
+  const tag = parsed.tag_name.trim();
+  releaseTagCache.set(repoSlug, { tag, expiresAt: Date.now() + 5 * 60_000 });
+  return tag;
+}
+
+export async function releaseUpdateStatus(
+  root: string,
+  install: ReleaseInstall,
+): Promise<ReleaseUpdateStatus> {
+  const currentVersion = installedVersion(root);
+  const repoSlug = install.repoSlug;
+  if (!currentVersion) {
+    return {
+      channel: "release",
+      state: "blocked",
+      message: "Could not determine the installed LFG version.",
+      restartSupported: restartCommand() !== null,
+    };
+  }
+  if (!repoSlug) {
+    return {
+      channel: "release",
+      state: "blocked",
+      currentVersion,
+      message: "This release install has no GitHub repository configured.",
+      restartSupported: restartCommand() !== null,
+    };
+  }
+  try {
+    const latestTag = await latestReleaseTag(repoSlug);
+    const latestVersion = cleanVersion(latestTag);
+    const base = {
+      channel: "release" as const,
+      currentVersion,
+      latestVersion,
+      latestTag,
+      restartSupported: restartCommand() !== null,
+    };
+    if (cleanVersion(currentVersion) === latestVersion) {
+      return { ...base, state: "up-to-date", message: `LFG ${currentVersion} is up to date.` };
+    }
+    return {
+      ...base,
+      state: "available",
+      message: `LFG ${latestVersion} is available (installed ${currentVersion}).`,
+    };
+  } catch (e) {
+    return {
+      channel: "release",
+      state: "blocked",
+      currentVersion,
+      message: e instanceof Error ? e.message : String(e),
+      restartSupported: restartCommand() !== null,
+    };
+  }
 }
 
 function blocked(message: string): SourceUpdateStatus {
@@ -138,6 +250,85 @@ export async function applySourceUpdate(
   if (!build.ok) throw new Error(build.stderr || "Web build failed.");
 
   return { status: await sourceUpdateStatus(root, false), updated: true };
+}
+
+async function download(url: string, destination: string): Promise<Response> {
+  const response = await fetch(url, { headers: { "User-Agent": "lfg-self-update" } });
+  if (!response.ok) throw new Error(`Release download failed (${response.status}).`);
+  await Bun.write(destination, await response.arrayBuffer());
+  return response;
+}
+
+export async function applyReleaseUpdate(
+  root: string,
+  install: ReleaseInstall,
+): Promise<{ status: ReleaseUpdateStatus; updated: boolean }> {
+  const status = await releaseUpdateStatus(root, install);
+  if (status.state === "blocked") return { status, updated: false };
+  if (!status.restartSupported) throw new Error("Automatic restart is unavailable on this install.");
+
+  const repoSlug = install.repoSlug!;
+  const tag = status.latestTag!;
+  const asset = install.releaseAsset || "lfg-bundle.tar.gz";
+  if (!/^[a-zA-Z0-9._-]+$/.test(asset)) throw new Error("The configured release asset is invalid.");
+  const url = `https://github.com/${repoSlug}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(asset)}`;
+  const temp = mkdtempSync(join(tmpdir(), "lfg-update-"));
+  const archive = join(temp, asset);
+
+  try {
+    await download(url, archive);
+
+    // Releases normally publish a sibling checksum. Keep compatibility with
+    // older bundles that do not have one, matching setup.sh's best-effort rule.
+    const checksumResponse = await fetch(`${url}.sha256`, {
+      headers: { "User-Agent": "lfg-self-update" },
+    });
+    if (checksumResponse.ok) {
+      const checksumText = await checksumResponse.text();
+      const expected = checksumText.match(/\b[a-fA-F0-9]{64}\b/)?.[0]?.toLowerCase();
+      if (!expected) throw new Error("The release checksum file is invalid.");
+      const actual = createHash("sha256").update(readFileSync(archive)).digest("hex");
+      if (actual !== expected) throw new Error("Release checksum mismatch; update refused.");
+    }
+
+    const listing = await run(["tar", "-tzf", archive], root);
+    if (!listing.ok) throw new Error(listing.stderr || "The release bundle is not a valid archive.");
+    const entries = listing.stdout.split("\n").filter(Boolean);
+    if (
+      !entries.length
+      || entries.some((entry) => {
+        const parts = entry.split("/");
+        return (parts[0] !== "lfg" || parts.includes(".."));
+      })
+    ) {
+      throw new Error("The release bundle contains unsafe paths.");
+    }
+
+    const extract = await run(["tar", "-xzf", archive, "-C", root, "--strip-components=1"], root);
+    if (!extract.ok) throw new Error(extract.stderr || "Could not extract the release bundle.");
+
+    rmSync(join(root, "node_modules"), { recursive: true, force: true });
+    const installResult = await run([process.execPath, "install", "--production"], root);
+    if (!installResult.ok) {
+      throw new Error(installResult.stderr || installResult.stdout || "Dependency installation failed.");
+    }
+
+    const currentVersion = installedVersion(root) || status.latestVersion;
+    return {
+      updated: true,
+      status: {
+        channel: "release",
+        state: "up-to-date",
+        currentVersion,
+        latestVersion: status.latestVersion,
+        latestTag: status.latestTag,
+        restartSupported: true,
+        message: `LFG ${currentVersion} is installed.`,
+      },
+    };
+  } finally {
+    rmSync(temp, { recursive: true, force: true });
+  }
 }
 
 export function scheduleRestart(delayMs = 1_000): void {
