@@ -201,6 +201,23 @@ type SetupCheckGroup = {
   actionLabel: string;
 };
 
+type InstallUpdateStatus = {
+  channel: "source";
+  state: "up-to-date" | "available" | "blocked";
+  currentSha?: string;
+  latestSha?: string;
+  commitsBehind?: number;
+  message: string;
+  restartSupported: boolean;
+};
+
+type InstallUpdateInfo = {
+  install: { channel: "source" | "release" | "container" | "unknown"; updateCommand: string };
+  update: InstallUpdateStatus | null;
+  restarting?: boolean;
+  bootId: string;
+};
+
 type ReportRef = {
   date: string;
   bytes: number;
@@ -13609,6 +13626,127 @@ function ChangelogPage() {
   );
 }
 
+function LfgUpdateSection() {
+  const [info, setInfo] = useState<InstallUpdateInfo | null>(null);
+  const [checking, setChecking] = useState(true);
+  const [updating, setUpdating] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const check = useCallback(async () => {
+    setChecking(true);
+    setError(null);
+    try {
+      const next = await api<InstallUpdateInfo>("/api/install", { cache: "no-store" });
+      setInfo(next);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not check for updates");
+    } finally {
+      setChecking(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void check();
+  }, [check]);
+
+  async function waitForRestart(previousBootId: string) {
+    // Give the successful response time to reach the browser before systemd or
+    // launchd replaces the serving process, then reload onto the new asset set.
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    const deadline = Date.now() + 60_000;
+    while (Date.now() < deadline) {
+      try {
+        const ready = await api<{ bootId: string }>("/api/install?ready=1", { cache: "no-store" });
+        if (ready.bootId !== previousBootId) {
+          window.location.reload();
+          return;
+        }
+      } catch {}
+      await new Promise((resolve) => setTimeout(resolve, 1_000));
+    }
+    setRestarting(false);
+    setError("LFG did not come back after restarting. Check the service logs.");
+  }
+
+  async function update() {
+    if (updating || restarting) return;
+    setUpdating(true);
+    setError(null);
+    try {
+      const next = await api<InstallUpdateInfo>("/api/install", { method: "POST" });
+      setInfo(next);
+      if (next.restarting) {
+        setRestarting(true);
+        toast.success("LFG updated. Restarting…");
+        void waitForRestart(next.bootId);
+      } else {
+        toast.success("LFG is already up to date");
+      }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "Could not update LFG";
+      setError(message);
+      toast.error(message);
+    } finally {
+      setUpdating(false);
+    }
+  }
+
+  const status = info?.update;
+  const source = info?.install.channel === "source";
+  const available = status?.state === "available";
+  const busy = checking || updating || restarting;
+  const detail = error
+    ?? (checking
+      ? "Checking origin/main…"
+      : restarting
+        ? "Restarting the service and reconnecting…"
+        : status?.message
+          ?? (info ? `Updates for ${info.install.channel} installs use: ${info.install.updateCommand}` : ""));
+
+  return (
+    <section className="space-y-2">
+      <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        System
+      </h2>
+      <div className="overflow-hidden rounded-2xl border border-border bg-card/40">
+        <div className="flex items-center justify-between gap-4 px-4 py-2.5">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-[7px] bg-primary text-white">
+              {busy ? <Loader2 className="size-4 animate-spin" /> : <ArrowDown className="size-4" />}
+            </span>
+            <div className="min-w-0">
+              <div className="text-sm font-medium">LFG updates</div>
+              <div className={cn("truncate text-xs text-muted-foreground", error && "text-destructive")}>
+                {detail}
+              </div>
+            </div>
+          </div>
+          {available ? (
+            <Button
+              size="sm"
+              onClick={() => void update()}
+              disabled={busy || !status.restartSupported}
+              title={status.restartSupported ? "Update to origin/main and restart LFG" : "Automatic restart is unavailable"}
+            >
+              {updating || restarting ? <Loader2 className="size-4 animate-spin" /> : <ArrowDown className="size-4" />}
+              {restarting ? "Restarting…" : updating ? "Updating…" : "Update & restart"}
+            </Button>
+          ) : (
+            <Button size="sm" variant="outline" onClick={() => void check()} disabled={busy || !source}>
+              <RotateCcw className={cn("size-4", checking && "animate-spin")} />
+              Check
+            </Button>
+          )}
+        </div>
+      </div>
+      <p className="px-4 text-xs text-muted-foreground">
+        Git installs update safely to <code>origin/main</code>, rebuild the UI, and restart automatically.
+      </p>
+    </section>
+  );
+}
+
 function SettingsView({
   dark,
   toggleTheme,
@@ -13853,6 +13991,8 @@ function SettingsView({
       </section>
 
       <VoiceSettingsSection />
+
+      <LfgUpdateSection />
 
       {/* About */}
       <section className="space-y-2">

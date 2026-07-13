@@ -5,6 +5,7 @@ import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { marked } from "marked";
 import { PATHS, installInfo } from "../config.ts";
+import { applySourceUpdate, scheduleRestart, sourceUpdateStatus } from "../self-update.ts";
 import { compressedAssetResponse, maybeCompressResponse } from "../http-compress.ts";
 import { getCachedResumableSession } from "../resume-cache.ts";
 import {
@@ -219,6 +220,8 @@ import {
 const REPOS_ROOT = reposRoot();
 const SELF_REPO = PATHS.root;
 const EVLOG_DIR = join(PATHS.data, "evlogs");
+const SERVER_INSTANCE_ID = randomBytes(8).toString("hex");
+let selfUpdateRunning = false;
 
 function evlog(event: string, fields: Record<string, unknown> = {}) {
   traceLog(event, fields);
@@ -3103,7 +3106,30 @@ export async function cmdServe() {
       }
 
       if (path === "/api/install") {
-        return json({ install: installInfo() });
+        const install = installInfo();
+        if (req.method === "GET") {
+          if (url.searchParams.get("ready") === "1") return json({ bootId: SERVER_INSTANCE_ID });
+          if (install.channel !== "source") return json({ install, update: null, bootId: SERVER_INSTANCE_ID });
+          return json({ install, update: await sourceUpdateStatus(PATHS.root), bootId: SERVER_INSTANCE_ID });
+        }
+        if (req.method === "POST") {
+          if (install.channel !== "source") return err(400, "UI updates are only available for Git installs.");
+          if (selfUpdateRunning) return err(409, "An LFG update is already running.");
+          selfUpdateRunning = true;
+          try {
+            const result = await applySourceUpdate(PATHS.root);
+            const update = result.status;
+            if (update.state === "blocked") return err(409, update.message);
+            if (update.state === "available") return err(500, "The update did not reach origin/main.");
+            if (result.updated) scheduleRestart();
+            return json({ install, update, restarting: result.updated, bootId: SERVER_INSTANCE_ID });
+          } catch (e) {
+            return err(500, e instanceof Error ? e.message : String(e));
+          } finally {
+            selfUpdateRunning = false;
+          }
+        }
+        return err(405, "method not allowed");
       }
 
       // Combined usage/limits across every agent provider (Claude, Codex,
