@@ -1,6 +1,6 @@
 {
   "name": "lfg",
-  "version": "0.1.26",
+  "version": "0.1.27",
   "type": "module",
   "bin": {
     "lfg": "./src/cli.ts"

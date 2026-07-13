@@ -2,6 +2,13 @@
 
 Recent product updates and deployment notes.
 
+## July 13, 2026 - Batch agent installation (v0.1.27)
+
+- Onboarding now lets users choose coding agents with individual checkboxes or
+  Select all, then installs the complete selection in one setup run.
+- Selected agents share installation progress while already configured agents
+  are left untouched.
+
 ## July 13, 2026 - Ready-to-run local projects (v0.1.26)
 
 - New projects now initialize a `main` branch and commit their starter README
