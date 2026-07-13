@@ -2,6 +2,15 @@
 
 Recent product updates and deployment notes.
 
+## July 13, 2026 - Live install logs during onboarding (v0.1.30)
+
+- Onboarding now streams the real installer output in a single live log while a
+  batch install runs, instead of painting the same synthetic progress bar on
+  every selected agent. Each agent row shows a simple **Installing…** state and
+  the shared log tells you exactly what setup is doing.
+- Backend captures stdout and stderr from the shared `setup.sh` run and exposes
+  it at `GET /api/coding-agents/setup/log`.
+
 ## July 13, 2026 - Reliable OMG onboarding installs (v0.1.29)
 
 - Fixed the onboarding batch endpoint being shadowed by the generic per-agent
