@@ -2210,18 +2210,9 @@ export async function cmdServe() {
         return json({ skills: await listSkillCatalog(repoRoots) });
       }
       {
-        const m = path.match(/^\/api\/coding-agents\/([a-z0-9_-]+)$/);
-        if (m && req.method === "POST") {
-          const kind = m[1];
-          if (!isCodingAgentKind(kind)) return err(404, "unknown coding agent");
-          const b = (await req.json().catch(() => null)) as { visible?: unknown } | null;
-          if (!b || typeof b.visible !== "boolean") return err(400, "expected { visible: boolean }");
-          await setCodingAgentVisibility(kind, b.visible);
-          const agents = await listCodingAgents();
-          return json({ agents, models: listModelCatalog(agents) });
-        }
-      }
-      {
+        // Keep the collection action ahead of the generic /:kind route below.
+        // Otherwise "setup" is parsed as an agent kind and batch onboarding
+        // fails with "unknown coding agent" before it reaches this handler.
         if (path === "/api/coding-agents/setup" && req.method === "POST") {
           const b = (await req.json().catch(() => null)) as { kinds?: unknown } | null;
           if (!b || !Array.isArray(b.kinds) || !b.kinds.length) {
@@ -2237,6 +2228,18 @@ export async function cmdServe() {
           );
           const agents = await listCodingAgents();
           return json({ ok: true, agents, models: listModelCatalog(agents) });
+        }
+      }
+      {
+        const m = path.match(/^\/api\/coding-agents\/([a-z0-9_-]+)$/);
+        if (m && m[1] !== "setup" && req.method === "POST") {
+          const kind = m[1];
+          if (!isCodingAgentKind(kind)) return err(404, "unknown coding agent");
+          const b = (await req.json().catch(() => null)) as { visible?: unknown } | null;
+          if (!b || typeof b.visible !== "boolean") return err(400, "expected { visible: boolean }");
+          await setCodingAgentVisibility(kind, b.visible);
+          const agents = await listCodingAgents();
+          return json({ agents, models: listModelCatalog(agents) });
         }
       }
       {

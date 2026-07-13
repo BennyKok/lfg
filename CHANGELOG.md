@@ -2,6 +2,14 @@
 
 Recent product updates and deployment notes.
 
+## July 13, 2026 - Reliable OMG onboarding installs (v0.1.29)
+
+- Fixed the onboarding batch endpoint being shadowed by the generic per-agent
+  route, which caused a correct multi-agent request to fail with
+  **unknown coding agent**.
+- OMG template installs now record their release channel and repository, so
+  Settings can check releases and enable supervisor-aware updates.
+
 ## July 13, 2026 - Repeatable setup on OMG (v0.1.28)
 
 - OMG agent-template installs now recognize their existing guest supervisor, so
