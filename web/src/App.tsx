@@ -10238,11 +10238,13 @@ type FolderBrowserPayload = {
 function ProjectFolderBrowser({
   open,
   initialPath,
+  startCreating = false,
   onOpenChange,
   onSelected,
 }: {
   open: boolean;
   initialPath?: string;
+  startCreating?: boolean;
   onOpenChange: (open: boolean) => void;
   onSelected: (project: Repo) => void | Promise<void>;
 }) {
@@ -10267,10 +10269,10 @@ function ProjectFolderBrowser({
 
   useEffect(() => {
     if (!open) return;
-    setCreating(false);
+    setCreating(startCreating);
     setFolderName("");
     void browse(initialPath);
-  }, [browse, initialPath, open]);
+  }, [browse, initialPath, open, startCreating]);
 
   async function finish(endpoint: string, body: object) {
     setLoading(true);
@@ -10390,6 +10392,64 @@ function ProjectFolderBrowser({
   );
 }
 
+function ComposerProjectSheet({
+  open,
+  repos,
+  selected,
+  onOpenChange,
+  onSelect,
+  onBrowse,
+  onCreate,
+}: {
+  open: boolean;
+  repos: Repo[];
+  selected: string;
+  onOpenChange: (open: boolean) => void;
+  onSelect: (repo: Repo) => void;
+  onBrowse: () => void;
+  onCreate: () => void;
+}) {
+  return (
+    <Drawer open={open} onOpenChange={onOpenChange} shouldScaleBackground={false}>
+      <DrawerContent className="mx-auto max-h-[78dvh] max-w-lg overflow-hidden">
+        <DrawerTitle className="sr-only">Projects</DrawerTitle>
+        <div className="flex min-h-0 flex-col px-4 pb-[max(env(safe-area-inset-bottom),1rem)]">
+          <div className="mb-3 flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold">Projects</h2>
+              <p className="text-xs text-muted-foreground">Choose where your agent will work</p>
+            </div>
+            <button type="button" onClick={() => onOpenChange(false)} className="flex size-8 items-center justify-center rounded-full bg-muted" aria-label="Close">
+              <X className="size-4" />
+            </button>
+          </div>
+          <div className="max-h-[20dvh] min-h-0 overflow-y-auto rounded-2xl border border-border bg-muted/25">
+            {repos.map((repo) => (
+              <button
+                key={repo.cwd}
+                type="button"
+                onClick={() => onSelect(repo)}
+                className="flex w-full items-center gap-3 border-b border-border px-3 py-3 text-left last:border-0 active:bg-muted"
+              >
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-blue-500/10 text-blue-500"><Folder className="size-4" /></span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">{repo.name}</span>
+                  <span className="block truncate text-xs text-muted-foreground">{repo.cwd}</span>
+                </span>
+                {repo.cwd === selected ? <Check className="size-4 text-emerald-500" /> : <ChevronRight className="size-4 text-muted-foreground" />}
+              </button>
+            ))}
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <Button type="button" variant="outline" onClick={onBrowse}><Folder className="size-4" /> Browse</Button>
+            <Button type="button" onClick={onCreate}><Plus className="size-4" /> New Project</Button>
+          </div>
+        </div>
+      </DrawerContent>
+    </Drawer>
+  );
+}
+
 function NewSessionDialog({
   open,
   repos,
@@ -10478,6 +10538,8 @@ function NewSessionDialog({
   const [resumable, setResumable] = useState<ResumableSession[] | null>(null);
   const [agentPopoverOpen, setAgentPopoverOpen] = useState(false);
   const [folderBrowserOpen, setFolderBrowserOpen] = useState(false);
+  const [projectSheetOpen, setProjectSheetOpen] = useState(false);
+  const [folderBrowserCreate, setFolderBrowserCreate] = useState(false);
   const [modelLayerOpen, setModelLayerOpen] = useState(false);
   // Swipe-to-switch state for the inline composer's agent icon. `dir`/`nonce`
   // drive the slide+fade animation when the icon swaps; the button ref lets us
@@ -10853,11 +10915,22 @@ function NewSessionDialog({
     return scopedProject !== "__all" ? scopedProject : "__all";
   })();
 
-  // Pin an arbitrary git repo on the box (outside LFG_REPOS_ROOT) into the
-  // picker. The path is resolved/validated server-side; on success we refresh
-  // the repo list and select the freshly added path.
-  function addCustomPath() {
-    setFolderBrowserOpen(true);
+  function openProjectSheet() {
+    setAgentPopoverOpen(false);
+    setProjectSheetOpen(true);
+  }
+
+  function openFolderBrowser(create: boolean) {
+    setProjectSheetOpen(false);
+    setFolderBrowserCreate(create);
+    window.setTimeout(() => setFolderBrowserOpen(true), 180);
+  }
+
+  function chooseComposerRepo(next: Repo) {
+    setRepo(next.cwd);
+    localStorage.setItem("lfg_v2_repo", next.cwd);
+    if (onProjectChange) onProjectChange(repoProject(next));
+    setProjectSheetOpen(false);
   }
 
   function removeCustomPath(cwd: string) {
@@ -11156,22 +11229,14 @@ function NewSessionDialog({
 
       {!projectScoped && (
         <FieldPill flat={variant === "inline"} icon={<Folder className="size-3.5 text-muted-foreground" />}>
-          <select
-            value={selectedRepo}
-            onChange={(e) => {
-              if (e.target.value === "__add__") addCustomPath();
-              else setRepo(e.target.value);
-            }}
-            aria-label="Repo"
-            className="max-w-28 appearance-none truncate bg-transparent pr-1 text-xs font-medium outline-none"
+          <button
+            type="button"
+            onClick={openProjectSheet}
+            aria-label="Choose project"
+            className="max-w-28 truncate pr-1 text-xs font-medium outline-none"
           >
-            {repos.map((item) => (
-              <option key={item.cwd} value={item.cwd}>
-                {item.custom ? `${item.name} ↗` : item.name}
-              </option>
-            ))}
-            <option value="__add__">+ Add custom path…</option>
-          </select>
+            {repos.find((item) => item.cwd === selectedRepo)?.name || "Choose project"}
+          </button>
           {selectedIsCustom && (
             <button
               type="button"
@@ -11424,12 +11489,17 @@ function NewSessionDialog({
         {/* Right cluster: folder + photo + send, stacked together. */}
         <div className="flex shrink-0 items-center gap-2">
           {variant === "inline" && projectOptions && onProjectChange ? (
-            <ProjectFilterMenu
-              value={scopedProject}
-              projects={projectOptions}
-              onChange={onProjectChange}
-              solidSurface
-            />
+            <Button
+              size="icon-sm"
+              type="button"
+              variant="outline"
+              className="size-8 rounded-full shadow-sm"
+              onClick={openProjectSheet}
+              aria-label="Choose project"
+              title="Choose project"
+            >
+              <Folder className="size-4" />
+            </Button>
           ) : null}
           <Button
             size="icon-sm"
@@ -11463,11 +11533,21 @@ function NewSessionDialog({
       <ProjectFolderBrowser
         open={folderBrowserOpen}
         initialPath={selectedRepo || undefined}
+        startCreating={folderBrowserCreate}
         onOpenChange={setFolderBrowserOpen}
         onSelected={async (project) => {
-          setRepo(project.cwd);
+          chooseComposerRepo(project);
           await onReposChanged();
         }}
+      />
+      <ComposerProjectSheet
+        open={projectSheetOpen}
+        repos={repos}
+        selected={selectedRepo}
+        onOpenChange={setProjectSheetOpen}
+        onSelect={chooseComposerRepo}
+        onBrowse={() => openFolderBrowser(false)}
+        onCreate={() => openFolderBrowser(true)}
       />
     </form>
     <ImageAnnotator
