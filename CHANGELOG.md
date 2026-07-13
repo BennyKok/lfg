@@ -2,6 +2,15 @@
 
 Recent product updates and deployment notes.
 
+## July 13, 2026 - Blank-project picker fixes (v0.1.31)
+
+- Fresh installs now create their configured repository root when the project
+  browser first opens, so a missing `~/repos` no longer blocks listing or
+  creating a project.
+- The live composer project control now displays the selected project name, and
+  newly browsed or created folders become the active composer project
+  immediately.
+
 ## July 13, 2026 - Live install logs during onboarding (v0.1.30)
 
 - Onboarding now streams the real installer output in a single live log while a

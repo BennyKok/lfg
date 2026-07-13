@@ -11192,6 +11192,9 @@ function NewSessionDialog({
       : undefined;
   const projectScoped = !!scopedRepo;
   const selectedRepo = scopedRepo?.cwd || repo || repos[0]?.cwd || "";
+  const selectedRepoName =
+    repos.find((candidate) => candidate.cwd === selectedRepo)?.name ||
+    (selectedRepo ? shortProject(selectedRepo) : "Project");
   const selectedIsCustom = repos.some((r) => r.cwd === selectedRepo && r.custom);
   const launching = pendingCreates > 0;
   // The project the resume picker should open scoped to: the composer's currently
@@ -11796,15 +11799,16 @@ function NewSessionDialog({
         <div className="flex shrink-0 items-center gap-2">
           {variant === "inline" && projectOptions && onProjectChange ? (
             <Button
-              size="icon-sm"
+              size="sm"
               type="button"
               variant="outline"
-              className="size-8 rounded-full shadow-sm"
+              className="h-8 max-w-36 rounded-full px-2.5 shadow-sm"
               onClick={openProjectSheet}
-              aria-label="Choose project"
-              title="Choose project"
+              aria-label={`Choose project. Current project: ${selectedRepoName}`}
+              title={selectedRepo || "Choose project"}
             >
-              <Folder className="size-4" />
+              <Folder className="size-4 shrink-0" />
+              <span className="truncate">{selectedRepoName}</span>
             </Button>
           ) : null}
           <Button

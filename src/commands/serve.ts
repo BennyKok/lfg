@@ -1,4 +1,4 @@
-import { readdir, realpath, stat } from "node:fs/promises";
+import { mkdir, readdir, realpath, stat } from "node:fs/promises";
 import { appendFileSync, statSync, mkdirSync, readFileSync, type Dirent } from "node:fs";
 import { tmpdir, homedir } from "node:os";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
@@ -3084,9 +3084,14 @@ export async function cmdServe() {
       // ---- running claude sessions ----
       if (path === "/api/filesystem/directories" && req.method === "GET") {
         const home = await realpath(homedir());
-        const requested = url.searchParams.get("path") || REPOS_ROOT;
+        const requestedPath = url.searchParams.get("path");
+        const requested = requestedPath || REPOS_ROOT;
         let current: string;
         try {
+          // Fresh release/blank-project installs may not have run setup.sh,
+          // which normally creates LFG_REPOS_ROOT. Make the default browser
+          // landing folder usable without making arbitrary missing paths.
+          if (!requestedPath) await mkdir(REPOS_ROOT, { recursive: true });
           current = await realpath(resolve(requested.replace(/^~(?=\/|$)/, home)));
         } catch {
           return err(400, "folder does not exist");
