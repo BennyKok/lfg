@@ -378,9 +378,6 @@ export async function cmdMcp() {
         displayed: true,
         sessionId: sid,
         artifact: data.artifact,
-        markdown: data.message?.url
-          ? `![${caption || alt || data.message.name || "image"}](${data.message.url})`
-          : undefined,
       });
     },
   );
