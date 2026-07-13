@@ -5094,6 +5094,7 @@ function OnboardingFlow({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedAgents, setSelectedAgents] = useState<Set<AgentKind>>(() => new Set());
 
   // Step 1 — profile (+ optional photo; uploaded right after the profile is
   // created, since the avatar is keyed to the profile's email server-side)
@@ -5120,7 +5121,16 @@ function OnboardingFlow({
   const repoCwd = cwd || repoList[0]?.cwd || "";
 
   const configuredAgents = codingAgents.filter((a) => a.status.configured);
+  const installableAgents = codingAgents.filter(
+    (a) => !a.status.configured && a.status.canAutoSetup,
+  );
   const agentSetupRunning = codingAgents.some((a) => a.status.setupRunning);
+  const allInstallableSelected =
+    installableAgents.length > 0 &&
+    installableAgents.every((agent) => selectedAgents.has(agent.key));
+  const selectedInstallableCount = installableAgents.filter((agent) =>
+    selectedAgents.has(agent.key),
+  ).length;
   useEffect(() => {
     if (step !== "agents" || !agentSetupRunning) return;
     const id = window.setInterval(onRefreshAgents, 1000);
@@ -5204,13 +5214,42 @@ function OnboardingFlow({
     setStep("session");
   }
 
-  async function setupAgent(kind: string) {
+  function toggleAgent(kind: AgentKind) {
+    setSelectedAgents((current) => {
+      const next = new Set(current);
+      if (next.has(kind)) next.delete(kind);
+      else next.add(kind);
+      return next;
+    });
+  }
+
+  function toggleAllAgents() {
+    setSelectedAgents(
+      allInstallableSelected
+        ? new Set()
+        : new Set(installableAgents.map((agent) => agent.key)),
+    );
+  }
+
+  async function setupSelectedAgents() {
+    const kinds = installableAgents
+      .filter((agent) => selectedAgents.has(agent.key))
+      .map((agent) => agent.key);
+    if (!kinds.length) return;
+    setBusy(true);
     setError(null);
     try {
-      await api(`/api/coding-agents/${kind}/setup`, { method: "POST" });
+      await api("/api/coding-agents/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kinds }),
+      });
+      setSelectedAgents(new Set());
       onRefreshAgents();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Setup failed");
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -5328,17 +5367,43 @@ function OnboardingFlow({
 
         {step === "agents" && (
           <>
-            <h1 className="text-xl font-semibold">Connect an agent</h1>
+            <h1 className="text-xl font-semibold">Install coding agents</h1>
             <p className="mb-5 mt-1 text-sm text-muted-foreground">
-              Sessions run on a coding agent. Connect at least one — you can add
-              more later in Settings.
+              Choose the agents you want, then install them together in one go.
+              You can add more later in Settings.
             </p>
             <div className="flex max-h-72 flex-col gap-2 overflow-y-auto">
+              {installableAgents.length > 0 && (
+                <label className="flex cursor-pointer items-center gap-3 px-3 py-1 text-xs font-medium text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={allInstallableSelected}
+                    disabled={busy || agentSetupRunning}
+                    onChange={toggleAllAgents}
+                    className="size-4 rounded border-border accent-foreground"
+                  />
+                  Select all
+                </label>
+              )}
               {codingAgents.map((a) => (
-                <div
+                <label
                   key={a.key}
-                  className="flex items-center gap-3 rounded-xl border border-border bg-muted/40 px-3 py-2.5"
+                  className={cn(
+                    "flex items-center gap-3 rounded-xl border border-border bg-muted/40 px-3 py-2.5",
+                    !a.status.configured && a.status.canAutoSetup && !agentSetupRunning
+                      ? "cursor-pointer"
+                      : "cursor-default",
+                  )}
                 >
+                  {!a.status.configured && a.status.canAutoSetup ? (
+                    <input
+                      type="checkbox"
+                      checked={selectedAgents.has(a.key)}
+                      disabled={busy || agentSetupRunning}
+                      onChange={() => toggleAgent(a.key)}
+                      className="size-4 shrink-0 rounded border-border accent-foreground"
+                    />
+                  ) : null}
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-medium">{a.label}</span>
                     <span className="block truncate text-xs text-muted-foreground">
@@ -5359,19 +5424,12 @@ function OnboardingFlow({
                   </span>
                   {a.status.configured ? (
                     <Check className="size-4 shrink-0 text-emerald-500" />
-                  ) : a.status.canAutoSetup ? (
-                    <button
-                      type="button"
-                      disabled={a.status.setupRunning}
-                      onClick={() => void setupAgent(a.key)}
-                      className="shrink-0 rounded-lg border border-border px-2.5 py-1 text-xs font-medium hover:bg-muted disabled:opacity-50"
-                    >
-                      {a.status.setupRunning
-                        ? `${a.status.setupProgress?.percent ?? 10}%`
-                        : "Set up"}
-                    </button>
+                  ) : a.status.setupRunning ? (
+                    <span className="shrink-0 text-xs font-medium text-muted-foreground">
+                      {a.status.setupProgress?.percent ?? 10}%
+                    </span>
                   ) : null}
-                </div>
+                </label>
               ))}
               {!codingAgents.length && (
                 <p className="text-sm text-muted-foreground">
@@ -5379,7 +5437,22 @@ function OnboardingFlow({
                 </p>
               )}
             </div>
-            <div className="mt-4 flex items-center gap-2">
+            {installableAgents.length > 0 && (
+              <button
+                type="button"
+                disabled={busy || agentSetupRunning || selectedInstallableCount === 0}
+                onClick={() => void setupSelectedAgents()}
+                className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-foreground px-3 py-2.5 text-sm font-medium text-background transition-opacity disabled:opacity-50"
+              >
+                {busy || agentSetupRunning ? <Loader2 className="size-4 animate-spin" /> : null}
+                {agentSetupRunning
+                  ? "Installing selected agents…"
+                  : selectedInstallableCount > 0
+                    ? `Install ${selectedInstallableCount} selected ${selectedInstallableCount === 1 ? "agent" : "agents"}`
+                    : "Select agents to install"}
+              </button>
+            )}
+            <div className="mt-2 flex items-center gap-2">
               <button
                 type="button"
                 onClick={onRefreshAgents}

@@ -186,6 +186,7 @@ import {
   listSetupChecks,
   loginCommandFor,
   runCodingAgentSetup,
+  runCodingAgentSetups,
   runSetupAction,
   setCodingAgentVisibility,
 } from "../coding-agents.ts";
@@ -2217,6 +2218,24 @@ export async function cmdServe() {
           await setCodingAgentVisibility(kind, b.visible);
           const agents = await listCodingAgents();
           return json({ agents, models: listModelCatalog(agents) });
+        }
+      }
+      {
+        if (path === "/api/coding-agents/setup" && req.method === "POST") {
+          const b = (await req.json().catch(() => null)) as { kinds?: unknown } | null;
+          if (!b || !Array.isArray(b.kinds) || !b.kinds.length) {
+            return err(400, "expected { kinds: [agent, ...] }");
+          }
+          if (!b.kinds.every((kind): kind is string => typeof kind === "string")) {
+            return err(400, "agent kinds must be strings");
+          }
+          const kinds = [...new Set(b.kinds)];
+          if (!kinds.every(isCodingAgentKind)) return err(404, "unknown coding agent");
+          void runCodingAgentSetups(kinds).catch((e) =>
+            console.error(`[coding-agents] batch setup failed:`, e),
+          );
+          const agents = await listCodingAgents();
+          return json({ ok: true, agents, models: listModelCatalog(agents) });
         }
       }
       {

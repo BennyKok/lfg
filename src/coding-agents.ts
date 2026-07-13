@@ -460,12 +460,21 @@ function setupEnvFor(kind: CodingAgentKind): Record<string, string> | null {
   return null;
 }
 
-export async function runCodingAgentSetup(kind: CodingAgentKind): Promise<void> {
-  if (setupRuns.has(kind)) throw new Error(`${kind} setup is already running`);
-  const setupEnv = setupEnvFor(kind);
-  if (!setupEnv) throw new Error(`${kind} does not have an automatic setup path`);
+export async function runCodingAgentSetups(kinds: CodingAgentKind[]): Promise<void> {
+  const uniqueKinds = [...new Set(kinds)];
+  if (!uniqueKinds.length) throw new Error("select at least one coding agent");
+  const runningKind = uniqueKinds.find((kind) => setupRuns.has(kind));
+  if (runningKind) throw new Error(`${runningKind} setup is already running`);
+
+  const setupEnv: Record<string, string> = {};
+  for (const kind of uniqueKinds) {
+    const env = setupEnvFor(kind);
+    if (!env) throw new Error(`${kind} does not have an automatic setup path`);
+    Object.assign(setupEnv, env);
+    setupProgress.set(kind, { percent: 10, label: "Starting…" });
+  }
+
   const script = join(PATHS.root, "scripts", "setup.sh");
-  setupProgress.set(kind, { percent: 10, label: "Starting…" });
   const run = (async () => {
     const proc = Bun.spawn(["bash", script], {
       cwd: PATHS.root,
@@ -489,9 +498,13 @@ export async function runCodingAgentSetup(kind: CodingAgentKind): Promise<void> 
           if (!message) continue;
           if (/Installing .*CLI|Installing OpenCode/i.test(message)) {
             installSeen = true;
-            setupProgress.set(kind, { percent: 55, label: message });
+            for (const kind of uniqueKinds) {
+              setupProgress.set(kind, { percent: 55, label: message });
+            }
           } else if (installSeen) {
-            setupProgress.set(kind, { percent: 80, label: message });
+            for (const kind of uniqueKinds) {
+              setupProgress.set(kind, { percent: 80, label: message });
+            }
           }
         }
       }
@@ -504,15 +517,23 @@ export async function runCodingAgentSetup(kind: CodingAgentKind): Promise<void> 
     if (code !== 0) {
       throw new Error(stderr.trim().slice(0, 1000) || `setup exited ${code}`);
     }
-    setupProgress.set(kind, { percent: 95, label: "Verifying installation…" });
+    for (const kind of uniqueKinds) {
+      setupProgress.set(kind, { percent: 95, label: "Verifying installation…" });
+    }
   })();
-  setupRuns.set(kind, run);
+  for (const kind of uniqueKinds) setupRuns.set(kind, run);
   try {
     await run;
   } finally {
-    setupRuns.delete(kind);
-    setupProgress.delete(kind);
+    for (const kind of uniqueKinds) {
+      if (setupRuns.get(kind) === run) setupRuns.delete(kind);
+      setupProgress.delete(kind);
+    }
   }
+}
+
+export async function runCodingAgentSetup(kind: CodingAgentKind): Promise<void> {
+  return runCodingAgentSetups([kind]);
 }
 
 export function isCodingAgentKind(value: string): value is CodingAgentKind {
