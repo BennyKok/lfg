@@ -2,6 +2,17 @@
 
 Recent product updates and deployment notes.
 
+## July 13, 2026 - Source auto-update (v0.1.24)
+
+- Added an update panel in Settings for Git/source installs that checks
+  `origin/main`, reports available commits, and can update with one click.
+- Source updates require a clean `main` checkout, fast-forward safely, install
+  locked dependencies, rebuild the web UI, and restart the managed systemd or
+  launchd service before reconnecting the browser.
+- Added coverage for up-to-date, behind, dirty, and non-main checkout states.
+- Refreshed the web lockfile so frozen CI installs include the AI SDK packages
+  already declared by the web app.
+
 ## July 13, 2026 - Native project picker & clean MCP images (v0.1.23)
 
 - Replaced the composer's native repo select with a mobile-friendly project
