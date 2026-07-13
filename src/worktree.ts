@@ -57,7 +57,27 @@ export function shouldAutoWorktree(
   return isGitRepo(abs);
 }
 
-// Create (or reuse) a per-session worktree branched from origin/main.
+function worktreeBaseRef(repo: string): { ok: true; ref: string } | { ok: false; error: string } {
+  const remoteMain = git(repo, ["rev-parse", "--verify", "--quiet", MAIN_REF]);
+  const localMain = git(repo, ["rev-parse", "--verify", "--quiet", "main"]);
+
+  if (localMain.ok) {
+    if (!remoteMain.ok) return { ok: true, ref: "main" };
+    const ahead = git(repo, ["rev-list", "--count", `${MAIN_REF}..main`]);
+    if (ahead.ok && parseInt(ahead.out.trim(), 10) > 0) return { ok: true, ref: "main" };
+    return { ok: true, ref: MAIN_REF };
+  }
+  if (remoteMain.ok) return { ok: true, ref: MAIN_REF };
+
+  // Imported local repositories may use another default branch. A real HEAD is
+  // sufficient; an unborn repository is not, because Git cannot make a
+  // worktree without a commit to branch from.
+  const head = git(repo, ["rev-parse", "--verify", "--quiet", "HEAD"]);
+  if (head.ok) return { ok: true, ref: "HEAD" };
+  return { ok: false, error: "repository has no commits; create an initial commit first" };
+}
+
+// Create (or reuse) a per-session worktree from the newest usable main ref.
 export function prepareSessionWorktree(
   repoRoot: string,
   sessionName: string,
@@ -74,19 +94,13 @@ export function prepareSessionWorktree(
 
   git(absRoot, ["fetch", "--quiet", "origin", "main"]);
 
-  // Base the worktree on whichever main is NEWER. origin/main alone made every
-  // subagent blind to unpushed local work — a child spawned minutes after a
-  // local commit landed would base on the last *pushed* commit and reference
-  // (or conflict with) stale code. Local main wins when it's ahead of origin;
-  // origin wins when the local checkout is behind (e.g. a stale clone).
-  let baseRef = MAIN_REF;
-  const localMain = git(absRoot, ["rev-parse", "--verify", "--quiet", "main"]);
-  if (localMain.ok) {
-    const ahead = git(absRoot, ["rev-list", "--count", `${MAIN_REF}..main`]);
-    if (ahead.ok && parseInt(ahead.out.trim(), 10) > 0) baseRef = "main";
-  }
+  // Base the worktree on whichever main is newer. Brand-new projects have no
+  // remote yet, so local main must be a complete path rather than a fallback
+  // that still assumes origin/main exists.
+  const base = worktreeBaseRef(absRoot);
+  if (!base.ok) return base;
 
-  const add = git(absRoot, ["worktree", "add", "-b", branch, wtPath, baseRef]);
+  const add = git(absRoot, ["worktree", "add", "-b", branch, wtPath, base.ref]);
   if (!add.ok) {
     const reuseBranch = git(absRoot, ["worktree", "add", wtPath, branch]);
     if (!reuseBranch.ok) {

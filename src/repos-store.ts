@@ -4,7 +4,7 @@
 // shows up alongside the scanned ones. Persisted as a flat JSON array so it
 // survives restarts; merged into listRepos() at request time.
 
-import { mkdir, stat, realpath } from "node:fs/promises";
+import { mkdir, stat, realpath, rm } from "node:fs/promises";
 import { join, resolve, basename } from "node:path";
 import { homedir } from "node:os";
 import { PATHS } from "./config.ts";
@@ -77,13 +77,9 @@ export async function addCustomRepo(
   return repo;
 }
 
-async function gitInit(cwd: string): Promise<void> {
-  try {
-    await stat(join(cwd, ".git"));
-    return;
-  } catch {}
+async function runGit(cwd: string, args: string[], action: string): Promise<void> {
   const proc = Bun.spawn({
-    cmd: ["git", "init", "--", cwd],
+    cmd: ["git", "-C", cwd, ...args],
     stdout: "pipe",
     stderr: "pipe",
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
@@ -91,8 +87,35 @@ async function gitInit(cwd: string): Promise<void> {
   const code = await proc.exited;
   if (code !== 0) {
     const stderr = await new Response(proc.stderr).text();
-    throw new Error(stderr.trim() || `git init exited ${code}`);
+    throw new Error(stderr.trim() || `${action} exited ${code}`);
   }
+}
+
+async function gitInit(cwd: string): Promise<void> {
+  try {
+    await stat(join(cwd, ".git"));
+    return;
+  } catch {}
+  await runGit(cwd, ["init", "-b", "main"], "git init");
+}
+
+async function commitStarterReadme(cwd: string): Promise<void> {
+  await runGit(cwd, ["add", "--", "README.md"], "stage starter README");
+  await runGit(
+    cwd,
+    [
+      "-c",
+      "user.name=LFG",
+      "-c",
+      "user.email=lfg@localhost",
+      "commit",
+      "-m",
+      "Initial commit",
+      "--",
+      "README.md",
+    ],
+    "initial git commit",
+  );
 }
 
 export async function useProjectFolder(rawPath: string): Promise<CustomRepo> {
@@ -120,9 +143,17 @@ export async function createProjectFolder(
     if (e instanceof Error && e.message.includes("already exists")) throw e;
   }
   await mkdir(cwd);
-  await Bun.write(join(cwd, "README.md"), `# ${name}\n`);
-  await gitInit(cwd);
-  return addCustomRepo(cwd, name);
+  try {
+    await Bun.write(join(cwd, "README.md"), `# ${name}\n`);
+    await gitInit(cwd);
+    await commitStarterReadme(cwd);
+    return await addCustomRepo(cwd, name);
+  } catch (error) {
+    // This function owns the new directory. Do not leave a half-created,
+    // selectable-looking project behind when Git setup or registration fails.
+    await rm(cwd, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 // Clone a remote git repository into the repos root (LFG_REPOS_ROOT), so a
