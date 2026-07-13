@@ -2,6 +2,19 @@
 
 Recent product updates and deployment notes.
 
+## July 13, 2026 - UI sound & haptics, composer polish (v0.1.25)
+
+- Added UI sound effects and haptic feedback across the app: a light press
+  tick on buttons, distinct on/off tones on toggles, a send whoosh, tab-switch
+  and agent-swipe cues, and success/error chimes on toasts. Sounds are
+  synthesized (no assets) and both are toggleable in Settings → Feedback
+  (default on); `haptic()` now respects the haptics setting everywhere.
+- Reworked the inline composer's controls into two animated mini-cards (agents,
+  then model/thinking/project) emitted from the agent icon.
+- Polished the session assign menu with avatar chips matching the user filter.
+- Kept the terminal surface dark regardless of theme.
+- Extended the source updater to support release installs alongside Git installs.
+
 ## July 13, 2026 - Source auto-update (v0.1.24)
 
 - Added an update panel in Settings for Git/source installs that checks
