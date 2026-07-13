@@ -2,6 +2,16 @@
 
 Recent product updates and deployment notes.
 
+## July 13, 2026 - Ready-to-run local projects (v0.1.26)
+
+- New projects now initialize a `main` branch and commit their starter README
+  before appearing in the project picker, so the first session can always
+  create its isolated Git worktree.
+- Local projects without an `origin/main` remote now correctly use their local
+  `main` commit as the worktree base.
+- Failed project setup rolls back the new folder instead of leaving a partial
+  project behind.
+
 ## July 13, 2026 - UI sound & haptics, composer polish (v0.1.25)
 
 - Added UI sound effects and haptic feedback across the app: a light press
