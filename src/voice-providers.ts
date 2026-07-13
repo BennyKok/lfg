@@ -63,6 +63,8 @@ const pcm = (body: ReadableStream<Uint8Array> | null) =>
 type TtsProvider = {
   id: string;
   label: string;
+  envVar: string;
+  accountUrl: string;
   available: () => boolean;
   synthesize: (text: string, voice?: string) => Promise<Response>;
 };
@@ -70,6 +72,8 @@ type TtsProvider = {
 type SttProvider = {
   id: string;
   label: string;
+  envVar: string;
+  accountUrl: string;
   available: () => boolean;
   transcribe: (audio: ArrayBuffer) => Promise<Response>;
   // Optional realtime path: open a streaming bridge for /api/voice/stt-stream.
@@ -190,6 +194,8 @@ function elevenLabsStreamInputPcm(text: string, voiceId: string, model: string, 
 const ttsElevenLabs: TtsProvider = {
   id: "elevenlabs",
   label: "ElevenLabs",
+  envVar: "ELEVENLABS_API_KEY",
+  accountUrl: "https://elevenlabs.io/app/developers/api-keys",
   available: () => !!process.env.ELEVENLABS_API_KEY,
   async synthesize(text) {
     const key = process.env.ELEVENLABS_API_KEY;
@@ -229,6 +235,8 @@ const ttsElevenLabs: TtsProvider = {
 const ttsOpenAI: TtsProvider = {
   id: "openai",
   label: "OpenAI",
+  envVar: "OPENAI_API_KEY",
+  accountUrl: "https://platform.openai.com/api-keys",
   available: () => !!process.env.OPENAI_API_KEY,
   async synthesize(text) {
     const key = process.env.OPENAI_API_KEY;
@@ -400,6 +408,8 @@ function elevenLabsRealtimeStream(handlers: SttStreamHandlers): SttStreamBridge 
 const sttElevenLabs: SttProvider = {
   id: "elevenlabs",
   label: "ElevenLabs (Scribe)",
+  envVar: "ELEVENLABS_API_KEY",
+  accountUrl: "https://elevenlabs.io/app/developers/api-keys",
   available: () => !!process.env.ELEVENLABS_API_KEY,
   openStream: (handlers) => elevenLabsRealtimeStream(handlers),
   async transcribe(audio) {
@@ -427,6 +437,8 @@ const sttElevenLabs: SttProvider = {
 const sttOpenAI: SttProvider = {
   id: "openai",
   label: "OpenAI (Whisper)",
+  envVar: "OPENAI_API_KEY",
+  accountUrl: "https://platform.openai.com/api-keys",
   available: () => !!process.env.OPENAI_API_KEY,
   async transcribe(audio) {
     const key = process.env.OPENAI_API_KEY;
@@ -508,11 +520,33 @@ export async function setVoiceSettings(patch: Partial<VoiceSettings>): Promise<V
 // (so we can grey out the ones that would 503).
 export function listProviders() {
   const map = (
-    p: { id: string; label: string; available: () => boolean },
-  ) => ({ id: p.id, label: p.label, available: p.available() });
+    p: {
+      id: string;
+      label: string;
+      envVar: string;
+      accountUrl: string;
+      available: () => boolean;
+    },
+  ) => ({
+    id: p.id,
+    label: p.label,
+    envVar: p.envVar,
+    accountUrl: p.accountUrl,
+    available: p.available(),
+  });
   return {
     tts: Object.values(TTS).map(map),
     stt: Object.values(STT).map(map),
+  };
+}
+
+export function voiceSetupInfo() {
+  return {
+    envFile: join(PATHS.root, ".env"),
+    restartCommand:
+      process.platform === "darwin"
+        ? "launchctl kickstart -k gui/$(id -u)/dev.omg.lfg"
+        : "systemctl --user restart lfg.service",
   };
 }
 

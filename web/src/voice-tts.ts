@@ -14,6 +14,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useSyncExternalStore } from "react";
+import { showVoiceSetup } from "./voice-setup";
 
 const TTS_SAMPLE_RATE = 24000; // matches synthesizeTts() output on the server
 const START_LEAD = 0.06; // small lead so the first chunk schedules cleanly
@@ -225,6 +226,7 @@ export async function speakText(
   }
   if (gen !== generation) return; // superseded while awaiting
   if (!res.ok || !res.body) {
+    if (res.status === 503) showVoiceSetup("output");
     finish();
     return;
   }

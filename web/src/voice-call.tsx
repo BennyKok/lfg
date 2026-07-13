@@ -18,6 +18,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import { lazyWithReload } from "./lib/lazy-with-reload";
+import { ensureVoiceConfigured } from "./voice-setup";
 
 // ───────────────────────────────────────────────────────────────────────────
 // VoiceCall — "phone call mode" for the voice orb. A focused, fullscreen call
@@ -179,6 +180,10 @@ export function VoiceCall({
     } catch {}
 
     void (async () => {
+      if (!(await ensureVoiceConfigured("call"))) {
+        if (!cancelled) onClose();
+        return;
+      }
       setStatus("connecting");
       setAgentState("thinking");
       try {

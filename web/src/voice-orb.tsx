@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { Room } from "livekit-client";
 import { Phone } from "lucide-react";
 import { startElevenVoice, type ElevenHandle } from "./eleven-voice";
+import { ensureVoiceConfigured } from "./voice-setup";
 
 // Opt-in fallback: route the launcher through ElevenLabs' managed agent
 // (Option B) instead of the self-hosted LiveKit worker when no dedicated phone
@@ -112,6 +113,7 @@ export function VoiceOrb({
   }, [agentState, detail]);
 
   const connect = useCallback(async () => {
+    if (!(await ensureVoiceConfigured("call"))) return;
     setStatus("connecting");
     setAgentState("thinking");
     flash("Connecting…");
@@ -213,6 +215,7 @@ export function VoiceOrb({
   // endpoint. We map the SDK's connect status + turn mode onto the same orb
   // animation states the LiveKit path drives, so the UI is identical.
   const connectEleven = useCallback(async () => {
+    if (!(await ensureVoiceConfigured("call"))) return;
     setStatus("connecting");
     setAgentState("thinking");
     flash("Connecting…");
