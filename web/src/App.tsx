@@ -8095,6 +8095,7 @@ function SessionActionsMenu({
 }) {
   const [forkOpen, setForkOpen] = useState(false);
   const sid = session.sessionId;
+  const assignee = users.find((user) => user.email === session.assignedUser);
 
   async function assign(user: string) {
     if (!sid) return;
@@ -8161,14 +8162,23 @@ function SessionActionsMenu({
         >
           <MoreVertical className="size-4" />
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="min-w-44">
+        <DropdownMenuContent align="end" className="min-w-48">
           <DropdownMenuSub>
             <DropdownMenuSubTrigger disabled={!sid}>
-              <span className="min-w-0 flex-1">Assign to</span>
+              <UserRound className="size-4" />
+              <span className="flex-1">Assign to</span>
               {session.assignedUser ? (
-                <span className="max-w-24 truncate text-xs text-muted-foreground">
-                  {shortUser(session.assignedUser)}
-                </span>
+                assignee?.avatar ? (
+                  <img
+                    src={assignee.avatar}
+                    alt=""
+                    className="size-5 shrink-0 rounded-full object-cover"
+                  />
+                ) : (
+                  <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted">
+                    <UserRound className="size-3" />
+                  </span>
+                )
               ) : null}
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent align="start" className="min-w-48">
@@ -8179,16 +8189,33 @@ function SessionActionsMenu({
                 }
               >
                 <DropdownMenuLabel>Assign to</DropdownMenuLabel>
-                <DropdownMenuRadioItem value="">Unassigned</DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="">
+                  <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted">
+                    <UserRound className="size-3" />
+                  </span>
+                  Unassigned
+                </DropdownMenuRadioItem>
                 {users.map((user) => (
                   <DropdownMenuRadioItem key={user.email} value={user.email}>
-                    {user.name ?? shortUser(user.email)}
+                    {user.avatar ? (
+                      <img
+                        src={user.avatar}
+                        alt=""
+                        className="size-5 shrink-0 rounded-full object-cover"
+                      />
+                    ) : (
+                      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted">
+                        <UserRound className="size-3" />
+                      </span>
+                    )}
+                    <span className="truncate capitalize">
+                      {user.name ?? shortUser(user.email)}
+                    </span>
                   </DropdownMenuRadioItem>
                 ))}
               </DropdownMenuRadioGroup>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
-          <DropdownMenuSeparator />
           <DropdownMenuItem disabled={!sid} onClick={() => setForkOpen(true)}>
             <GitFork className="size-4" />
             Fork
