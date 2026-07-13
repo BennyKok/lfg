@@ -1,6 +1,7 @@
 import { Switch as SwitchPrimitive } from "@base-ui/react/switch";
 
 import { cn } from "@/lib/utils";
+import { feedback } from "@/lib/feedback";
 
 // iOS-style toggle. The track turns system-green when on (matching the
 // --success token, which is iOS #34c759 / dark #30d158), the thumb is a
@@ -9,11 +10,17 @@ import { cn } from "@/lib/utils";
 // *navigates* should use a row + chevron instead.
 function Switch({
   className,
+  onCheckedChange,
   ...props
 }: SwitchPrimitive.Root.Props) {
   return (
     <SwitchPrimitive.Root
       data-slot="switch"
+      onCheckedChange={(checked, event) => {
+        // Distinct pitch for on vs off, plus a matching haptic.
+        feedback.toggle(checked);
+        onCheckedChange?.(checked, event);
+      }}
       className={cn(
         "relative inline-flex h-[31px] w-[51px] shrink-0 items-center rounded-full p-0.5",
         "bg-foreground/[0.12] transition-colors duration-200 ease-apple",

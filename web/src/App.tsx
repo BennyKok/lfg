@@ -92,14 +92,18 @@ import {
   Send,
   Settings,
   Sparkles,
+  Volume2,
+  Vibrate,
   Sun,
   TerminalSquare,
   Trash2,
   UserRound,
   X,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/notify";
 import { haptic } from "@/lib/haptics";
+import { feedback } from "@/lib/feedback";
+import { useUiFeedbackPrefs, setUiFeedbackPrefs } from "@/lib/ui-feedback-prefs";
 import { reportError } from "./lib/report-error";
 import { lazyWithReload } from "./lib/lazy-with-reload";
 import { fetchBootstrap } from "./bootstrap";
@@ -202,11 +206,14 @@ type SetupCheckGroup = {
 };
 
 type InstallUpdateStatus = {
-  channel: "source";
+  channel: "source" | "release";
   state: "up-to-date" | "available" | "blocked";
   currentSha?: string;
   latestSha?: string;
   commitsBehind?: number;
+  currentVersion?: string;
+  latestVersion?: string;
+  latestTag?: string;
   message: string;
   restartSupported: boolean;
 };
@@ -4463,6 +4470,7 @@ function FloatingSessionAudio({
       const t = text.trim();
       if (!sid || !t || sending) return;
       setSending(true);
+      feedback.send();
       try {
         onOptimisticMessage(sid, t);
         const sent = await api<{ msg?: QueueMsg }>(`/api/sessions/${sid}/send`, {
@@ -4638,7 +4646,10 @@ function TopTab({
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={() => {
+        if (!active) feedback.select();
+        onClick();
+      }}
       aria-current={active ? "page" : undefined}
       className={cn(
         "flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium tracking-[-0.01em] transition-colors duration-200 ease-out",
@@ -4668,7 +4679,10 @@ function IconTab({
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={() => {
+        if (!active) feedback.select();
+        onClick();
+      }}
       aria-label={label}
       title={label}
       aria-current={active ? "page" : undefined}
@@ -7728,6 +7742,7 @@ function SessionChat({
     const files = attachments;
     if (!sid || (!text && !files.length)) return;
     setSending(true);
+    feedback.send();
     onError(null);
     setMessageText("");
     try {
@@ -11190,61 +11205,51 @@ function NewSessionDialog({
     setAgentIconNonce((n) => n + 1);
     setAgent(nextKey);
     setModel(localStorage.getItem(`lfg_model_${nextKey}`) || defaultModelFor(nextKey));
-    haptic();
+    feedback.swipe();
   };
   cycleAgentRef.current = cycleAgent;
 
-  // The agent switcher + model / thinking / repo pills. Shared between the
-  // inline composer (revealed in its own row when expanded) and the always-open
-  // drawer variant, so the markup lives in one place.
-  const controlsInner = (
+  const agentSelector = agentButtons.length ? (
     <div
       className={cn(
-        "flex items-center gap-1.5 pb-0.5",
-        // Inline popover keeps agent icons + model + thinking on a single row;
-        // the wider drawer wraps.
-        variant === "inline" ? "flex-nowrap" : "flex-wrap",
+        "inline-flex h-8 items-center text-xs font-semibold",
+        variant === "inline" ? "gap-0.5" : "rounded-full bg-muted p-0.5",
       )}
     >
-      {agentButtons.length ? (
-        <div
+      {agentButtons.map(({ key, label }) => (
+        <button
+          key={key}
+          type="button"
+          title={label}
+          aria-label={label}
+          onClick={() => {
+            // Re-tapping the already-selected agent collapses the row.
+            if (variant === "inline" && expanded && agent === key) {
+              onExpandedChange?.(false);
+              return;
+            }
+            setAgent(key);
+            setModel(
+              localStorage.getItem(`lfg_model_${key}`) || defaultModelFor(key),
+            );
+          }}
           className={cn(
-            "inline-flex h-8 items-center text-xs font-semibold",
-            variant === "inline" ? "gap-0.5" : "rounded-full bg-muted p-0.5",
+            "flex h-7 w-9 items-center justify-center rounded-full transition",
+            agent === key
+              ? variant === "inline"
+                ? "bg-muted text-foreground"
+                : "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground",
           )}
         >
-          {agentButtons.map(({ key, label }) => (
-            <button
-              key={key}
-              type="button"
-              title={label}
-              aria-label={label}
-              onClick={() => {
-                // Re-tapping the already-selected agent collapses the row.
-                if (variant === "inline" && expanded && agent === key) {
-                  onExpandedChange?.(false);
-                  return;
-                }
-                setAgent(key);
-                setModel(
-                  localStorage.getItem(`lfg_model_${key}`) || defaultModelFor(key),
-                );
-              }}
-              className={cn(
-                "flex h-7 w-9 items-center justify-center rounded-full transition",
-                agent === key
-                  ? variant === "inline"
-                    ? "bg-muted text-foreground"
-                    : "bg-background text-foreground shadow-sm"
-                  : "text-muted-foreground",
-              )}
-            >
-              <img src={agentIconSrc(key)} alt="" className="size-5" />
-            </button>
-          ))}
-        </div>
-      ) : null}
+          <img src={agentIconSrc(key)} alt="" className="size-5" />
+        </button>
+      ))}
+    </div>
+  ) : null;
 
+  const modelControls = (
+    <>
       <ModelPicker
         value={model}
         models={models}
@@ -11294,6 +11299,28 @@ function NewSessionDialog({
           )}
         </FieldPill>
       )}
+    </>
+  );
+
+  // In the inline composer the controls reveal as two independent mini cards:
+  // agent choices first, then model/thinking/project. Each card enters from the
+  // trigger's bottom-left corner so the stack feels emitted by the agent icon.
+  // The drawer keeps the same controls in its existing wrapping row.
+  const controlsInner = variant === "inline" ? (
+    <div className="flex w-max max-w-[calc(100vw-1rem)] origin-bottom-left flex-col items-start gap-1.5">
+      {agentButtons.length ? (
+        <div className="origin-bottom-left rounded-2xl bg-popover px-2 py-1.5 shadow-xl ring-1 ring-foreground/5 animate-in fade-in-0 zoom-in-75 slide-in-from-bottom-3 duration-200 ease-out">
+          {agentSelector}
+        </div>
+      ) : null}
+      <div className="flex max-w-full origin-bottom-left items-center gap-1.5 overflow-hidden rounded-2xl bg-popover px-2.5 py-1.5 shadow-xl ring-1 ring-foreground/5 animate-in fade-in-0 zoom-in-75 slide-in-from-bottom-3 duration-200 ease-out [animation-delay:55ms] [animation-fill-mode:backwards]">
+        {modelControls}
+      </div>
+    </div>
+  ) : (
+    <div className="flex flex-wrap items-center gap-1.5 pb-0.5">
+      {agentSelector}
+      {modelControls}
     </div>
   );
 
@@ -11348,7 +11375,12 @@ function NewSessionDialog({
           </button>
         }
       />
-      <DropdownMenuContent side="top" align="start" sideOffset={8} alignOffset={-12} className="w-max max-w-[calc(100vw-1rem)] py-2 pr-4 pl-2">
+      <DropdownMenuContent
+        side="top"
+        align="start"
+        sideOffset={8}
+        className="w-max min-w-0 max-w-[calc(100vw-1rem)] origin-bottom-left overflow-visible bg-transparent p-0 shadow-none ring-0"
+      >
         {controlsInner}
       </DropdownMenuContent>
     </DropdownMenu>
@@ -13720,7 +13752,7 @@ function LfgUpdateSection() {
   }
 
   const status = info?.update;
-  const source = info?.install.channel === "source";
+  const supported = info?.install.channel === "source" || info?.install.channel === "release";
   const available = status?.state === "available";
   const busy = checking || updating || restarting;
   const detail = error
@@ -13760,7 +13792,7 @@ function LfgUpdateSection() {
               {restarting ? "Restarting…" : updating ? "Updating…" : "Update & restart"}
             </Button>
           ) : (
-            <Button size="sm" variant="outline" onClick={() => void check()} disabled={busy || !source}>
+            <Button size="sm" variant="outline" onClick={() => void check()} disabled={busy || !supported}>
               <RotateCcw className={cn("size-4", checking && "animate-spin")} />
               Check
             </Button>
@@ -13768,7 +13800,11 @@ function LfgUpdateSection() {
         </div>
       </div>
       <p className="px-4 text-xs text-muted-foreground">
-        Git installs update safely to <code>origin/main</code>, rebuild the UI, and restart automatically.
+        {info?.install.channel === "release" ? (
+          <>Release installs download the latest verified bundle and restart automatically.</>
+        ) : (
+          <>Git installs update safely to <code>origin/main</code>, rebuild the UI, and restart automatically.</>
+        )}
       </p>
     </section>
   );
@@ -13805,6 +13841,7 @@ function SettingsView({
 }) {
   const initial = (user ?? "").trim().slice(0, 1).toUpperCase() || "?";
   const audioMode = useAudioMode();
+  const uiFeedback = useUiFeedbackPrefs();
 
   return (
     <div className="mx-auto max-w-xl space-y-8 pb-10">
@@ -13993,6 +14030,45 @@ function SettingsView({
           Auto-plays replies aloud as they stream and keeps the session
           conversational — heavy work is delegated to a subagent so a mis-heard word
           can't quietly run the wrong thing.
+        </p>
+      </section>
+
+      {/* Feedback — UI sound effects + haptics */}
+      <section className="space-y-2">
+        <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Feedback
+        </h2>
+        <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card/40">
+          <div className="flex items-center justify-between gap-4 px-4 py-2.5">
+            <div className="flex items-center gap-3">
+              <span className="flex size-7 items-center justify-center rounded-[7px] bg-primary text-white">
+                <Volume2 className="size-4" />
+              </span>
+              <span className="text-sm font-medium">Sound effects</span>
+            </div>
+            <Switch
+              checked={uiFeedback.sound}
+              onCheckedChange={(v) => setUiFeedbackPrefs({ sound: v })}
+              aria-label="Toggle UI sound effects"
+            />
+          </div>
+          <div className="flex items-center justify-between gap-4 px-4 py-2.5">
+            <div className="flex items-center gap-3">
+              <span className="flex size-7 items-center justify-center rounded-[7px] bg-primary text-white">
+                <Vibrate className="size-4" />
+              </span>
+              <span className="text-sm font-medium">Haptics</span>
+            </div>
+            <Switch
+              checked={uiFeedback.haptics}
+              onCheckedChange={(v) => setUiFeedbackPrefs({ haptics: v })}
+              aria-label="Toggle haptic feedback"
+            />
+          </div>
+        </div>
+        <p className="px-4 text-xs text-muted-foreground">
+          Plays subtle clicks on taps, toggles, sends and tab switches, with a
+          matching vibration on supported devices. Turn either off here.
         </p>
       </section>
 
