@@ -2,6 +2,16 @@
 
 Recent product updates and deployment notes.
 
+## July 13, 2026 - Native project picker & clean MCP images (v0.1.23)
+
+- Replaced the composer's native repo select with a mobile-friendly project
+  sheet that lists project paths and makes browsing or creating a project a
+  first-class action.
+- The inline composer now opens the same project sheet from its folder button,
+  keeping project selection consistent across composer layouts.
+- Stopped MCP image results from emitting redundant Markdown URLs that could
+  render as broken images; clients continue to receive the structured artifact.
+
 ## July 12, 2026 - Fix agent-icon swipe gesture (v0.1.22)
 
 Follow-up to v0.1.21: the swipe-to-switch gesture didn't actually fire.
