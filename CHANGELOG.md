@@ -2,6 +2,14 @@
 
 Recent product updates and deployment notes.
 
+## July 13, 2026 - Repeatable setup on OMG (v0.1.28)
+
+- OMG agent-template installs now recognize their existing guest supervisor, so
+  **Update & restart** can safely install a release and relaunch LFG.
+- Onboarding displays the exact LFG version being configured.
+- Settings now includes **Redo onboarding**, which reopens the full walkthrough
+  without deleting existing profiles, repositories, or sessions.
+
 ## July 13, 2026 - Batch agent installation (v0.1.27)
 
 - Onboarding now lets users choose coding agents with individual checkboxes or
