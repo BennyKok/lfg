@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { releaseUpdateStatus, sourceUpdateStatus } from "./self-update.ts";
+import { releaseUpdateStatus, restartCommand, sourceUpdateStatus } from "./self-update.ts";
 
 const cleanup: string[] = [];
 const realFetch = globalThis.fetch;
@@ -91,5 +91,41 @@ describe("release update status", () => {
 
     const status = await releaseUpdateStatus(root, { repoSlug: "example/lfg-current-test" });
     expect(status.state).toBe("up-to-date");
+  });
+});
+
+describe("restart command", () => {
+  test("recognizes the OMG agent-template supervisor", () => {
+    const root = mkdtempSync(join(tmpdir(), "lfg-omg-restart-"));
+    cleanup.push(root);
+    const home = join(root, "home");
+    const procRoot = join(root, "proc");
+    const supervisorPid = 4242;
+    mkdirSync(join(home, ".omg"), { recursive: true });
+    mkdirSync(join(procRoot, String(supervisorPid)), { recursive: true });
+    writeFileSync(join(home, ".omg", "agent-serve.sh"), "#!/bin/sh\n");
+    writeFileSync(join(home, ".omg", "agent-serve.pid"), `${supervisorPid}\n`);
+    writeFileSync(
+      join(procRoot, String(supervisorPid), "cmdline"),
+      `bash\0${join(home, ".omg", "agent-serve.sh")}\0`,
+    );
+
+    const command = restartCommand("linux", home, procRoot);
+    expect(command?.slice(1)).toEqual(["-TERM", String(process.pid)]);
+    expect(command?.[0].endsWith("/kill")).toBe(true);
+  });
+
+  test("does not trust a stale OMG supervisor pidfile", () => {
+    const root = mkdtempSync(join(tmpdir(), "lfg-omg-restart-"));
+    cleanup.push(root);
+    const home = join(root, "home");
+    const procRoot = join(root, "proc");
+    mkdirSync(join(home, ".omg"), { recursive: true });
+    mkdirSync(join(procRoot, "4242"), { recursive: true });
+    writeFileSync(join(home, ".omg", "agent-serve.sh"), "#!/bin/sh\n");
+    writeFileSync(join(home, ".omg", "agent-serve.pid"), "4242\n");
+    writeFileSync(join(procRoot, "4242", "cmdline"), "unrelated-process\0");
+
+    expect(restartCommand("linux", home, procRoot)).toBeNull();
   });
 });

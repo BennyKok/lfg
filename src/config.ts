@@ -11,6 +11,19 @@ export const PATHS = {
   installInfo: join(ROOT, "data", "install.json"),
 };
 
+export function appVersion(): string {
+  try {
+    const parsed = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as {
+      version?: unknown;
+    };
+    return typeof parsed.version === "string" && parsed.version.trim()
+      ? parsed.version.trim()
+      : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
 export type InstallChannel = "source" | "release" | "container" | "unknown";
 
 export type InstallInfo = {

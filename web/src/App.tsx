@@ -415,6 +415,7 @@ type GlobalSettings = {
 };
 
 type BootstrapPayload = {
+  version?: string | null;
   agents?: Agent[] | null;
   codingAgents?: CodingAgentInfo[] | null;
   models?: ModelCatalogItem[] | null;
@@ -2952,6 +2953,7 @@ export function App() {
   // full-screen onboarding flow is showing. See loadCore for the gate.
   const [onboarding, setOnboarding] = useState<OnboardingState | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [lfgVersion, setLfgVersion] = useState("unknown");
   const [repos, setRepos] = useState<Repo[]>([]);
   // Legacy report-view selector — retained so the old AgentView effects compile,
   // but the live UI now switches on `tab` (Live / Auto), so this stays "__live".
@@ -3130,6 +3132,7 @@ export function App() {
 
   const loadCore = useCallback(async () => {
     const payload = await fetchBootstrap<BootstrapPayload>();
+    setLfgVersion(payload.version || "unknown");
     setOnboarding(payload.onboarding ?? null);
     // First-run gate: a brand-new install has no roster (env or stored
     // profiles), no sessions, and no completed onboarding. The flag is sticky
@@ -4122,6 +4125,7 @@ export function App() {
     return (
       <OnboardingFlow
         onboarding={onboarding}
+        version={lfgVersion}
         codingAgents={codingAgents}
         repos={repos}
         identity={identity}
@@ -4322,6 +4326,22 @@ export function App() {
             onOpenAuto={() => setTab("auto")}
             onOpenUsage={() => setTab("usage")}
             onOpenChangelog={() => setTab("changelog")}
+            onRedoOnboarding={async () => {
+              try {
+                const response = await api<{ state: OnboardingState }>("/api/onboarding", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    steps: { profile: false, agents: false, repo: false, firstSession: false },
+                    completed: false,
+                  }),
+                });
+                setOnboarding(response.state);
+                setShowOnboarding(true);
+              } catch (e) {
+                toast.error(e instanceof Error ? e.message : "Couldn't restart onboarding");
+              }
+            }}
             extTabs={extNavTabs}
             onOpenExt={setTab}
             settings={settings}
@@ -5066,6 +5086,7 @@ function ProjectFilterMenu({
 // to the end still marks onboarding completed so the flow never nags again.
 function OnboardingFlow({
   onboarding,
+  version,
   codingAgents,
   repos,
   identity,
@@ -5074,6 +5095,7 @@ function OnboardingFlow({
   onDone,
 }: {
   onboarding: OnboardingState | null;
+  version: string;
   codingAgents: CodingAgentInfo[];
   repos: Repo[];
   identity: string | null;
@@ -5098,8 +5120,11 @@ function OnboardingFlow({
 
   // Step 1 — profile (+ optional photo; uploaded right after the profile is
   // created, since the avatar is keyed to the profile's email server-side)
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+  const existingProfile =
+    onboarding?.profiles.find((profile) => profile.email === identity) ??
+    onboarding?.profiles[0];
+  const [name, setName] = useState(existingProfile?.name ?? "");
+  const [email, setEmail] = useState(existingProfile?.email ?? "");
   const [photo, setPhoto] = useState<File | null>(null);
   const photoUrl = useMemo(() => (photo ? URL.createObjectURL(photo) : null), [photo]);
   useEffect(() => () => {
@@ -5299,7 +5324,12 @@ function OnboardingFlow({
           lets this container scroll to the fields/buttons below the keyboard. */}
       <div className="my-auto w-full max-w-md py-6">
         <div className="mb-4 flex items-center justify-between">
-          <img src="/icon.svg" alt="lfg" className="size-7 shrink-0" />
+          <div className="flex items-center gap-2">
+            <img src="/icon.svg" alt="lfg" className="size-7 shrink-0" />
+            <span className="text-xs font-medium text-muted-foreground">
+              v{version}
+            </span>
+          </div>
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             {labels.map(([key, label], i) => (
               <span key={key} className="flex items-center gap-1.5">
@@ -13902,6 +13932,7 @@ function SettingsView({
   onOpenAuto,
   onOpenUsage,
   onOpenChangelog,
+  onRedoOnboarding,
   extTabs,
   onOpenExt,
 }: {
@@ -13916,6 +13947,7 @@ function SettingsView({
   onOpenAuto: () => void;
   onOpenUsage: () => void;
   onOpenChangelog: () => void;
+  onRedoOnboarding: () => Promise<void>;
   extTabs: ExtensionNavTab[];
   onOpenExt: (id: string) => void;
 }) {
@@ -14176,6 +14208,33 @@ function SettingsView({
       <VoiceSettingsSection />
 
       <LfgUpdateSection />
+
+      {/* Setup — reopens the full walkthrough without deleting existing data. */}
+      <section className="space-y-2">
+        <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Setup
+        </h2>
+        <div className="overflow-hidden rounded-2xl border border-border bg-card/40">
+          <button
+            type="button"
+            onClick={() => void onRedoOnboarding()}
+            className="flex w-full items-center justify-between gap-4 px-4 py-2.5 text-left transition-colors duration-150 ease-ios hover:bg-foreground/[0.03] active:bg-foreground/[0.06]"
+          >
+            <div className="flex items-center gap-3">
+              <span className="flex size-7 items-center justify-center rounded-[7px] bg-primary text-white">
+                <RotateCcw className="size-4" />
+              </span>
+              <span>
+                <span className="block text-sm font-medium">Redo onboarding</span>
+                <span className="block text-xs text-muted-foreground">
+                  Revisit setup without deleting your existing data
+                </span>
+              </span>
+            </div>
+            <ChevronRight className="size-4 text-muted-foreground/60" />
+          </button>
+        </div>
+      </section>
 
       {/* About */}
       <section className="space-y-2">

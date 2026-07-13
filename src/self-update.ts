@@ -39,6 +39,9 @@ export type ReleaseInstall = {
 
 type CommandResult = { ok: boolean; stdout: string; stderr: string };
 
+const OMG_SERVE_SCRIPT = ".omg/agent-serve.sh";
+const OMG_SERVE_PID = ".omg/agent-serve.pid";
+
 async function run(cmd: string[], cwd: string): Promise<CommandResult> {
   const proc = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([
@@ -149,20 +152,52 @@ function blocked(message: string): SourceUpdateStatus {
   };
 }
 
-export function restartCommand(platform = process.platform): string[] | null {
-  if (platform === "linux") {
-    if (!existsSync(join(homedir(), ".config", "systemd", "user", "lfg.service"))) return null;
-    for (const systemctl of ["/usr/bin/systemctl", "/bin/systemctl"]) {
+function omgSupervisorRestartCommand(
+  home = homedir(),
+  procRoot = "/proc",
+  currentPid = process.pid,
+): string[] | null {
+  if (process.platform !== "linux") return null;
+  const script = join(home, OMG_SERVE_SCRIPT);
+  const pidFile = join(home, OMG_SERVE_PID);
+  if (!existsSync(script) || !existsSync(pidFile)) return null;
+  try {
+    const supervisorPid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
+    if (!Number.isSafeInteger(supervisorPid) || supervisorPid <= 1) return null;
+    const cmdline = readFileSync(join(procRoot, String(supervisorPid), "cmdline"), "utf8")
+      .replaceAll("\0", " ");
+    if (!cmdline.includes(OMG_SERVE_SCRIPT)) return null;
+    for (const kill of ["/usr/bin/kill", "/bin/kill"]) {
       try {
-        accessSync(systemctl, constants.X_OK);
-        return [systemctl, "--user", "restart", "lfg.service"];
+        accessSync(kill, constants.X_OK);
+        // The OMG-owned loop observes this process exit and starts the updated
+        // foreground command again after its normal two-second backoff.
+        return [kill, "-TERM", String(currentPid)];
       } catch {}
     }
-    return null;
+  } catch {}
+  return null;
+}
+
+export function restartCommand(
+  platform = process.platform,
+  home = homedir(),
+  procRoot = "/proc",
+): string[] | null {
+  if (platform === "linux") {
+    if (existsSync(join(home, ".config", "systemd", "user", "lfg.service"))) {
+      for (const systemctl of ["/usr/bin/systemctl", "/bin/systemctl"]) {
+        try {
+          accessSync(systemctl, constants.X_OK);
+          return [systemctl, "--user", "restart", "lfg.service"];
+        } catch {}
+      }
+    }
+    return omgSupervisorRestartCommand(home, procRoot);
   }
   if (platform === "darwin") {
     const launchctl = "/bin/launchctl";
-    if (!existsSync(join(homedir(), "Library", "LaunchAgents", "dev.omg.lfg.plist"))) return null;
+    if (!existsSync(join(home, "Library", "LaunchAgents", "dev.omg.lfg.plist"))) return null;
     try {
       accessSync(launchctl, constants.X_OK);
       return [launchctl, "kickstart", "-k", `gui/${process.getuid?.() ?? 0}/dev.omg.lfg`];

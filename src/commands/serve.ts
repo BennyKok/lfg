@@ -4,7 +4,7 @@ import { tmpdir, homedir } from "node:os";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { marked } from "marked";
-import { PATHS, installInfo } from "../config.ts";
+import { PATHS, appVersion, installInfo } from "../config.ts";
 import {
   applyReleaseUpdate,
   applySourceUpdate,
@@ -2192,6 +2192,7 @@ export async function cmdServe() {
               findings: boot.findings ?? null,
             },
             onboarding: boot.onboarding ?? null,
+            version: appVersion(),
           },
           { headers: { "Content-Type": "application/json", "Cache-Control": "no-cache" } },
         );
