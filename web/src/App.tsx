@@ -5289,8 +5289,15 @@ function OnboardingFlow({
   const stepIndex = labels.findIndex(([key]) => key === step);
 
   return (
-    <div className="flex h-dvh flex-col items-center justify-center bg-background px-6 text-foreground">
-      <div className="w-full max-w-md">
+    <div
+      className="flex flex-col items-center overflow-y-auto overscroll-none bg-background px-6 text-foreground"
+      style={{ height: "var(--lfg-app-height, 100dvh)" }}
+    >
+      {/* Safe vertical centering: auto margins center the card while it fits,
+          then collapse to zero when the soft keyboard makes the viewport shorter
+          than the card. Unlike justify-center, that keeps the top reachable and
+          lets this container scroll to the fields/buttons below the keyboard. */}
+      <div className="my-auto w-full max-w-md py-6">
         <div className="mb-4 flex items-center justify-between">
           <img src="/icon.svg" alt="lfg" className="size-7 shrink-0" />
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
