@@ -14094,11 +14094,14 @@ function LfgUpdateSection() {
   const [restarting, setRestarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const check = useCallback(async () => {
+  const check = useCallback(async (force = false) => {
     setChecking(true);
     setError(null);
     try {
-      const next = await api<InstallUpdateInfo>("/api/install", { cache: "no-store" });
+      // A manual click forces a fresh lookup that bypasses the server-side
+      // release-tag cache; the passive on-mount check reuses it.
+      const path = force ? "/api/install?refresh=1" : "/api/install";
+      const next = await api<InstallUpdateInfo>(path, { cache: "no-store" });
       setInfo(next);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not check for updates");
@@ -14194,7 +14197,7 @@ function LfgUpdateSection() {
               {restarting ? "Restarting…" : updating ? "Updating…" : "Update & restart"}
             </Button>
           ) : (
-            <Button size="sm" variant="outline" onClick={() => void check()} disabled={busy || !supported}>
+            <Button size="sm" variant="outline" onClick={() => void check(true)} disabled={busy || !supported}>
               <RotateCcw className={cn("size-4", checking && "animate-spin")} />
               Check
             </Button>

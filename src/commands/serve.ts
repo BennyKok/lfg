@@ -3178,10 +3178,14 @@ export async function cmdServe() {
         const install = installInfo();
         if (req.method === "GET") {
           if (url.searchParams.get("ready") === "1") return json({ bootId: SERVER_INSTANCE_ID });
+          // A manual "Check" click forces a fresh lookup that bypasses the
+          // 5-minute release-tag cache; the passive on-load check stays cached.
+          // Source installs always `git fetch`, so they're never stale.
+          const force = url.searchParams.get("refresh") === "1";
           const update = install.channel === "source"
             ? await sourceUpdateStatus(PATHS.root)
             : install.channel === "release"
-              ? await releaseUpdateStatus(PATHS.root, install)
+              ? await releaseUpdateStatus(PATHS.root, install, force)
               : null;
           return json({ install, update, bootId: SERVER_INSTANCE_ID });
         }

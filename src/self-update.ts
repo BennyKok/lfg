@@ -72,12 +72,14 @@ function installedVersion(root: string): string | null {
 type GithubRelease = { tag_name?: unknown };
 const releaseTagCache = new Map<string, { tag: string; expiresAt: number }>();
 
-async function latestReleaseTag(repoSlug: string): Promise<string> {
+async function latestReleaseTag(repoSlug: string, force = false): Promise<string> {
   if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_.-]+$/.test(repoSlug)) {
     throw new Error("The configured GitHub repository is invalid.");
   }
-  const cached = releaseTagCache.get(repoSlug);
-  if (cached && cached.expiresAt > Date.now()) return cached.tag;
+  if (!force) {
+    const cached = releaseTagCache.get(repoSlug);
+    if (cached && cached.expiresAt > Date.now()) return cached.tag;
+  }
   const response = await fetch(`https://api.github.com/repos/${repoSlug}/releases/latest`, {
     headers: { Accept: "application/vnd.github+json", "User-Agent": "lfg-self-update" },
   });
@@ -94,6 +96,7 @@ async function latestReleaseTag(repoSlug: string): Promise<string> {
 export async function releaseUpdateStatus(
   root: string,
   install: ReleaseInstall,
+  force = false,
 ): Promise<ReleaseUpdateStatus> {
   const currentVersion = installedVersion(root);
   const repoSlug = install.repoSlug;
@@ -115,7 +118,7 @@ export async function releaseUpdateStatus(
     };
   }
   try {
-    const latestTag = await latestReleaseTag(repoSlug);
+    const latestTag = await latestReleaseTag(repoSlug, force);
     const latestVersion = cleanVersion(latestTag);
     const base = {
       channel: "release" as const,
