@@ -21,6 +21,19 @@ import {
 let ghosttyReady: Promise<void> | null = null;
 const ensureGhostty = () => (ghosttyReady ??= init());
 
+// The terminal is a self-contained dark surface (header, link tray, and key
+// controls all use this palette), regardless of the surrounding app theme.
+// Keeping Ghostty dark too also preserves the contrast of its default ANSI
+// palette, which is designed for a dark background.
+const TERMINAL_THEME = {
+  background: "#0b0b0d",
+  foreground: "#d4d4d8",
+  cursor: "#fafafa",
+  cursorAccent: "#0b0b0d",
+  selectionBackground: "#3f3f46",
+  selectionForeground: "#fafafa",
+} as const;
+
 // Merge freshly-seen URLs into the running list, most-recent first, deduped and
 // capped. `found` is chronological, so unshifting in order leaves the newest at
 // the front. Returns `prev` unchanged when nothing moved (so React can bail).
@@ -629,14 +642,11 @@ export function TermView() {
     (async () => {
       await ensureGhostty();
       if (disposed || !hostRef.current) return;
-      const isDark = document.documentElement.classList.contains("dark");
       term = new GhosttyTerminal({
         fontSize: 13,
         scrollback: 8000,
         cursorBlink: true,
-        theme: isDark
-          ? { background: "#0b0b0d", foreground: "#d4d4d8" }
-          : { background: "#ffffff", foreground: "#18181b" },
+        theme: TERMINAL_THEME,
       });
       fit = new FitAddon();
       term.loadAddon(fit);
