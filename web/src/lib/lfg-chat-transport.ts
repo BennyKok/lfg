@@ -369,14 +369,21 @@ class LfgChunkEmitter {
     }
     if (part.type !== "text-delta" && part.type !== "text-start") return;
     const incoming = part.reset ? (part.text ?? part.delta ?? "") : (part.delta ?? part.text ?? "");
-    if (part.type === "text-start" && !this.activeTextIds.has(part.id)) this.startText(part.id);
-    if (!incoming) return;
-    if (part.reset && this.activeTextIds.has(part.id) && this.textById[part.id]) {
-      this.endText(part.id);
+    const current = this.textById[part.id] ?? "";
+    let delta = incoming;
+    if (part.reset && current) {
+      // A reset is a full snapshot of the draft, not another delta. The AI SDK
+      // stream protocol is append-only, so forward only the newly-grown suffix.
+      // Replaying the whole snapshot made the live bubble repeat once per poll;
+      // a reload appeared to fix it because indexed history contains one row.
+      if (!incoming.startsWith(current)) return;
+      delta = incoming.slice(current.length);
     }
+    if (part.type === "text-start" && !this.activeTextIds.has(part.id)) this.startText(part.id);
+    if (!incoming || !delta) return;
     if (!this.activeTextIds.has(part.id)) this.startText(part.id);
-    this.textById[part.id] = part.reset ? incoming : `${this.textById[part.id] ?? ""}${incoming}`;
-    this.enqueue({ type: "text-delta", id: part.id, delta: incoming });
+    this.textById[part.id] = part.reset ? incoming : `${current}${incoming}`;
+    this.enqueue({ type: "text-delta", id: part.id, delta });
   }
 
   private handleMessage(message: LfgMessage) {

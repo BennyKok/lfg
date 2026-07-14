@@ -2125,7 +2125,7 @@ export async function listSessions(): Promise<Session[]> {
     const isCodex = e.agent === "codex";
     const isOpencode = e.agent === "opencode";
     const codexThreadId = isCodex ? (e.threadId ?? null) : null;
-    const nativeSessionId = isCodex ? codexThreadId : e.sessionId;
+    const nativeSessionId = isCodex || isOpencode ? (e.threadId ?? null) : e.sessionId;
     const managedRec = e.tmuxName ? managedByName.get(e.tmuxName) : undefined;
     rememberNativeSession(managedRec, nativeSessionId);
     const sessionId = managedVisibleId(managedRec, e.sessionId) ?? e.sessionId;
@@ -2387,7 +2387,11 @@ export type ResumableSession = {
   // Which engine the session was recorded with. "claude" resumes via the claude
   // CLI (`claude --resume`); "codex" resumes via a codex-aisdk harness keyed to
   // the rollout's threadId. The serve /resume endpoint branches on this.
-  agent: "claude" | "codex";
+  agent: "claude" | "codex" | "opencode";
+  backend?: "aisdk" | "codex-aisdk" | "opencode";
+  resumeHandle?: string | null;
+  model?: string | null;
+  assignedUser?: string | null;
 };
 
 // The cwd a codex rollout was recorded in. Codex stores it on the first
@@ -2424,7 +2428,10 @@ const RESUMABLE_ENRICH_BUDGET = 600;
 async function refreshResumableCacheOnce(): Promise<void> {
   const fingerprints = cachedFingerprints();
   const overrides = await readTitleOverrides();
-  const managedByCwd = new Map(listManaged().map((m) => [m.cwd, m]));
+  const managedSessions = listManaged();
+  const managedByCwd = new Map(managedSessions.map((m) => [m.cwd, m]));
+  const sdkEntries = new Map(listAisdkEntries().map((entry) => [entry.sessionId, entry]));
+  const assignments = userAssignments();
   const seen = new Set<string>();
   const changed: ResumableCacheRow[] = [];
 
@@ -2499,6 +2506,58 @@ async function refreshResumableCacheOnce(): Promise<void> {
       agent: "codex",
       path: t.path,
       mtimeMs: mtime,
+    });
+  }
+
+  // Managed SDK sessions are durable SQLite conversations, not transcript
+  // files. Catalog them from their managed metadata plus the direct index so a
+  // closed process remains resumable after its live registry is removed.
+  for (const m of managedSessions) {
+    if (!m.sessionId || !m.agent || !DIRECT_INDEX_MANAGED_AGENTS.has(m.agent)) continue;
+    if (!sessionHasIndexedMessages(m.sessionId)) continue;
+    const recent = await indexedRecentMessages(sessionIndexKey(m.sessionId), m.sessionId, 80)
+      .catch(() => [] as SessionMsg[]);
+    const lastActivityAt = recent.reduce<number>(
+      (max, msg) => Math.max(max, msg.ts ?? 0),
+      m.createdAt,
+    );
+    const lastUser = [...recent].reverse().find(
+      (msg) => msg.role === "user" && msg.kind === "text" && msg.text.trim(),
+    );
+    const backend = m.agent === "codex-aisdk"
+      ? "codex-aisdk"
+      : m.agent === "opencode"
+        ? "opencode"
+        : "aisdk";
+    const agent = backend === "codex-aisdk"
+      ? "codex"
+      : backend === "opencode"
+        ? "opencode"
+        : "claude";
+    const sdkEntry = sdkEntries.get(m.sessionId);
+    const resumeHandle = backend === "aisdk"
+      ? m.sessionId
+      : sdkEntry?.threadId || (m.nativeSessionId !== m.sessionId ? m.nativeSessionId : null);
+    // Codex/OpenCode cannot be resumed safely until the provider has issued
+    // its native handle. Keep the managed record for a later refresh instead
+    // of cataloging the lfg control key as if it were provider state.
+    if (!resumeHandle) continue;
+    seen.add(m.sessionId);
+    changed.push({
+      sessionId: m.sessionId,
+      cwd: m.cwd,
+      project: m.project || projectName(m.cwd, { repoRoot: m.repoRoot }),
+      title: overrides[m.sessionId] || m.title || (m.cwd ? basename(m.cwd) : "—"),
+      lastActivityAt,
+      lastUserText: lastUser?.text.trim().replace(/\s+/g, " ").slice(0, 140) || null,
+      agent,
+      path: sessionIndexKey(m.sessionId),
+      mtimeMs: lastActivityAt,
+      backend,
+      resumeHandle,
+      model: sdkEntry?.model || m.model || null,
+      assignedUser: assignments[m.tmuxName] || null,
+      managed: true,
     });
   }
 

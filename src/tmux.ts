@@ -678,6 +678,7 @@ export function spawnManagedOpencodeAisdkSession(opts: {
   key: string;
   lfgSessionId?: string;
   lfgUser?: string | null;
+  resume?: string;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   // Harmless for opencode: ensureFolderTrusted only patches ~/.claude.json and
@@ -695,6 +696,7 @@ export function spawnManagedOpencodeAisdkSession(opts: {
     "--cwd", opts.cwd,
     "--tmux", opts.name,
   ];
+  if (opts.resume) argv.push("--resume", opts.resume);
   if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
   addSessionEnv(argv, opts.lfgSessionId ?? opts.key, opts.lfgUser);
   const create = Bun.spawnSync(argv);

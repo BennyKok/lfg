@@ -171,6 +171,7 @@ import {
 } from "./lib/push";
 import { AskNavButton, AskPage, AskProvider } from "./components/ask-center";
 import { PwaInstallCallout, PwaInstallSettingsSection } from "./components/pwa-install";
+import { configuredAgentOptions } from "./lib/coding-agent-options";
 import {
   Conversation,
   ConversationContent,
@@ -211,6 +212,8 @@ type CodingAgentInfo = {
     loginCommand?: string;
   };
 };
+
+const CodingAgentsContext = createContext<CodingAgentInfo[] | undefined>(undefined);
 
 type CodingAgentAuthSession = {
   id: string;
@@ -4237,6 +4240,7 @@ export function App() {
   const liveDesktopWorkspace = tab === "live" && isWide;
 
   return (
+    <CodingAgentsContext.Provider value={codingAgents}>
     <AgentModelCatalogContext.Provider value={modelCatalog}>
     <AskProvider>
     <div ref={rootRef} className={APP_SHELL_CLASS}>
@@ -4537,6 +4541,7 @@ export function App() {
     </div>
     </AskProvider>
     </AgentModelCatalogContext.Provider>
+    </CodingAgentsContext.Provider>
   );
 }
 
@@ -5228,7 +5233,7 @@ function OnboardingFlow({
   const [prompt, setPrompt] = useState("");
   const repoCwd = cwd || repoList[0]?.cwd || "";
 
-  const configuredAgents = codingAgents.filter((a) => a.status.configured);
+  const configuredAgents = codingAgents.filter((a) => a.visible && a.status.configured);
   const installableAgents = codingAgents.filter(
     (a) => !a.status.configured && a.status.canAutoSetup,
   );
@@ -5281,7 +5286,7 @@ function OnboardingFlow({
   // recommendation), else the first configured agent, else whatever the
   // backend defaults to.
   const [sessionAgent, setSessionAgent] = useState("");
-  const selectableAgents = configuredAgents.length ? configuredAgents : codingAgents;
+  const selectableAgents = configuredAgents;
   const effectiveAgent =
     sessionAgent ||
     (selectableAgents.some((a) => a.key === "claude")
@@ -5396,6 +5401,10 @@ function OnboardingFlow({
   }
 
   async function createFirstSession() {
+    if (!selectableAgents.some((agent) => agent.key === effectiveAgent)) {
+      setError("Set up and sign in to a coding agent before starting a session.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -5739,13 +5748,15 @@ function OnboardingFlow({
                       }
                     >
                       {a.label}
-                      {!a.status.configured && (
-                        <span className="ml-1 opacity-60">(not set up)</span>
-                      )}
                     </button>
                   ))}
                 </div>
               )}
+              {!selectableAgents.length ? (
+                <p className="rounded-xl border border-border bg-muted/40 px-3 py-2.5 text-sm text-muted-foreground">
+                  Set up and sign in to a coding agent before starting a session.
+                </p>
+              ) : null}
               {repoList.length > 0 && (
                 <select
                   value={repoCwd}
@@ -5769,7 +5780,7 @@ function OnboardingFlow({
               />
               <button
                 type="button"
-                disabled={busy}
+                disabled={busy || !selectableAgents.length}
                 onClick={() => void createFirstSession()}
                 className="mt-2 flex items-center justify-center gap-2 rounded-xl bg-foreground px-3 py-2.5 text-sm font-medium text-background transition-opacity disabled:opacity-50"
               >
@@ -9161,10 +9172,15 @@ function SessionTitleSheet({
   );
 }
 
-function defaultForkAgent(sourceAgent?: string | null): AgentKind {
+function defaultForkAgent(
+  sourceAgent: string | null | undefined,
+  availableOptions: readonly { key: AgentKind }[],
+): AgentKind {
   const saved = localStorage.getItem("lfg_fork_agent") as AgentKind | null;
-  if (saved && AGENT_MODELS[saved]) return saved;
-  return sourceAgent === "codex-aisdk" ? "aisdk" : "codex-aisdk";
+  if (saved && availableOptions.some((option) => option.key === saved)) return saved;
+  const preferred = sourceAgent === "codex-aisdk" ? "aisdk" : "codex-aisdk";
+  if (availableOptions.some((option) => option.key === preferred)) return preferred;
+  return availableOptions[0]?.key ?? "aisdk";
 }
 
 function ForkSessionDialog({
@@ -9177,8 +9193,13 @@ function ForkSessionDialog({
   onCreated: () => Promise<void>;
 }) {
   const catalog = useAgentModelCatalog();
+  const codingAgents = useContext(CodingAgentsContext);
+  const availableAgentOptions = useMemo(
+    () => configuredAgentOptions(AGENT_OPTIONS, codingAgents),
+    [codingAgents],
+  );
   const defaultModelFor = (key: AgentKind) => catalog.defaults[key] ?? AGENT_DEFAULT_MODEL[key];
-  const defaultAgent = defaultForkAgent(session.agent);
+  const defaultAgent = defaultForkAgent(session.agent, availableAgentOptions);
   const [agent, setAgent] = useState<AgentKind>(() => defaultAgent);
   const [model, setModel] = useState(
     () =>
@@ -9195,6 +9216,13 @@ function ForkSessionDialog({
     if (!models.includes(model)) setModel(models[0]);
   }, [models, model]);
   useEffect(() => {
+    if (availableAgentOptions.some((option) => option.key === agent)) return;
+    const next = availableAgentOptions[0]?.key;
+    if (!next) return;
+    setAgent(next);
+    setModel(localStorage.getItem(`lfg_fork_model_${next}`) || defaultModelFor(next));
+  }, [agent, availableAgentOptions]);
+  useEffect(() => {
     if (thinkingLevels.length && !thinkingLevels.includes(thinkingLevel)) {
       setThinkingLevel(thinkingLevels.includes("high") ? "high" : thinkingLevels[0]);
     }
@@ -9203,6 +9231,10 @@ function ForkSessionDialog({
   function submit(e?: FormEvent) {
     e?.preventDefault();
     if (!sid) return;
+    if (!availableAgentOptions.some((option) => option.key === agent)) {
+      toast.error("Set up and sign in to a coding agent before forking a session.");
+      return;
+    }
     localStorage.setItem("lfg_fork_agent", agent);
     localStorage.setItem(`lfg_fork_model_${agent}`, model);
     if (agentSupportsThinking(agent)) localStorage.setItem("lfg_thinking_level", thinkingLevel);
@@ -9250,7 +9282,7 @@ function ForkSessionDialog({
 
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
           <div className="inline-flex h-8 items-center rounded-full bg-muted p-0.5 text-xs font-semibold">
-            {AGENT_OPTIONS.map(({ key, label }) => (
+            {availableAgentOptions.map(({ key, label }) => (
               <button
                 key={key}
                 type="button"
@@ -10665,8 +10697,7 @@ function ActionsPanel({
   );
 }
 
-// A closed/rebooted-away claude session that can be brought back with
-// `claude --resume` — mirrors the backend ResumableSession shape.
+// A closed/rebooted-away session that can be relaunched by its SDK backend.
 type ResumableSession = {
   sessionId: string;
   cwd: string | null;
@@ -10674,9 +10705,8 @@ type ResumableSession = {
   title: string;
   lastActivityAt: number | null;
   lastUserText: string | null;
-  // "claude" (resumes via the claude CLI) or "codex" (resumes via a codex-aisdk
-  // harness). Drives the engine label in the resume list.
-  agent: "claude" | "codex";
+  agent: "claude" | "codex" | "opencode";
+  model?: string | null;
 };
 
 // Facet counts + total returned alongside the resumable roster so the picker can
@@ -11322,6 +11352,10 @@ function NewSessionDialog({
         ? ["fable", "opus", "sonnet", "haiku"].includes(model)
           ? model
           : undefined
+        : session.agent === "opencode"
+          ? (catalog.models.opencode ?? AGENT_MODELS.opencode).includes(model)
+            ? model
+            : defaultModelFor("opencode")
         : (catalog.models["codex-aisdk"] ?? AGENT_MODELS["codex-aisdk"]).includes(model)
           ? model
           : defaultModelFor("codex-aisdk");
@@ -11436,17 +11470,13 @@ function NewSessionDialog({
   }, [thinkingLevel, thinkingLevels]);
 
   const visibleAgentOptions = useMemo(() => {
-    const visible = new Set<string>();
-    for (const item of codingAgents ?? []) {
-      if (item.visible) visible.add(item.key);
-    }
-    const filtered = codingAgents ? AGENT_OPTIONS.filter((option) => visible.has(option.key)) : AGENT_OPTIONS;
-    return filtered.length ? filtered : AGENT_OPTIONS;
+    return configuredAgentOptions(AGENT_OPTIONS, codingAgents);
   }, [codingAgents]);
 
   useEffect(() => {
     if (visibleAgentOptions.some((option) => option.key === agent)) return;
-    const next = visibleAgentOptions[0]?.key ?? "aisdk";
+    const next = visibleAgentOptions[0]?.key;
+    if (!next) return;
     setAgent(next);
     setModel(localStorage.getItem(`lfg_model_${next}`) || defaultModelFor(next));
   }, [agent, visibleAgentOptions]);
@@ -11520,6 +11550,12 @@ function NewSessionDialog({
     const taskPrompt = (overrideText ?? prompt).trim();
     const files = attachments;
     if (!taskPrompt && !files.length) return;
+    if (!visibleAgentOptions.some((option) => option.key === agent)) {
+      const message = "Set up and sign in to a coding agent before starting a session.";
+      setError(message);
+      toast.error(message);
+      return;
+    }
     const launchUser = user || null;
     const launchAgent = agent;
     const launchModel = model;
@@ -11588,7 +11624,10 @@ function NewSessionDialog({
   // show; tapping the agent icon morphs the controls row open. The drawer
   // variant is always expanded.
   const compact = variant === "inline" && !expanded;
-  const canSubmit = !!selectedRepo && (!!prompt.trim() || attachments.length > 0);
+  const canSubmit =
+    !!selectedRepo &&
+    visibleAgentOptions.some((option) => option.key === agent) &&
+    (!!prompt.trim() || attachments.length > 0);
   const selectedAgentOption =
     visibleAgentOptions.find((option) => option.key === agent) ?? visibleAgentOptions[0] ?? AGENT_OPTIONS[0];
   // Keep every agent in a fixed position so picking one never reshuffles the
@@ -12110,7 +12149,7 @@ function ResumeSessionSheet({
 
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
-  const [agent, setAgent] = useState<"all" | "claude" | "codex">("all");
+  const [agent, setAgent] = useState<"all" | "claude" | "codex" | "opencode">("all");
   const [project, setProject] = useState<string>(scoped);
   // Seed from the parent prefetch only when opening unscoped — a scoped open
   // needs its own first page, so the unfiltered seed would be wrong.
@@ -12196,7 +12235,7 @@ function ResumeSessionSheet({
     return () => obs.disconnect();
   }, []);
 
-  const agentCount = (kind: "claude" | "codex") =>
+  const agentCount = (kind: "claude" | "codex" | "opencode") =>
     facets.agents.find((a) => a.agent === kind)?.count ?? 0;
   // Keep the currently-selected project visible even if the active search would
   // otherwise drop it out of the facet list.
@@ -12210,10 +12249,11 @@ function ResumeSessionSheet({
   const filtersActive = agent !== "all" || project !== "all" || !!debounced;
   const showSkeleton = loading && items.length === 0;
 
-  const agentTabs: Array<{ key: "all" | "claude" | "codex"; label: string; badge?: number }> = [
+  const agentTabs: Array<{ key: "all" | "claude" | "codex" | "opencode"; label: string; badge?: number }> = [
     { key: "all", label: "All" },
     { key: "claude", label: "Claude", badge: agentCount("claude") },
     { key: "codex", label: "Codex", badge: agentCount("codex") },
+    { key: "opencode", label: "OpenCode", badge: agentCount("opencode") },
   ];
 
   return createPortal(
@@ -12681,19 +12721,13 @@ function AutoAgentModelPicker({
   const defaultModelFor = (key: AutoAgentBackend) =>
     catalog.defaults[key] ?? AGENT_DEFAULT_MODEL[key];
   const visibleOptions = useMemo(() => {
-    const visible = new Set<string>();
-    for (const item of codingAgents ?? []) {
-      if (item.visible) visible.add(item.key);
-    }
-    const filtered = codingAgents
-      ? AUTO_AGENT_OPTIONS.filter((option) => visible.has(option.key))
-      : AUTO_AGENT_OPTIONS;
-    return filtered.length ? filtered : AUTO_AGENT_OPTIONS;
+    return configuredAgentOptions(AUTO_AGENT_OPTIONS, codingAgents);
   }, [codingAgents]);
 
   useEffect(() => {
     if (visibleOptions.some((option) => option.key === backend)) return;
-    const next = visibleOptions[0]?.key ?? "aisdk";
+    const next = visibleOptions[0]?.key;
+    if (!next) return;
     setBackend(next);
     setModel(defaultModelFor(next));
   }, [backend, setBackend, setModel, visibleOptions]);
@@ -12706,6 +12740,9 @@ function AutoAgentModelPicker({
 
   return (
     <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      {!visibleOptions.length ? (
+        <span className="text-xs text-muted-foreground">No configured coding agents</span>
+      ) : null}
       <div className="inline-flex h-8 items-center rounded-full bg-muted p-0.5 text-xs font-semibold">
         {visibleOptions.map(({ key, label }) => (
           <button
@@ -12766,6 +12803,10 @@ function BottomSheet({
   return (
     <Drawer
       open
+      // The viewport already shrinks around the mobile keyboard. Vaul's input
+      // repositioning applies a second offset, which can push the focused auto-
+      // agent field (and the rest of the sheet) out of the visible viewport.
+      repositionInputs={false}
       onOpenChange={(open) => {
         if (!open) onClose();
       }}

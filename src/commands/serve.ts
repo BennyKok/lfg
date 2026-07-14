@@ -13,7 +13,11 @@ import {
   sourceUpdateStatus,
 } from "../self-update.ts";
 import { compressedAssetResponse, maybeCompressResponse } from "../http-compress.ts";
-import { getCachedResumableSession } from "../resume-cache.ts";
+import {
+  getCachedResumableSession,
+  updateResumableUser,
+  upsertResumableRows,
+} from "../resume-cache.ts";
 import {
   AGENTS_DIR,
   listAgents,
@@ -518,6 +522,34 @@ async function resolveResumeCwd(
   if (repo && (!dirExists(transcriptCwd) || projectName(transcriptCwd) !== project)) return repo.cwd;
   if (dirExists(transcriptCwd)) return transcriptCwd;
   return repo?.cwd || SELF_REPO;
+}
+
+function persistManagedResume(session: Session): void {
+  if (!session.sessionId) return;
+  const backend = session.agent === "aisdk"
+    ? "aisdk"
+    : session.agent === "codex-aisdk"
+      ? "codex-aisdk"
+      : session.agent === "opencode"
+        ? "opencode"
+        : null;
+  if (!backend) return;
+  upsertResumableRows([{
+    sessionId: session.sessionId,
+    cwd: session.cwd,
+    project: session.project,
+    title: session.title,
+    lastActivityAt: session.lastActivityAt ?? Date.now(),
+    lastUserText: session.lastUserText,
+    agent: backend === "codex-aisdk" ? "codex" : backend === "opencode" ? "opencode" : "claude",
+    path: sessionIndexKey(session.sessionId),
+    mtimeMs: session.lastActivityAt ?? Date.now(),
+    backend,
+    resumeHandle: session.nativeSessionId || session.sessionId,
+    model: session.model,
+    assignedUser: session.assignedUser,
+    managed: true,
+  }]);
 }
 
 // ---------- agent reports ----------
@@ -3293,10 +3325,17 @@ export async function cmdServe() {
         if (m && req.method === "POST") {
           const body = (await req.json().catch(() => null)) as { user?: string | null } | null;
           const sess = (await listSessions()).find((s) => s.sessionId === m[1]);
-          if (!sess) return err(404, "session not found");
-          if (!sess.tmuxName) return err(409, "session is not in a tmux pane — cannot tag");
-          if (!assignUser(sess.tmuxName, body?.user ?? null))
-            return err(400, "unknown user");
+          const user = body?.user ?? null;
+          if (user && !rosterEmails().includes(user)) return err(400, "unknown user");
+          if (sess) {
+            if (!sess.tmuxName) return err(409, "session is not in a tmux pane — cannot tag");
+            if (!assignUser(sess.tmuxName, user)) return err(400, "unknown user");
+            // Keep the durable session-id record in sync so closing/resuming a
+            // managed SDK session does not lose its owner when tmux is removed.
+            updateResumableUser(m[1], user);
+          } else if (!updateResumableUser(m[1], user)) {
+            return err(404, "session not found");
+          }
           return json({ ok: true });
         }
       }
@@ -3315,7 +3354,9 @@ export async function cmdServe() {
         const offset = Number(url.searchParams.get("offset")) || 0;
         const search = url.searchParams.get("search")?.trim() || undefined;
         const agentParam = url.searchParams.get("agent")?.trim();
-        const agent = agentParam === "claude" || agentParam === "codex" ? agentParam : undefined;
+        const agent = agentParam === "claude" || agentParam === "codex" || agentParam === "opencode"
+          ? agentParam
+          : undefined;
         const project = url.searchParams.get("project")?.trim() || undefined;
         const { sessions, total, facets } = await queryResumable({
           limit,
@@ -3371,13 +3412,93 @@ export async function cmdServe() {
             agent: live.agent,
           });
         }
+        const cachedResume = getCachedResumableSession(sessionId);
+
+        // Direct-indexed SDK sessions have no lfg-owned transcript JSONL to
+        // discover. Relaunch from the durable catalog and keep the same lfg key
+        // so the existing SQLite history remains the conversation read model.
+        if (cachedResume?.backend) {
+          const cwd = await resolveResumeCwd(cachedResume.cwd, cachedResume.project);
+          const tmuxName = `lfg-${randomBytes(3).toString("hex")}`;
+          const resumeHandle = cachedResume.resumeHandle || sessionId;
+          const assignedUser = body?.user || cachedResume.assignedUser || undefined;
+          if (assignedUser && !rosterEmails().includes(assignedUser)) return err(400, "unknown user");
+          const resumeModel = model || cachedResume.model || (
+            cachedResume.backend === "codex-aisdk"
+              ? "gpt-5.5"
+              : cachedResume.backend === "opencode"
+                ? OPENCODE_DEFAULT_MODEL
+                : "opus"
+          );
+          addManaged({
+            tmuxName,
+            cwd,
+            createdAt: Date.now(),
+            agent: cachedResume.backend,
+            sessionId,
+            nativeSessionId: resumeHandle,
+            launchState: "launching",
+            model: resumeModel,
+            title: cachedResume.title,
+            project: cachedResume.project || undefined,
+            repoRoot: repoRootForManagedCwd(cwd),
+          });
+          if (assignedUser) assignUser(tmuxName, assignedUser);
+          const prompt = body?.prompt?.trim() || undefined;
+          const spawned = cachedResume.backend === "codex-aisdk"
+            ? spawnManagedCodexAisdkSession({
+                name: tmuxName,
+                cwd,
+                prompt,
+                model: resumeModel,
+                key: sessionId,
+                resume: resumeHandle,
+                lfgSessionId: sessionId,
+                lfgUser: assignedUser,
+              })
+            : cachedResume.backend === "opencode"
+              ? spawnManagedOpencodeAisdkSession({
+                  name: tmuxName,
+                  cwd,
+                  prompt,
+                  model: resumeModel,
+                  key: sessionId,
+                  resume: resumeHandle,
+                  lfgSessionId: sessionId,
+                  lfgUser: assignedUser,
+                })
+              : spawnManagedAisdkSession({
+                  name: tmuxName,
+                  cwd,
+                  prompt,
+                  model: resumeModel,
+                  sessionId,
+                  lfgSessionId: sessionId,
+                  lfgUser: assignedUser,
+                });
+          if (!spawned.ok) {
+            removeManaged(tmuxName);
+            assignUser(tmuxName, null);
+            return err(502, spawned.error || "failed to resume session");
+          }
+          patchManaged(tmuxName, { launchState: "running" });
+          updateResumableUser(sessionId, assignedUser ?? null);
+          invalidateListSessionsCache();
+          return json({
+            ok: true,
+            tmuxName,
+            cwd,
+            sessionId,
+            resumedFrom: sessionId,
+            agent: cachedResume.backend,
+          });
+        }
+
         const transcript = await resolveTranscript(sessionId);
         if (!transcript) {
           console.warn(`[resume] no transcript found for ${sessionId} — cannot resume`);
           return err(404, "no transcript found for that session");
         }
-        const cachedResume = getCachedResumableSession(sessionId);
-
         // Codex rollouts live under ~/.codex/sessions — resume them through a
         // codex-aisdk harness keyed to the rollout's threadId rather than the
         // claude CLI.
@@ -4459,6 +4580,7 @@ export async function cmdServe() {
           });
           if (!sess) return err(404, "session not found");
           if (isCommandFileAgent(sess.agent)) {
+            persistManagedResume(sess);
             // Ask the harness to shut down, then tear down its supervisor pane and
             // control-plane files. markClosed tombstones the harness pid so the
             // session drops out of the list immediately. For codex-aisdk the

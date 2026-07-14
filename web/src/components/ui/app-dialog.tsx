@@ -103,7 +103,20 @@ export function AppDialogProvider({ children }: { children: React.ReactNode }) {
         }}
       >
         {request?.kind === "confirm" ? (
-          <AlertDialogContent>
+          <AlertDialogContent
+            onKeyDown={(event) => {
+              if (event.metaKey || event.ctrlKey || event.altKey || event.nativeEvent.isComposing) return
+
+              const key = event.key.toLowerCase()
+              if (key !== "y" && key !== "n") return
+
+              // Keep app-level shortcuts behind the modal from also handling
+              // the confirmation keystroke.
+              event.preventDefault()
+              event.stopPropagation()
+              finish(key === "y")
+            }}
+          >
             <AlertDialogHeader>
               <AlertDialogTitle>{request.options.title}</AlertDialogTitle>
               {request.options.description ? (
@@ -111,10 +124,11 @@ export function AppDialogProvider({ children }: { children: React.ReactNode }) {
               ) : null}
             </AlertDialogHeader>
             <AlertDialogFooter>
-              <AlertDialogCancel onClick={() => finish(false)}>
+              <AlertDialogCancel aria-keyshortcuts="N" onClick={() => finish(false)}>
                 {request.options.cancelLabel ?? "Cancel"}
               </AlertDialogCancel>
               <AlertDialogAction
+                aria-keyshortcuts="Y"
                 variant={request.options.destructive ? "destructive" : "default"}
                 onClick={() => finish(true)}
               >

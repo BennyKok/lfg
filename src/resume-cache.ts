@@ -8,7 +8,7 @@
 //
 // The scan/enrich orchestration lives in sessions.ts (it owns the transcript
 // helpers); this module owns only persistence + querying.
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import { PATHS } from "./config";
@@ -19,7 +19,14 @@ import type { ResumableSession } from "./sessions";
 export type ResumableCacheRow = ResumableSession & {
   path: string | null;
   mtimeMs: number;
+  backend?: ResumableBackend | null;
+  resumeHandle?: string | null;
+  model?: string | null;
+  assignedUser?: string | null;
+  managed?: boolean;
 };
+
+export type ResumableBackend = "aisdk" | "codex-aisdk" | "opencode";
 
 export type ResumableQuery = {
   limit?: number;
@@ -56,6 +63,11 @@ type Row = {
   agent: string;
   path: string | null;
   mtime_ms: number;
+  backend: string | null;
+  resume_handle: string | null;
+  model: string | null;
+  assigned_user: string | null;
+  managed: number;
 };
 
 const DB_PATH = join(PATHS.data, "resume-cache.sqlite");
@@ -93,6 +105,14 @@ function init(): Database {
     CREATE INDEX IF NOT EXISTS resumable_sessions_project
       ON resumable_sessions(project);
   `);
+  const version = d.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0;
+  if (version < 1) {
+    const migration = readFileSync(
+      new URL("./migrations/resume-cache/001_managed_session_resume.sql", import.meta.url),
+      "utf8",
+    );
+    d.exec(migration);
+  }
   initialized = true;
   return d;
 }
@@ -105,7 +125,11 @@ function toSession(row: Row): ResumableSession {
     title: row.title,
     lastActivityAt: row.last_activity_at,
     lastUserText: row.last_user_text,
-    agent: (row.agent === "codex" ? "codex" : "claude") as ResumableSession["agent"],
+    agent: (row.agent === "codex" || row.agent === "opencode" ? row.agent : "claude") as ResumableSession["agent"],
+    backend: (row.backend || undefined) as ResumableSession["backend"],
+    resumeHandle: row.resume_handle,
+    model: row.model,
+    assignedUser: row.assigned_user,
   };
 }
 
@@ -128,8 +152,9 @@ export function upsertResumableRows(rows: ResumableCacheRow[]): void {
   const d = init();
   const stmt = d.query(`
     INSERT INTO resumable_sessions
-      (session_id, cwd, project, title, last_user_text, last_activity_at, agent, path, mtime_ms)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (session_id, cwd, project, title, last_user_text, last_activity_at, agent, path, mtime_ms,
+       backend, resume_handle, model, assigned_user, managed)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(session_id) DO UPDATE SET
       cwd = excluded.cwd,
       project = excluded.project,
@@ -138,7 +163,12 @@ export function upsertResumableRows(rows: ResumableCacheRow[]): void {
       last_activity_at = excluded.last_activity_at,
       agent = excluded.agent,
       path = excluded.path,
-      mtime_ms = excluded.mtime_ms
+      mtime_ms = excluded.mtime_ms,
+      backend = COALESCE(excluded.backend, resumable_sessions.backend),
+      resume_handle = COALESCE(excluded.resume_handle, resumable_sessions.resume_handle),
+      model = COALESCE(excluded.model, resumable_sessions.model),
+      assigned_user = COALESCE(excluded.assigned_user, resumable_sessions.assigned_user),
+      managed = MAX(excluded.managed, resumable_sessions.managed)
   `);
   d.transaction((batch: ResumableCacheRow[]) => {
     for (const r of batch) {
@@ -152,6 +182,11 @@ export function upsertResumableRows(rows: ResumableCacheRow[]): void {
         r.agent,
         r.path,
         r.mtimeMs,
+        r.backend ?? null,
+        r.resumeHandle ?? null,
+        r.model ?? null,
+        r.assignedUser ?? null,
+        r.managed ? 1 : 0,
       );
     }
   })(rows);
@@ -162,7 +197,7 @@ export function upsertResumableRows(rows: ResumableCacheRow[]): void {
 export function pruneResumableExcept(keep: Set<string>): void {
   const d = init();
   const existing = d
-    .query<{ session_id: string }, []>("SELECT session_id FROM resumable_sessions")
+    .query<{ session_id: string }, []>("SELECT session_id FROM resumable_sessions WHERE managed = 0")
     .all();
   const stale = existing.filter((r) => !keep.has(r.session_id)).map((r) => r.session_id);
   if (!stale.length) return;
@@ -176,12 +211,20 @@ export function getCachedResumableSession(sessionId: string): ResumableSession |
   const d = init();
   const row = d
     .query<Row, [string]>(`
-      SELECT session_id, cwd, project, title, last_user_text, last_activity_at, agent, path, mtime_ms
+      SELECT session_id, cwd, project, title, last_user_text, last_activity_at, agent, path, mtime_ms,
+             backend, resume_handle, model, assigned_user, managed
       FROM resumable_sessions
       WHERE session_id = ?
     `)
     .get(sessionId);
   return row ? toSession(row) : null;
+}
+
+export function updateResumableUser(sessionId: string, user: string | null): boolean {
+  const result = init()
+    .query("UPDATE resumable_sessions SET assigned_user = ? WHERE session_id = ?")
+    .run(user, sessionId);
+  return Number(result.changes ?? 0) > 0;
 }
 
 // Turn "foo bar" into an AND of case-insensitive substring predicates over the
@@ -268,7 +311,8 @@ export function queryResumableCache(opts: ResumableQuery = {}): ResumableQueryRe
 
   const rows = d
     .query<Row, (string | number)[]>(`
-      SELECT session_id, cwd, project, title, last_user_text, last_activity_at, agent, path, mtime_ms
+      SELECT session_id, cwd, project, title, last_user_text, last_activity_at, agent, path, mtime_ms,
+             backend, resume_handle, model, assigned_user, managed
       FROM resumable_sessions
       ${whereSql}
       ORDER BY last_activity_at IS NULL, last_activity_at DESC, session_id DESC
