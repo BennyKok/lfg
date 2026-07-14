@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PATHS } from "./config.ts";
-import { createProjectFolder } from "./repos-store.ts";
-import { prepareSessionWorktree, WORKTREE_ROOT } from "./worktree.ts";
+import { createProjectFolder, useProjectFolder } from "./repos-store.ts";
+import { prepareSessionWorktree, resolveSessionCwd, WORKTREE_ROOT } from "./worktree.ts";
 
 function git(cwd: string, ...args: string[]): string {
   const result = Bun.spawnSync(["git", "-C", cwd, ...args], {
@@ -61,5 +61,21 @@ describe("project creation", () => {
     await expect(createProjectFolder(root, "test")).rejects.toThrow();
 
     expect(existsSync(join(root, "test"))).toBe(false);
+  });
+
+  test("launches the first session in an existing folder before it has a commit", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lfg-project-existing-"));
+    roots.push(root);
+    PATHS.data = join(root, "data");
+    const folder = join(root, "existing");
+    mkdirSync(folder);
+    writeFileSync(join(folder, "notes.txt"), "keep me\n");
+
+    const repo = await useProjectFolder(folder);
+    expect(Bun.spawnSync(["git", "-C", repo.cwd, "rev-parse", "HEAD"]).exitCode).not.toBe(0);
+
+    const resolved = resolveSessionCwd(repo.cwd, `unborn-${crypto.randomUUID().slice(0, 8)}`);
+    expect(resolved).toEqual({ ok: true, cwd: repo.cwd });
+    expect(readFileSync(join(folder, "notes.txt"), "utf8")).toBe("keep me\n");
   });
 });

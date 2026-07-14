@@ -33,6 +33,10 @@ export function isGitRepo(path: string): boolean {
   return git(resolve(path), ["rev-parse", "--git-dir"]).ok;
 }
 
+function hasHeadCommit(path: string): boolean {
+  return git(resolve(path), ["rev-parse", "--verify", "--quiet", "HEAD"]).ok;
+}
+
 export function sessionWorktreeEnabled(): boolean {
   return process.env.LFG_SESSION_WORKTREE !== "0";
 }
@@ -54,7 +58,12 @@ export function shouldAutoWorktree(
   if (!sessionWorktreeEnabled()) return false;
   if (opts?.voice) return false;
   if (opts?.selfRepo && resolve(opts.selfRepo) === abs) return false;
-  return isGitRepo(abs);
+  // "Use this folder" can initialize an existing directory as an unborn Git
+  // repository. There is no commit from which Git can create a worktree yet,
+  // but the first coding agent still needs to launch so it can inspect the
+  // existing files and make that commit. Run that first session in place;
+  // subsequent sessions regain normal worktree isolation once HEAD exists.
+  return isGitRepo(abs) && hasHeadCommit(abs);
 }
 
 function worktreeBaseRef(repo: string): { ok: true; ref: string } | { ok: false; error: string } {

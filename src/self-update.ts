@@ -42,14 +42,46 @@ type CommandResult = { ok: boolean; stdout: string; stderr: string };
 const OMG_SERVE_SCRIPT = ".omg/agent-serve.sh";
 const OMG_SERVE_PID = ".omg/agent-serve.pid";
 
-async function run(cmd: string[], cwd: string): Promise<CommandResult> {
-  const proc = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "pipe" });
+async function run(
+  cmd: string[],
+  cwd: string,
+  env: Record<string, string | undefined> = process.env,
+): Promise<CommandResult> {
+  const proc = Bun.spawn(cmd, { cwd, env, stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
   return { ok: code === 0, stdout: stdout.trim(), stderr: stderr.trim() };
+}
+
+// Sandboxes can inject TAR_OPTIONS (notably --keep-old-files), which turns a
+// normal release update into hundreds of "Cannot open: File exists" failures.
+// Release contents are application files and are meant to replace the prior
+// bundle. Avoid restoring archive metadata too: shared/sandbox filesystems may
+// allow writes while rejecting chmod/chown/utime, causing a successful content
+// update to be reported as a tar failure.
+export async function extractReleaseArchive(
+  archive: string,
+  root: string,
+): Promise<CommandResult> {
+  return run(
+    [
+      "tar",
+      "-xzf",
+      archive,
+      "-C",
+      root,
+      "--strip-components=1",
+      "--overwrite",
+      "--no-same-owner",
+      "--no-same-permissions",
+      "--touch",
+    ],
+    root,
+    { ...process.env, TAR_OPTIONS: "" },
+  );
 }
 
 function short(sha: string): string {
@@ -342,7 +374,7 @@ export async function applyReleaseUpdate(
       throw new Error("The release bundle contains unsafe paths.");
     }
 
-    const extract = await run(["tar", "-xzf", archive, "-C", root, "--strip-components=1"], root);
+    const extract = await extractReleaseArchive(archive, root);
     if (!extract.ok) throw new Error(extract.stderr || "Could not extract the release bundle.");
 
     rmSync(join(root, "node_modules"), { recursive: true, force: true });

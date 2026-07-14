@@ -2,6 +2,17 @@
 
 Recent product updates and deployment notes.
 
+## July 14, 2026 - Sandbox-safe release updates (v0.1.32)
+
+- Release setup and in-app updates now ignore host-injected tar defaults,
+  replace the prior application bundle explicitly, and avoid restoring archive
+  ownership, permissions, or timestamps that restricted sandbox filesystems can
+  reject.
+- Existing folders initialized as new Git repositories can now launch their
+  first coding-agent session before an initial commit exists. That first session
+  runs in the selected folder; normal isolated worktrees resume after HEAD is
+  created.
+
 ## July 13, 2026 - Blank-project picker fixes (v0.1.31)
 
 - Fresh installs now create their configured repository root when the project

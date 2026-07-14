@@ -332,8 +332,12 @@ else
   fi
   mkdir -p "$LFG_DIR"
   # Strip the leading lfg/ dir; leaves $LFG_DIR/.env and data/ (not in the tarball) intact.
+  # Explicitly replace application files and skip archive metadata. Some hosted
+  # sandboxes inject TAR_OPTIONS=--keep-old-files and/or reject chmod/chown/utime
+  # even though the workspace itself is writable.
   say "Extracting into ${LFG_DIR}..."
-  tar -xzf "$TMP_TGZ" -C "$LFG_DIR" --strip-components=1
+  TAR_OPTIONS= tar -xzf "$TMP_TGZ" -C "$LFG_DIR" --strip-components=1 \
+    --overwrite --no-same-owner --no-same-permissions --touch
   rm -f "$TMP_TGZ" "$TMP_TGZ.sha256"
 
   if [ "${LFG_SKIP_BUN_INSTALL:-0}" != "1" ]; then

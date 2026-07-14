@@ -1,8 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { releaseUpdateStatus, restartCommand, sourceUpdateStatus } from "./self-update.ts";
+import {
+  extractReleaseArchive,
+  releaseUpdateStatus,
+  restartCommand,
+  sourceUpdateStatus,
+} from "./self-update.ts";
 
 const cleanup: string[] = [];
 const realFetch = globalThis.fetch;
@@ -91,6 +96,33 @@ describe("release update status", () => {
 
     const status = await releaseUpdateStatus(root, { repoSlug: "example/lfg-current-test" });
     expect(status.state).toBe("up-to-date");
+  });
+});
+
+describe("release extraction", () => {
+  test("overwrites bundle files even when the host injects keep-old-files", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lfg-release-extract-"));
+    cleanup.push(root);
+    const stage = join(root, "stage");
+    const target = join(root, "target");
+    const archive = join(root, "bundle.tar.gz");
+    mkdirSync(join(stage, "lfg", "src"), { recursive: true });
+    mkdirSync(join(target, "src"), { recursive: true });
+    writeFileSync(join(stage, "lfg", "src", "index.ts"), "new\n");
+    writeFileSync(join(target, "src", "index.ts"), "old\n");
+    const packed = Bun.spawnSync(["tar", "-C", stage, "-czf", archive, "lfg"]);
+    expect(packed.exitCode, packed.stderr.toString()).toBe(0);
+
+    const priorTarOptions = process.env.TAR_OPTIONS;
+    process.env.TAR_OPTIONS = "--keep-old-files";
+    try {
+      const extracted = await extractReleaseArchive(archive, target);
+      expect(extracted.ok, extracted.stderr).toBe(true);
+    } finally {
+      if (priorTarOptions === undefined) delete process.env.TAR_OPTIONS;
+      else process.env.TAR_OPTIONS = priorTarOptions;
+    }
+    expect(readFileSync(join(target, "src", "index.ts"), "utf8")).toBe("new\n");
   });
 });
 
