@@ -5089,6 +5089,52 @@ function UsageRingsButton({
   );
 }
 
+function ManageSessionsMenu({
+  projectFilter,
+  onSelect,
+}: {
+  projectFilter: string;
+  onSelect: (template: ManageSessionPromptTemplate) => void;
+}) {
+  const scopeLabel = projectFilter === "__all" ? "All projects" : shortProject(projectFilter);
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <button
+            type="button"
+            aria-label="Manage sessions"
+            title={`Manage sessions: ${scopeLabel}`}
+            className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors duration-200 ease-out hover:text-foreground active:scale-[0.96]"
+          />
+        }
+      >
+        <ClipboardList className="size-[18px]" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-72">
+        <DropdownMenuLabel className="space-y-1">
+          <span className="block text-xs font-semibold">Manage Sessions</span>
+          <span className="block truncate text-[11px] font-normal text-muted-foreground">
+            Scope: {scopeLabel}
+          </span>
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        {MANAGE_SESSION_PROMPTS.map((template) => (
+          <DropdownMenuItem
+            key={template.id}
+            className="flex cursor-pointer flex-col items-start gap-0.5 py-2"
+            onClick={() => onSelect(template)}
+          >
+            <span className="text-sm font-medium">{template.label}</span>
+            <span className="text-xs text-muted-foreground">{template.description}</span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function ProjectFilterMenu({
   value,
   projects,

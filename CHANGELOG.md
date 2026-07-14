@@ -2,6 +2,21 @@
 
 Recent product updates and deployment notes.
 
+## July 14, 2026 - Installable app and resilient recovery (v0.1.34)
+
+- Added a discoverable PWA install flow on desktop and mobile, including the
+  native Chromium prompt, guided Apple installation steps, standalone detection,
+  and proper platform, maskable, and Apple touch icons.
+- Managed SDK sessions now keep a durable resume record with their model,
+  project, and assigned user, so closed or restarted sessions can be recovered
+  reliably. OpenCode sessions also participate in the agent filters and model
+  pickers throughout the web UI.
+- Theme choices now persist across reloads, and voice provider API keys can be
+  configured securely from the setup dialog.
+- The Manage Sessions launcher now stays accessible in the appropriate desktop
+  and mobile navigation positions, and the OMG badge points to the correct
+  template page.
+
 ## July 14, 2026 - Ready-by-default live sessions (v0.1.33)
 
 - WebSocket live transcripts are now the default for the server and web client,
