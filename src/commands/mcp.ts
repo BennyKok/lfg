@@ -48,6 +48,9 @@ type ImageArtifactResponse = {
     name?: string;
   };
 };
+type AskQuestionResponse = {
+  answer: string;
+};
 
 const VERSION = "0.1.19";
 
@@ -348,6 +351,35 @@ export async function cmdMcp() {
           `The user has been notified. Do not wait or poll. Continue other safe work or end your turn now; ` +
           `the answer will arrive later as a user message starting with "[ask-user answer ${data.id}]".`,
       });
+    },
+  );
+
+  server.registerTool(
+    "lfg_ask_question",
+    {
+      title: "Ask LFG A Question",
+      description:
+        "Ask LFG's deep-thinking advisor a technical or informative question and wait for its concise answer. Use this when the human wants an answer from LFG, optionally grounded in a specific repository. This is the opposite direction from lfg_ask_user, which asks the human to make a decision.",
+      inputSchema: {
+        question: z
+          .string()
+          .min(1)
+          .describe("The question for the advisor, in clear plain language."),
+        cwd: z
+          .string()
+          .optional()
+          .describe(
+            "Optional repository directory to inspect for context. Defaults to the LFG repository.",
+          ),
+      },
+    },
+    async ({ question, cwd }) => {
+      const data = await api<AskQuestionResponse>("/api/voice/consult", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question, cwd }),
+      });
+      return result({ answer: data.answer });
     },
   );
 
