@@ -1252,6 +1252,23 @@ html.lfg-keyboard-open {
   .lfg-pending-breathe {
     animation: lfg-pending-breathe 1.4s ease-in-out infinite;
   }
+  /* Desktop rail rows: a light staggered rise-in echoing the mobile card's
+     lfg-card-in, so the rail list lands with the same motion language instead
+     of popping in flat. Stagger runs off nth-child within each rail group. */
+  @keyframes lfg-rail-in {
+    from { opacity: 0; transform: translateY(5px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .lfg-rail-in {
+    animation: lfg-rail-in 320ms var(--ease-ios) both;
+  }
+  .lfg-rail-in:nth-child(2) { animation-delay: 30ms; }
+  .lfg-rail-in:nth-child(3) { animation-delay: 60ms; }
+  .lfg-rail-in:nth-child(4) { animation-delay: 90ms; }
+  .lfg-rail-in:nth-child(5) { animation-delay: 120ms; }
+  .lfg-rail-in:nth-child(6) { animation-delay: 150ms; }
+  .lfg-rail-in:nth-child(n + 7) { animation-delay: 180ms; }
+
   /* Ping-pong marquee for a one-line title that's too wide to fit. Pauses at
      each end (the 0–10% / 90–100% holds) so the start and end of the text are
      both readable. Scroll distance is fed in via --lfg-marquee-shift and the
@@ -1266,6 +1283,7 @@ html.lfg-keyboard-open {
   }
   @media (prefers-reduced-motion: reduce) {
     .lfg-card-in { animation: none; }
+    .lfg-rail-in { animation: none; }
     .lfg-composer-launching { animation: none; }
     .lfg-pending-card { animation: none; }
     .lfg-pending-breathe { animation: none; }
