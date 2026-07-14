@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Check, ExternalLink, KeyRound } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Dialog,
   DialogContent,
@@ -63,20 +64,13 @@ export async function ensureVoiceConfigured(capability: VoiceCapability): Promis
   }
 }
 
-function command(text: string) {
-  return (
-    <code className="block overflow-x-auto rounded-xl bg-muted px-3 py-2 text-xs text-foreground">
-      {text}
-    </code>
-  );
-}
-
 export function VoiceSetupDialog() {
   const [open, setOpen] = useState(false);
   const [capability, setCapability] = useState<VoiceCapability>("call");
   const [cfg, setCfg] = useState<VoiceConfig | null>(null);
   const [providerId, setProviderId] = useState("");
-  const [checking, setChecking] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
 
   const load = useCallback(async () => {
@@ -92,6 +86,7 @@ export function VoiceSetupDialog() {
       const detail = (event as CustomEvent<{ capability?: VoiceCapability }>).detail;
       const nextCapability = detail?.capability ?? "call";
       setCapability(nextCapability);
+      setApiKey("");
       setMessage("");
       setOpen(true);
       void load()
@@ -115,21 +110,35 @@ export function VoiceSetupDialog() {
   }, [capability, cfg]);
   const provider = providers.find((item) => item.id === providerId) ?? providers[0];
 
-  const checkAgain = async () => {
-    setChecking(true);
+  const saveKey = async () => {
+    if (!provider || !apiKey.trim()) return;
+    setSaving(true);
     setMessage("");
     try {
+      const selection = capability === "input"
+        ? { sttProvider: provider.id }
+        : capability === "output"
+          ? { ttsProvider: provider.id }
+          : { sttProvider: provider.id, ttsProvider: provider.id };
+      const response = await fetch("/api/voice/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ providerId: provider.id, apiKey: apiKey.trim(), ...selection }),
+      });
+      const result = (await response.json().catch(() => null)) as { error?: string } | null;
+      if (!response.ok) throw new Error(result?.error || "Could not save the API key");
       const next = await load();
+      setApiKey("");
       if (voiceReady(next, capability)) {
-        setMessage("Voice is configured. You can try again now.");
+        setMessage("API key saved. Voice is ready to use.");
         window.setTimeout(() => setOpen(false), 700);
       } else {
-        setMessage("The key is still not available. Save .env and restart LFG, then check again.");
+        setMessage("API key saved, but this voice configuration is not ready yet.");
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error));
     } finally {
-      setChecking(false);
+      setSaving(false);
     }
   };
 
@@ -168,26 +177,31 @@ export function VoiceSetupDialog() {
         ) : null}
 
         {provider && cfg ? (
-          <ol className="space-y-4 text-sm">
-            <li className="space-y-2">
-              <p><span className="mr-2 font-semibold">1.</span>Create or copy a {provider.label.replace(/ \(.+\)$/, "")} API key.</p>
+          <div className="space-y-4 text-sm">
+            <div className="space-y-2">
+              <p>Create or copy a {provider.label.replace(/ \(.+\)$/, "")} API key.</p>
               <Button variant="outline" size="sm" render={<a href={provider.accountUrl} target="_blank" rel="noreferrer" />}>
                 Open API keys <ExternalLink className="size-3.5" />
               </Button>
-            </li>
-            <li className="space-y-2">
-              <p><span className="mr-2 font-semibold">2.</span>Add the key to the server environment file.</p>
-              {command(`${provider.envVar}=your_key_here`)}
-              <p className="break-all text-xs text-muted-foreground">{cfg.setup.envFile}</p>
-            </li>
-            <li className="space-y-2">
-              <p><span className="mr-2 font-semibold">3.</span>Restart LFG so it loads the new key.</p>
-              {command(cfg.setup.restartCommand)}
-            </li>
-            <li>
-              <p><span className="mr-2 font-semibold">4.</span>Return here and check the setup.</p>
-            </li>
-          </ol>
+            </div>
+            <div className="space-y-2">
+              <label htmlFor="voice-api-key" className="font-medium">API key</label>
+              <Input
+                id="voice-api-key"
+                type="password"
+                value={apiKey}
+                autoComplete="off"
+                placeholder={provider.available ? "Enter a new key to replace the current one" : "Paste your API key"}
+                onChange={(event) => setApiKey(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void saveKey();
+                }}
+              />
+              <p className="text-xs text-muted-foreground">
+                Saved securely to the server environment. The key is never sent back to the browser.
+              </p>
+            </div>
+          </div>
         ) : (
           <p className="text-sm text-muted-foreground">Loading voice providers…</p>
         )}
@@ -195,8 +209,8 @@ export function VoiceSetupDialog() {
         {message ? <p role="status" className="text-sm text-muted-foreground">{message}</p> : null}
         <DialogFooter>
           <Button type="button" variant="outline" onClick={() => setOpen(false)}>Not now</Button>
-          <Button type="button" disabled={checking || !cfg} onClick={() => void checkAgain()}>
-            {checking ? "Checking…" : "I restarted — check again"}
+          <Button type="button" disabled={saving || !cfg || !provider || !apiKey.trim()} onClick={() => void saveKey()}>
+            {saving ? "Saving…" : "Save API key"}
           </Button>
         </DialogFooter>
       </DialogContent>

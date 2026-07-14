@@ -5,12 +5,14 @@
 // honours, which the worker consumes verbatim:
 //   TTS  → raw 24 kHz mono int16 PCM byte stream (no container/header)
 //   STT  → JSON { text }   (input is octet-stream WAV)
-// Secrets (API keys / upstream tokens) stay in env; the only thing persisted to
-// disk (data/voice-settings.json) is the *choice* of provider — never a key.
+// Secrets (API keys / upstream tokens) stay server-side. Provider choices live
+// in data/voice-settings.json; keys entered in the setup dialog are written to
+// the server's .env file and are never returned to the browser.
 
-import { mkdir } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { randomBytes } from "node:crypto";
 import { PATHS } from "./config.ts";
 
 export type VoiceSettings = {
@@ -471,6 +473,58 @@ const STT: Record<string, SttProvider> = {
   [sttElevenLabs.id]: sttElevenLabs,
   [sttOpenAI.id]: sttOpenAI,
 };
+
+function providerById(id: string): TtsProvider | SttProvider | undefined {
+  return TTS[id] ?? STT[id];
+}
+
+/** Replace or append one environment assignment without disturbing comments. */
+export async function writeEnvValue(envFile: string, name: string, value: string): Promise<void> {
+  let current = "";
+  let mode = 0o600;
+  try {
+    current = await readFile(envFile, "utf8");
+    mode = (await stat(envFile)).mode & 0o777;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  const assignment = `${name}=${value}`;
+  const lines = current.split(/\r?\n/);
+  let replaced = false;
+  const nextLines = lines.map((line) => {
+    if (!new RegExp(`^\\s*(?:export\\s+)?${name}\\s*=`).test(line)) return line;
+    replaced = true;
+    return assignment;
+  });
+  if (!replaced) {
+    if (nextLines.at(-1) === "") nextLines[nextLines.length - 1] = assignment;
+    else nextLines.push(assignment);
+  }
+  const next = nextLines.join("\n");
+  const temp = `${envFile}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  try {
+    await writeFile(temp, next, { encoding: "utf8", mode, flag: "wx" });
+    await chmod(temp, mode);
+    await rename(temp, envFile);
+  } catch (error) {
+    await unlink(temp).catch(() => {});
+    throw error;
+  }
+}
+
+export async function saveVoiceProviderKey(providerId: string, apiKey: string): Promise<void> {
+  const provider = providerById(providerId);
+  if (!provider) throw new Error("unknown voice provider");
+  const key = apiKey.trim();
+  // Voice-provider keys are opaque, single-token credentials. Keeping the env
+  // value to this character set also prevents shell/.env syntax injection.
+  if (!key || key.length > 4096 || !/^[A-Za-z0-9._-]+$/.test(key)) {
+    throw new Error("invalid API key format");
+  }
+  await writeEnvValue(join(PATHS.root, ".env"), provider.envVar, key);
+  process.env[provider.envVar] = key;
+}
 
 // ------------------------------------------------------------ settings store
 

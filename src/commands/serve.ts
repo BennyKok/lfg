@@ -175,6 +175,7 @@ import {
   transcribeStt,
   getVoiceSettings,
   setVoiceSettings,
+  saveVoiceProviderKey,
   listProviders,
   voiceSetupInfo,
   openSttStream,
@@ -2002,9 +2003,10 @@ export async function cmdServe() {
       // ---- voice provider config: which TTS/STT provider the proxies use.
       // The selection lives server-side (data/voice-settings.json) because the
       // Python worker's TTS/STT calls go agent→proxy and never see the browser;
-      // localStorage alone wouldn't reach them. Secrets stay in env — this only
-      // stores the *choice*. GET returns current settings + the provider list
-      // (with availability) so the UI can grey out unconfigured ones.
+      // localStorage alone wouldn't reach them. Secrets stay server-side; POST
+      // can persist a known provider's key to .env without returning it. GET
+      // returns current settings + availability so the UI can grey out
+      // unconfigured providers.
       if (path === "/api/voice/config" && req.method === "GET") {
         return json({
           settings: await getVoiceSettings(),
@@ -2013,9 +2015,27 @@ export async function cmdServe() {
         });
       }
       if (path === "/api/voice/config" && req.method === "POST") {
-        const b = (await req.json().catch(() => null)) as Partial<VoiceSettings> | null;
+        const b = (await req.json().catch(() => null)) as
+          | (Partial<VoiceSettings> & { providerId?: string; apiKey?: string })
+          | null;
         if (!b) return err(400, "expected body");
-        return json({ settings: await setVoiceSettings(b) });
+        if (b.apiKey !== undefined) {
+          if (!b.providerId) return err(400, "providerId is required with apiKey");
+          try {
+            await saveVoiceProviderKey(b.providerId, b.apiKey);
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "";
+            if (message === "unknown voice provider" || message === "invalid API key format") {
+              return err(400, message);
+            }
+            console.error("[voice] could not save provider API key", error);
+            return err(500, "could not save API key");
+          }
+        }
+        return json({
+          settings: await setVoiceSettings(b),
+          providers: listProviders(),
+        });
       }
 
       // ---- onboarding: first-run state (user profiles created in-app, step
