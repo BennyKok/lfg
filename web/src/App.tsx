@@ -7052,7 +7052,7 @@ function RailStage({
   return (
     <div className="flex h-full min-h-0 gap-3">
       <aside
-        className="flex h-full min-h-0 shrink-0 flex-col overflow-hidden rounded-xl border border-border bg-card transition-[width] duration-200 ease-ios"
+        className="lfg-gborder flex h-full min-h-0 shrink-0 flex-col overflow-hidden rounded-xl border border-transparent bg-card shadow-[0_12px_40px_-28px_rgba(0,0,0,0.5)] transition-[width] duration-200 ease-ios"
         style={{ width: railCollapsed ? 56 : 280 }}
       >
         {railCollapsed ? (
@@ -7087,31 +7087,13 @@ function RailStage({
             ) : null}
           </div>
         ) : (
-          <div className="flex shrink-0 flex-col gap-1.5 border-b border-border px-2 py-2">
+          <div className="flex shrink-0 flex-col gap-2 border-b border-border px-2 py-2">
+            {/* Fresh header: the lfg mark + project folder (same
+                ProjectFilterMenu as mobile) lead, the user avatar anchors the
+                right edge with Ask/Settings beside it. No "Sessions" label —
+                the list below speaks for itself. */}
             <div className="flex items-center gap-1.5">
-              <img src="/icon.svg" alt="lfg" className="size-5 shrink-0" />
-              <span className="min-w-0 flex-1 truncate text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Sessions · {sessions.length}
-              </span>
-              <button
-                type="button"
-                onClick={onNew}
-                aria-label="New session"
-                title="New session"
-                className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
-              >
-                <Plus className="size-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setRailCollapsed((v) => !v)}
-                aria-label="Collapse sidebar"
-                className="flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
-              >
-                <PanelLeftClose className="size-4" />
-              </button>
-            </div>
-            <div className="flex flex-wrap items-center gap-1">
+              <img src="/icon.svg" alt="lfg" className="size-6 shrink-0 rounded-md" />
               {onProjectChange ? (
                 <ProjectFilterMenu
                   value={projectFilter}
@@ -7119,14 +7101,7 @@ function RailStage({
                   onChange={onProjectChange}
                 />
               ) : null}
-              {onUserChange ? (
-                <UserFilterMenu
-                  value={userFilter}
-                  users={users}
-                  onChange={onUserChange}
-                />
-              ) : null}
-              <div className="ml-auto flex items-center gap-0.5">
+              <div className="ml-auto flex items-center gap-1">
                 {onOpenAsk ? (
                   <AskNavButton active={false} onOpen={onOpenAsk} />
                 ) : null}
@@ -7138,7 +7113,36 @@ function RailStage({
                     label="Settings"
                   />
                 ) : null}
+                {onUserChange ? (
+                  <UserFilterMenu
+                    value={userFilter}
+                    users={users}
+                    onChange={onUserChange}
+                  />
+                ) : null}
               </div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={onNew}
+                className="lfg-gborder flex h-8 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full border border-transparent bg-muted/50 px-3 text-[13px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <Plus className="size-3.5 shrink-0" />
+                <span className="truncate">New session</span>
+                <kbd className="ml-0.5 shrink-0 rounded-[5px] bg-background/70 px-1.5 py-px font-mono text-[10px] font-medium text-muted-foreground ring-1 ring-inset ring-border">
+                  C
+                </kbd>
+              </button>
+              <button
+                type="button"
+                onClick={() => setRailCollapsed((v) => !v)}
+                aria-label="Collapse sidebar"
+                title="Collapse sidebar"
+                className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"
+              >
+                <PanelLeftClose className="size-4" />
+              </button>
             </div>
           </div>
         )}
@@ -7194,14 +7198,35 @@ function RailStage({
                 data-stage-sid={sid}
                 className="h-full min-h-0 min-w-0"
               >
-                {renderStageCard(node, () => closeColumn(sid))}
+                {/* A lone pane has nothing to "close back to" — hide the X
+                    until a second column exists. */}
+                {renderStageCard(
+                  node,
+                  stageColumns.length > 1 ? () => closeColumn(sid) : undefined,
+                )}
               </div>
             );
           })
         ) : (
-          <div className="flex h-full flex-1 flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border text-center text-sm text-muted-foreground">
-            <MessageSquare className="size-6" />
-            <span>Select a session from the rail to open it here.</span>
+          <div className="flex h-full flex-1 flex-col items-center justify-center">
+            <div className="lfg-gborder flex flex-col items-center gap-3 rounded-3xl border border-transparent bg-card px-8 py-10 text-center shadow-[0_12px_40px_-24px_rgba(0,0,0,0.5)]">
+              <div className="lfg-gborder flex size-14 items-center justify-center rounded-2xl border border-transparent bg-muted">
+                <MessageSquare className="size-6 text-muted-foreground" />
+              </div>
+              <div>
+                <div className="font-semibold">No session open</div>
+                <div className="mt-1 text-sm text-muted-foreground">
+                  Pick one from the rail, or press{" "}
+                  <kbd className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px] font-medium">1–9</kbd>{" "}
+                  to jump. <kbd className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px] font-medium">?</kbd>{" "}
+                  shows all shortcuts.
+                </div>
+              </div>
+              <Button variant="brand" className="lfg-gborder lfg-gborder--brand" onClick={onNew}>
+                <Plus className="size-4" />
+                New session
+              </Button>
+            </div>
           </div>
         )}
       </div>
@@ -7370,7 +7395,7 @@ const RailItem = memo(function RailItem({
     <div
       data-rail-sid={session.sessionId ?? ""}
       className={cn(
-        "relative rounded-lg",
+        "lfg-rail-in relative rounded-xl",
         swiping ? "overflow-hidden" : "overflow-visible",
         cursored && "ring-2 ring-inset ring-primary/60",
         depth > 0 && !collapsed && "ml-6 pl-4",
@@ -7420,13 +7445,14 @@ const RailItem = memo(function RailItem({
         onTouchEnd={onTouchEnd}
         title={collapsed ? titleForSession(session) : undefined}
         className={cn(
-          "group relative flex cursor-pointer touch-pan-y select-none items-center gap-2 rounded-lg py-1.5 outline-none transition-[background-color,box-shadow] duration-150",
+          "group relative flex cursor-pointer touch-pan-y select-none items-center gap-2 rounded-xl border py-1.5 outline-none transition-[background-color,box-shadow,border-color] duration-150",
           collapsed ? "justify-center px-0" : "px-2",
           swiping
-            ? "bg-card"
+            ? "border-transparent bg-card"
             : active
-              ? "bg-primary/10"
-              : "hover:bg-muted",
+              ? // Open-in-stage rows wear the mobile card's glass edge instead of a flat tint.
+                "lfg-gborder border-transparent bg-card shadow-[0_8px_24px_-18px_rgba(0,0,0,0.55)]"
+              : "border-transparent hover:bg-muted/70",
         )}
       >
         <span className="relative flex size-6 shrink-0 items-center justify-center">
@@ -7446,8 +7472,15 @@ const RailItem = memo(function RailItem({
         {!collapsed ? (
           <>
             <span className="flex min-w-0 flex-1 flex-col">
-              <span className="truncate text-[13px] font-medium leading-tight">
-                {titleForSession(session)}
+              <span className="flex items-baseline gap-1.5">
+                <span className="min-w-0 flex-1 truncate text-[13px] font-medium leading-tight">
+                  {titleForSession(session)}
+                </span>
+                {session.lastActivityAt || session.startedAt ? (
+                  <span className="shrink-0 text-[10px] leading-tight tabular-nums text-muted-foreground/70">
+                    {relTime(session.lastActivityAt ?? session.startedAt ?? 0)}
+                  </span>
+                ) : null}
               </span>
               {latest ? (
                 <span className="truncate text-[11px] leading-tight text-muted-foreground">
