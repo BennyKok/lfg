@@ -9,6 +9,12 @@ import { App, RootErrorBoundary } from "./App";
 import { registerExtension } from "./lib/extensions";
 import { installErrorReporting } from "./lib/report-error";
 import { AppDialogProvider } from "@/components/ui/app-dialog";
+import {
+  applyTheme,
+  getThemePreference,
+  THEME_CHANGE_EVENT,
+  THEME_STORAGE_KEY,
+} from "./lib/theme";
 
 // Capture uncaught errors + unhandled rejections and auto-report them to the
 // backend (which surfaces a finding/push and dispatches an auto-fix agent).
@@ -32,17 +38,18 @@ declare global {
 }
 window.lfg = { React, ReactDOM, jsxRuntime: JsxRuntime, registerExtension };
 
-// Mirror the OS light/dark preference onto the `.dark` class the shadcn
-// components key off (see @custom-variant dark in index.css). This is the
-// React equivalent of lfg's prefers-color-scheme media queries.
-function applyTheme() {
-  const dark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-  document.documentElement.classList.toggle("dark", dark);
-}
 applyTheme();
-window
-  .matchMedia("(prefers-color-scheme: dark)")
-  .addEventListener("change", applyTheme);
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => {
+  // Continue following the OS until the user makes an explicit selection.
+  if (getThemePreference() !== null) return;
+  applyTheme();
+  window.dispatchEvent(new Event(THEME_CHANGE_EVENT));
+});
+window.addEventListener("storage", (event) => {
+  if (event.key !== THEME_STORAGE_KEY && event.key !== null) return;
+  applyTheme();
+  window.dispatchEvent(new Event(THEME_CHANGE_EVENT));
+});
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

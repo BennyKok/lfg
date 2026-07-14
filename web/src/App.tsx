@@ -40,6 +40,7 @@ import {
   type LfgChatMessage,
   type LfgTranscriptSubscribe,
 } from "./lib/lfg-chat-transport";
+import { setThemePreference, THEME_CHANGE_EVENT } from "./lib/theme";
 import { ConnectionStatusToasts } from "./ConnectionStatus";
 import type {
   CSSProperties,
@@ -2967,6 +2968,13 @@ function PushBell({ user }: { user?: string | null }) {
 
 export function App() {
   const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
+  useEffect(() => {
+    const syncTheme = () => {
+      setDark(document.documentElement.classList.contains("dark"));
+    };
+    window.addEventListener(THEME_CHANGE_EVENT, syncTheme);
+    return () => window.removeEventListener(THEME_CHANGE_EVENT, syncTheme);
+  }, []);
   const rootRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const isMobile = useIsMobile();
@@ -3752,9 +3760,7 @@ export function App() {
   const liveStream = useWsLive ? wsLiveStream : sseLiveStream;
 
   function toggleTheme() {
-    const next = !document.documentElement.classList.contains("dark");
-    document.documentElement.classList.toggle("dark", next);
-    setDark(next);
+    setThemePreference(!document.documentElement.classList.contains("dark"));
   }
 
   async function runAgent(agent: string) {

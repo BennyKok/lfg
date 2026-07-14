@@ -6,8 +6,7 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content"
     />
-    <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f2f2f7" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <link rel="apple-touch-icon" href="/icon.svg" />
@@ -22,11 +21,20 @@
          CSS (`html { background: var(--background) }`) overrides the inline dark
          rule below but resolves --background to its light default until main.tsx
          adds `.dark` post-bundle — leaving the uncovered bottom safe-area strip
-         light for a beat (the "white border" under the splash). main.tsx still
-         owns runtime OS-change toggling. */
+         light for a beat (the "white border" under the splash). Read the saved
+         preference here as well so reloads never flash the OS theme first. */
       try {
-        if (matchMedia("(prefers-color-scheme: dark)").matches)
-          document.documentElement.classList.add("dark");
+        var savedTheme = null;
+        try {
+          savedTheme = localStorage.getItem("lfg_theme");
+        } catch (e) {}
+        var startsDark =
+          savedTheme === "dark" ||
+          (savedTheme !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+        document.documentElement.classList.add(startsDark ? "dark" : "light");
+        document.documentElement.style.colorScheme = startsDark ? "dark" : "light";
+        document.querySelector('meta[name="theme-color"]').content =
+          startsDark ? "#000000" : "#f2f2f7";
       } catch (e) {}
     </script>
     <style>
@@ -40,11 +48,9 @@
         margin: 0;
         background: #f2f2f7;
       }
-      @media (prefers-color-scheme: dark) {
-        html,
-        body {
-          background: #000;
-        }
+      html.dark,
+      html.dark body {
+        background: #000;
       }
 
       /* App shell splash — static markup inside #root so it paints on the very
@@ -59,10 +65,8 @@
         justify-content: center;
         background: #f2f2f7;
       }
-      @media (prefers-color-scheme: dark) {
-        #app-splash {
-          background: #000;
-        }
+      html.dark #app-splash {
+        background: #000;
       }
       #app-splash .splash-inner {
         display: flex;
