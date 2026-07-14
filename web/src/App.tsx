@@ -125,6 +125,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
+import { useAppDialog } from "@/components/ui/app-dialog";
 // Code-split: the terminal pulls in ghostty-web's ~400KB WASM, so only load it
 // when the Terminal tab is actually opened — keeps the initial bundle lean.
 // lazyWithReload recovers from the post-deploy stale-chunk case (React #306).
@@ -4336,6 +4337,7 @@ export function App() {
             findings={projectScopedFindings}
             autoAgents={projectScopedAutoAgents}
             onOpenFinding={setOpenFinding}
+            onDismissFinding={(finding) => void dismissFinding(finding)}
           />
         ) : tab === "auto" ? (
           <AutoManageView
@@ -6117,6 +6119,7 @@ function LiveView({
   findings = [],
   autoAgents = [],
   onOpenFinding,
+  onDismissFinding,
   projectOptions = [],
   onProjectChange,
   onUserChange,
@@ -6145,6 +6148,7 @@ function LiveView({
   findings: AutoFinding[];
   autoAgents: AutoAgent[];
   onOpenFinding: (f: AutoFinding) => void;
+  onDismissFinding: (f: AutoFinding) => void;
 }) {
   const isWide = useIsWide();
   // Full-height detail sheet (mobile tap). Held here, above every card,
@@ -6337,6 +6341,7 @@ function LiveView({
                 finding={f}
                 agentName={nameFor(f.agentId)}
                 onOpen={() => onOpenFinding(f)}
+                onDismiss={() => onDismissFinding(f)}
               />
             ))}
           </div>
@@ -6433,6 +6438,7 @@ function RailStage({
   onOpenFinding: (f: AutoFinding) => void;
   onNew: () => void;
 }) {
+  const appDialog = useAppDialog();
   const MAX_COLUMNS = 4;
   const layoutScope = projectFilter || "__all";
   const layoutKey = encodeURIComponent(layoutScope);
@@ -6686,7 +6692,13 @@ function RailStage({
     async (sid: string | null) => {
       const session = sid ? bySid.get(sid) : null;
       if (!sid || !session) return;
-      if (!confirm(`End ${titleForSession(session)}?`)) return;
+      const confirmed = await appDialog.confirm({
+        title: `End ${titleForSession(session)}?`,
+        description: "The session will stop and disappear from the live view.",
+        confirmLabel: "End session",
+        destructive: true,
+      });
+      if (!confirmed) return;
       closeColumn(sid);
       try {
         await closeSessionRequest(sid, "live_keyboard_shift_e");
@@ -6697,7 +6709,7 @@ function RailStage({
         await onRefresh();
       }
     },
-    [bySid, closeColumn, onRemove, onRefresh],
+    [appDialog, bySid, closeColumn, onRemove, onRefresh],
   );
 
   // Latest values for the global key handler, so it binds once but never reads
@@ -7406,24 +7418,158 @@ function AutoFindingCard({
   finding,
   agentName,
   onOpen,
+  onDismiss,
 }: {
   finding: AutoFinding;
   agentName: string;
   onOpen: () => void;
+  onDismiss: () => void;
 }) {
+  const cardRef = useRef<HTMLButtonElement>(null);
+  const [swipeOpen, setSwipeOpen] = useState(false);
+  const [swiping, setSwiping] = useState(false);
+  const drag = useRef({
+    startX: 0,
+    startY: 0,
+    x: 0,
+    width: 0,
+    dragging: false,
+    decided: false,
+    horizontal: false,
+    justSwiped: false,
+    open: false,
+  });
+  const OPEN = 116;
+  const COMMIT = 0.55;
+
+  const setTransform = (x: number) => {
+    drag.current.x = x;
+    if (cardRef.current) cardRef.current.style.transform = x ? `translateX(${x}px)` : "";
+  };
+
+  const closeSwipe = () => {
+    if (cardRef.current) cardRef.current.style.transition = "";
+    drag.current.open = false;
+    setSwipeOpen(false);
+    setSwiping(false);
+    setTransform(0);
+  };
+
+  const commitDismiss = () => {
+    const card = cardRef.current;
+    haptic("selection");
+    drag.current.open = false;
+    setSwipeOpen(false);
+    setSwiping(false);
+    if (card) {
+      card.style.transition = "transform 0.24s var(--ease-ios), opacity 0.24s";
+      card.style.transform = `translateX(-${card.offsetWidth}px)`;
+      card.style.opacity = "0";
+    }
+    window.setTimeout(onDismiss, 240);
+  };
+
+  const onTouchStart = (event: ReactTouchEvent) => {
+    if (event.touches.length !== 1) return;
+    const card = cardRef.current;
+    if (!card) return;
+    const touch = event.touches[0];
+    const state = drag.current;
+    state.startX = touch.clientX;
+    state.startY = touch.clientY;
+    state.width = card.offsetWidth;
+    state.dragging = true;
+    state.decided = false;
+    state.horizontal = false;
+    state.justSwiped = false;
+    card.style.transition = "none";
+  };
+
+  const onTouchMove = (event: ReactTouchEvent) => {
+    const state = drag.current;
+    if (!state.dragging) return;
+    const touch = event.touches[0];
+    const dx = touch.clientX - state.startX;
+    const dy = touch.clientY - state.startY;
+    if (!state.decided) {
+      if (Math.abs(dx) < 8 && Math.abs(dy) < 8) return;
+      state.decided = true;
+      state.horizontal = Math.abs(dx) > Math.abs(dy);
+      if (!state.horizontal) {
+        state.dragging = false;
+        return;
+      }
+      setSwiping(true);
+    }
+    const origin = state.open ? -OPEN : 0;
+    setTransform(Math.max(-state.width, Math.min(0, origin + dx)));
+  };
+
+  const onTouchEnd = () => {
+    const state = drag.current;
+    if (!state.dragging) return;
+    state.dragging = false;
+    if (cardRef.current) cardRef.current.style.transition = "";
+    if (!state.decided || !state.horizontal) {
+      setSwiping(false);
+      return;
+    }
+    state.justSwiped = Math.abs(state.x) > 6;
+    if (state.x <= -state.width * COMMIT) {
+      commitDismiss();
+      return;
+    }
+    state.open = state.x <= -OPEN * 0.5;
+    if (state.open) haptic("selection");
+    setSwipeOpen(state.open);
+    setSwiping(false);
+    setTransform(state.open ? -OPEN : 0);
+  };
+
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      className="live-pane lfg-gborder flex flex-col gap-1 rounded-xl border border-transparent bg-card px-3 py-2.5 text-left transition active:scale-[0.99]"
-    >
-      <div className="flex items-center gap-2">
-        <span className={cn("size-2 shrink-0 rounded-full", SEV_DOT[finding.severity])} />
-        <span className="text-[13px] font-semibold">{agentName}</span>
-        <span className="ml-auto text-[11px] text-muted-foreground">{relTime(finding.createdAt)}</span>
-      </div>
-      <div className="pl-4 text-[13px] leading-snug text-muted-foreground">{finding.title}</div>
-    </button>
+    <div className="relative min-w-0 overflow-hidden rounded-xl">
+      <button
+        type="button"
+        aria-label={`Dismiss finding from ${agentName}`}
+        tabIndex={swipeOpen ? 0 : -1}
+        onClick={commitDismiss}
+        className={cn(
+          "absolute inset-0 flex items-center justify-end gap-2 rounded-xl bg-destructive pr-5 text-sm font-semibold text-white",
+          swipeOpen || swiping ? "" : "hidden",
+          swipeOpen ? "" : "pointer-events-none",
+        )}
+      >
+        <X className="size-5" />
+        Dismiss
+      </button>
+      <button
+        ref={cardRef}
+        type="button"
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+        onTouchCancel={closeSwipe}
+        onClick={() => {
+          if (drag.current.justSwiped) {
+            drag.current.justSwiped = false;
+            return;
+          }
+          if (drag.current.open) {
+            closeSwipe();
+            return;
+          }
+          onOpen();
+        }}
+        className="live-pane lfg-gborder relative z-[1] flex w-full touch-pan-y flex-col gap-1 rounded-xl border border-transparent bg-card px-3 py-2.5 text-left transition-[transform,opacity] active:scale-[0.99]"
+      >
+        <div className="flex w-full items-center gap-2">
+          <span className={cn("size-2 shrink-0 rounded-full", SEV_DOT[finding.severity])} />
+          <span className="text-[13px] font-semibold">{agentName}</span>
+          <span className="ml-auto text-[11px] text-muted-foreground">{relTime(finding.createdAt)}</span>
+        </div>
+        <div className="pl-4 text-[13px] leading-snug text-muted-foreground">{finding.title}</div>
+      </button>
+    </div>
   );
 }
 
@@ -8338,6 +8484,7 @@ function SessionActionsMenu({
   onError: (error: string | null) => void;
   triggerClassName?: string;
 }) {
+  const appDialog = useAppDialog();
   const [forkOpen, setForkOpen] = useState(false);
   const sid = session.sessionId;
   const assignee = users.find((user) => user.email === session.assignedUser);
@@ -8369,7 +8516,14 @@ function SessionActionsMenu({
   }
 
   async function close() {
-    if (!sid || !confirm(`End ${titleForSession(session)}?`)) return;
+    if (!sid) return;
+    const confirmed = await appDialog.confirm({
+      title: `End ${titleForSession(session)}?`,
+      description: "The session will stop and disappear from the live view.",
+      confirmLabel: "End session",
+      destructive: true,
+    });
+    if (!confirmed) return;
     onError(null);
     onRemove(sid); // drop the card now; the tombstone survives the next poll
     try {
@@ -9182,6 +9336,7 @@ const SessionCard = memo(function SessionCard({
   // the one-shot entrance animation on the card root.
   entering?: boolean;
 }) {
+  const appDialog = useAppDialog();
   const catalog = useAgentModelCatalog();
   const [error, setError] = useState<string | null>(null);
   const [summarizing, setSummarizing] = useState(false);
@@ -9373,9 +9528,19 @@ const SessionCard = memo(function SessionCard({
     }
   }
 
-  function commitDelete() {
+  async function commitDelete() {
     const el = sectionRef.current;
-    if (!sid || !confirm(`End ${titleForSession(session)}?`)) {
+    if (!sid) {
+      closeSwipe();
+      return;
+    }
+    const confirmed = await appDialog.confirm({
+      title: `End ${titleForSession(session)}?`,
+      description: "The session will stop and disappear from the live view.",
+      confirmLabel: "End session",
+      destructive: true,
+    });
+    if (!confirmed) {
       closeSwipe();
       return;
     }
@@ -9454,7 +9619,7 @@ const onTouchStart = (e: ReactTouchEvent) => {
       setSwiping(false);
       d.justSwiped = Math.abs(d.x) > 6;
       if (d.x <= -d.w * COMMIT) {
-        commitDelete();
+        void commitDelete();
         return;
       }
       const nextOpen = d.x <= -OPEN * 0.5 ? "delete" : "none";
@@ -9525,7 +9690,7 @@ const onTouchStart = (e: ReactTouchEvent) => {
         type="button"
         aria-label="Delete session"
         tabIndex={swipeOpen ? 0 : -1}
-        onClick={commitDelete}
+        onClick={() => void commitDelete()}
         className={cn(
           "absolute inset-0 flex items-center justify-end gap-2 rounded-xl bg-destructive pr-6 text-sm font-semibold text-white md:hidden",
           swipeOpen || swipeIntent === "delete" ? "" : "hidden", // out of the paint tree unless mid-swipe

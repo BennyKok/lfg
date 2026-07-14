@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { ClipboardPaste, CornerDownLeft, Delete, Loader2, RotateCcw, Save, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { useAppDialog } from "@/components/ui/app-dialog";
 
 // Live, interactive remote-browser view. We open a WebSocket to the backend
 // session stream, paint incoming JPEG frames onto a <canvas>, and forward the
@@ -38,6 +39,7 @@ export default function BrowserLoginView(props: {
   onSaved?: (profileId: string) => void;
 }) {
   const { sessionId, onClose, onSaved } = props;
+  const appDialog = useAppDialog();
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -305,14 +307,20 @@ export default function BrowserLoginView(props: {
     [addressBar, send],
   );
 
-  const handleSave = useCallback(() => {
-    const name = window.prompt("Save profile as:", status.title || "");
+  const handleSave = useCallback(async () => {
+    const name = await appDialog.prompt({
+      title: "Save browser profile",
+      description: "Name this saved login so agents can find it later.",
+      defaultValue: status.title || "",
+      inputLabel: "Profile name",
+      confirmLabel: "Save profile",
+    });
     if (name == null) return;
     const trimmed = name.trim();
     if (!trimmed) return;
     setSaving(true);
     send({ type: "save", name: trimmed });
-  }, [send, status.title]);
+  }, [appDialog, send, status.title]);
 
   const handleReload = useCallback(() => {
     send({ type: "reload" });

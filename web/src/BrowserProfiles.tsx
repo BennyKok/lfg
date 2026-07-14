@@ -15,6 +15,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import BrowserLoginView from "./BrowserLoginView";
+import { useAppDialog } from "@/components/ui/app-dialog";
 
 // Manage saved cloud-browser login profiles. Each profile captures the cookies
 // /storage state for a set of origins so an agent can act as the logged-in user
@@ -99,6 +100,7 @@ function timeAgo(value?: number | null): string {
 type LiveSession = { sessionId: string; profileId: string | null };
 
 export default function BrowserProfiles() {
+  const appDialog = useAppDialog();
   const [profiles, setProfiles] = useState<ProfileMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -134,7 +136,13 @@ export default function BrowserProfiles() {
   }, [refresh]);
 
   const handleNewLogin = useCallback(async () => {
-    const raw = window.prompt("Log in to which site? Enter a URL:", "https://");
+    const raw = await appDialog.prompt({
+      title: "New browser login",
+      description: "Enter the site you want to log in to.",
+      defaultValue: "https://",
+      inputLabel: "Website URL",
+      confirmLabel: "Open login",
+    });
     if (raw == null) return;
     const trimmed = raw.trim();
     if (!trimmed || trimmed === "https://") return;
@@ -149,7 +157,7 @@ export default function BrowserProfiles() {
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to start session");
     }
-  }, [viewportMode]);
+  }, [appDialog, viewportMode]);
 
   const handleReauth = useCallback(
     async (id: string) => {
@@ -194,7 +202,13 @@ export default function BrowserProfiles() {
   }, []);
 
   const handleDelete = useCallback(async (p: ProfileMeta) => {
-    if (!window.confirm(`Delete profile "${p.name}"? This cannot be undone.`)) return;
+    const confirmed = await appDialog.confirm({
+      title: `Delete profile “${p.name}”?`,
+      description: "This saved login will be permanently removed. This cannot be undone.",
+      confirmLabel: "Delete profile",
+      destructive: true,
+    });
+    if (!confirmed) return;
     setBusyId(p.id);
     try {
       await api(`/api/browser/profiles/${encodeURIComponent(p.id)}`, { method: "DELETE" });
@@ -210,7 +224,7 @@ export default function BrowserProfiles() {
     } finally {
       setBusyId(null);
     }
-  }, []);
+  }, [appDialog]);
 
   const closeLive = useCallback(() => setLive(null), []);
 

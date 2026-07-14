@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { App, RootErrorBoundary } from "./App";
 import { registerExtension } from "./lib/extensions";
 import { installErrorReporting } from "./lib/report-error";
+import { AppDialogProvider } from "@/components/ui/app-dialog";
 
 // Capture uncaught errors + unhandled rejections and auto-report them to the
 // backend (which surfaces a finding/push and dispatches an auto-fix agent).
@@ -46,7 +47,9 @@ window
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <RootErrorBoundary>
-      <App />
+      <AppDialogProvider>
+        <App />
+      </AppDialogProvider>
     </RootErrorBoundary>
   </StrictMode>,
 );
