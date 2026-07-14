@@ -47,7 +47,7 @@ function branchExists(repo: string, branch: string): boolean {
 }
 
 function sessionWorktreeOwner(absCwd: string): string | null {
-  const wtRoot = resolve(process.env.LFG_WORKTREE_ROOT ?? "/tmp/lfg-wt");
+  const wtRoot = resolve(process.env.LFG_WORKTREE_ROOT ?? `${homedir()}/lfg-worktrees`);
   const rel = relative(wtRoot, absCwd);
   if (!rel || rel.startsWith("..") || rel === ".." || rel.startsWith("/")) return null;
   const name = rel.split(/[\\/]/).filter(Boolean)[0];
@@ -72,7 +72,7 @@ function sessionWorktreeOwner(absCwd: string): string | null {
 }
 
 function isSessionWorktreePath(absCwd: string): boolean {
-  const wtRoot = resolve(process.env.LFG_WORKTREE_ROOT ?? "/tmp/lfg-wt");
+  const wtRoot = resolve(process.env.LFG_WORKTREE_ROOT ?? `${homedir()}/lfg-worktrees`);
   const rel = relative(wtRoot, absCwd);
   return !!rel && !rel.startsWith("..") && rel !== ".." && !rel.startsWith("/");
 }

@@ -3,12 +3,19 @@
 // lfg itself and voice-orchestrator sessions.
 
 import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import { MAIN_REF } from "./agents/collectors/git-fresh.ts";
 import { listManaged } from "./managed.ts";
 import { tmuxHasSession } from "./tmux.ts";
 
-export const WORKTREE_ROOT = "/tmp/lfg-wt";
+// Persistent, env-overridable. Never default to /tmp: it is cleared on reboot
+// (systemd-tmpfiles), which silently destroys every live session's worktree —
+// including uncommitted work. Keep this in sync with the same default in
+// projects.ts (a shared import would create a projects→worktree→tmux cycle).
+export const WORKTREE_ROOT = resolve(
+  process.env.LFG_WORKTREE_ROOT ?? `${homedir()}/lfg-worktrees`,
+);
 
 export type SessionWorktree = {
   repoRoot: string;
