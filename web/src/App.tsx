@@ -170,6 +170,7 @@ import {
   disablePush,
 } from "./lib/push";
 import { AskNavButton, AskPage, AskProvider } from "./components/ask-center";
+import { PwaInstallCallout, PwaInstallSettingsSection } from "./components/pwa-install";
 import {
   Conversation,
   ConversationContent,
@@ -4304,6 +4305,8 @@ export function App() {
         </NavIsland>
       </header>
       )}
+
+      <PwaInstallCallout />
 
       {error ? (
         <div className="mx-3 mt-3 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -14465,6 +14468,8 @@ function SettingsView({
       </section>
 
       <TimeZoneSettingsSection settings={settings} onChange={onSettingsChange} />
+
+      <PwaInstallSettingsSection />
 
       {/* Auto agents — opens as its own page. */}
       <section className="space-y-2">

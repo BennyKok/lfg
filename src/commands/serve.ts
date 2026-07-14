@@ -715,13 +715,19 @@ const STATIC_FILES: Record<string, { path: string; type: string }> = {
     path: join(WEB_DIR, "icon-maskable.svg"),
     type: "image/svg+xml",
   },
+  "/icon-192.png": { path: join(WEB_DIR, "icon-192.png"), type: "image/png" },
+  "/icon-512.png": { path: join(WEB_DIR, "icon-512.png"), type: "image/png" },
+  "/icon-maskable-512.png": {
+    path: join(WEB_DIR, "icon-maskable-512.png"),
+    type: "image/png",
+  },
   "/agent-claude.svg": { path: join(WEB_DIR, "agent-claude.svg"), type: "image/svg+xml" },
   "/agent-codex.svg": { path: join(WEB_DIR, "agent-codex.svg"), type: "image/svg+xml" },
   "/agent-cursor.svg": { path: join(WEB_DIR, "agent-cursor.svg"), type: "image/svg+xml" },
   "/agent-opencode.svg": { path: join(WEB_DIR, "agent-opencode.svg"), type: "image/svg+xml" },
   "/agent-grok.svg": { path: join(WEB_DIR, "agent-grok.svg"), type: "image/svg+xml" },
   "/agent-hermes.svg": { path: join(WEB_DIR, "agent-hermes.svg"), type: "image/svg+xml" },
-  "/apple-touch-icon.png": { path: join(WEB_DIR, "icon.svg"), type: "image/svg+xml" },
+  "/apple-touch-icon.png": { path: join(WEB_DIR, "apple-touch-icon.png"), type: "image/png" },
 };
 
 // Serve a small static asset (manifest, PWA icons, agent SVGs) with proper
