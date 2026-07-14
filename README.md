@@ -2,7 +2,7 @@
 
 Run AI coding agents on your own machine, from anywhere.
 
-[![Deploy on omg](https://omg.dev/deploy-badge.svg?v=2)](https://omg.dev/deploy?repo=github.com/BennyKok/lfg)
+[![Deploy on omg](https://omg.dev/deploy-badge.svg?v=2)](https://omg.dev/sandbox/templates/lfg)
 
 <a href="https://lfg.apps.omg.dev">
   <img src="https://raw.githubusercontent.com/BennyKok/lfg/main/docs/images/lfg-icon.png" alt="lfg icon" width="96" />
@@ -80,12 +80,11 @@ LFG_TAILSCALE_SERVE=1 lfg setup
 
 ## One-click Launch
 
-[![Deploy on omg](https://omg.dev/deploy-badge.svg?v=2)](https://omg.dev/deploy?repo=github.com/BennyKok/lfg)
+[![Deploy on omg](https://omg.dev/deploy-badge.svg?v=2)](https://omg.dev/sandbox/templates/lfg)
 
-OMG is the fastest hosted workspace path for `lfg`. The button passes this
-GitHub repo to OMG, signs you in if needed, creates an LFG sandbox from the
-prebuilt `lfg` template, starts `lfg serve` on port `8766`, and opens the
-workspace URL.
+OMG is the fastest hosted workspace path for `lfg`. The button opens the LFG
+template, signs you in if needed, creates a sandbox from its prebuilt image,
+starts `lfg serve` on port `8766`, and opens the workspace URL.
 
 On a fresh workspace, open **Settings → Coding agents** in LFG. That screen
 checks whether Claude, Codex, OpenCode, Hermes, or Grok is installed and signed
