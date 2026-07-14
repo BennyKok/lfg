@@ -128,7 +128,7 @@ declare global {
 export function liveTransportMode(): "sse" | "ws" {
   const runtime = typeof window !== "undefined" ? window.__LFG_CONFIG__?.liveTransport : undefined;
   const build = import.meta.env.VITE_LIVE_TRANSPORT;
-  return runtime === "ws" || build === "ws" ? "ws" : "sse";
+  return runtime === "sse" || build === "sse" ? "sse" : "ws";
 }
 
 function evlog(event: string, fields: Record<string, unknown> = {}) {

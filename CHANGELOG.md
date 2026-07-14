@@ -2,6 +2,12 @@
 
 Recent product updates and deployment notes.
 
+## July 14, 2026 - Ready-by-default live sessions (v0.1.33)
+
+- WebSocket live transcripts are now the default for the server and web client,
+  so a standard install no longer needs `LIVE_TRANSPORT=ws`. Set it explicitly
+  to `sse` only for compatibility with a proxy that cannot upgrade WebSockets.
+
 ## July 14, 2026 - Sandbox-safe release updates (v0.1.32)
 
 - Release setup and in-app updates now ignore host-injected tar defaults,

@@ -90,7 +90,7 @@ function defaultEvlog(event: string, fields: Record<string, unknown> = {}) {
 }
 
 export function liveTransportMode(): "sse" | "ws" {
-  return process.env.LIVE_TRANSPORT === "ws" ? "ws" : "sse";
+  return process.env.LIVE_TRANSPORT === "sse" ? "sse" : "ws";
 }
 
 export function isLiveWsEnabled(): boolean {
