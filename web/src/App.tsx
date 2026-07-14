@@ -148,6 +148,7 @@ import { Drawer as VaulDrawer } from "vaul";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuRadioGroup,
@@ -5113,12 +5114,16 @@ function ManageSessionsMenu({
         <ClipboardList className="size-[18px]" />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-72">
-        <DropdownMenuLabel className="space-y-1">
-          <span className="block text-xs font-semibold">Manage Sessions</span>
-          <span className="block truncate text-[11px] font-normal text-muted-foreground">
-            Scope: {scopeLabel}
-          </span>
-        </DropdownMenuLabel>
+        {/* GroupLabel needs a surrounding Group for MenuGroupContext (Base UI
+            #31) — wrap this title label so it doesn't throw. */}
+        <DropdownMenuGroup>
+          <DropdownMenuLabel className="space-y-1">
+            <span className="block text-xs font-semibold">Manage Sessions</span>
+            <span className="block truncate text-[11px] font-normal text-muted-foreground">
+              Scope: {scopeLabel}
+            </span>
+          </DropdownMenuLabel>
+        </DropdownMenuGroup>
         <DropdownMenuSeparator />
         {MANAGE_SESSION_PROMPTS.map((template) => (
           <DropdownMenuItem
