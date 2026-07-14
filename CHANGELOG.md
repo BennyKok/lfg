@@ -2,6 +2,14 @@
 
 Recent product updates and deployment notes.
 
+## July 14, 2026 - Desktop polish and upload progress (v0.1.35)
+
+- Refreshed the desktop navigation rail, header, and session stage to match the
+  mobile visual language, with improved glass surfaces, spacing, and controls.
+- File attachments now show real per-file upload percentages and progress bars
+  in both active-session and new-session composers, including concurrent files.
+- Fixed the desktop Manage Sessions menu trigger for Base UI compatibility.
+
 ## July 14, 2026 - Installable app and resilient recovery (v0.1.34)
 
 - Added a discoverable PWA install flow on desktop and mobile, including the

@@ -411,6 +411,7 @@ type ComposerAttachment = {
   type: string;
   previewUrl?: string;
   status: "ready" | "uploading" | "failed";
+  progress?: number;
   error?: string;
 };
 
@@ -679,6 +680,44 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(data?.error || `${res.status} ${res.statusText}`);
   }
   return data as T;
+}
+
+function uploadFile<T>(
+  path: string,
+  file: File,
+  contentType: string,
+  onProgress: (progress: number) => void,
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequest();
+    request.open("POST", path);
+    request.setRequestHeader("Content-Type", contentType || "application/octet-stream");
+    request.upload.addEventListener("progress", (event) => {
+      const total = event.total || file.size;
+      if (total > 0) onProgress(Math.min(100, Math.round((event.loaded / total) * 100)));
+    });
+    request.addEventListener("load", () => {
+      let data: unknown = {};
+      try {
+        data = request.responseText ? JSON.parse(request.responseText) : {};
+      } catch {
+        // Keep the HTTP status error below useful even if a proxy returns HTML.
+      }
+      if (request.status >= 200 && request.status < 300) {
+        onProgress(100);
+        resolve(data as T);
+        return;
+      }
+      const message =
+        typeof data === "object" && data && "error" in data && typeof data.error === "string"
+          ? data.error
+          : `${request.status} ${request.statusText}`;
+      reject(new Error(message));
+    });
+    request.addEventListener("error", () => reject(new Error("Upload failed due to a network error")));
+    request.addEventListener("abort", () => reject(new Error("Upload cancelled")));
+    request.send(file);
+  });
 }
 
 function closeSessionRequest(sid: string, source: string) {
@@ -8201,16 +8240,18 @@ function SessionChat({
     if (!sid) throw new Error("session not found");
     setAttachments((current) =>
       current.map((item) =>
-        item.id === att.id ? { ...item, status: "uploading", error: undefined } : item,
+        item.id === att.id ? { ...item, status: "uploading", progress: 0, error: undefined } : item,
       ),
     );
     try {
-      const uploaded = await api<{ path: string; name?: string }>(
+      const uploaded = await uploadFile<{ path: string; name?: string }>(
         `/api/sessions/${sid}/upload?filename=${encodeURIComponent(att.name)}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": att.type || "application/octet-stream" },
-          body: att.file,
+        att.file,
+        att.type,
+        (progress) => {
+          setAttachments((current) =>
+            current.map((item) => (item.id === att.id ? { ...item, progress } : item)),
+          );
         },
       );
       return { name: uploaded.name || att.name, path: uploaded.path };
@@ -8371,7 +8412,7 @@ function SessionChat({
                 <div
                   key={att.id}
                   className={cn(
-                    "group flex h-12 max-w-52 shrink-0 items-center gap-2 rounded-lg border bg-muted/55 pl-1.5 pr-1.5 text-xs",
+                    "group relative flex h-12 max-w-52 shrink-0 items-center gap-2 overflow-hidden rounded-lg border bg-muted/55 pl-1.5 pr-1.5 text-xs",
                     att.status === "failed" ? "border-destructive/40 bg-destructive/10" : "border-border/70",
                   )}
                   title={att.error || att.name}
@@ -8390,9 +8431,21 @@ function SessionChat({
                   <div className="min-w-0">
                     <div className="truncate font-medium text-foreground">{att.name}</div>
                     <div className="text-[11px] text-muted-foreground">
-                      {att.status === "uploading" ? "Uploading..." : att.status === "failed" ? "Failed" : formatBytes(att.size)}
+                      {att.status === "uploading" ? `Uploading ${att.progress ?? 0}%` : att.status === "failed" ? "Failed" : formatBytes(att.size)}
                     </div>
                   </div>
+                  {att.status === "uploading" ? (
+                    <div
+                      className="absolute inset-x-0 bottom-0 h-0.5 bg-primary/15"
+                      role="progressbar"
+                      aria-label={`Uploading ${att.name}`}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={att.progress ?? 0}
+                    >
+                      <div className="h-full bg-primary transition-[width] duration-150" style={{ width: `${att.progress ?? 0}%` }} />
+                    </div>
+                  ) : null}
                   {att.previewUrl ? (
                     <button
                       type="button"
@@ -11115,6 +11168,7 @@ function NewSessionDialog({
   );
   const [prompt, setPrompt] = useState("");
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [pendingUploads, setPendingUploads] = useState<ComposerAttachment[]>([]);
   const [draggingFiles, setDraggingFiles] = useState(false);
   const [annotatingId, setAnnotatingId] = useState<string | null>(null);
   const [usage, setUsage] = useState<ProviderUsage | null>(null);
@@ -11616,28 +11670,26 @@ function NewSessionDialog({
   }
 
   async function uploadAttachment(att: ComposerAttachment): Promise<{ name: string; path: string }> {
-    setAttachments((current) =>
-      current.map((item) =>
-        item.id === att.id ? { ...item, status: "uploading", error: undefined } : item,
-      ),
-    );
+    const update = (patch: Partial<ComposerAttachment>) => {
+      setAttachments((current) =>
+        current.map((item) => (item.id === att.id ? { ...item, ...patch } : item)),
+      );
+      setPendingUploads((current) =>
+        current.map((item) => (item.id === att.id ? { ...item, ...patch } : item)),
+      );
+    };
+    update({ status: "uploading", progress: 0, error: undefined });
     try {
-      const uploaded = await api<{ path: string; name?: string }>(
+      const uploaded = await uploadFile<{ path: string; name?: string }>(
         `/api/uploads?filename=${encodeURIComponent(att.name)}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": att.type || "application/octet-stream" },
-          body: att.file,
-        },
+        att.file,
+        att.type,
+        (progress) => update({ progress }),
       );
       return { name: uploaded.name || att.name, path: uploaded.path };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      setAttachments((current) =>
-        current.map((item) =>
-          item.id === att.id ? { ...item, status: "failed", error: message } : item,
-        ),
-      );
+      update({ status: "failed", error: message });
       throw err;
     }
   }
@@ -11657,15 +11709,14 @@ function NewSessionDialog({
     const launchAgent = agent;
     const launchModel = model;
     const launchThinkingLevel = thinkingLevel;
-    const revokedUrls = new Set(files.map((att) => att.previewUrl).filter((url): url is string => !!url));
+    const uploadIds = new Set(files.map((att) => att.id));
     setError(null);
     setPrompt("");
     setAttachments([]);
-    previewUrls.current = previewUrls.current.filter((url) => {
-      if (!revokedUrls.has(url)) return true;
-      URL.revokeObjectURL(url);
-      return false;
-    });
+    setPendingUploads((current) => [
+      ...current,
+      ...files.map((att) => ({ ...att, status: "uploading" as const, progress: 0, error: undefined })),
+    ]);
     setPendingCreates((n) => n + 1);
     localStorage.setItem("lfg_v2_agent", launchAgent);
     localStorage.setItem("lfg_v2_repo", selectedRepo);
@@ -11708,10 +11759,15 @@ function NewSessionDialog({
         const message = err instanceof Error ? err.message : String(err);
         setError(message);
         toast.error(message || "Couldn't create session");
-        setAttachments((current) =>
-          current.map((att) => (att.status === "uploading" ? { ...att, status: "ready" } : att)),
-        );
       } finally {
+        for (const att of files) {
+          if (att.previewUrl) URL.revokeObjectURL(att.previewUrl);
+        }
+        const uploadPreviewUrls = new Set(
+          files.map((att) => att.previewUrl).filter((url): url is string => !!url),
+        );
+        previewUrls.current = previewUrls.current.filter((url) => !uploadPreviewUrls.has(url));
+        setPendingUploads((current) => current.filter((att) => !uploadIds.has(att.id)));
         setPendingCreates((n) => Math.max(0, n - 1));
       }
     })();
@@ -12026,13 +12082,13 @@ function NewSessionDialog({
         />
       </div>
 
-      {attachments.length ? (
+      {pendingUploads.length || attachments.length ? (
         <div className="mt-2 flex gap-1.5 overflow-x-auto pb-0.5">
-          {attachments.map((att) => (
+          {[...pendingUploads, ...attachments].map((att) => (
             <div
               key={att.id}
               className={cn(
-                "group flex h-12 max-w-52 shrink-0 items-center gap-2 rounded-lg border bg-muted/55 pl-1.5 pr-1.5 text-xs",
+                "group relative flex h-12 max-w-52 shrink-0 items-center gap-2 overflow-hidden rounded-lg border bg-muted/55 pl-1.5 pr-1.5 text-xs",
                 att.status === "failed" ? "border-destructive/40 bg-destructive/10" : "border-border/70",
               )}
               title={att.error || att.name}
@@ -12051,9 +12107,21 @@ function NewSessionDialog({
               <div className="min-w-0">
                 <div className="truncate font-medium text-foreground">{att.name}</div>
                 <div className="text-[11px] text-muted-foreground">
-                  {att.status === "uploading" ? "Uploading..." : att.status === "failed" ? "Failed" : formatBytes(att.size)}
+                  {att.status === "uploading" ? `Uploading ${att.progress ?? 0}%` : att.status === "failed" ? "Failed" : formatBytes(att.size)}
                 </div>
               </div>
+              {att.status === "uploading" ? (
+                <div
+                  className="absolute inset-x-0 bottom-0 h-0.5 bg-primary/15"
+                  role="progressbar"
+                  aria-label={`Uploading ${att.name}`}
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={att.progress ?? 0}
+                >
+                  <div className="h-full bg-primary transition-[width] duration-150" style={{ width: `${att.progress ?? 0}%` }} />
+                </div>
+              ) : null}
               {att.previewUrl ? (
                 <button
                   type="button"
@@ -12061,6 +12129,7 @@ function NewSessionDialog({
                   onClick={() => setAnnotatingId(att.id)}
                   aria-label={`Annotate ${att.name}`}
                   title="Annotate"
+                  disabled={att.status === "uploading"}
                 >
                   <Pencil className="size-3.5" />
                 </button>
@@ -12071,6 +12140,7 @@ function NewSessionDialog({
                 onClick={() => removeAttachment(att.id)}
                 aria-label={`Remove ${att.name}`}
                 title="Remove"
+                disabled={att.status === "uploading"}
               >
                 <X className="size-3.5" />
               </button>
