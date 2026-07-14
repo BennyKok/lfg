@@ -510,6 +510,67 @@ export function sessionHasIndexedMessages(sessionId: string): boolean {
     .get(key);
 }
 
+// Seed the synthetic per-session read model (`lfg://session/<id>`) from history
+// that was indexed under a real FILE path. Two cases:
+//   - claude: legacy sessions indexed by their native ~/.claude JSONL before the
+//     direct-SDK aisdk harness existed, keyed under the file path with the lfg
+//     session id (sourceSessionId defaults to sessionId).
+//   - codex: the rollout JSONL is tailed under the native threadId, so a session
+//     resumed under a fresh control-plane key must pull from that threadId
+//     (pass it as sourceSessionId).
+// A resumed harness serves only the synthetic key, and `indexedMessagePage`
+// filters (WHERE path = ?), so without this the pane renders empty. Copying the
+// rows under the synthetic key makes the full history visible; new turns then
+// append after them via indexSessionMessagesDirect. No-op when the synthetic key
+// already has rows (working/new sessions) or when there is no file-path history,
+// so it can never regress a healthy session.
+export function reindexFileHistoryUnderSessionKey(
+  sessionId: string,
+  sourceSessionId: string = sessionId,
+): number {
+  init();
+  const key = sessionIndexKey(sessionId);
+  const d = database();
+  if (d.query("SELECT 1 FROM transcript_messages WHERE path = ? LIMIT 1").get(key)) return 0;
+  const src = d
+    .query<
+      { message_id: string | null; role: string; kind: string; ts: number; text: string },
+      [string]
+    >(
+      `SELECT message_id, role, kind, ts, text
+         FROM transcript_messages
+        WHERE session_id = ? AND path NOT LIKE 'lfg://%'
+        ORDER BY byte_offset ASC, id ASC`,
+    )
+    .all(sourceSessionId);
+  if (!src.length) return 0;
+  let seq = 0;
+  const inserted = d.transaction((rows: typeof src) => {
+    const msgStmt = d.query(`
+      INSERT OR IGNORE INTO transcript_messages
+        (id, session_id, path, message_id, byte_offset, ts, role, kind, text)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const ftsStmt = d.query(`
+      INSERT INTO transcript_messages_fts (id, session_id, text)
+      SELECT ?, ?, ?
+      WHERE NOT EXISTS (SELECT 1 FROM transcript_messages_fts WHERE id = ?)
+    `);
+    let n = 0;
+    for (const r of rows) {
+      const id = `${key}\0${r.message_id ?? String(seq)}\0${seq}`;
+      const result = msgStmt.run(id, sessionId, key, r.message_id, seq, r.ts, r.role, r.kind, r.text);
+      n += Number(result.changes ?? 0);
+      ftsStmt.run(id, sessionId, r.text, id);
+      seq++;
+    }
+    return n;
+  })(src);
+  directNextOffset.set(key, seq);
+  pageTotalCache.delete(key);
+  return inserted;
+}
+
 function cursorFor(path: string): { offset: number; size: number; mtimeMs: number } | null {
   init();
   return database()

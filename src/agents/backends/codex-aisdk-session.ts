@@ -30,7 +30,7 @@ import {
   writeEntry,
 } from "../../aisdk-registry.ts";
 import type { SessionMsg } from "../../sessions.ts";
-import { indexSessionMessagesDirect } from "../../transcript-index.ts";
+import { indexSessionMessagesDirect, reindexFileHistoryUnderSessionKey } from "../../transcript-index.ts";
 import { makeDraftPublisher } from "./draft.ts";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 
@@ -205,6 +205,15 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
   try {
     process.chdir(cwd);
   } catch {}
+
+  // Resuming a codex thread under a fresh control-plane key: the thread's history
+  // was tailed into the index under its native threadId, so the pane keyed by
+  // `key` would render empty. Seed the synthetic key from the threadId's history
+  // (no-op if the key already has rows or the thread has none) — visible history
+  // now, new turns append after it. See reindexFileHistoryUnderSessionKey.
+  if (resumeThreadId && resumeThreadId !== key) {
+    reindexFileHistoryUnderSessionKey(key, resumeThreadId);
+  }
 
   const { Codex } = await import("@openai/codex-sdk");
   const codexPathOverride = resolveCodexPathOverride();

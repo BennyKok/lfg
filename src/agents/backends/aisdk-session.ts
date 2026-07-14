@@ -31,7 +31,11 @@ import {
   writeEntry,
 } from "../../aisdk-registry.ts";
 import { normalizeLineMessages, type SessionMsg } from "../../sessions.ts";
-import { indexSessionMessagesDirect, sessionHasIndexedMessages } from "../../transcript-index.ts";
+import {
+  indexSessionMessagesDirect,
+  reindexFileHistoryUnderSessionKey,
+  sessionHasIndexedMessages,
+} from "../../transcript-index.ts";
 import { makeDraftPublisher } from "./draft.ts";
 import { readFileSync, statSync } from "node:fs";
 
@@ -180,6 +184,13 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
   // an existing session. Fresh sessions mint the deterministic id up front
   // (sessionId and resume are mutually exclusive on the SDK).
   const resuming = sessionHasIndexedMessages(sessionId);
+  // Legacy claude sessions have their history under a native ~/.claude JSONL
+  // file path, not the synthetic session key — so a resumed pane would render
+  // empty. Seed the synthetic key from that file history so the transcript is
+  // visible and new turns append to it. Done AFTER `resuming` is captured, so
+  // the SDK still starts in `{ sessionId }` mode (no resume of an id the SDK
+  // never minted) — visibility now, continuation as a fresh underlying thread.
+  if (!resuming) reindexFileHistoryUnderSessionKey(sessionId);
 
   const publishDraft = makeDraftPublisher(sessionId);
 
