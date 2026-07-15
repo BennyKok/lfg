@@ -76,7 +76,6 @@ import {
   KeyRound,
   LayoutDashboard,
   Loader2,
-  Megaphone,
   MessageSquare,
   Mic,
   Bell,
@@ -4509,12 +4508,12 @@ export function App() {
                 />
               </>
             ) : null}
-            <IconTab
-              active={tab === "shipped"}
-              onClick={() => setTab("shipped")}
-              icon={<Megaphone className="size-[18px]" />}
-              label="Shipped"
-            />
+            {tab === "live" || tab === "shipped" ? (
+              <PagerDots
+                page={tab === "shipped" ? "shipped" : "live"}
+                onSelect={(page) => setTab(page)}
+              />
+            ) : null}
             <AskNavButton active={tab === "ask"} onOpen={() => setTab("ask")} />
             <IconTab
               active={tab !== "live"}
@@ -5014,6 +5013,49 @@ function TopTab({
     >
       {icon}
       <span>{label}</span>
+    </button>
+  );
+}
+
+// Live and Shipped read as sibling "virtual pages": this pager cycles through
+// them (tap = next page; each dot is also a direct target). Replaces the
+// dedicated megaphone icon so the chrome stays minimal.
+const VIRTUAL_PAGES = ["live", "shipped"] as const;
+type VirtualPage = (typeof VIRTUAL_PAGES)[number];
+
+function PagerDots({
+  page,
+  onSelect,
+  className,
+}: {
+  page: VirtualPage;
+  onSelect: (page: VirtualPage) => void;
+  className?: string;
+}) {
+  const index = VIRTUAL_PAGES.indexOf(page);
+  const next = VIRTUAL_PAGES[(index + 1) % VIRTUAL_PAGES.length];
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(next)}
+      aria-label={`Switch to ${next === "shipped" ? "Shipped" : "Live"}`}
+      title={`Switch to ${next === "shipped" ? "Shipped" : "Live"}`}
+      className={cn(
+        "flex h-9 items-center gap-1.5 rounded-full px-3 transition-transform active:scale-[0.95]",
+        className,
+      )}
+    >
+      {VIRTUAL_PAGES.map((key) => (
+        <span
+          key={key}
+          className={cn(
+            "rounded-full transition-all duration-300 ease-out",
+            key === page
+              ? "h-1.5 w-5 bg-foreground"
+              : "size-1.5 bg-muted-foreground/40",
+          )}
+        />
+      ))}
     </button>
   );
 }
@@ -7358,15 +7400,7 @@ function RailStage({
               </button>
             ) : null}
             {onOpenShipped ? (
-              <button
-                type="button"
-                onClick={onOpenShipped}
-                aria-label="Shipped"
-                title="Shipped"
-                className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
-              >
-                <Megaphone className="size-4" />
-              </button>
+              <PagerDots page="live" onSelect={(page) => page === "shipped" && onOpenShipped()} />
             ) : null}
           </div>
         ) : (
@@ -7389,12 +7423,7 @@ function RailStage({
                   <AskNavButton active={false} onOpen={onOpenAsk} />
                 ) : null}
                 {onOpenShipped ? (
-                  <IconTab
-                    active={false}
-                    onClick={onOpenShipped}
-                    icon={<Megaphone className="size-[18px]" />}
-                    label="Shipped"
-                  />
+                  <PagerDots page="live" onSelect={(page) => page === "shipped" && onOpenShipped()} />
                 ) : null}
                 {onOpenSettings ? (
                   <IconTab
@@ -14924,34 +14953,42 @@ function ShipMedia({
     );
   }
   if (item.kind === "html") {
-    // Live artifacts (dashboards) embed in the feed too — same sandbox as chat.
-    // Expand pushes the full-screen native viewer, never a popup.
+    // Live artifacts render as a compact card in the feed — distinct from
+    // media, no heavy inline embed. Tapping opens the full-screen native
+    // viewer where the artifact gets the whole page.
     return (
-      <div className="relative">
-        <AutoHeightArtifactFrame
-          key={`${item.url}?v=${item.version ?? 0}`}
-          src={`${item.url}?v=${item.version ?? 0}`}
-          title={item.caption || item.name}
-          minHeight={180}
-          maxHeight={520}
-        />
-        <button
-          type="button"
-          onClick={() =>
-            onExpand?.({
-              url: item.url,
-              kind: "html",
-              caption: item.caption,
-              name: item.name,
-              version: item.version,
-            })
-          }
-          aria-label="Open artifact full screen"
-          className="absolute right-2 top-2 flex size-7 items-center justify-center rounded-full border border-border bg-background/80 text-muted-foreground backdrop-blur transition-colors hover:text-foreground"
-        >
-          <Maximize2 className="size-3.5" />
-        </button>
-      </div>
+      <button
+        type="button"
+        onClick={() =>
+          onExpand?.({
+            url: item.url,
+            kind: "html",
+            caption: item.caption,
+            name: item.name,
+            version: item.version,
+          })
+        }
+        className="group col-span-full flex w-full items-center gap-3 bg-gradient-to-br from-sky-500/[0.06] to-violet-500/[0.08] px-4 py-3 text-left transition-colors hover:from-sky-500/[0.1] hover:to-violet-500/[0.12]"
+      >
+        <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-background/70">
+          <LayoutDashboard className="size-[18px] text-muted-foreground" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-[13px] font-medium">
+            {item.caption || item.name}
+          </span>
+          <span className="block text-[11px] text-muted-foreground">
+            Live artifact · tap to open
+          </span>
+        </span>
+        {(item.version ?? 1) > 1 ? (
+          <span className="flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+            <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" />
+            live · v{item.version}
+          </span>
+        ) : null}
+        <Maximize2 className="size-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
+      </button>
     );
   }
   return (
