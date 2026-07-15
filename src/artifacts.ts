@@ -2,6 +2,7 @@ import {
   copyFileSync,
   mkdirSync,
   readFileSync,
+  renameSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -10,9 +11,17 @@ import { randomBytes } from "node:crypto";
 import { PATHS } from "./config.ts";
 import type { SessionMsg } from "./sessions.ts";
 
-const ROOT = join(PATHS.data, "artifacts");
-const FILES_DIR = join(ROOT, "files");
-const INDEX_PATH = join(ROOT, "index.json");
+function root(): string {
+  return join(PATHS.data, "artifacts");
+}
+
+function filesDir(): string {
+  return join(root(), "files");
+}
+
+function indexPath(): string {
+  return join(root(), "index.json");
+}
 const UUID = /^[0-9a-fA-F-]{36}$/;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 250 * 1024 * 1024;
@@ -23,6 +32,22 @@ const MAX_VIDEO_BYTES = 250 * 1024 * 1024;
 const RETRY_DEDUPE_MS = 5 * 60 * 1000;
 
 export type MediaKind = "image" | "video" | "html";
+
+export type ArtifactRefreshStatus = "idle" | "running" | "success" | "error";
+
+export type ArtifactRefreshConfig = {
+  scriptPath: string;
+  argv: string[];
+  scopeRoot: string;
+  intervalMs: number;
+  timeoutMs: number;
+  enabled: boolean;
+  configuredAt: number;
+  status: ArtifactRefreshStatus;
+  lastStartedAt?: number;
+  lastSuccessAt?: number;
+  lastError?: string;
+};
 
 const MAX_HTML_BYTES = 2 * 1024 * 1024;
 const ARTIFACT_ID = /^[a-z0-9][a-z0-9-]{2,63}$/;
@@ -62,6 +87,9 @@ export type ImageArtifact = {
   version?: number;
   updatedAt?: number;
   title?: string;
+  // Server-side script refresh configuration. This lives with the stable
+  // artifact record so schedules and their status survive server restarts.
+  refresh?: ArtifactRefreshConfig;
 };
 
 export type ImageArtifactMessage = SessionMsg & {
@@ -75,19 +103,30 @@ export type ImageArtifactMessage = SessionMsg & {
   alt?: string;
   version?: number;
   title?: string;
+  refresh?: ArtifactRefreshConfig;
 };
 
 function readIndex(): Record<string, ImageArtifact> {
   try {
-    return JSON.parse(readFileSync(INDEX_PATH, "utf8")) as Record<string, ImageArtifact>;
+    return JSON.parse(readFileSync(indexPath(), "utf8")) as Record<string, ImageArtifact>;
   } catch {
     return {};
   }
 }
 
 function writeIndex(index: Record<string, ImageArtifact>): void {
-  mkdirSync(dirname(INDEX_PATH), { recursive: true });
-  writeFileSync(INDEX_PATH, JSON.stringify(index, null, 2));
+  const path = indexPath();
+  mkdirSync(dirname(path), { recursive: true });
+  const temp = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  writeFileSync(temp, JSON.stringify(index, null, 2));
+  renameSync(temp, path);
+}
+
+function atomicWrite(path: string, content: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const temp = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  writeFileSync(temp, content);
+  renameSync(temp, path);
 }
 
 function cleanText(value: string | undefined, max: number): string | undefined {
@@ -152,10 +191,11 @@ function createMediaArtifact(
     .sort((a, b) => b.createdAt - a.createdAt)[0];
   if (existing) return existing;
 
-  mkdirSync(FILES_DIR, { recursive: true });
+  const dir = filesDir();
+  mkdirSync(dir, { recursive: true });
   const id = `${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;
   const ext = extname(sourcePath).toLowerCase();
-  const filePath = join(FILES_DIR, `${id}${ext}`);
+  const filePath = join(dir, `${id}${ext}`);
   copyFileSync(sourcePath, filePath);
 
   const artifact: ImageArtifact = {
@@ -206,6 +246,8 @@ export function publishHtmlArtifact(input: {
   id?: string;
   title?: string;
   caption?: string;
+  // undefined preserves the current configuration; null removes it.
+  refresh?: ArtifactRefreshConfig | null;
 }): ImageArtifact {
   const sessionId = input.sessionId.trim();
   if (!UUID.test(sessionId)) throw new Error("sessionId must be a UUID");
@@ -226,11 +268,17 @@ export function publishHtmlArtifact(input: {
   }
 
   const id = requestedId ?? `${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;
-  mkdirSync(FILES_DIR, { recursive: true });
-  const filePath = existing?.filePath ?? join(FILES_DIR, `${id}.html`);
-  writeFileSync(filePath, html);
+  const dir = filesDir();
+  mkdirSync(dir, { recursive: true });
+  const filePath = existing?.filePath ?? join(dir, `${id}.html`);
+  // A refresh never exposes partial output: write beside the destination and
+  // atomically rename only after the complete document is durable.
+  atomicWrite(filePath, html);
 
-  const now = Date.now();
+  // `imageArtifactMessagesSince` uses a strict greater-than cursor. Keep this
+  // monotonic even when two publishes land in the same millisecond so an open
+  // client reliably receives every new version without a duplicate card.
+  const now = Math.max(Date.now(), (existing?.updatedAt ?? 0) + 1);
   const artifact: ImageArtifact = {
     id,
     sessionId,
@@ -245,8 +293,39 @@ export function publishHtmlArtifact(input: {
     title: cleanText(input.title, 120) ?? existing?.title,
     version: (existing?.version ?? 0) + 1,
     updatedAt: now,
+    refresh: input.refresh === undefined ? existing?.refresh : input.refresh ?? undefined,
   };
   index[id] = artifact;
+  writeIndex(index);
+  return artifact;
+}
+
+export function updateHtmlArtifactRefresh(input: {
+  id: string;
+  sessionId: string;
+  refresh: ArtifactRefreshConfig | null;
+}): ImageArtifact {
+  const index = readIndex();
+  const artifact = index[input.id];
+  if (!artifact || artifact.media !== "html") throw new Error("html artifact not found");
+  if (artifact.sessionId !== input.sessionId) throw new Error("artifact belongs to a different session");
+  artifact.refresh = input.refresh ?? undefined;
+  index[input.id] = artifact;
+  writeIndex(index);
+  return artifact;
+}
+
+export function updateHtmlArtifactRefreshStatus(input: {
+  id: string;
+  patch: Partial<Pick<ArtifactRefreshConfig, "status" | "lastStartedAt" | "lastSuccessAt" | "lastError">>;
+}): ImageArtifact | null {
+  const index = readIndex();
+  const artifact = index[input.id];
+  if (!artifact || artifact.media !== "html" || !artifact.refresh) return null;
+  const refresh = { ...artifact.refresh, ...input.patch };
+  if (input.patch.lastError === undefined && "lastError" in input.patch) delete refresh.lastError;
+  artifact.refresh = refresh;
+  index[input.id] = artifact;
   writeIndex(index);
   return artifact;
 }
@@ -286,6 +365,7 @@ export function imageArtifactToMessage(artifact: ImageArtifact): ImageArtifactMe
     alt: artifact.alt,
     version: artifact.version,
     title: artifact.title,
+    refresh: artifact.refresh,
   };
 }
 
