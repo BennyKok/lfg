@@ -2,6 +2,17 @@
 
 Recent product updates and deployment notes.
 
+## [Unreleased]
+
+### Added
+
+- **GitHub Copilot CLI** (`@github/copilot`, binary `copilot`) as an 8th supported coding agent:
+  - Settings → Coding agents tile with binary + auth status checks (`GH_TOKEN` / `GITHUB_TOKEN` env or `~/.copilot/` cache).
+  - Tmux-transport session launcher `spawnManagedCopilotSession` passing `--allow-all-tools` to bypass per-tool approval prompts.
+  - Curated model catalog: `claude-sonnet-4.5` (default), `claude-sonnet-4`, `gpt-5`.
+  - `scripts/setup.sh` installs `@github/copilot` when `LFG_INSTALL_COPILOT=1` (requires Node 22+).
+  - New `LFG_COPILOT_PATH` override for the binary path.
+
 ## July 16, 2026 - Shipped feed and live artifacts (v0.1.37)
 
 - New Shipped channel: a feed of agent-published work, available as a virtual
