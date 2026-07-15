@@ -232,6 +232,7 @@ import {
   hydrateImageArtifactMessage,
   imageArtifactMessagesSince,
   imageArtifactToMessage,
+  listAllArtifacts,
   listImageArtifacts,
   publishHtmlArtifact,
   type ImageArtifactMessage,
@@ -4114,6 +4115,35 @@ export async function cmdServe() {
       }
 
       {
+        // Gallery: every artifact across sessions, newest first. Powers the
+        // Artifacts view so agent output is browsable in one place.
+        if (path === "/api/artifacts" && req.method === "GET") {
+          const limit = Math.min(Number(url.searchParams.get("limit")) || 120, 500);
+          const titles = await readTitleOverrides();
+          const managed = listManaged();
+          const artifacts = listAllArtifacts()
+            .slice(-limit)
+            .reverse()
+            .map((artifact) => ({
+              id: artifact.id,
+              kind: artifact.media ?? "image",
+              url: `/api/artifacts/${encodeURIComponent(artifact.id)}`,
+              name: artifact.name,
+              title: artifact.title,
+              caption: artifact.caption,
+              sessionId: artifact.sessionId,
+              sessionTitle:
+                titles[artifact.sessionId] ??
+                managed.find(
+                  (m2) => m2.sessionId === artifact.sessionId || m2.nativeSessionId === artifact.sessionId,
+                )?.title,
+              ts: artifact.updatedAt ?? artifact.createdAt,
+              version: artifact.version,
+              size: artifact.size,
+              mimeType: artifact.mimeType,
+            }));
+          return json({ ok: true, artifacts });
+        }
         const m = path.match(/^\/api\/artifacts\/([a-z0-9-]+)$/);
         if (m && req.method === "GET") {
           const artifact = getImageArtifact(m[1]);
@@ -5155,7 +5185,7 @@ export async function cmdServe() {
                     Math.max(
                       0,
                       ...msgs
-                        .filter((msg) => msg.kind === "image" || msg.kind === "video")
+                        .filter((msg) => msg.kind === "image" || msg.kind === "video" || msg.kind === "html")
                         .map((msg) => msg.ts ?? 0),
                     ),
                   );
@@ -5322,7 +5352,7 @@ export async function cmdServe() {
                 lastArtifactAt = Math.max(
                   0,
                   ...msgs
-                    .filter((msg) => msg.kind === "image" || msg.kind === "video")
+                    .filter((msg) => msg.kind === "image" || msg.kind === "video" || msg.kind === "html")
                     .map((msg) => msg.ts ?? 0),
                 );
                 for (const msg of msgs)

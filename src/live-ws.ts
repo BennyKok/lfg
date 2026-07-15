@@ -668,7 +668,7 @@ export function createLiveWsSupport(opts: {
       tail.lastArtifactAt = Math.max(
         tail.lastArtifactAt,
         ...backlog.messages
-          .filter((msg) => msg.kind === "image" || msg.kind === "video")
+          .filter((msg) => msg.kind === "image" || msg.kind === "video" || msg.kind === "html")
           .map((msg) => msg.ts ?? 0),
       );
     }
@@ -741,7 +741,7 @@ export function createLiveWsSupport(opts: {
         tail.lastArtifactAt,
         ...batchMessages
           .filter((msg): msg is { kind?: string; ts?: number | null } => typeof msg === "object" && !!msg)
-          .filter((msg) => msg.kind === "image" || msg.kind === "video")
+          .filter((msg) => msg.kind === "image" || msg.kind === "video" || msg.kind === "html")
           .map((msg) => msg.ts ?? 0),
       );
     }

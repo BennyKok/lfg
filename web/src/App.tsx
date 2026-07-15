@@ -69,6 +69,7 @@ import {
   Check,
   ChevronDown,
   ChevronLeft,
+  Maximize2,
   ChevronRight,
   Folder,
   GitFork,
@@ -112,6 +113,7 @@ import { feedback } from "@/lib/feedback";
 import { useUiFeedbackPrefs, setUiFeedbackPrefs } from "@/lib/ui-feedback-prefs";
 import { reportError } from "./lib/report-error";
 import { lazyWithReload } from "./lib/lazy-with-reload";
+import { buildChatRenderItems, toolGroupLabel } from "./lib/chat-render-items";
 import {
   ensureVoiceConfigured,
   showVoiceSetup,
@@ -659,6 +661,80 @@ const AGENT_OPTIONS: { key: AgentKind; label: string; Icon: typeof Sparkles }[] 
 const AGENT_ICON_VERSION = "20260712";
 // Maps an agent-kind to its session-card / picker icon. codex variants share the
 // codex mark; claude variants (incl. aisdk) share the claude mark.
+// ---- Native artifact viewer -------------------------------------------------
+// Opening an artifact never leaves the app or pops a window: cards push onto a
+// full-screen in-app page with a Back header (Escape also closes).
+type ViewerArtifact = {
+  url: string;
+  kind: "image" | "video" | "html";
+  title?: string;
+  caption?: string;
+  name?: string;
+  version?: number;
+};
+
+const ArtifactViewerContext = createContext<(artifact: ViewerArtifact) => void>(() => {});
+
+function ArtifactViewerPage({
+  artifact,
+  onClose,
+}: {
+  artifact: ViewerArtifact;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const label = artifact.title || artifact.caption || artifact.name || "Artifact";
+  const src = artifact.kind === "html" ? `${artifact.url}?v=${artifact.version ?? 0}` : artifact.url;
+  return (
+    <div className="fixed inset-0 z-50 flex flex-col bg-background">
+      <header className="flex shrink-0 items-center gap-2 border-b border-border px-2 py-2 pt-[calc(0.5rem+env(safe-area-inset-top))]">
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Back"
+          className="flex h-8 items-center gap-1 rounded-full pl-1.5 pr-3 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground active:scale-[0.96]"
+        >
+          <ChevronLeft className="size-[18px]" />
+          <span>Back</span>
+        </button>
+        <div className="min-w-0 flex-1 truncate text-center text-sm font-semibold">{label}</div>
+        <div className="flex w-20 shrink-0 items-center justify-end gap-1.5 pr-1">
+          {artifact.kind === "html" && (artifact.version ?? 1) > 1 ? (
+            <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+              <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" />
+              v{artifact.version}
+            </span>
+          ) : null}
+        </div>
+      </header>
+      <div className="min-h-0 flex-1">
+        {artifact.kind === "html" ? (
+          <iframe
+            src={src}
+            sandbox="allow-scripts"
+            title={label}
+            className="block h-full w-full border-0 bg-background"
+          />
+        ) : artifact.kind === "video" ? (
+          <div className="flex h-full items-center justify-center bg-black">
+            <video src={src} controls autoPlay playsInline className="max-h-full max-w-full" />
+          </div>
+        ) : (
+          <div className="flex h-full items-center justify-center overflow-auto bg-background p-4">
+            <img src={src} alt={artifact.caption || label} className="max-h-full max-w-full object-contain" />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function agentIconSrc(agent?: string): string {
   const v = `?v=${AGENT_ICON_VERSION}`;
   if (agent === "codex" || agent === "codex-aisdk") return `/agent-codex.svg${v}`;
@@ -1012,12 +1088,12 @@ function titleForSession(session: Session) {
 }
 
 // The most recent activity condensed to one line — used as the collapsed-card
-// subtitle. Reuses the exact transcript shortening (buildRenderItems +
+// subtitle. Reuses the exact transcript shortening (buildChatRenderItems +
 // toolGroupLabel): a run of tool calls/results renders as its group summary
 // ("2 Bash · 1 Read · 1 result") instead of a raw tool_result dump; prose and
 // thinking render as their text.
 function latestLine(messages: Message[]): string {
-  const items = buildRenderItems(messages);
+  const items = buildChatRenderItems(messages);
   const last = items[items.length - 1];
   if (!last) return "";
   return last.type === "tools" ? toolGroupLabel(last.items) : normText(last.message.text);
@@ -1045,7 +1121,7 @@ function collapseThinkingRuns(messages: Message[]) {
 }
 
 function insertMediaByTimestamp(messages: Message[], message: Message): Message[] {
-  if ((message.kind !== "image" && message.kind !== "video") || message.ts == null) {
+  if ((message.kind !== "image" && message.kind !== "video" && message.kind !== "html") || message.ts == null) {
     return [...messages, message];
   }
   const insertAt = messages.findIndex((item) => item.ts != null && item.ts > message.ts!);
@@ -3032,6 +3108,8 @@ export function App() {
   // Horizontal swipe between the Live and Shipped "pages" on mobile — the
   // Shipped channel reads as a sibling page you swipe onto, not a buried tab.
   const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
+  // Full-page native artifact viewer (no popups/new tabs).
+  const [viewerArtifact, setViewerArtifact] = useState<ViewerArtifact | null>(null);
   const isMobile = useIsMobile();
   const isWide = useIsWide();
   const [keyboardOpen, setKeyboardOpen] = useState(false);
@@ -4319,7 +4397,11 @@ export function App() {
     <CodingAgentsContext.Provider value={codingAgents}>
     <AgentModelCatalogContext.Provider value={modelCatalog}>
     <AskProvider>
+    <ArtifactViewerContext.Provider value={setViewerArtifact}>
     <div ref={rootRef} className={APP_SHELL_CLASS}>
+      {viewerArtifact ? (
+        <ArtifactViewerPage artifact={viewerArtifact} onClose={() => setViewerArtifact(null)} />
+      ) : null}
       {/* Two floating "islands" — brand + Live on the left, an icon-only
           Settings button on the right — mirroring the bottom nav's
           gradient-bordered pill so the whole chrome reads as one matched set.
@@ -4667,6 +4749,7 @@ export function App() {
       <VoiceSetupDialog />
       <Toaster position="bottom-center" />
     </div>
+    </ArtifactViewerContext.Provider>
     </AskProvider>
     </AgentModelCatalogContext.Provider>
     </CodingAgentsContext.Provider>
@@ -10156,54 +10239,6 @@ const onTouchStart = (e: ReactTouchEvent) => {
   );
 });
 
-function toolName(text?: string) {
-  // tool_use text is "Name" or "Name: <input>" — the first token is the tool.
-  return (text || "").split(":")[0].trim().split(/\s+/)[0] || "tool";
-}
-
-// "2 Bash · 1 Read · 1 result" — aggregate a run of tool calls by name,
-// preserving first-seen order, with bare results counted at the end.
-function toolGroupLabel(items: Message[]) {
-  const counts = new Map<string, number>();
-  let results = 0;
-  for (const m of items) {
-    if (m.kind === "tool_use") {
-      const name = toolName(m.text);
-      counts.set(name, (counts.get(name) ?? 0) + 1);
-    } else {
-      results += 1;
-    }
-  }
-  const parts = [...counts].map(([name, count]) => `${count} ${name}`);
-  if (results) parts.push(`${results} result${results === 1 ? "" : "s"}`);
-  return parts.join(" · ") || `${items.length} step${items.length === 1 ? "" : "s"}`;
-}
-
-type RenderItem =
-  | { type: "msg"; message: Message; key: string }
-  | { type: "tools"; items: Message[]; key: string };
-
-// Coalesce adjacent tool_use/tool_result messages into one compact status row
-// so a busy session doesn't flood the pane. Prose and thinking stay as their
-// own items.
-function buildRenderItems(messages: Message[]): RenderItem[] {
-  const items: RenderItem[] = [];
-  messages.forEach((message, index) => {
-    const isTool = message.kind === "tool_use" || message.kind === "tool_result";
-    if (isTool) {
-      const last = items[items.length - 1];
-      if (last && last.type === "tools") {
-        last.items.push(message);
-        return;
-      }
-      items.push({ type: "tools", items: [message], key: message.id ?? `tools-${message.ts}-${index}` });
-      return;
-    }
-    items.push({ type: "msg", message, key: message.id ?? `${message.kind}-${message.ts}-${index}` });
-  });
-  return items;
-}
-
 const ChatStream = memo(function ChatStream({
   sid,
   messages,
@@ -10224,7 +10259,7 @@ const ChatStream = memo(function ChatStream({
   const [diffBarVisible, setDiffBarVisible] = useState(false);
   const preserveScrollRef = useRef<{ height: number; top: number } | null>(null);
   const visibleMessages = useMemo(() => messages.filter((message) => !message.seed), [messages]);
-  const items = useMemo(() => buildRenderItems(visibleMessages), [visibleMessages]);
+  const items = useMemo(() => buildChatRenderItems(visibleMessages), [visibleMessages]);
   // Historical reasoning can remain in the transcript after its turn is done.
   // Only let reasoning at the active tail replace the typing dots; otherwise an
   // old thinking block would make a newly-busy session look idle.
@@ -10573,6 +10608,7 @@ function MessageBubble({
   // entrance so the draft→final swap doesn't flash.
   entering?: boolean;
 }) {
+  const openArtifact = useContext(ArtifactViewerContext);
   if (message.kind === "thinking") {
     return (
       <AiMessage className="msg" from="assistant">
@@ -10595,10 +10631,23 @@ function MessageBubble({
       <AiMessage className={cn("msg", entering && "lfg-msg-in")} from="assistant">
         <MessageContent className="not-prose w-full max-w-[min(42rem,92vw)] overflow-hidden rounded-lg border border-border bg-card p-0 shadow-sm">
           <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2 text-xs">
-            <span className="flex min-w-0 items-center gap-2 font-medium">
+            <button
+              type="button"
+              onClick={() =>
+                openArtifact({
+                  url: message.url!,
+                  kind: "html",
+                  title: message.title,
+                  caption: message.caption,
+                  name: message.name,
+                  version: message.version,
+                })
+              }
+              className="flex min-w-0 items-center gap-2 font-medium transition-colors hover:text-foreground"
+            >
               <LayoutDashboard className="size-3.5 shrink-0 text-muted-foreground" />
               <span className="min-w-0 truncate">{label}</span>
-            </span>
+            </button>
             <span className="flex shrink-0 items-center gap-2 text-muted-foreground">
               {(message.version ?? 1) > 1 ? (
                 <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
@@ -10606,15 +10655,23 @@ function MessageBubble({
                   live · v{message.version}
                 </span>
               ) : null}
-              <a
-                href={message.url}
-                target="_blank"
-                rel="noreferrer"
-                aria-label="Open artifact in a new tab"
+              <button
+                type="button"
+                onClick={() =>
+                  openArtifact({
+                    url: message.url!,
+                    kind: "html",
+                    title: message.title,
+                    caption: message.caption,
+                    name: message.name,
+                    version: message.version,
+                  })
+                }
+                aria-label="Open artifact full screen"
                 className="transition-colors hover:text-foreground"
               >
-                <ExternalLink className="size-3.5" />
-              </a>
+                <Maximize2 className="size-3.5" />
+              </button>
             </span>
           </div>
           {/* Sandboxed: scripts may run for chart rendering, but no same-origin
@@ -10642,7 +10699,7 @@ function MessageBubble({
       message.caption || message.text || message.name || (isVideo ? "Video" : "Image");
     return (
       <AiMessage className={cn("msg", entering && "lfg-msg-in")} from="assistant">
-        <MessageContent className="not-prose w-fit max-w-[min(34rem,92vw)] overflow-hidden rounded-lg border border-border bg-card p-0 shadow-sm">
+        <MessageContent className="not-prose inline-flex w-fit max-w-[min(34rem,92vw)] flex-col items-start overflow-hidden rounded-lg border border-border bg-card p-0 shadow-sm">
           {/* Media renders inline in-app — no navigation away to the raw URL. */}
           {isVideo ? (
             <video
@@ -10651,16 +10708,19 @@ function MessageBubble({
               playsInline
               preload="metadata"
               aria-label={message.alt || label}
-              className="block max-h-[24rem] w-auto max-w-full bg-black object-contain"
+              className="block max-h-[24rem] w-auto max-w-full self-center bg-black object-contain"
             />
           ) : (
             <ZoomableImage
               src={message.url}
               alt={message.alt || label}
-              className="block max-h-[24rem] w-auto max-w-full bg-muted object-contain"
+              className="block max-h-[24rem] w-auto max-w-full self-center bg-muted object-contain"
             />
           )}
-          <div className="flex min-w-0 items-center justify-between gap-3 px-3 py-2 text-xs text-muted-foreground">
+          {/* w-0 + min-w-full keeps long captions from participating in the
+              shrink-to-fit width calculation. The rendered media owns the
+              card width; this row then conforms to it and truncates. */}
+          <div className="box-border flex w-0 min-w-full items-center justify-between gap-3 px-3 py-2 text-xs text-muted-foreground">
             <span className="min-w-0 truncate">{label}</span>
             {message.size ? <span className="shrink-0">{formatBytes(message.size)}</span> : null}
           </div>
@@ -14754,6 +14814,20 @@ type ShipMediaItem = {
   version?: number;
 };
 
+type GalleryArtifact = {
+  id: string;
+  kind: "image" | "video" | "html";
+  url: string;
+  name: string;
+  title?: string;
+  caption?: string;
+  sessionId?: string;
+  sessionTitle?: string;
+  ts: number;
+  version?: number;
+  size?: number;
+};
+
 type ShipPost = {
   id: string;
   rev: number;
@@ -14769,7 +14843,13 @@ type ShipPost = {
   mediaItems: ShipMediaItem[];
 };
 
-function ShipMedia({ item }: { item: ShipMediaItem }) {
+function ShipMedia({
+  item,
+  onExpand,
+}: {
+  item: ShipMediaItem;
+  onExpand?: (artifact: ViewerArtifact) => void;
+}) {
   if (item.kind === "video") {
     return (
       <video
@@ -14783,13 +14863,32 @@ function ShipMedia({ item }: { item: ShipMediaItem }) {
   }
   if (item.kind === "html") {
     // Live artifacts (dashboards) embed in the feed too — same sandbox as chat.
+    // Expand pushes the full-screen native viewer, never a popup.
     return (
-      <iframe
-        src={`${item.url}?v=${item.version ?? 0}`}
-        sandbox="allow-scripts"
-        title={item.caption || item.name}
-        className="block h-[22rem] w-full border-0 bg-background"
-      />
+      <div className="relative">
+        <iframe
+          src={`${item.url}?v=${item.version ?? 0}`}
+          sandbox="allow-scripts"
+          title={item.caption || item.name}
+          className="block h-[22rem] w-full border-0 bg-background"
+        />
+        <button
+          type="button"
+          onClick={() =>
+            onExpand?.({
+              url: item.url,
+              kind: "html",
+              caption: item.caption,
+              name: item.name,
+              version: item.version,
+            })
+          }
+          aria-label="Open artifact full screen"
+          className="absolute right-2 top-2 flex size-7 items-center justify-center rounded-full border border-border bg-background/80 text-muted-foreground backdrop-blur transition-colors hover:text-foreground"
+        >
+          <Maximize2 className="size-3.5" />
+        </button>
+      </div>
     );
   }
   return (
@@ -14923,6 +15022,31 @@ function ShippedPage({
   const [error, setError] = useState<string | null>(null);
   // Post whose (ended) session transcript is open read-only.
   const [viewing, setViewing] = useState<ShipPost | null>(null);
+  // Feed | Artifacts segment; the gallery lists every artifact across sessions.
+  const [view, setView] = useState<"feed" | "artifacts">("feed");
+  const [gallery, setGallery] = useState<GalleryArtifact[] | null>(null);
+  const openArtifact = useContext(ArtifactViewerContext);
+
+  useEffect(() => {
+    if (view !== "artifacts") return;
+    let alive = true;
+    const load = async () => {
+      try {
+        const data = await api<{ artifacts: GalleryArtifact[] }>("/api/artifacts", {
+          cache: "no-store",
+        });
+        if (alive) setGallery(data.artifacts);
+      } catch {
+        if (alive) setGallery([]);
+      }
+    };
+    void load();
+    const interval = setInterval(() => void load(), 20_000);
+    return () => {
+      alive = false;
+      clearInterval(interval);
+    };
+  }, [view]);
 
   useEffect(() => {
     let alive = true;
@@ -14948,8 +15072,86 @@ function ShippedPage({
     <div className="mx-auto max-w-xl space-y-4 pb-10">
       <div className="flex items-center justify-between px-1">
         <h1 className="text-lg font-semibold tracking-[-0.01em]">Shipped</h1>
-        <span className="text-xs text-muted-foreground">what your agents finished</span>
+        <div className="flex items-center gap-0.5 rounded-full border border-border bg-card/40 p-0.5 text-xs">
+          {(["feed", "artifacts"] as const).map((key) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setView(key)}
+              className={cn(
+                "rounded-full px-3 py-1 font-medium capitalize transition-colors",
+                view === key
+                  ? "bg-foreground text-background"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {key}
+            </button>
+          ))}
+        </div>
       </div>
+
+      {view === "artifacts" ? (
+        <>
+          {gallery === null ? (
+            <div className="py-10 text-center text-sm text-muted-foreground">Loading…</div>
+          ) : gallery.length === 0 ? (
+            <div className="rounded-2xl border border-border bg-card/40 px-4 py-10 text-center text-sm text-muted-foreground">
+              No artifacts yet — agents create them with lfg_display_image, lfg_display_video, and
+              lfg_publish_artifact.
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {gallery.map((a) => (
+                <button
+                  key={a.id}
+                  type="button"
+                  onClick={() =>
+                    openArtifact({
+                      url: a.url,
+                      kind: a.kind,
+                      title: a.title,
+                      caption: a.caption,
+                      name: a.name,
+                      version: a.version,
+                    })
+                  }
+                  className="group overflow-hidden rounded-xl border border-border bg-card/40 text-left shadow-sm transition-colors hover:border-foreground/20"
+                >
+                  {a.kind === "image" ? (
+                    <img
+                      src={a.url}
+                      alt={a.caption || a.name}
+                      loading="lazy"
+                      className="h-32 w-full bg-muted object-cover"
+                    />
+                  ) : a.kind === "video" ? (
+                    <video src={a.url} muted preload="metadata" className="h-32 w-full bg-black object-cover" />
+                  ) : (
+                    <div className="flex h-32 w-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-sky-500/10 to-violet-500/10">
+                      <LayoutDashboard className="size-6 text-muted-foreground" />
+                      {(a.version ?? 1) > 1 ? (
+                        <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                          <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" />
+                          live · v{a.version}
+                        </span>
+                      ) : null}
+                    </div>
+                  )}
+                  <div className="px-2.5 py-2">
+                    <div className="truncate text-xs font-medium">{a.title || a.caption || a.name}</div>
+                    <div className="mt-0.5 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+                      <span className="min-w-0 truncate">{a.sessionTitle ?? a.kind}</span>
+                      <span className="shrink-0">{timeAgo(a.ts)}</span>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <>
 
       {error ? (
         <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -15032,7 +15234,7 @@ function ShippedPage({
                 )}
               >
                 {post.mediaItems.slice(0, 4).map((item) => (
-                  <ShipMedia key={item.artifactId} item={item} />
+                  <ShipMedia key={item.artifactId} item={item} onExpand={openArtifact} />
                 ))}
               </div>
             ) : null}
@@ -15044,6 +15246,8 @@ function ShippedPage({
           </article>
         );
       })}
+        </>
+      )}
       {viewing ? <ShipTranscriptSheet post={viewing} onClose={() => setViewing(null)} /> : null}
     </div>
   );

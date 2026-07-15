@@ -275,7 +275,7 @@ function normalizeMessageList(messages: Message[]): Message[] {
 }
 
 function insertMediaByTimestamp(messages: Message[], message: Message): Message[] {
-  if ((message.kind !== "image" && message.kind !== "video") || message.ts == null) {
+  if ((message.kind !== "image" && message.kind !== "video" && message.kind !== "html") || message.ts == null) {
     return [...messages, message];
   }
   const insertAt = messages.findIndex((item) => item.ts != null && item.ts > message.ts!);
