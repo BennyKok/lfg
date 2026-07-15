@@ -117,7 +117,9 @@ export function prepareArtifactRefreshConfig(input: {
     timeoutMs,
     enabled: input.changes.enabled ?? input.existing?.enabled ?? true,
     configuredAt: input.now ?? Date.now(),
-    status: executionChanged ? "idle" : input.existing?.status ?? "idle",
+    status: executionChanged || input.existing?.status === "running"
+      ? "idle"
+      : input.existing?.status ?? "idle",
     lastStartedAt: input.existing?.lastStartedAt,
     lastSuccessAt: input.existing?.lastSuccessAt,
     lastError: executionChanged ? undefined : input.existing?.lastError,

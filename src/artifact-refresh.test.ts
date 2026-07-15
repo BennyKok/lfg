@@ -105,6 +105,18 @@ describe("script-backed HTML artifact refresh", () => {
     expect(readFileSync(after.filePath, "utf8")).toBe(FIRST_HTML);
   });
 
+  test("a non-zero exit records stderr and preserves last-good output", async () => {
+    const executable = script("exit-failure.sh", "#!/bin/sh\necho 'upstream unavailable' >&2\nexit 7\n");
+    const before = create({ scriptPath: executable });
+
+    const result = await manager().refreshNow(before.id, SESSION);
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("upstream unavailable");
+    expect(getImageArtifact(before.id)?.version).toBe(1);
+    expect(readFileSync(before.filePath, "utf8")).toBe(FIRST_HTML);
+  });
+
   test("prevents overlapping executions for one artifact", async () => {
     const executable = script(
       "slow.sh",
@@ -163,6 +175,29 @@ describe("script-backed HTML artifact refresh", () => {
       changes: { scriptPath: null },
     });
     expect(getImageArtifact(artifact.id)?.refresh).toBeUndefined();
+  });
+
+  test("disabling an active schedule cancels its process and clears running status", async () => {
+    const executable = script(
+      "cancel.sh",
+      "#!/bin/sh\nsleep 2\nprintf '%s' '<!doctype html><html><body>too late</body></html>'\n",
+    );
+    const artifact = create({ scriptPath: executable });
+    const refreshes = manager();
+    const running = refreshes.refreshNow(artifact.id, SESSION);
+    await Bun.sleep(20);
+
+    refreshes.configure({
+      id: artifact.id,
+      sessionId: SESSION,
+      changes: { enabled: false },
+    });
+    const result = await running;
+
+    expect(result.ok).toBe(false);
+    expect(getImageArtifact(artifact.id)?.refresh?.enabled).toBe(false);
+    expect(getImageArtifact(artifact.id)?.refresh?.status).toBe("idle");
+    expect(getImageArtifact(artifact.id)?.version).toBe(1);
   });
 
   test("enforces owner and cwd scope and passes argv without a shell", async () => {
