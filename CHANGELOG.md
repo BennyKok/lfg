@@ -2,6 +2,12 @@
 
 Recent product updates and deployment notes.
 
+## July 15, 2026 - Artifact retry stability
+
+- Image display retries no longer create duplicate transcript entries when the
+  shared SQLite index is busy; durable artifacts succeed and reconcile into the
+  ordered message stream, with a short idempotency window for agent retries.
+
 ## July 14, 2026 - Desktop polish and upload progress (v0.1.35)
 
 - Refreshed the desktop navigation rail, header, and session stage to match the

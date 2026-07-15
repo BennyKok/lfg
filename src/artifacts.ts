@@ -16,6 +16,11 @@ const INDEX_PATH = join(ROOT, "index.json");
 const UUID = /^[0-9a-fA-F-]{36}$/;
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 const MAX_VIDEO_BYTES = 250 * 1024 * 1024;
+// Agents commonly retry a display tool after a transport/indexing error.  The
+// media copy may already be durable at that point, so treat an identical call
+// in this short window as the same publish instead of creating a second chat
+// message.  Deliberately displaying the same file again later still works.
+const RETRY_DEDUPE_MS = 5 * 60 * 1000;
 
 export type MediaKind = "image" | "video";
 
@@ -42,6 +47,7 @@ export type ImageArtifact = {
   // "image" (default for legacy entries that predate video support) or "video".
   media?: MediaKind;
   sourcePath: string;
+  sourceMtimeMs?: number;
   filePath: string;
   name: string;
   mimeType: string;
@@ -118,6 +124,24 @@ function createMediaArtifact(
     throw new Error(`${media} file is larger than ${Math.round(maxBytes / (1024 * 1024))} MB`);
   }
 
+  const caption = cleanText(input.caption, 300);
+  const alt = cleanText(input.alt, 160);
+  const now = Date.now();
+  const existing = Object.values(readIndex())
+    .filter((artifact) =>
+      artifact.sessionId === sessionId &&
+      (artifact.media ?? "image") === media &&
+      artifact.sourcePath === sourcePath &&
+      artifact.sourceMtimeMs === st.mtimeMs &&
+      artifact.size === st.size &&
+      artifact.caption === caption &&
+      artifact.alt === alt &&
+      now - artifact.createdAt >= 0 &&
+      now - artifact.createdAt <= RETRY_DEDUPE_MS
+    )
+    .sort((a, b) => b.createdAt - a.createdAt)[0];
+  if (existing) return existing;
+
   mkdirSync(FILES_DIR, { recursive: true });
   const id = `${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;
   const ext = extname(sourcePath).toLowerCase();
@@ -127,15 +151,16 @@ function createMediaArtifact(
   const artifact: ImageArtifact = {
     id,
     sessionId,
-    createdAt: Date.now(),
+    createdAt: now,
     media,
     sourcePath,
+    sourceMtimeMs: st.mtimeMs,
     filePath,
     name: basename(sourcePath),
     mimeType,
     size: st.size,
-    caption: cleanText(input.caption, 300),
-    alt: cleanText(input.alt, 160),
+    caption,
+    alt,
   };
   const index = readIndex();
   index[id] = artifact;
@@ -193,6 +218,42 @@ export function imageArtifactMessagesSince(sessionId: string, after: number): Im
   return listImageArtifacts(sessionId)
     .filter((artifact) => artifact.createdAt > after)
     .map(imageArtifactToMessage);
+}
+
+// Older servers could persist a media artifact and then report the display call
+// as failed when only the transcript-index write was busy. Agent retries left
+// two durable rows with different artifact ids. Collapse that legacy retry pair
+// at the transcript boundary without deleting either stored file or DB row.
+export function collapseArtifactRetryMessages<T extends {
+  kind: string;
+  ts?: number | null;
+  name?: string;
+  mimeType?: string;
+  size?: number;
+  caption?: string;
+  alt?: string;
+}>(messages: T[]): T[] {
+  const out: T[] = [];
+  const lastBySignature = new Map<string, number>();
+  for (const message of messages) {
+    if ((message.kind !== "image" && message.kind !== "video") || message.ts == null) {
+      out.push(message);
+      continue;
+    }
+    const signature = JSON.stringify([
+      message.kind,
+      message.name ?? "",
+      message.mimeType ?? "",
+      message.size ?? -1,
+      message.caption ?? "",
+      message.alt ?? "",
+    ]);
+    const previousAt = lastBySignature.get(signature);
+    if (previousAt != null && message.ts >= previousAt && message.ts - previousAt <= RETRY_DEDUPE_MS) continue;
+    lastBySignature.set(signature, message.ts);
+    out.push(message);
+  }
+  return out;
 }
 
 export function hydrateImageArtifactMessage(message: SessionMsg): SessionMsg | ImageArtifactMessage {

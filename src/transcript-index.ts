@@ -166,7 +166,11 @@ function database(): Database {
   db = new Database(DB_PATH, { create: true });
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = NORMAL");
-  db.exec("PRAGMA busy_timeout = 2500");
+  // The index has multiple process writers (serve plus managed harnesses).
+  // Resuming a long thread can legitimately hold SQLite's single WAL writer
+  // for several seconds, so short writes should wait rather than surface a
+  // false failure after their primary data is already durable.
+  db.exec("PRAGMA busy_timeout = 15000");
   db.exec("PRAGMA wal_autocheckpoint = 1000");
   startWalCheckpointTimer();
   return db;
