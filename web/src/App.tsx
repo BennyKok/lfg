@@ -73,7 +73,9 @@ import {
   Folder,
   GitFork,
   KeyRound,
+  LayoutDashboard,
   Loader2,
+  Megaphone,
   MessageSquare,
   Mic,
   Bell,
@@ -358,6 +360,8 @@ type Message = {
   size?: number;
   caption?: string;
   alt?: string;
+  version?: number;
+  title?: string;
   pending?: boolean;
   seed?: boolean;
   // A draft assistant turn we joined mid-stream: its text was already fully
@@ -3017,6 +3021,9 @@ export function App() {
   }, []);
   const rootRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
+  // Horizontal swipe between the Live and Shipped "pages" on mobile — the
+  // Shipped channel reads as a sibling page you swipe onto, not a buried tab.
+  const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
   const isMobile = useIsMobile();
   const isWide = useIsWide();
   const [keyboardOpen, setKeyboardOpen] = useState(false);
@@ -4340,6 +4347,12 @@ export function App() {
                 />
               </>
             ) : null}
+            <IconTab
+              active={tab === "shipped"}
+              onClick={() => setTab("shipped")}
+              icon={<Megaphone className="size-[18px]" />}
+              label="Shipped"
+            />
             <AskNavButton active={tab === "ask"} onOpen={() => setTab("ask")} />
             <IconTab
               active={tab !== "live"}
@@ -4362,6 +4375,23 @@ export function App() {
 
       <main
         ref={mainRef}
+        onTouchStart={(e) => {
+          if (!isMobile || (tab !== "live" && tab !== "shipped")) return;
+          const t = e.touches[0];
+          swipeStartRef.current = { x: t.clientX, y: t.clientY };
+        }}
+        onTouchEnd={(e) => {
+          const start = swipeStartRef.current;
+          swipeStartRef.current = null;
+          if (!isMobile || !start || (tab !== "live" && tab !== "shipped")) return;
+          const t = e.changedTouches[0];
+          const dx = t.clientX - start.x;
+          const dy = t.clientY - start.y;
+          // A deliberate horizontal swipe, not a scroll or a tap.
+          if (Math.abs(dx) < 70 || Math.abs(dy) > 50) return;
+          if (dx < 0 && tab === "live") setTab("shipped");
+          else if (dx > 0 && tab === "shipped") setTab("live");
+        }}
         className={cn(
           "min-h-0 flex-1 px-3 pt-3",
           liveDesktopWorkspace ? "overflow-hidden pb-3" : `overflow-y-auto ${mainBottomPadding}`,
@@ -4378,6 +4408,7 @@ export function App() {
             onUserChange={changeUserFilter}
             onOpenSettings={() => setTab("settings")}
             onOpenAsk={() => setTab("ask")}
+            onOpenShipped={() => setTab("shipped")}
             messagesBySid={liveStream.messagesBySid}
             busyBySid={liveStream.busyBySid}
             promptsBySid={liveStream.promptsBySid}
@@ -4415,6 +4446,27 @@ export function App() {
             onLogin={loginCodingAgent}
             onSetupCheck={runSetupCheck}
             onRefresh={() => void refreshCodingAgents({ refreshModels: true })}
+          />
+        ) : tab === "shipped" ? (
+          <ShippedPage
+            liveSessionIds={
+              new Set(
+                liveSessions.flatMap((s) =>
+                  [s.sessionId, s.nativeSessionId].filter((x): x is string => !!x),
+                ),
+              )
+            }
+            onOpenSession={(sid) => {
+              setTab("live");
+              // Focus the session's rail card once the live view mounts.
+              setTimeout(() => {
+                const el = document.querySelector(
+                  `[data-rail-sid="${sid}"]`,
+                ) as HTMLElement | null;
+                el?.scrollIntoView({ block: "center" });
+                el?.click();
+              }, 350);
+            }}
           />
         ) : tab === "changelog" ? (
           <ChangelogPage />
@@ -6245,6 +6297,7 @@ function LiveView({
   onUserChange,
   onOpenSettings,
   onOpenAsk,
+  onOpenShipped,
   onManageSessions,
 }: {
   sessions: Session[];
@@ -6256,6 +6309,7 @@ function LiveView({
   onUserChange?: (v: string) => void;
   onOpenSettings?: () => void;
   onOpenAsk?: () => void;
+  onOpenShipped?: () => void;
   onManageSessions: (template: ManageSessionPromptTemplate) => void;
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
@@ -6419,6 +6473,7 @@ function LiveView({
         onUserChange={onUserChange}
         onOpenSettings={onOpenSettings}
         onOpenAsk={onOpenAsk}
+        onOpenShipped={onOpenShipped}
       />
     );
   }
@@ -6526,6 +6581,7 @@ function RailStage({
   onUserChange,
   onOpenSettings,
   onOpenAsk,
+  onOpenShipped,
 }: {
   sessions: Session[];
   users: User[];
@@ -6536,6 +6592,7 @@ function RailStage({
   onUserChange?: (v: string) => void;
   onOpenSettings?: () => void;
   onOpenAsk?: () => void;
+  onOpenShipped?: () => void;
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
@@ -7116,6 +7173,17 @@ function RailStage({
                 <Settings className="size-4" />
               </button>
             ) : null}
+            {onOpenShipped ? (
+              <button
+                type="button"
+                onClick={onOpenShipped}
+                aria-label="Shipped"
+                title="Shipped"
+                className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
+              >
+                <Megaphone className="size-4" />
+              </button>
+            ) : null}
           </div>
         ) : (
           <div className="flex shrink-0 flex-col gap-2 border-b border-border px-2 py-2">
@@ -7135,6 +7203,14 @@ function RailStage({
               <div className="ml-auto flex items-center gap-1">
                 {onOpenAsk ? (
                   <AskNavButton active={false} onOpen={onOpenAsk} />
+                ) : null}
+                {onOpenShipped ? (
+                  <IconTab
+                    active={false}
+                    onClick={onOpenShipped}
+                    icon={<Megaphone className="size-[18px]" />}
+                    label="Shipped"
+                  />
                 ) : null}
                 {onOpenSettings ? (
                   <IconTab
@@ -10471,6 +10547,56 @@ function MessageBubble({
             <ReasoningTrigger isStreaming={live} />
             <ReasoningContent>{message.text || "thinking..."}</ReasoningContent>
           </Reasoning>
+        </MessageContent>
+      </AiMessage>
+    );
+  }
+
+  if (message.kind === "html" && message.url) {
+    const label = message.title || message.caption || message.text || message.name || "Artifact";
+    // ?v= busts the iframe on re-publish: the message id stays stable so the
+    // card upserts in place, but the changed src remounts the document.
+    const src = `${message.url}?v=${message.version ?? message.ts ?? 0}`;
+    return (
+      <AiMessage className={cn("msg", entering && "lfg-msg-in")} from="assistant">
+        <MessageContent className="not-prose w-full max-w-[min(42rem,92vw)] overflow-hidden rounded-lg border border-border bg-card p-0 shadow-sm">
+          <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2 text-xs">
+            <span className="flex min-w-0 items-center gap-2 font-medium">
+              <LayoutDashboard className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 truncate">{label}</span>
+            </span>
+            <span className="flex shrink-0 items-center gap-2 text-muted-foreground">
+              {(message.version ?? 1) > 1 ? (
+                <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                  <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" />
+                  live · v{message.version}
+                </span>
+              ) : null}
+              <a
+                href={message.url}
+                target="_blank"
+                rel="noreferrer"
+                aria-label="Open artifact in a new tab"
+                className="transition-colors hover:text-foreground"
+              >
+                <ExternalLink className="size-3.5" />
+              </a>
+            </span>
+          </div>
+          {/* Sandboxed: scripts may run for chart rendering, but no same-origin
+              access, no network (CSP on the artifact response), no top-nav. */}
+          <iframe
+            key={src}
+            src={src}
+            sandbox="allow-scripts"
+            title={label}
+            className="block h-[26rem] w-full border-0 bg-background"
+          />
+          {message.caption && message.caption !== label ? (
+            <div className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
+              {message.caption}
+            </div>
+          ) : null}
         </MessageContent>
       </AiMessage>
     );
@@ -14511,6 +14637,310 @@ function UsagePage() {
   return (
     <div className="mx-auto max-w-xl space-y-8 pb-10">
       <UsageLimitsSection />
+    </div>
+  );
+}
+
+type ShipMediaItem = {
+  artifactId: string;
+  kind: "image" | "video" | "html";
+  url: string;
+  name: string;
+  caption?: string;
+  version?: number;
+};
+
+type ShipPost = {
+  id: string;
+  rev: number;
+  ts: number;
+  firstTs: number;
+  revisions: number;
+  title: string;
+  summary?: string;
+  sessionId?: string;
+  sessionTitle?: string;
+  agent?: string;
+  project?: string;
+  mediaItems: ShipMediaItem[];
+};
+
+function ShipMedia({ item }: { item: ShipMediaItem }) {
+  if (item.kind === "video") {
+    return (
+      <video
+        src={item.url}
+        controls
+        playsInline
+        preload="metadata"
+        className="block max-h-[22rem] w-full bg-black object-contain"
+      />
+    );
+  }
+  if (item.kind === "html") {
+    // Live artifacts (dashboards) embed in the feed too — same sandbox as chat.
+    return (
+      <iframe
+        src={`${item.url}?v=${item.version ?? 0}`}
+        sandbox="allow-scripts"
+        title={item.caption || item.name}
+        className="block h-[22rem] w-full border-0 bg-background"
+      />
+    );
+  }
+  return (
+    <ZoomableImage
+      src={item.url}
+      alt={item.caption || item.name}
+      className="block max-h-[22rem] w-full bg-muted object-cover"
+    />
+  );
+}
+
+// Read-only transcript view for a ship post whose session is no longer live:
+// clicking the post can't drop you into a running chat, so show what the agent
+// did instead. Live sessions skip this entirely and jump into the session.
+function ShipTranscriptSheet({ post, onClose }: { post: ShipPost; onClose: () => void }) {
+  const [messages, setMessages] = useState<Message[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const data = await api<{ messages: Message[] }>(
+          `/api/sessions/${post.sessionId}/messages?limit=60`,
+          { cache: "no-store" },
+        );
+        if (alive) setMessages(data.messages);
+      } catch (e) {
+        if (alive) setError(e instanceof Error ? e.message : "Couldn't load the transcript");
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [post.sessionId]);
+
+  const visible = (messages ?? []).filter(
+    (m) => m.kind === "text" || m.kind === "image" || m.kind === "video" || m.kind === "html",
+  );
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 backdrop-blur-sm sm:items-center"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-t-2xl border border-border bg-background shadow-xl sm:rounded-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold">
+              {post.sessionTitle ?? post.title}
+            </div>
+            <div className="text-[11px] text-muted-foreground">
+              Session ended · read-only transcript
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/[0.05] hover:text-foreground"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
+          {error ? <div className="text-sm text-destructive">{error}</div> : null}
+          {messages === null && !error ? (
+            <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>
+          ) : null}
+          {messages !== null && visible.length === 0 ? (
+            <div className="py-8 text-center text-sm text-muted-foreground">
+              No transcript available for this session.
+            </div>
+          ) : null}
+          {visible.map((m, i) => {
+            if ((m.kind === "image" || m.kind === "video") && m.url) {
+              return m.kind === "video" ? (
+                <video key={m.id ?? i} src={m.url} controls playsInline preload="metadata" className="max-h-60 rounded-lg" />
+              ) : (
+                <img key={m.id ?? i} src={m.url} alt={m.alt || m.name || "media"} className="max-h-60 rounded-lg border border-border/60" />
+              );
+            }
+            if (m.kind === "html" && m.url) {
+              return (
+                <a
+                  key={m.id ?? i}
+                  href={m.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1 text-xs text-primary hover:bg-foreground/[0.03]"
+                >
+                  <LayoutDashboard className="size-3.5" />
+                  {m.title || m.caption || m.name || "Artifact"}
+                </a>
+              );
+            }
+            const isUser = m.role === "user";
+            return (
+              <div key={m.id ?? i} className={cn("flex", isUser && "justify-end")}>
+                <div
+                  className={cn(
+                    "max-w-[85%] rounded-2xl px-3 py-2 text-[13px] leading-relaxed",
+                    isUser ? "bg-primary/10" : "bg-card/60 border border-border/60",
+                  )}
+                >
+                  <MessageResponse>{m.text ?? ""}</MessageResponse>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// The Shipped channel: a showcase feed of finished work, posted by agents via
+// lfg_ship. Media are ordinary artifacts (image / video / live html), so this
+// page is purely presentational.
+function ShippedPage({
+  onOpenSession,
+  liveSessionIds,
+}: {
+  onOpenSession: (sessionId: string) => void;
+  liveSessionIds: Set<string>;
+}) {
+  const [posts, setPosts] = useState<ShipPost[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Post whose (ended) session transcript is open read-only.
+  const [viewing, setViewing] = useState<ShipPost | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const data = await api<{ posts: ShipPost[] }>("/api/shipped", { cache: "no-store" });
+        if (!alive) return;
+        setPosts(data.posts);
+        setError(null);
+      } catch (e) {
+        if (alive) setError(e instanceof Error ? e.message : "Could not load the shipped feed");
+      }
+    };
+    void load();
+    const interval = setInterval(() => void load(), 15_000);
+    return () => {
+      alive = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  return (
+    <div className="mx-auto max-w-xl space-y-4 pb-10">
+      <div className="flex items-center justify-between px-1">
+        <h1 className="text-lg font-semibold tracking-[-0.01em]">Shipped</h1>
+        <span className="text-xs text-muted-foreground">what your agents finished</span>
+      </div>
+
+      {error ? (
+        <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          {error}
+        </div>
+      ) : null}
+
+      {posts === null && !error ? (
+        <div className="py-10 text-center text-sm text-muted-foreground">Loading…</div>
+      ) : null}
+
+      {posts !== null && posts.length === 0 ? (
+        <div className="rounded-2xl border border-border bg-card/40 px-4 py-10 text-center text-sm text-muted-foreground">
+          Nothing shipped yet — agents post here (via <code>lfg_ship</code>) when they finish
+          something worth showing.
+        </div>
+      ) : null}
+
+      {(posts ?? []).map((post) => {
+        const live = !!post.sessionId && liveSessionIds.has(post.sessionId);
+        return (
+          <article
+            key={post.id}
+            className="overflow-hidden rounded-2xl border border-border bg-card/40 shadow-sm"
+          >
+            {/* Tapping the post opens the conversation: straight into the live
+                session when it's still running, read-only transcript when not. */}
+            <button
+              type="button"
+              onClick={() => {
+                if (!post.sessionId) return;
+                if (live) onOpenSession(post.sessionId);
+                else setViewing(post);
+              }}
+              className="flex w-full items-start gap-3 px-4 pb-1 pt-3 text-left transition-colors hover:bg-foreground/[0.02]"
+            >
+              <img
+                src={agentIconSrc(post.agent)}
+                alt={agentIconAlt(post.agent)}
+                className="mt-0.5 size-9 shrink-0 rounded-full border border-border bg-background p-1.5"
+              />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline gap-1.5 text-[13px]">
+                  <span className="font-semibold">{agentIconAlt(post.agent)}</span>
+                  {post.sessionTitle ? (
+                    <span className="min-w-0 truncate text-muted-foreground">
+                      · {post.sessionTitle}
+                    </span>
+                  ) : null}
+                  <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
+                    {post.revisions > 1 ? (
+                      <span className="rounded-full bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
+                        updated · v{post.revisions}
+                      </span>
+                    ) : null}
+                    {live ? (
+                      <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                        <span className="size-1.5 rounded-full bg-emerald-500" />
+                        active
+                      </span>
+                    ) : null}
+                    {timeAgo(post.ts)}
+                  </span>
+                </div>
+                <h2 className="mt-0.5 text-[15px] font-semibold leading-snug tracking-[-0.01em]">
+                  {post.title}
+                </h2>
+                {post.summary ? (
+                  <div className="mt-0.5 text-[13px] leading-relaxed text-muted-foreground">
+                    <MessageResponse>{post.summary}</MessageResponse>
+                  </div>
+                ) : null}
+              </div>
+            </button>
+            {post.mediaItems.length ? (
+              <div
+                className={cn(
+                  "mx-4 my-2 grid gap-0.5 overflow-hidden rounded-xl border border-border/60",
+                  post.mediaItems.length > 1 ? "grid-cols-2" : "grid-cols-1",
+                )}
+              >
+                {post.mediaItems.slice(0, 4).map((item) => (
+                  <ShipMedia key={item.artifactId} item={item} />
+                ))}
+              </div>
+            ) : null}
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-4 pb-3 text-[11px] text-muted-foreground/80">
+              {post.project ? <span>{post.project}</span> : null}
+              {post.revisions > 1 ? <span>· first shipped {timeAgo(post.firstTs)}</span> : null}
+              <span>· {live ? "tap to open the session" : "tap to view the transcript"}</span>
+            </div>
+          </article>
+        );
+      })}
+      {viewing ? <ShipTranscriptSheet post={viewing} onClose={() => setViewing(null)} /> : null}
     </div>
   );
 }

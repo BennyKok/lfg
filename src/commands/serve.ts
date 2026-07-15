@@ -71,6 +71,7 @@ import {
 } from "../ask/store.ts";
 import {
   listSessions,
+  readTitleOverrides,
   resolveTranscript,
   setSessionTitle,
   sessionIdForPid,
@@ -131,7 +132,7 @@ import {
   tmuxHasSession,
   isBusy,
 } from "../tmux.ts";
-import { addManaged, patchManaged, removeManaged } from "../managed.ts";
+import { addManaged, listManaged, patchManaged, removeManaged } from "../managed.ts";
 import { PtyBridge, termSessionName } from "../pty.ts";
 import { capturePaneScroll, capturePaneEscaped, paneWidth } from "../tmux.ts";
 import { detectUrls } from "../links.ts";
@@ -230,9 +231,11 @@ import {
   imageArtifactMessagesSince,
   imageArtifactToMessage,
   listImageArtifacts,
+  publishHtmlArtifact,
   type ImageArtifactMessage,
 } from "../artifacts.ts";
 import { getOrCreateImagePreview } from "../artifact-previews.ts";
+import { addShipPost, listShipPosts } from "../shipped.ts";
 
 // Where the user keeps the repos lfg can launch agents into. Scanned for git
 // repos at runtime; defaults to ~/repos. The lfg repo itself (PATHS.root) is
@@ -4082,6 +4085,20 @@ export async function cmdServe() {
           }
           const file = Bun.file(filePath);
           if (!(await file.exists())) return err(404, "artifact file not found");
+          if (artifact.media === "html") {
+            // Updatable + rendered in a sandboxed iframe: never cache (the same
+            // URL serves newer versions), and lock the document down — inline
+            // script/style only, no network, no parent-frame access.
+            return new Response(file, {
+              headers: {
+                "Content-Type": "text/html; charset=utf-8",
+                "Cache-Control": "no-store",
+                "X-Content-Type-Options": "nosniff",
+                "Content-Security-Policy":
+                  "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; frame-ancestors 'self'",
+              },
+            });
+          }
           const baseHeaders: Record<string, string> = {
             "Content-Type": contentType,
             "Cache-Control": "private, max-age=31536000, immutable",
@@ -4194,6 +4211,77 @@ export async function cmdServe() {
             return json({ ok: true, artifact, message: imageArtifactToMessage(artifact), indexed });
           } catch (e) {
             return err(400, e instanceof Error ? e.message : "could not create video artifact");
+          }
+        }
+      }
+
+      {
+        // Publish (or re-publish) an HTML artifact. Re-POSTing the same id
+        // bumps the version; live-ws pollArtifacts re-emits the message and the
+        // client swaps the iframe in place — that's the whole "live dashboard".
+        const m = path.match(/^\/api\/sessions\/([0-9a-fA-F-]{36})\/artifacts\/html$/);
+        if (m && req.method === "POST") {
+          const body = (await req.json().catch(() => null)) as {
+            html?: string;
+            id?: string;
+            title?: string;
+            caption?: string;
+          } | null;
+          if (!body?.html?.trim()) return err(400, "html required");
+          try {
+            const artifact = publishHtmlArtifact({
+              sessionId: m[1],
+              html: body.html,
+              id: body.id,
+              title: body.title,
+              caption: body.caption,
+            });
+            const transcriptPath = await resolveTranscript(m[1]);
+            indexSessionArtifactMessages(transcriptPath ?? sessionIndexKey(m[1]), m[1]);
+            return json({ ok: true, artifact, message: imageArtifactToMessage(artifact) });
+          } catch (e) {
+            return err(400, e instanceof Error ? e.message : "could not publish html artifact");
+          }
+        }
+      }
+
+      {
+        // The Shipped channel: agents post finished work here (title, summary,
+        // media). Media are ordinary artifacts, so images/videos/live html
+        // dashboards all embed the same way.
+        if (path === "/api/shipped" && req.method === "GET") {
+          const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 200);
+          const titles = await readTitleOverrides();
+          const managed = listManaged();
+          const posts = listShipPosts(limit).map((post) => ({
+            ...post,
+            sessionTitle: post.sessionId
+              ? (titles[post.sessionId] ??
+                managed.find(
+                  (s) => s.sessionId === post.sessionId || s.nativeSessionId === post.sessionId,
+                )?.title)
+              : undefined,
+          }));
+          return json({ ok: true, posts });
+        }
+        if (path === "/api/shipped" && req.method === "POST") {
+          const body = (await req.json().catch(() => null)) as {
+            title?: string;
+            summary?: string;
+            id?: string;
+            sessionId?: string;
+            agent?: string;
+            project?: string;
+            mediaPaths?: Array<{ path: string; caption?: string }>;
+            artifactIds?: string[];
+          } | null;
+          const shipTitle = body?.title?.trim();
+          if (!body || !shipTitle) return err(400, "title required");
+          try {
+            const post = await addShipPost({ ...body, title: shipTitle });
+            return json({ ok: true, post });
+          } catch (e) {
+            return err(400, e instanceof Error ? e.message : "could not add shipped post");
           }
         }
       }

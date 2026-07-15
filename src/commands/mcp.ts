@@ -446,6 +446,68 @@ export async function cmdMcp() {
   );
 
   server.registerTool(
+    "lfg_publish_artifact",
+    {
+      title: "Publish HTML Artifact In LFG",
+      description:
+        "Publish a self-contained HTML artifact (report, data view, live dashboard) into the LFG session transcript. Re-publishing with the same id updates the artifact in place — use a stable id plus periodic re-publishes to build a live-updating dashboard. The HTML renders in a sandboxed iframe with no network access, so inline all styles, scripts, and data.",
+      inputSchema: {
+        html: z.string().min(1).describe("Complete self-contained HTML document (inline CSS/JS/data only; no external resources)."),
+        id: z.string().optional().describe("Stable artifact id (3-64 chars: lowercase letters, digits, dashes). Re-publish with the same id to update in place."),
+        title: z.string().optional().describe("Short title shown on the artifact card."),
+        caption: z.string().optional().describe("Short caption shown under the artifact."),
+        sessionId: z.string().optional().describe("Target LFG session id. Defaults to LFG_SESSION_ID."),
+      },
+    },
+    async ({ html, id, title, caption, sessionId }) => {
+      const sid = activeSessionId(sessionId);
+      const data = await api<ImageArtifactResponse>(
+        `/api/sessions/${encodeURIComponent(sid)}/artifacts/html`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ html, id, title, caption }),
+        },
+      );
+      return result({
+        published: true,
+        sessionId: sid,
+        artifact: data.artifact,
+      });
+    },
+  );
+
+  server.registerTool(
+    "lfg_ship",
+    {
+      title: "Post To The LFG Shipped Channel",
+      description:
+        "Showcase finished work in the LFG Shipped channel — a feed of what agents completed, with visuals. Call this when you finish something worth showing: give it a short title, a 1-3 sentence summary, and attach the screenshots/recordings you captured while verifying (mediaPaths), or embed an existing artifact like a live dashboard (artifactIds). Images are optimized automatically before storage. To UPDATE an earlier post (e.g. after follow-up feedback), pass its id — the post revises in place and the feed shows the new version.",
+      inputSchema: {
+        title: z.string().min(1).describe("Short headline for what shipped (e.g. 'WhatsApp reconnect loop fixed')."),
+        id: z.string().optional().describe("Existing ship post id to update in place (returned when the post was created)."),
+        summary: z.string().optional().describe("1-3 sentence markdown summary of what was done and why it matters."),
+        mediaPaths: z
+          .array(z.object({ path: z.string().min(1), caption: z.string().optional() }))
+          .optional()
+          .describe("Local image/video files to attach (absolute paths) — screenshots or recordings of the result."),
+        artifactIds: z.array(z.string()).optional().describe("Existing artifact ids to embed (e.g. a published html dashboard)."),
+        project: z.string().optional().describe("Project label shown on the post."),
+        sessionId: z.string().optional().describe("Source LFG session id. Defaults to LFG_SESSION_ID."),
+      },
+    },
+    async ({ title, id, summary, mediaPaths, artifactIds, project, sessionId }) => {
+      const sid = activeSessionId(sessionId);
+      const data = await api<{ ok: boolean; post: unknown }>("/api/shipped", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, id, summary, mediaPaths, artifactIds, project, sessionId: sid }),
+      });
+      return result({ shipped: true, post: data.post });
+    },
+  );
+
+  server.registerTool(
     "lfg_list_repos",
     {
       title: "List LFG Repos",
