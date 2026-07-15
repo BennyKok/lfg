@@ -68,6 +68,11 @@ export const OPENCODE_MODELS: string[] = [
   "opencode-go/qwen3.7-max",
   "opencode-go/qwen3.7-plus",
 ];
+export const COPILOT_MODELS: string[] = [
+  "claude-sonnet-4.5",
+  "claude-sonnet-4",
+  "gpt-5",
+];
 
 export const AUTO_AGENT_BACKENDS = [
   "aisdk",
@@ -85,6 +90,7 @@ const MODEL_CATALOG_KEYS: CodingAgentKind[] = [
   "grok",
   "cursor",
   "opencode",
+  "copilot",
 ];
 
 export const CODEX_THINKING_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
@@ -112,6 +118,7 @@ const LABELS: Record<CodingAgentKind, string> = {
   grok: "grok",
   cursor: "cursor",
   hermes: "hermes",
+  copilot: "copilot",
 };
 
 export const MODEL_OPTIONS: Record<CodingAgentKind, { defaultModel: string; models: readonly string[] }> = {
@@ -123,6 +130,7 @@ export const MODEL_OPTIONS: Record<CodingAgentKind, { defaultModel: string; mode
   cursor: { defaultModel: "auto", models: CURSOR_MODELS },
   hermes: { defaultModel: "nousresearch/hermes-4-405b", models: HERMES_MODELS },
   opencode: { defaultModel: "opencode-go/deepseek-v4-flash", models: OPENCODE_MODELS },
+  copilot: { defaultModel: "claude-sonnet-4.5", models: COPILOT_MODELS },
 };
 
 function mergeModels(...sets: Array<readonly string[] | undefined>): string[] {
