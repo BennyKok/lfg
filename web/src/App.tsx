@@ -11697,6 +11697,12 @@ function NewSessionDialog({
       document.documentElement.style.removeProperty("--lfg-inline-composer-height");
     };
   }, [variant]);
+  // True while the post-commit swap animation is in flight. Committing a swipe
+  // changes project/tab, which recreates onProjectSwipe and re-attaches the
+  // effect below — without this guard its cleanup wipes the in-flight
+  // transform and the bar flashes centered before sliding in again (same race
+  // as the page-level swipe in App).
+  const composerSwipeAnim = useRef(false);
   useEffect(() => {
     if (variant !== "inline" || !onProjectSwipe) return;
     const shell = inlineShellRef.current;
@@ -11728,6 +11734,11 @@ function NewSessionDialog({
       const width = Math.max(320, window.innerWidth || shell.clientWidth || 320);
       const out = dir === 1 ? -width : width;
       const inbound = -out;
+      composerSwipeAnim.current = true;
+      // Covers the full out (130ms) + in (210ms) timeline with headroom.
+      window.setTimeout(() => {
+        composerSwipeAnim.current = false;
+      }, 480);
       shell.style.transition =
         "transform 130ms cubic-bezier(0.32,0.72,0,1), opacity 130ms ease-out";
       shell.style.transform = `translateX(${out}px)`;
@@ -11818,9 +11829,14 @@ function NewSessionDialog({
       shell.removeEventListener("touchmove", onMove);
       shell.removeEventListener("touchend", onEnd);
       shell.removeEventListener("touchcancel", onEnd);
-      shell.style.transition = "";
-      shell.style.transform = "";
-      shell.style.opacity = "";
+      // A committed swipe re-runs this effect mid-animation; resetting styles
+      // here would flash the bar centered before the inbound slide. The
+      // animation always ends by clearing the styles itself.
+      if (!composerSwipeAnim.current) {
+        shell.style.transition = "";
+        shell.style.transform = "";
+        shell.style.opacity = "";
+      }
     };
   }, [onProjectSwipe, pendingCreates, variant]);
   useEffect(() => {
