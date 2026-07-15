@@ -157,22 +157,26 @@ export async function addShipPost(input: {
   return post;
 }
 
-export function listShipPosts(limit = 50): ShipPostHydrated[] {
+export function listShipPosts(
+  limit = 50,
+  offset = 0,
+): { posts: ShipPostHydrated[]; total: number } {
   const byId = new Map<string, ShipPostRevision[]>();
   for (const row of readRevisions()) {
     const list = byId.get(row.id) ?? [];
     list.push(row);
     byId.set(row.id, list);
   }
-  return [...byId.values()]
+  const merged = [...byId.values()]
     .map((revs) => {
       revs.sort((a, b) => a.rev - b.rev);
       const latest = revs[revs.length - 1];
       return { ...latest, firstTs: revs[0].ts, revisions: revs.length };
     })
-    .sort((a, b) => b.ts - a.ts)
-    .slice(0, limit)
-    .map((post) => ({
+    .sort((a, b) => b.ts - a.ts);
+  // Hydration touches the artifact index per media id, so only the requested
+  // page pays that cost — total lets the client know when to stop paging.
+  const posts = merged.slice(offset, offset + limit).map((post) => ({
       ...post,
       mediaItems: post.media
         .map((id) => {
@@ -190,4 +194,5 @@ export function listShipPosts(limit = 50): ShipPostHydrated[] {
         })
         .filter((x): x is NonNullable<typeof x> => x !== null),
     }));
+  return { posts, total: merged.length };
 }

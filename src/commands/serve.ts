@@ -4119,11 +4119,16 @@ export async function cmdServe() {
         // Artifacts view so agent output is browsable in one place.
         if (path === "/api/artifacts" && req.method === "GET") {
           const limit = Math.min(Number(url.searchParams.get("limit")) || 120, 500);
+          const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
           const titles = await readTitleOverrides();
           const managed = listManaged();
-          const artifacts = listAllArtifacts()
-            .slice(-limit)
+          const all = listAllArtifacts();
+          // listAllArtifacts is oldest-first; page newest-first with an offset
+          // so the gallery can load incrementally instead of all up front.
+          const artifacts = all
+            .slice()
             .reverse()
+            .slice(offset, offset + limit)
             .map((artifact) => ({
               id: artifact.id,
               kind: artifact.media ?? "image",
@@ -4142,7 +4147,7 @@ export async function cmdServe() {
               size: artifact.size,
               mimeType: artifact.mimeType,
             }));
-          return json({ ok: true, artifacts });
+          return json({ ok: true, artifacts, total: all.length });
         }
         const m = path.match(/^\/api\/artifacts\/([a-z0-9-]+)$/);
         if (m && req.method === "GET") {
@@ -4337,9 +4342,11 @@ export async function cmdServe() {
         // dashboards all embed the same way.
         if (path === "/api/shipped" && req.method === "GET") {
           const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 200);
+          const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
           const titles = await readTitleOverrides();
           const managed = listManaged();
-          const posts = listShipPosts(limit).map((post) => ({
+          const page = listShipPosts(limit, offset);
+          const posts = page.posts.map((post) => ({
             ...post,
             sessionTitle: post.sessionId
               ? (titles[post.sessionId] ??
@@ -4348,7 +4355,7 @@ export async function cmdServe() {
                 )?.title)
               : undefined,
           }));
-          return json({ ok: true, posts });
+          return json({ ok: true, posts, total: page.total });
         }
         if (path === "/api/shipped" && req.method === "POST") {
           const body = (await req.json().catch(() => null)) as {

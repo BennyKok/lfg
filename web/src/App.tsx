@@ -15124,6 +15124,11 @@ function ShipTranscriptSheet({ post, onClose }: { post: ShipPost; onClose: () =>
   );
 }
 
+// Page sizes for the Shipped feed and the artifacts gallery: both load one
+// page up front and grow via "load more" instead of fetching everything.
+const FEED_PAGE = 15;
+const GALLERY_PAGE = 24;
+
 // The Shipped channel: a showcase feed of finished work, posted by agents via
 // lfg_ship. Media are ordinary artifacts (image / video / live html), so this
 // page is purely presentational.
@@ -15135,12 +15140,20 @@ function ShippedPage({
   liveSessionIds: Set<string>;
 }) {
   const [posts, setPosts] = useState<ShipPost[] | null>(null);
+  const [postsTotal, setPostsTotal] = useState(0);
+  const [postsBusy, setPostsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Post whose (ended) session transcript is open read-only.
   const [viewing, setViewing] = useState<ShipPost | null>(null);
   // Feed | Artifacts segment; the gallery lists every artifact across sessions.
   const [view, setView] = useState<"feed" | "artifacts">("feed");
   const [gallery, setGallery] = useState<GalleryArtifact[] | null>(null);
+  const [galleryTotal, setGalleryTotal] = useState(0);
+  const [galleryBusy, setGalleryBusy] = useState(false);
+  // How many items are currently on screen — the polling refresh re-fetches
+  // exactly that window so "load more" pages survive the refresh.
+  const galleryLen = useRef(GALLERY_PAGE);
+  const postsLen = useRef(FEED_PAGE);
   const openArtifact = useContext(ArtifactViewerContext);
 
   useEffect(() => {
@@ -15148,12 +15161,17 @@ function ShippedPage({
     let alive = true;
     const load = async () => {
       try {
-        const data = await api<{ artifacts: GalleryArtifact[] }>("/api/artifacts", {
-          cache: "no-store",
-        });
-        if (alive) setGallery(data.artifacts);
+        const limit = Math.max(GALLERY_PAGE, galleryLen.current);
+        const data = await api<{ artifacts: GalleryArtifact[]; total?: number }>(
+          `/api/artifacts?limit=${limit}`,
+          { cache: "no-store" },
+        );
+        if (!alive) return;
+        setGallery(data.artifacts);
+        setGalleryTotal(data.total ?? data.artifacts.length);
+        galleryLen.current = Math.max(GALLERY_PAGE, data.artifacts.length);
       } catch {
-        if (alive) setGallery([]);
+        if (alive) setGallery((g) => g ?? []);
       }
     };
     void load();
@@ -15164,13 +15182,41 @@ function ShippedPage({
     };
   }, [view]);
 
+  const loadMoreGallery = async () => {
+    if (galleryBusy) return;
+    setGalleryBusy(true);
+    try {
+      const data = await api<{ artifacts: GalleryArtifact[]; total?: number }>(
+        `/api/artifacts?limit=${GALLERY_PAGE}&offset=${galleryLen.current}`,
+        { cache: "no-store" },
+      );
+      setGallery((g) => {
+        const seen = new Set((g ?? []).map((a) => a.id));
+        const merged = [...(g ?? []), ...data.artifacts.filter((a) => !seen.has(a.id))];
+        galleryLen.current = merged.length;
+        return merged;
+      });
+      setGalleryTotal((t) => data.total ?? t);
+    } catch {
+      // Leave the current page as-is; the next tap retries.
+    } finally {
+      setGalleryBusy(false);
+    }
+  };
+
   useEffect(() => {
     let alive = true;
     const load = async () => {
       try {
-        const data = await api<{ posts: ShipPost[] }>("/api/shipped", { cache: "no-store" });
+        const limit = Math.max(FEED_PAGE, postsLen.current);
+        const data = await api<{ posts: ShipPost[]; total?: number }>(
+          `/api/shipped?limit=${limit}`,
+          { cache: "no-store" },
+        );
         if (!alive) return;
         setPosts(data.posts);
+        setPostsTotal(data.total ?? data.posts.length);
+        postsLen.current = Math.max(FEED_PAGE, data.posts.length);
         setError(null);
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : "Could not load the shipped feed");
@@ -15183,6 +15229,28 @@ function ShippedPage({
       clearInterval(interval);
     };
   }, []);
+
+  const loadMorePosts = async () => {
+    if (postsBusy) return;
+    setPostsBusy(true);
+    try {
+      const data = await api<{ posts: ShipPost[]; total?: number }>(
+        `/api/shipped?limit=${FEED_PAGE}&offset=${postsLen.current}`,
+        { cache: "no-store" },
+      );
+      setPosts((p) => {
+        const seen = new Set((p ?? []).map((x) => x.id));
+        const merged = [...(p ?? []), ...data.posts.filter((x) => !seen.has(x.id))];
+        postsLen.current = merged.length;
+        return merged;
+      });
+      setPostsTotal((t) => data.total ?? t);
+    } catch {
+      // Leave the current page as-is; the next tap retries.
+    } finally {
+      setPostsBusy(false);
+    }
+  };
 
   return (
     <div className="mx-auto max-w-xl space-y-4 pb-10">
@@ -15244,10 +15312,21 @@ function ShippedPage({
                   ) : a.kind === "video" ? (
                     <video src={a.url} muted preload="metadata" className="h-32 w-full bg-black object-cover" />
                   ) : (
-                    <div className="flex h-32 w-full flex-col items-center justify-center gap-2 bg-gradient-to-br from-sky-500/10 to-violet-500/10">
-                      <LayoutDashboard className="size-6 text-muted-foreground" />
+                    // Live html artifacts show a real (zoomed-out, inert)
+                    // preview of the document instead of a placeholder icon —
+                    // pointer-events pass through to the tile's click handler.
+                    <div className="relative h-32 w-full overflow-hidden bg-background">
+                      <iframe
+                        src={`${a.url}?v=${a.version ?? 0}`}
+                        title={a.title || a.caption || a.name}
+                        sandbox="allow-scripts"
+                        loading="lazy"
+                        tabIndex={-1}
+                        scrolling="no"
+                        className="pointer-events-none h-[200%] w-[200%] origin-top-left scale-50 select-none border-0"
+                      />
                       {(a.version ?? 1) > 1 ? (
-                        <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                        <span className="absolute right-1.5 top-1.5 flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 backdrop-blur dark:text-emerald-400">
                           <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" />
                           live · v{a.version}
                         </span>
@@ -15265,6 +15344,16 @@ function ShippedPage({
               ))}
             </div>
           )}
+          {gallery !== null && gallery.length < galleryTotal ? (
+            <button
+              type="button"
+              onClick={() => void loadMoreGallery()}
+              disabled={galleryBusy}
+              className="w-full rounded-xl border border-border bg-card/40 px-4 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:border-foreground/20 hover:text-foreground disabled:opacity-60"
+            >
+              {galleryBusy ? "Loading…" : `Load more · ${galleryTotal - gallery.length} left`}
+            </button>
+          ) : null}
         </>
       ) : (
         <>
@@ -15367,6 +15456,16 @@ function ShippedPage({
           </article>
         );
       })}
+      {posts !== null && posts.length < postsTotal ? (
+        <button
+          type="button"
+          onClick={() => void loadMorePosts()}
+          disabled={postsBusy}
+          className="w-full rounded-xl border border-border bg-card/40 px-4 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:border-foreground/20 hover:text-foreground disabled:opacity-60"
+        >
+          {postsBusy ? "Loading…" : `Load more · ${postsTotal - posts.length} left`}
+        </button>
+      ) : null}
         </>
       )}
       {viewing ? <ShipTranscriptSheet post={viewing} onClose={() => setViewing(null)} /> : null}
