@@ -450,6 +450,13 @@ type ModelCatalogItem = {
 
 type GlobalSettings = {
   timeZone: string;
+  maxConcurrentAgents: number;
+};
+
+type AgentCapacity = {
+  max: number;
+  active: number;
+  queued: number;
 };
 
 type BootstrapPayload = {
@@ -458,6 +465,7 @@ type BootstrapPayload = {
   codingAgents?: CodingAgentInfo[] | null;
   models?: ModelCatalogItem[] | null;
   settings?: GlobalSettings | null;
+  agentCapacity?: AgentCapacity | null;
   sessions?: Session[] | null;
   users?: User[] | null;
   repos?: Repo[] | null;
@@ -3066,7 +3074,16 @@ export function App() {
   const [tab, setTab] = useState<string>("live");
   const extNavTabs = useExtensionNavTabs();
   const [autoAgents, setAutoAgents] = useState<AutoAgent[]>([]);
-  const [settings, setSettings] = useState<GlobalSettings>({ timeZone: DEFAULT_SCHED_TZ });
+  const [settings, setSettings] = useState<GlobalSettings>({
+    timeZone: DEFAULT_SCHED_TZ,
+    maxConcurrentAgents: 6,
+  });
+  const [agentCapacity, setAgentCapacity] = useState<AgentCapacity>({
+    max: 6,
+    active: 0,
+    queued: 0,
+  });
+  const previousQueuedAgents = useRef(0);
   const [schedTz, setSchedTz] = useState<string>(DEFAULT_SCHED_TZ);
   const [findings, setFindings] = useState<AutoFinding[]>([]);
   const [toastedFindingIds, setToastedFindingIds] = useState<Set<string>>(() => new Set());
@@ -3236,7 +3253,11 @@ export function App() {
     setAgents(payload.agents ?? []);
     setCodingAgents(payload.codingAgents ?? []);
     setModelCatalog(buildAgentModelCatalog(payload.models));
-    setSettings(payload.settings ?? { timeZone: payload.auto?.tz ?? DEFAULT_SCHED_TZ });
+    setSettings(payload.settings ?? {
+      timeZone: payload.auto?.tz ?? DEFAULT_SCHED_TZ,
+      maxConcurrentAgents: 6,
+    });
+    if (payload.agentCapacity) setAgentCapacity(payload.agentCapacity);
     // Guard sessions to [] — it feeds `allLiveSessions`/`liveSessions` which
     // call `.filter()` unconditionally on render, so a malformed/empty payload
     // must degrade to an empty live view rather than crash.
@@ -3359,11 +3380,12 @@ export function App() {
   }, [hideToastedFinding, showToastedFinding]);
 
   const refreshSessions = useCallback(async (_opts?: { retireLaunchId?: string }) => {
-    const payload = await api<{ sessions: Session[] }>("/api/sessions");
+    const payload = await api<{ sessions: Session[]; agentCapacity?: AgentCapacity }>("/api/sessions");
     // Guard to [] — `sessions` is consumed by `.filter()`/`.map()` on render
     // (allLiveSessions) and just below, so a missing field must not crash.
     const sessionList = payload.sessions ?? [];
     setSessions(sessionList);
+    if (payload.agentCapacity) setAgentCapacity(payload.agentCapacity);
     setError((current) => (current === "not found" ? null : current));
     // Prune tombstones the server has finally forgotten, so the set can't grow
     // unbounded and a recycled sid is never wrongly suppressed.
@@ -3374,6 +3396,16 @@ export function App() {
       return next.size === prev.size ? prev : next;
     });
   }, []);
+
+  useEffect(() => {
+    const previous = previousQueuedAgents.current;
+    previousQueuedAgents.current = agentCapacity.queued;
+    if (agentCapacity.queued > previous) {
+      toast.warning(
+        `Agent limit reached — ${agentCapacity.queued} waiting, ${agentCapacity.active}/${agentCapacity.max} running`,
+      );
+    }
+  }, [agentCapacity]);
 
   useEffect(() => {
     let cancelled = false;
@@ -4087,12 +4119,13 @@ export function App() {
   }
 
   const updateSettings = useCallback(async (patch: Partial<GlobalSettings>) => {
-    const payload = await api<{ settings: GlobalSettings }>("/api/settings", {
+    const payload = await api<{ settings: GlobalSettings; agentCapacity?: AgentCapacity }>("/api/settings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     });
     setSettings(payload.settings);
+    if (payload.agentCapacity) setAgentCapacity(payload.agentCapacity);
     setSchedTz(payload.settings.timeZone);
   }, []);
 
@@ -4510,6 +4543,7 @@ export function App() {
             extTabs={extNavTabs}
             onOpenExt={setTab}
             settings={settings}
+            agentCapacity={agentCapacity}
             onSettingsChange={updateSettings}
           />
         )}
@@ -14110,6 +14144,76 @@ function TimeZoneSettingsSection({
   );
 }
 
+function AgentConcurrencySettingsSection({
+  settings,
+  capacity,
+  onChange,
+}: {
+  settings: GlobalSettings;
+  capacity: AgentCapacity;
+  onChange: (patch: Partial<GlobalSettings>) => Promise<void>;
+}) {
+  const [saving, setSaving] = useState(false);
+
+  async function save(maxConcurrentAgents: number) {
+    if (maxConcurrentAgents === settings.maxConcurrentAgents || saving) return;
+    setSaving(true);
+    try {
+      await onChange({ maxConcurrentAgents });
+      toast.success(`Agent limit set to ${maxConcurrentAgents}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not update agent limit");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="space-y-2">
+      <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+        Agent capacity
+      </h2>
+      <div className="overflow-hidden rounded-2xl border border-border bg-card/40">
+        <div className="flex items-center justify-between gap-3 px-4 py-2.5">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className="flex size-7 shrink-0 items-center justify-center rounded-[7px] bg-primary text-white">
+              <Bot className="size-4" />
+            </span>
+            <div className="min-w-0">
+              <div className="text-sm font-medium">Concurrent subagents</div>
+              <div className={cn(
+                "text-xs",
+                capacity.queued > 0 ? "font-medium text-warning" : "text-muted-foreground",
+              )}>
+                {capacity.queued > 0
+                  ? `Limit reached · ${capacity.queued} waiting`
+                  : `${capacity.active} running now`}
+              </div>
+            </div>
+          </div>
+          <label className="flex shrink-0 items-center gap-1 rounded-full bg-muted px-3 py-1.5">
+            <select
+              value={settings.maxConcurrentAgents}
+              onChange={(event) => void save(Number(event.target.value))}
+              disabled={saving}
+              aria-label="Maximum concurrent subagents"
+              className="appearance-none bg-transparent text-right text-xs font-medium outline-none"
+            >
+              {[1, 2, 3, 4, 5, 6].map((count) => (
+                <option key={count} value={count}>{count}</option>
+              ))}
+            </select>
+            <ChevronDown className="size-3 text-muted-foreground/70" />
+          </label>
+        </div>
+      </div>
+      <p className="px-4 text-xs text-muted-foreground">
+        Extra subagents wait in a queue. The 5 GB kernel memory ceiling still protects the VM.
+      </p>
+    </section>
+  );
+}
+
 function CodingAgentAuthDialog({
   session,
   onSessionChange,
@@ -15088,6 +15192,7 @@ function SettingsView({
   toggleTheme,
   user,
   settings,
+  agentCapacity,
   onSettingsChange,
   onOpenTerminal,
   onOpenBrowser,
@@ -15103,6 +15208,7 @@ function SettingsView({
   toggleTheme: () => void;
   user: string | null;
   settings: GlobalSettings;
+  agentCapacity: AgentCapacity;
   onSettingsChange: (patch: Partial<GlobalSettings>) => Promise<void>;
   onOpenTerminal: () => void;
   onOpenBrowser: () => void;
@@ -15158,6 +15264,12 @@ function SettingsView({
       </section>
 
       <TimeZoneSettingsSection settings={settings} onChange={onSettingsChange} />
+
+      <AgentConcurrencySettingsSection
+        settings={settings}
+        capacity={agentCapacity}
+        onChange={onSettingsChange}
+      />
 
       <PwaInstallSettingsSection />
 
