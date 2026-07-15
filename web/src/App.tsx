@@ -15150,6 +15150,10 @@ function ShippedPage({
   const [gallery, setGallery] = useState<GalleryArtifact[] | null>(null);
   const [galleryTotal, setGalleryTotal] = useState(0);
   const [galleryBusy, setGalleryBusy] = useState(false);
+  // Kind filter for the gallery — applied server-side so paging + totals
+  // always describe the filtered set.
+  const [galleryKind, setGalleryKind] = useState<"all" | "html" | "image" | "video">("all");
+  const galleryKindParam = galleryKind === "all" ? "" : `&kind=${galleryKind}`;
   // How many items are currently on screen — the polling refresh re-fetches
   // exactly that window so "load more" pages survive the refresh.
   const galleryLen = useRef(GALLERY_PAGE);
@@ -15159,11 +15163,14 @@ function ShippedPage({
   useEffect(() => {
     if (view !== "artifacts") return;
     let alive = true;
+    // Switching filters starts a fresh first page (stale tiles would mix kinds).
+    setGallery(null);
+    galleryLen.current = GALLERY_PAGE;
     const load = async () => {
       try {
         const limit = Math.max(GALLERY_PAGE, galleryLen.current);
         const data = await api<{ artifacts: GalleryArtifact[]; total?: number }>(
-          `/api/artifacts?limit=${limit}`,
+          `/api/artifacts?limit=${limit}${galleryKindParam}`,
           { cache: "no-store" },
         );
         if (!alive) return;
@@ -15180,14 +15187,14 @@ function ShippedPage({
       alive = false;
       clearInterval(interval);
     };
-  }, [view]);
+  }, [view, galleryKind]);
 
   const loadMoreGallery = async () => {
     if (galleryBusy) return;
     setGalleryBusy(true);
     try {
       const data = await api<{ artifacts: GalleryArtifact[]; total?: number }>(
-        `/api/artifacts?limit=${GALLERY_PAGE}&offset=${galleryLen.current}`,
+        `/api/artifacts?limit=${GALLERY_PAGE}&offset=${galleryLen.current}${galleryKindParam}`,
         { cache: "no-store" },
       );
       setGallery((g) => {
@@ -15277,12 +15284,30 @@ function ShippedPage({
 
       {view === "artifacts" ? (
         <>
+          <div className="flex items-center gap-1.5 px-1">
+            {(["all", "html", "image", "video"] as const).map((k) => (
+              <button
+                key={k}
+                type="button"
+                onClick={() => setGalleryKind(k)}
+                className={cn(
+                  "rounded-full border px-2.5 py-1 text-[11px] font-medium capitalize transition-colors",
+                  galleryKind === k
+                    ? "border-foreground/20 bg-foreground/[0.08] text-foreground"
+                    : "border-border bg-card/40 text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {k === "html" ? "HTML" : k}
+              </button>
+            ))}
+          </div>
           {gallery === null ? (
             <div className="py-10 text-center text-sm text-muted-foreground">Loading…</div>
           ) : gallery.length === 0 ? (
             <div className="rounded-2xl border border-border bg-card/40 px-4 py-10 text-center text-sm text-muted-foreground">
-              No artifacts yet — agents create them with lfg_display_image, lfg_display_video, and
-              lfg_publish_artifact.
+              {galleryKind === "all"
+                ? "No artifacts yet — agents create them with lfg_display_image, lfg_display_video, and lfg_publish_artifact."
+                : `No ${galleryKind === "html" ? "HTML" : galleryKind} artifacts yet.`}
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">

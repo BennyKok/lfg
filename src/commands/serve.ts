@@ -4120,9 +4120,14 @@ export async function cmdServe() {
         if (path === "/api/artifacts" && req.method === "GET") {
           const limit = Math.min(Number(url.searchParams.get("limit")) || 120, 500);
           const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
+          // Optional kind filter (image | video | html) applied before paging
+          // so offset/total always describe the filtered set.
+          const kindFilter = url.searchParams.get("kind");
           const titles = await readTitleOverrides();
           const managed = listManaged();
-          const all = listAllArtifacts();
+          const all = listAllArtifacts().filter(
+            (artifact) => !kindFilter || (artifact.media ?? "image") === kindFilter,
+          );
           // listAllArtifacts is oldest-first; page newest-first with an offset
           // so the gallery can load incrementally instead of all up front.
           const artifacts = all
