@@ -103,7 +103,6 @@ export type ImageArtifactMessage = SessionMsg & {
   alt?: string;
   version?: number;
   title?: string;
-  refresh?: ArtifactRefreshConfig;
 };
 
 function readIndex(): Record<string, ImageArtifact> {
@@ -365,7 +364,6 @@ export function imageArtifactToMessage(artifact: ImageArtifact): ImageArtifactMe
     alt: artifact.alt,
     version: artifact.version,
     title: artifact.title,
-    refresh: artifact.refresh,
   };
 }
 

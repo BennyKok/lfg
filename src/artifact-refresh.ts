@@ -83,13 +83,18 @@ export function validateCompleteHtml(html: string): void {
 export function prepareArtifactRefreshConfig(input: {
   changes: ArtifactRefreshChanges;
   existing?: ArtifactRefreshConfig;
-  scopeRoot: string;
+  scopeRoot?: string;
   now?: number;
 }): ArtifactRefreshConfig | null {
   if (input.changes.scriptPath === null) return null;
   const rawScript = input.changes.scriptPath ?? input.existing?.scriptPath;
   if (!rawScript) throw new Error("refresh script path required");
-  const paths = validateScript(rawScript, input.scopeRoot);
+  const paths = input.existing && input.changes.scriptPath === undefined
+    ? { scriptPath: input.existing.scriptPath, scopeRoot: input.existing.scopeRoot }
+    : (() => {
+      if (!input.scopeRoot) throw new Error("owning session cwd not found");
+      return validateScript(rawScript, input.scopeRoot);
+    })();
   const argv = validateArgv(input.changes.argv ?? input.existing?.argv ?? []);
   const intervalMs = input.changes.intervalMs ?? input.existing?.intervalMs ?? 5 * 60_000;
   if (!Number.isInteger(intervalMs) || intervalMs < MIN_ARTIFACT_REFRESH_INTERVAL_MS || intervalMs > MAX_ARTIFACT_REFRESH_INTERVAL_MS) {
@@ -153,7 +158,7 @@ export class ArtifactRefreshManager {
   configure(input: {
     id: string;
     sessionId: string;
-    scopeRoot: string;
+    scopeRoot?: string;
     changes: ArtifactRefreshChanges;
     now?: number;
   }): ImageArtifact {
@@ -198,7 +203,7 @@ export class ArtifactRefreshManager {
     const startedAt = Date.now();
     artifact = updateHtmlArtifactRefreshStatus({
       id,
-      patch: { status: "running", lastStartedAt: startedAt, lastError: undefined },
+      patch: { status: "running", lastStartedAt: startedAt },
     }) ?? artifact;
 
     let child: ChildProcessByStdio<null, Readable, Readable>;

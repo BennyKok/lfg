@@ -41,6 +41,16 @@ type ImageArtifactResponse = {
     name: string;
     caption?: string;
     alt?: string;
+    version?: number;
+    refresh?: {
+      enabled: boolean;
+      intervalMs: number;
+      timeoutMs: number;
+      status: "idle" | "running" | "success" | "error";
+      lastStartedAt?: number;
+      lastSuccessAt?: number;
+      lastError?: string;
+    };
   };
   message?: {
     url?: string;
@@ -87,6 +97,15 @@ function activeSessionId(input?: string): string {
   const sessionId = input?.trim() || process.env.LFG_SESSION_ID?.trim();
   if (!sessionId) {
     throw new Error("sessionId required; pass it explicitly or run inside an LFG-managed session");
+  }
+  return sessionId;
+}
+
+function ownedSessionId(input?: string): string {
+  const sessionId = activeSessionId(input);
+  const caller = process.env.LFG_SESSION_ID?.trim();
+  if (caller && caller !== sessionId) {
+    throw new Error("script-backed artifacts can only be managed by their owning LFG session");
   }
   return sessionId;
 }
@@ -454,29 +473,78 @@ export async function cmdMcp() {
     {
       title: "Publish HTML Artifact In LFG",
       description:
-        "Publish a self-contained HTML artifact (report, data view, live dashboard) into the LFG session transcript. Re-publishing with the same id updates the artifact in place — use a stable id plus periodic re-publishes to build a live-updating dashboard. The HTML renders in a sandboxed iframe with no network access, so inline all styles, scripts, and data.",
+        "Publish a self-contained HTML artifact (report, data view, live dashboard) into the LFG session transcript. Re-publishing with the same id updates one card in place. Optionally attach an executable server-side refresh script inside the owning session cwd; LFG invokes the path with explicit argv (never a shell), validates complete HTML output, and preserves the last good version on failure. Omit html only when updating an existing artifact's refresh configuration. The HTML iframe has no network or host-execution access.",
       inputSchema: {
-        html: z.string().min(1).describe("Complete self-contained HTML document (inline CSS/JS/data only; no external resources)."),
+        html: z.string().min(1).optional().describe("Complete self-contained HTML document (inline CSS/JS/data only; no external resources). May be omitted only to update refresh settings for an existing id."),
         id: z.string().optional().describe("Stable artifact id (3-64 chars: lowercase letters, digits, dashes). Re-publish with the same id to update in place."),
         title: z.string().optional().describe("Short title shown on the artifact card."),
         caption: z.string().optional().describe("Short caption shown under the artifact."),
         sessionId: z.string().optional().describe("Target LFG session id. Defaults to LFG_SESSION_ID."),
+        refreshScriptPath: z.string().nullable().optional().describe("Absolute executable script path inside the owning session cwd. Set null to remove the refresh configuration."),
+        refreshArgv: z.array(z.string()).max(32).optional().describe("Explicit arguments passed directly to the script; shell syntax is never evaluated."),
+        refreshIntervalSeconds: z.number().int().min(10).max(604800).optional().describe("Automatic refresh interval in seconds (10 seconds to 7 days)."),
+        refreshTimeoutSeconds: z.number().int().min(1).max(300).optional().describe("Per-run timeout in seconds (default 30, maximum 300)."),
+        refreshEnabled: z.boolean().optional().describe("Enable or disable scheduled runs while retaining the script for manual refreshes."),
       },
     },
-    async ({ html, id, title, caption, sessionId }) => {
-      const sid = activeSessionId(sessionId);
+    async ({ html, id, title, caption, sessionId, refreshScriptPath, refreshArgv, refreshIntervalSeconds, refreshTimeoutSeconds, refreshEnabled }) => {
+      const hasRefreshChanges = refreshScriptPath !== undefined || refreshArgv !== undefined ||
+        refreshIntervalSeconds !== undefined || refreshTimeoutSeconds !== undefined || refreshEnabled !== undefined;
+      const sid = hasRefreshChanges ? ownedSessionId(sessionId) : activeSessionId(sessionId);
       const data = await api<ImageArtifactResponse>(
         `/api/sessions/${encodeURIComponent(sid)}/artifacts/html`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ html, id, title, caption }),
+          headers: {
+            "Content-Type": "application/json",
+            ...(hasRefreshChanges ? { "X-LFG-Session-ID": sid } : {}),
+          },
+          body: JSON.stringify({
+            html,
+            id,
+            title,
+            caption,
+            refreshScriptPath,
+            refreshArgv,
+            refreshIntervalSeconds,
+            refreshTimeoutSeconds,
+            refreshEnabled,
+          }),
         },
       );
       return result({
         published: true,
         sessionId: sid,
         artifact: data.artifact,
+      });
+    },
+  );
+
+  server.registerTool(
+    "lfg_refresh_artifact",
+    {
+      title: "Refresh Or Inspect An LFG HTML Artifact",
+      description:
+        "Run the owning HTML artifact's configured server-side script now, or inspect persisted refresh status. Manual runs also work when the automatic schedule is disabled. The stable artifact/card id is retained and the version increases only after valid complete HTML is produced.",
+      inputSchema: {
+        id: z.string().min(3).describe("Stable HTML artifact id."),
+        action: z.enum(["now", "status"]).optional().describe("Run now (default) or only return persisted status."),
+        sessionId: z.string().optional().describe("Owning LFG session id. Defaults to LFG_SESSION_ID and cannot target another session."),
+      },
+    },
+    async ({ id, action, sessionId }) => {
+      const sid = ownedSessionId(sessionId);
+      const method = action === "status" ? "GET" : "POST";
+      const data = await api<ImageArtifactResponse & { started?: boolean; error?: string; refresh?: unknown }>(
+        `/api/sessions/${encodeURIComponent(sid)}/artifacts/html/${encodeURIComponent(id)}/refresh`,
+        { method, headers: { "X-LFG-Session-ID": sid } },
+      );
+      return result({
+        refreshed: method === "POST" ? data.ok === true : undefined,
+        sessionId: sid,
+        artifact: data.artifact,
+        refresh: data.refresh ?? data.artifact?.refresh ?? null,
+        error: data.error,
       });
     },
   );

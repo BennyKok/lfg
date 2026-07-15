@@ -239,6 +239,12 @@ import {
 } from "../artifacts.ts";
 import { getOrCreateImagePreview } from "../artifact-previews.ts";
 import { addShipPost, listShipPosts } from "../shipped.ts";
+import {
+  artifactRefreshManager,
+  prepareArtifactRefreshConfig,
+  startArtifactRefreshScheduler,
+  type ArtifactRefreshChanges,
+} from "../artifact-refresh.ts";
 
 // Where the user keeps the repos lfg can launch agents into. Scanned for git
 // repos at runtime; defaults to ~/repos. The lfg repo itself (PATHS.root) is
@@ -537,6 +543,19 @@ function dirExists(path: string | null | undefined): path is string {
   } catch {
     return false;
   }
+}
+
+async function artifactOwnerCwd(sessionId: string): Promise<string | null> {
+  const sessions = await listSessions().catch(() => []);
+  const session = sessions.find((row) => sessionMatchesId(row, sessionId));
+  if (dirExists(session?.cwd)) return session.cwd;
+  const managed = listManaged().find((row) => sessionMatchesId(row, sessionId));
+  if (dirExists(managed?.cwd)) return managed.cwd;
+  const transcript = await resolveTranscript(sessionId).catch(() => null);
+  if (!transcript) return null;
+  const cwd = await cwdForTranscript(transcript).catch(() => null) ??
+    await cwdForCodexTranscript(transcript).catch(() => null);
+  return dirExists(cwd) ? cwd : null;
 }
 
 async function resolveResumeCwd(
@@ -4312,9 +4331,10 @@ export async function cmdServe() {
       }
 
       {
-        // Publish (or re-publish) an HTML artifact. Re-POSTing the same id
-        // bumps the version; live-ws pollArtifacts re-emits the message and the
-        // client swaps the iframe in place — that's the whole "live dashboard".
+        // Publish/re-publish HTML and optionally attach a server-side refresh
+        // script. The script path is scoped to the owning session cwd; the
+        // sandboxed iframe has no route to invoke it (no forms, network, or
+        // same-origin capability under the artifact CSP).
         const m = path.match(/^\/api\/sessions\/([0-9a-fA-F-]{36})\/artifacts\/html$/);
         if (m && req.method === "POST") {
           const body = (await req.json().catch(() => null)) as {
@@ -4322,21 +4342,100 @@ export async function cmdServe() {
             id?: string;
             title?: string;
             caption?: string;
+            refreshScriptPath?: string | null;
+            refreshArgv?: string[];
+            refreshIntervalSeconds?: number;
+            refreshTimeoutSeconds?: number;
+            refreshEnabled?: boolean;
           } | null;
-          if (!body?.html?.trim()) return err(400, "html required");
+          if (!body) return err(400, "request body required");
+          const hasRefreshChanges = [
+            "refreshScriptPath",
+            "refreshArgv",
+            "refreshIntervalSeconds",
+            "refreshTimeoutSeconds",
+            "refreshEnabled",
+          ].some((key) => Object.prototype.hasOwnProperty.call(body, key));
+          if (hasRefreshChanges && req.headers.get("x-lfg-session-id") !== m[1]) {
+            return err(403, "refresh configuration requires the owning LFG session");
+          }
+          if (!body.html?.trim() && (!body.id || !hasRefreshChanges)) {
+            return err(400, "html required unless updating an existing refresh configuration");
+          }
           try {
-            const artifact = publishHtmlArtifact({
-              sessionId: m[1],
-              html: body.html,
-              id: body.id,
-              title: body.title,
-              caption: body.caption,
-            });
-            const transcriptPath = await resolveTranscript(m[1]);
-            indexSessionArtifactMessages(transcriptPath ?? sessionIndexKey(m[1]), m[1]);
+            const changes: ArtifactRefreshChanges = {
+              scriptPath: body.refreshScriptPath,
+              argv: body.refreshArgv,
+              intervalMs: body.refreshIntervalSeconds === undefined
+                ? undefined
+                : body.refreshIntervalSeconds * 1_000,
+              timeoutMs: body.refreshTimeoutSeconds === undefined
+                ? undefined
+                : body.refreshTimeoutSeconds * 1_000,
+              enabled: body.refreshEnabled,
+            };
+            let artifact;
+            if (body.html?.trim()) {
+              const existing = body.id ? getImageArtifact(body.id) : null;
+              let refresh = undefined;
+              if (hasRefreshChanges) {
+                const scopeRoot = typeof body.refreshScriptPath === "string"
+                  ? await artifactOwnerCwd(m[1]) ?? undefined
+                  : undefined;
+                refresh = prepareArtifactRefreshConfig({
+                  changes,
+                  existing: existing?.refresh,
+                  scopeRoot,
+                });
+                if (!refresh || !refresh.enabled) artifactRefreshManager.cancel(body.id ?? "");
+              }
+              artifact = publishHtmlArtifact({
+                sessionId: m[1],
+                html: body.html,
+                id: body.id,
+                title: body.title,
+                caption: body.caption,
+                refresh: hasRefreshChanges ? refresh : undefined,
+              });
+              const transcriptPath = await resolveTranscript(m[1]);
+              indexSessionArtifactMessages(transcriptPath ?? sessionIndexKey(m[1]), m[1]);
+            } else {
+              const scopeRoot = typeof body.refreshScriptPath === "string"
+                ? await artifactOwnerCwd(m[1]) ?? undefined
+                : undefined;
+              artifact = artifactRefreshManager.configure({
+                id: body.id!,
+                sessionId: m[1],
+                scopeRoot,
+                changes,
+              });
+            }
             return json({ ok: true, artifact, message: imageArtifactToMessage(artifact) });
           } catch (e) {
             return err(400, e instanceof Error ? e.message : "could not publish html artifact");
+          }
+        }
+      }
+
+      {
+        // Status + manual refresh. Ownership is enforced by both the route
+        // session and the durable artifact owner before host execution begins.
+        const m = path.match(/^\/api\/sessions\/([0-9a-fA-F-]{36})\/artifacts\/html\/([a-z0-9-]+)\/refresh$/);
+        if (m && (req.method === "GET" || req.method === "POST")) {
+          if (req.headers.get("x-lfg-session-id") !== m[1]) {
+            return err(403, "artifact refresh requires the owning LFG session");
+          }
+          const artifact = getImageArtifact(m[2]);
+          if (!artifact || artifact.media !== "html") return err(404, "html artifact not found");
+          if (artifact.sessionId !== m[1]) return err(403, "artifact belongs to a different session");
+          if (req.method === "GET") {
+            return json({ ok: true, artifact, refresh: artifact.refresh ?? null });
+          }
+          try {
+            const result = await artifactRefreshManager.refreshNow(m[2], m[1]);
+            return json({ ...result, refresh: result.artifact.refresh ?? null });
+          } catch (e) {
+            return err(400, e instanceof Error ? e.message : "could not refresh html artifact");
           }
         }
       }
@@ -5490,6 +5589,21 @@ export async function cmdServe() {
   });
 
   startAutoScheduler((l) => console.log(l));
+  const stopArtifactRefresh = startArtifactRefreshScheduler((l) => console.log(l));
+  // Refresh scripts are detached process groups so timeouts can kill their
+  // descendants. Tear all of them down before the server exits on either
+  // interactive or service-manager shutdown.
+  const stopRefreshOnExit = () => stopArtifactRefresh();
+  process.once("exit", stopRefreshOnExit);
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    const handler = () => {
+      stopArtifactRefresh();
+      process.off("exit", stopRefreshOnExit);
+      process.off(signal, handler);
+      process.kill(process.pid, signal);
+    };
+    process.once(signal, handler);
+  }
   startModelDiscoveryScheduler((l) => console.log(l));
   startWorktreeSweep((l) => console.log(l));
   // Watch the fleet for busy -> idle transitions and fan "completed" events out
