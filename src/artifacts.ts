@@ -22,7 +22,10 @@ const MAX_VIDEO_BYTES = 250 * 1024 * 1024;
 // message.  Deliberately displaying the same file again later still works.
 const RETRY_DEDUPE_MS = 5 * 60 * 1000;
 
-export type MediaKind = "image" | "video";
+export type MediaKind = "image" | "video" | "html";
+
+const MAX_HTML_BYTES = 2 * 1024 * 1024;
+const ARTIFACT_ID = /^[a-z0-9][a-z0-9-]{2,63}$/;
 
 const IMAGE_TYPES: Record<string, string> = {
   ".gif": "image/gif",
@@ -54,6 +57,11 @@ export type ImageArtifact = {
   size: number;
   caption?: string;
   alt?: string;
+  // Updatable artifacts (html): version bumps on every re-publish so live-ws
+  // re-emits the message and the client refreshes the card in place.
+  version?: number;
+  updatedAt?: number;
+  title?: string;
 };
 
 export type ImageArtifactMessage = SessionMsg & {
@@ -65,6 +73,8 @@ export type ImageArtifactMessage = SessionMsg & {
   size: number;
   caption?: string;
   alt?: string;
+  version?: number;
+  title?: string;
 };
 
 function readIndex(): Record<string, ImageArtifact> {
@@ -186,8 +196,69 @@ export function createVideoArtifact(input: {
   return createMediaArtifact(input, "video");
 }
 
+// HTML artifacts are UPDATABLE: re-publishing with the same id overwrites the
+// file and bumps `version`/`updatedAt`. The stable message id (`artifact-<id>`)
+// means the client upserts the card in place — that's what makes a "live
+// dashboard" just an agent re-publishing the same artifact on an interval.
+export function publishHtmlArtifact(input: {
+  sessionId: string;
+  html: string;
+  id?: string;
+  title?: string;
+  caption?: string;
+}): ImageArtifact {
+  const sessionId = input.sessionId.trim();
+  if (!UUID.test(sessionId)) throw new Error("sessionId must be a UUID");
+  const html = input.html ?? "";
+  if (!html.trim()) throw new Error("html content required");
+  const bytes = Buffer.byteLength(html, "utf8");
+  if (bytes > MAX_HTML_BYTES) throw new Error("html artifact is larger than 2 MB");
+
+  const requestedId = input.id?.trim().toLowerCase();
+  if (requestedId && !ARTIFACT_ID.test(requestedId)) {
+    throw new Error("artifact id must be 3-64 chars: lowercase letters, digits, dashes");
+  }
+
+  const index = readIndex();
+  const existing = requestedId ? index[requestedId] : null;
+  if (existing && (existing.sessionId !== sessionId || (existing.media ?? "image") !== "html")) {
+    throw new Error("artifact id belongs to a different session or media kind");
+  }
+
+  const id = requestedId ?? `${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;
+  mkdirSync(FILES_DIR, { recursive: true });
+  const filePath = existing?.filePath ?? join(FILES_DIR, `${id}.html`);
+  writeFileSync(filePath, html);
+
+  const now = Date.now();
+  const artifact: ImageArtifact = {
+    id,
+    sessionId,
+    createdAt: existing?.createdAt ?? now,
+    media: "html",
+    sourcePath: filePath,
+    filePath,
+    name: `${id}.html`,
+    mimeType: "text/html; charset=utf-8",
+    size: bytes,
+    caption: cleanText(input.caption, 300) ?? existing?.caption,
+    title: cleanText(input.title, 120) ?? existing?.title,
+    version: (existing?.version ?? 0) + 1,
+    updatedAt: now,
+  };
+  index[id] = artifact;
+  writeIndex(index);
+  return artifact;
+}
+
 export function getImageArtifact(id: string): ImageArtifact | null {
   return readIndex()[id] ?? null;
+}
+
+export function listAllArtifacts(): ImageArtifact[] {
+  return Object.values(readIndex()).sort(
+    (a, b) => (a.updatedAt ?? a.createdAt) - (b.updatedAt ?? b.createdAt),
+  );
 }
 
 export function listImageArtifacts(sessionId: string): ImageArtifact[] {
@@ -197,13 +268,15 @@ export function listImageArtifacts(sessionId: string): ImageArtifact[] {
 }
 
 export function imageArtifactToMessage(artifact: ImageArtifact): ImageArtifactMessage {
-  const label = artifact.caption || artifact.alt || artifact.name;
+  const label = artifact.title || artifact.caption || artifact.alt || artifact.name;
   return {
     id: `artifact-${artifact.id}`,
     role: "assistant",
     kind: artifact.media ?? "image",
     text: label,
-    ts: artifact.createdAt,
+    // Updatable artifacts surface at their last-publish time so live-ws
+    // re-emits them and the client re-sorts/refreshes in place.
+    ts: artifact.updatedAt ?? artifact.createdAt,
     artifactId: artifact.id,
     url: `/api/artifacts/${encodeURIComponent(artifact.id)}`,
     name: artifact.name,
@@ -211,12 +284,14 @@ export function imageArtifactToMessage(artifact: ImageArtifact): ImageArtifactMe
     size: artifact.size,
     caption: artifact.caption,
     alt: artifact.alt,
+    version: artifact.version,
+    title: artifact.title,
   };
 }
 
 export function imageArtifactMessagesSince(sessionId: string, after: number): ImageArtifactMessage[] {
   return listImageArtifacts(sessionId)
-    .filter((artifact) => artifact.createdAt > after)
+    .filter((artifact) => (artifact.updatedAt ?? artifact.createdAt) > after)
     .map(imageArtifactToMessage);
 }
 
@@ -257,7 +332,7 @@ export function collapseArtifactRetryMessages<T extends {
 }
 
 export function hydrateImageArtifactMessage(message: SessionMsg): SessionMsg | ImageArtifactMessage {
-  if (message.kind !== "image" && message.kind !== "video") return message;
+  if (message.kind !== "image" && message.kind !== "video" && message.kind !== "html") return message;
   const artifactId = message.id?.startsWith("artifact-") ? message.id.slice("artifact-".length) : null;
   if (!artifactId) return message;
   const artifact = getImageArtifact(artifactId);

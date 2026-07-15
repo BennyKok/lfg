@@ -29,6 +29,8 @@ export type Message = {
   size?: number;
   caption?: string;
   alt?: string;
+  version?: number;
+  title?: string;
   pending?: boolean;
   seed?: boolean;
   catchUp?: boolean;

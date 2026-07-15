@@ -294,12 +294,14 @@ export function ZoomableImage({
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const previewSrc = src.includes("?") ? `${src}&preview=1` : `${src}?preview=1`;
   return (
     <>
       <img
-        src={src}
+        src={previewSrc}
         alt={alt}
         loading="lazy"
+        decoding="async"
         onClick={() => setOpen(true)}
         className={cn("cursor-zoom-in", className)}
       />

@@ -31,17 +31,17 @@ function DialogOverlay({
     <DialogPrimitive.Backdrop
       data-slot="dialog-overlay"
       className={cn(
-        // z-[80] sits above the Drawer (z-[70]) so a Dialog opened from
-        // within an open Drawer (e.g. nested confirmation flows) doesn't
-        // get its click overlay intercepted by the Drawer's overlay.
-        // Modal layers (Dialog, AlertDialog) always sit above transient
-        // surfaces like Drawer.
+        // z-[160] sits above every app-level sheet and drawer (the full-screen
+        // session sheet is z-[90] and the tallest drawers are z-[150]). A
+        // Dialog opened from one of those surfaces must remain visible and
+        // receive clicks. Portalled menus/popovers sit at z-[170] so controls
+        // opened from inside a dialog render above this backdrop.
         //
         // pointer-events-auto is critical: vaul (the Drawer lib) sets
         // `pointer-events: none` on <body> while a Drawer is open, and
         // base-ui portals our Dialog content as a descendant of body —
         // without overriding here every click is dropped silently.
-        "pointer-events-auto fixed inset-0 isolate z-[80] bg-black/80 duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+        "pointer-events-auto fixed inset-0 isolate z-[160] bg-black/80 duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
         className
       )}
       {...props}
@@ -92,6 +92,7 @@ function DialogContent({
   showCloseButton = true,
   innerClassName,
   overlayClassName,
+  onKeyDown,
   ...props
 }: DialogPrimitive.Popup.Props & {
   showCloseButton?: boolean
@@ -106,8 +107,37 @@ function DialogContent({
       <DialogPrimitive.Popup
         ref={popupRef}
         data-slot="dialog-content"
+        onKeyDown={(event) => {
+          // A portalled dialog can still bubble keyboard events to document-level
+          // app shortcuts. Keep Escape/arrows/etc. from controlling the screen
+          // underneath the active modal.
+          event.stopPropagation()
+          onKeyDown?.(event)
+          if (event.defaultPrevented || event.nativeEvent.isComposing) return
+          if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return
+          if (event.key !== "Enter") return
+
+          const target = event.target as HTMLElement
+          if (
+            target.closest("input, textarea, select, button, a, [contenteditable='true']")
+          ) return
+
+          // Enter from non-editable dialog content activates the trailing footer
+          // button, which is the primary action by convention. Tab/Shift+Tab and
+          // Escape continue to be handled by Base UI's focus trap and dismiss logic.
+          const footer = event.currentTarget.querySelector<HTMLElement>(
+            "[data-slot='dialog-footer']",
+          )
+          const actions = footer
+            ? Array.from(footer.querySelectorAll<HTMLButtonElement>("button:not(:disabled)"))
+            : []
+          const primary = actions.at(-1)
+          if (!primary) return
+          event.preventDefault()
+          primary.click()
+        }}
         className={cn(
-          "pointer-events-auto fixed top-1/2 left-1/2 z-[80] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-4xl bg-background text-sm ring-1 ring-foreground/5 duration-100 outline-none sm:max-w-md data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "pointer-events-auto fixed top-1/2 left-1/2 z-[160] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-4xl bg-background text-sm ring-1 ring-foreground/5 duration-100 outline-none sm:max-w-md data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className
         )}
         {...props}
