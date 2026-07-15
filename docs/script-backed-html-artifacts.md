@@ -40,3 +40,9 @@ schedule by omitting `html` and reusing the same `id`. Set `refreshEnabled` to
 Successful runs increment the existing artifact version and emit the repo's
 normal realtime artifact update, so an open client refreshes the same card.
 Failures leave both the prior HTML and version intact.
+
+The Artifacts page labels scheduled dashboards with their most recent
+successful refresh time. Delete an artifact from that page with its trash
+button, or call `lfg_delete_artifact` with its stable `id`. Deletion is limited
+to the owning session, cancels any active refresh process, removes the schedule,
+and permanently removes the stored artifact.

@@ -62,7 +62,7 @@ type AskQuestionResponse = {
   answer: string;
 };
 
-const VERSION = "0.1.19";
+const VERSION = "0.1.20";
 
 function baseUrl(): string {
   if (process.env.LFG_BASE) return process.env.LFG_BASE.replace(/\/$/, "");
@@ -546,6 +546,27 @@ export async function cmdMcp() {
         refresh: data.refresh ?? data.artifact?.refresh ?? null,
         error: data.error,
       });
+    },
+  );
+
+  server.registerTool(
+    "lfg_delete_artifact",
+    {
+      title: "Delete An LFG Artifact",
+      description:
+        "Permanently delete an artifact owned by this LFG session. HTML refresh schedules and active refresh processes are stopped before the artifact is removed.",
+      inputSchema: {
+        id: z.string().min(3).describe("Artifact id to permanently delete."),
+        sessionId: z.string().optional().describe("Owning LFG session id. Defaults to LFG_SESSION_ID and cannot target another session."),
+      },
+    },
+    async ({ id, sessionId }) => {
+      const sid = ownedSessionId(sessionId);
+      const data = await api<ImageArtifactResponse>(
+        `/api/sessions/${encodeURIComponent(sid)}/artifacts/${encodeURIComponent(id)}`,
+        { method: "DELETE", headers: { "X-LFG-Session-ID": sid } },
+      );
+      return result({ deleted: data.ok === true, sessionId: sid, artifact: data.artifact });
     },
   );
 

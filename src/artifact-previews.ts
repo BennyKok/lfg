@@ -47,3 +47,8 @@ export async function getOrCreateImagePreview(artifact: ImageArtifact): Promise<
   pending.set(artifact.id, generation);
   return generation;
 }
+
+export async function deleteImagePreview(artifactId: string): Promise<void> {
+  await pending.get(artifactId)?.catch(() => undefined);
+  await rm(imagePreviewPath(artifactId), { force: true });
+}

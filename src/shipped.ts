@@ -54,6 +54,8 @@ export type ShipPostHydrated = ShipPostRevision & {
     name: string;
     caption?: string;
     version?: number;
+    lastRefreshedAt?: number;
+    refreshStatus?: "idle" | "running" | "success" | "error";
   }>;
 };
 
@@ -190,6 +192,8 @@ export function listShipPosts(
             name: artifact.name,
             caption: artifact.caption,
             version: artifact.version,
+            lastRefreshedAt: artifact.refresh?.lastSuccessAt,
+            refreshStatus: artifact.refresh?.status,
           };
         })
         .filter((x): x is NonNullable<typeof x> => x !== null),

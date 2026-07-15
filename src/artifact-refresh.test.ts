@@ -92,6 +92,10 @@ describe("script-backed HTML artifact refresh", () => {
     expect(result.artifact.id).toBe(before.id);
     expect(result.artifact.version).toBe(2);
     expect(result.artifact.refresh?.status).toBe("success");
+    expect(typeof result.artifact.refresh?.lastSuccessAt).toBe("number");
+    expect(imageArtifactMessagesSince(SESSION, before.updatedAt!)[0]?.lastRefreshedAt).toBe(
+      result.artifact.refresh?.lastSuccessAt,
+    );
     expect(readFileSync(result.artifact.filePath, "utf8")).toContain("second");
     expect(imageArtifactMessagesSince(SESSION, before.updatedAt!).map((message) => ({
       id: message.id,
@@ -206,6 +210,27 @@ describe("script-backed HTML artifact refresh", () => {
     expect(getImageArtifact(artifact.id)?.refresh?.enabled).toBe(false);
     expect(getImageArtifact(artifact.id)?.refresh?.status).toBe("idle");
     expect(getImageArtifact(artifact.id)?.version).toBe(1);
+  });
+
+  test("deleting an active artifact cancels its script and cannot resurrect it", async () => {
+    const executable = script(
+      "delete.sh",
+      "#!/bin/sh\nsleep 2\nprintf '%s' '<!doctype html><html><body>too late</body></html>'\n",
+    );
+    const artifact = create({ scriptPath: executable });
+    const refreshes = manager();
+    const running = refreshes.refreshNow(artifact.id, SESSION);
+    await Bun.sleep(20);
+
+    expect(() => refreshes.delete(artifact.id, OTHER_SESSION)).toThrow("different session");
+    const deleted = refreshes.delete(artifact.id, SESSION);
+    const result = await running;
+
+    expect(deleted.id).toBe(artifact.id);
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("deleted while refresh was running");
+    expect(getImageArtifact(artifact.id)).toBeNull();
+    expect(existsSync(artifact.filePath)).toBe(false);
   });
 
   test("enforces owner and cwd scope and passes argv without a shell", async () => {

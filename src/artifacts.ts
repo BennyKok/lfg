@@ -3,6 +3,7 @@ import {
   mkdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
@@ -103,6 +104,8 @@ export type ImageArtifactMessage = SessionMsg & {
   alt?: string;
   version?: number;
   title?: string;
+  lastRefreshedAt?: number;
+  refreshStatus?: ArtifactRefreshStatus;
 };
 
 function readIndex(): Record<string, ImageArtifact> {
@@ -329,6 +332,38 @@ export function updateHtmlArtifactRefreshStatus(input: {
   return artifact;
 }
 
+// Remove the durable record and its copied media as one transition. The file
+// is first moved out of its public path, then the index is atomically replaced;
+// if the index write fails, the move is rolled back so a listed artifact can
+// never point at a missing file.
+export function deleteArtifact(input: { id: string; sessionId: string }): ImageArtifact {
+  const index = readIndex();
+  const artifact = index[input.id];
+  if (!artifact) throw new Error("artifact not found");
+  if (artifact.sessionId !== input.sessionId) {
+    throw new Error("artifact belongs to a different session");
+  }
+
+  const tombstone = `${artifact.filePath}.${process.pid}.${randomBytes(6).toString("hex")}.deleted`;
+  let moved = false;
+  try {
+    renameSync(artifact.filePath, tombstone);
+    moved = true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  delete index[input.id];
+  try {
+    writeIndex(index);
+  } catch (error) {
+    if (moved) renameSync(tombstone, artifact.filePath);
+    throw error;
+  }
+  if (moved) rmSync(tombstone, { force: true });
+  return artifact;
+}
+
 export function getImageArtifact(id: string): ImageArtifact | null {
   return readIndex()[id] ?? null;
 }
@@ -364,6 +399,8 @@ export function imageArtifactToMessage(artifact: ImageArtifact): ImageArtifactMe
     alt: artifact.alt,
     version: artifact.version,
     title: artifact.title,
+    lastRefreshedAt: artifact.refresh?.lastSuccessAt,
+    refreshStatus: artifact.refresh?.status,
   };
 }
 

@@ -3,6 +3,7 @@ import { spawn, type ChildProcess, type ChildProcessByStdio } from "node:child_p
 import type { Readable } from "node:stream";
 import { isAbsolute, relative, resolve } from "node:path";
 import {
+  deleteArtifact,
   getImageArtifact,
   listAllArtifacts,
   publishHtmlArtifact,
@@ -175,6 +176,12 @@ export class ArtifactRefreshManager {
     return updateHtmlArtifactRefresh({ id: input.id, sessionId: input.sessionId, refresh });
   }
 
+  delete(id: string, sessionId: string): ImageArtifact {
+    assertOwnedHtmlArtifact(id, sessionId);
+    this.cancel(id);
+    return deleteArtifact({ id, sessionId });
+  }
+
   cancel(id: string): void {
     const child = this.running.get(id);
     if (child) killProcessTree(child);
@@ -267,7 +274,13 @@ export class ArtifactRefreshManager {
     });
     this.running.delete(id);
 
-    const current = assertOwnedHtmlArtifact(id, sessionId);
+    const current = getImageArtifact(id);
+    if (!current) {
+      return { ok: false, started: true, artifact, error: "artifact deleted while refresh was running" };
+    }
+    if (sessionId && current.sessionId !== sessionId) {
+      return { ok: false, started: true, artifact: current, error: "artifact owner changed while refresh was running" };
+    }
     if (!sameExecution(current.refresh, config)) {
       return { ok: false, started: true, artifact: current, error: "refresh configuration changed while script was running" };
     }
