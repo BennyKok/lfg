@@ -71,6 +71,59 @@ function addSessionEnv(argv: string[], sessionId?: string | null, user?: string 
   if (env.length) argv.splice(i + 1, 0, ...env);
 }
 
+type AgentContainment = {
+  name: string;
+  cwd: string;
+  lfgSessionId?: string | null;
+  lfgUser?: string | null;
+};
+
+/**
+ * Run a subagent as a transient user service in the aggregate agent slice.
+ * A service (rather than a scope) gives systemd a main process: when it exits,
+ * KillMode=control-group reaps helper daemons such as agent-browser. Blocking
+ * the service's session bus also prevents Chromium from moving itself into an
+ * unrestricted app-org.chromium scope outside the slice.
+ */
+export function containedAgentCommand(command: string[], opts: AgentContainment): string[] {
+  if (process.platform !== "linux") return command;
+  const systemdRun = Bun.which("systemd-run") ?? "/usr/bin/systemd-run";
+  const uid = typeof process.getuid === "function" ? process.getuid() : 1000;
+  const argv = [
+    systemdRun,
+    "--user",
+    "--quiet",
+    "--pty",
+    "--wait",
+    "--collect",
+    `--unit=lfg-agent-${opts.name}`,
+    "--slice=lfg-agents.slice",
+    `--working-directory=${opts.cwd}`,
+    "--property=Type=exec",
+    "--property=KillMode=control-group",
+    "--property=OOMScoreAdjust=200",
+    `--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${uid}/lfg-agent-no-session-bus`,
+    `--setenv=AGENT_BROWSER_SESSION=${opts.name}`,
+    "--setenv=AGENT_BROWSER_IDLE_TIMEOUT_MS=300000",
+  ];
+  if (process.env.PATH) argv.push(`--setenv=PATH=${process.env.PATH}`);
+  if (opts.lfgSessionId) argv.push(`--setenv=LFG_SESSION_ID=${opts.lfgSessionId}`);
+  if (opts.lfgUser) argv.push(`--setenv=LFG_USER=${opts.lfgUser}`);
+  return [...argv, "--", ...command];
+}
+
+function containTmuxCommand(
+  argv: string[],
+  executable: string,
+  enabled: boolean | undefined,
+  opts: AgentContainment,
+): void {
+  if (!enabled) return;
+  const commandIndex = argv.indexOf(executable);
+  if (commandIndex < 0) throw new Error(`agent executable not found in tmux argv: ${executable}`);
+  argv.splice(commandIndex, argv.length - commandIndex, ...containedAgentCommand(argv.slice(commandIndex), opts));
+}
+
 // Resolve the `claude` executable to an absolute path. We must NOT rely on a
 // bare `claude` in the spawn: when lfg runs as a systemd service its PATH
 // often lacks ~/.local/bin, so `tmux new-session … claude` can't exec claude
@@ -346,6 +399,7 @@ export function spawnManagedSession(opts: {
   resume?: string;
   lfgSessionId?: string;
   lfgUser?: string | null;
+  containInAgentSlice?: boolean;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   ensureFolderTrusted(opts.cwd);
@@ -371,6 +425,7 @@ export function spawnManagedSession(opts: {
   // an empty composer — the first message never gets submitted).
   if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
   addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
+  containTmuxCommand(argv, claudeBin(), opts.containInAgentSlice, opts);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -413,6 +468,7 @@ export function spawnManagedCodexSession(opts: {
   thinkingLevel?: string;
   lfgSessionId?: string;
   lfgUser?: string | null;
+  containInAgentSlice?: boolean;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   const argv = [
@@ -437,6 +493,7 @@ export function spawnManagedCodexSession(opts: {
   if (opts.thinkingLevel) argv.push("-c", `reasoning_effort=${JSON.stringify(opts.thinkingLevel)}`);
   if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
   addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
+  containTmuxCommand(argv, codexBin(), opts.containInAgentSlice, opts);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -451,6 +508,7 @@ export function spawnManagedGrokSession(opts: {
   thinkingLevel?: string;
   lfgSessionId?: string;
   lfgUser?: string | null;
+  containInAgentSlice?: boolean;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   const argv = [
@@ -473,6 +531,7 @@ export function spawnManagedGrokSession(opts: {
   if (effort) argv.push("--effort", effort);
   if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
   addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
+  containTmuxCommand(argv, grokBin(), opts.containInAgentSlice, opts);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -487,6 +546,7 @@ export type ManagedCursorSessionOptions = {
   lfgSessionId?: string;
   lfgUser?: string | null;
   nativeSessionId?: string;
+  containInAgentSlice?: boolean;
 };
 
 export function managedCursorSessionArgv(opts: ManagedCursorSessionOptions): string[] {
@@ -541,6 +601,7 @@ export function spawnManagedCursorSession(opts: ManagedCursorSessionOptions): {
   const nativeSessionId = cursorChatIdFromOutput(dec.decode(chat.stdout));
   if (!nativeSessionId) return { ok: false, error: "cursor create-chat returned no chat id" };
   const argv = managedCursorSessionArgv({ ...opts, nativeSessionId });
+  containTmuxCommand(argv, cursorBin(), opts.containInAgentSlice, opts);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -592,6 +653,7 @@ export function spawnManagedAisdkSession(opts: {
   thinkingLevel?: string;
   lfgSessionId?: string;
   lfgUser?: string | null;
+  containInAgentSlice?: boolean;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   // The provider drives the bundled claude binary, which still honors the trust
@@ -613,6 +675,10 @@ export function spawnManagedAisdkSession(opts: {
   if (opts.thinkingLevel) argv.push("--thinking-level", opts.thinkingLevel);
   if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
   addSessionEnv(argv, opts.lfgSessionId ?? opts.sessionId, opts.lfgUser);
+  containTmuxCommand(argv, process.execPath, opts.containInAgentSlice, {
+    ...opts,
+    lfgSessionId: opts.lfgSessionId ?? opts.sessionId,
+  });
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -633,6 +699,7 @@ export function spawnManagedCodexAisdkSession(opts: {
   thinkingLevel?: string;
   lfgSessionId?: string;
   lfgUser?: string | null;
+  containInAgentSlice?: boolean;
   // When set, resume this existing codex rollout/thread instead of starting a
   // fresh persistent thread — the harness seeds its threadId with it.
   resume?: string;
@@ -658,6 +725,10 @@ export function spawnManagedCodexAisdkSession(opts: {
   if (opts.resume) argv.push("--resume", opts.resume);
   if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
   addSessionEnv(argv, opts.lfgSessionId ?? opts.key, opts.lfgUser);
+  containTmuxCommand(argv, process.execPath, opts.containInAgentSlice, {
+    ...opts,
+    lfgSessionId: opts.lfgSessionId ?? opts.key,
+  });
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -679,6 +750,7 @@ export function spawnManagedOpencodeAisdkSession(opts: {
   lfgSessionId?: string;
   lfgUser?: string | null;
   resume?: string;
+  containInAgentSlice?: boolean;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   // Harmless for opencode: ensureFolderTrusted only patches ~/.claude.json and
@@ -699,6 +771,10 @@ export function spawnManagedOpencodeAisdkSession(opts: {
   if (opts.resume) argv.push("--resume", opts.resume);
   if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
   addSessionEnv(argv, opts.lfgSessionId ?? opts.key, opts.lfgUser);
+  containTmuxCommand(argv, process.execPath, opts.containInAgentSlice, {
+    ...opts,
+    lfgSessionId: opts.lfgSessionId ?? opts.key,
+  });
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };

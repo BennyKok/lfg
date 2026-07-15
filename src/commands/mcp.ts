@@ -295,7 +295,11 @@ export async function cmdMcp() {
       const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text, mode }),
+        body: JSON.stringify({
+          text,
+          mode,
+          fromSessionId: process.env.LFG_SESSION_ID?.trim() || undefined,
+        }),
       });
       return result(data);
     },

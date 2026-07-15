@@ -175,6 +175,7 @@ import {
 } from "../repos-store.ts";
 import { projectName, reposRoot } from "../projects.ts";
 import { resolveSessionCwd, startWorktreeSweep } from "../worktree.ts";
+import { SubagentLimiter } from "../subagent-limiter.ts";
 import {
   synthesizeTts,
   transcribeStt,
@@ -217,6 +218,7 @@ import {
 import {
   DEFAULT_TIME_ZONE,
   getGlobalSettings,
+  getGlobalSettingsSync,
   setGlobalSettings,
   validTimeZone,
   type GlobalSettings,
@@ -357,6 +359,24 @@ const PORT = Number(process.env.LFG_PORT ?? process.env.PORT ?? 8766);
 // if you understand the exposure.
 const HOST = process.env.LFG_HOST ?? "127.0.0.1";
 const MAX_LFG_SUBAGENT_DEPTH = 4;
+const subagentLimiter = new SubagentLimiter(getGlobalSettingsSync().maxConcurrentAgents);
+
+function agentCapacity() {
+  const snapshot = subagentLimiter.snapshot();
+  return {
+    max: snapshot.max,
+    active: snapshot.active.length,
+    queued: snapshot.queued.length,
+  };
+}
+
+function restoreSubagentLimiter(): void {
+  subagentLimiter.restore(
+    listManaged()
+      .filter((session) => session.spawnedBy === "subagent" && tmuxHasSession(session.tmuxName))
+      .map((session) => session.tmuxName),
+  );
+}
 
 marked.setOptions({ gfm: true, breaks: false });
 
@@ -1635,6 +1655,9 @@ function prepareLoginTerminal(kind: string, command: string): string {
 }
 
 export async function cmdServe() {
+  restoreSubagentLimiter();
+  const limiterReaper = setInterval(() => subagentLimiter.reconcile(tmuxHasSession), 2_000);
+  limiterReaper.unref();
   const liveWs = createLiveWsSupport({
     evlog,
     getAgentRun: agentRunSnapshot,
@@ -2194,7 +2217,15 @@ export async function cmdServe() {
             if (!validTimeZone(timeZone)) return err(400, `invalid timezone "${timeZone}"`);
             patch.timeZone = timeZone;
           }
-          return json({ settings: await setGlobalSettings(patch) });
+          if (b?.maxConcurrentAgents !== undefined) {
+            const max = Number(b.maxConcurrentAgents);
+            if (!Number.isInteger(max) || max < 1 || max > 6)
+              return err(400, "maxConcurrentAgents must be an integer from 1 to 6");
+            patch.maxConcurrentAgents = max;
+          }
+          const settings = await setGlobalSettings(patch);
+          subagentLimiter.setMax(settings.maxConcurrentAgents);
+          return json({ settings, agentCapacity: agentCapacity() });
         }
         return err(405, "method not allowed");
       }
@@ -2248,6 +2279,7 @@ export async function cmdServe() {
             models: boot.models ?? null,
             settings: boot.settings ?? null,
             sessions: boot.sessions ?? null,
+            agentCapacity: agentCapacity(),
             users: boot.users ?? null,
             repos: boot.repos ?? null,
             skills: boot.skills ?? null,
@@ -3241,7 +3273,7 @@ export async function cmdServe() {
         const sessions = await listSessionsCached();
         warmChatTranscripts(sessions);
         warmRenderedBacklogs(sessions, 40);
-        return json({ sessions });
+        return json({ sessions, agentCapacity: agentCapacity() });
       }
 
       if (path === "/api/install") {
@@ -3818,12 +3850,19 @@ export async function cmdServe() {
           assignedUser = cursor?.assignedUser ?? undefined;
         }
         const tmuxName = `lfg-${randomBytes(3).toString("hex")}`;
+        const isSubagent = spawnedBy === "subagent";
+        const admission = isSubagent
+          ? await subagentLimiter.acquire(tmuxName)
+          : { queuedForMs: 0 };
         const cwdResolved = resolveSessionCwd(repo.cwd, tmuxName, {
           voice: !!body?.voice,
           worktree: body?.worktree,
           selfRepo: SELF_REPO,
         });
-        if (!cwdResolved.ok) return err(502, cwdResolved.error);
+        if (!cwdResolved.ok) {
+          if (isSubagent) subagentLimiter.release(tmuxName);
+          return err(502, cwdResolved.error);
+        }
         const cwd = cwdResolved.cwd;
         const worktree = cwdResolved.worktree;
         // For the voice orchestrator, append a live snapshot of every OTHER
@@ -3909,7 +3948,7 @@ export async function cmdServe() {
         if (assignedUser) assignUser(tmuxName, assignedUser);
         const r: { ok: boolean; error?: string; nativeSessionId?: string } =
           agent === "codex"
-            ? spawnManagedCodexSession({ name: tmuxName, cwd, prompt, model: resolvedModel, thinkingLevel, lfgSessionId: launchId, lfgUser: assignedUser })
+            ? spawnManagedCodexSession({ name: tmuxName, cwd, prompt, model: resolvedModel, thinkingLevel, lfgSessionId: launchId, lfgUser: assignedUser, containInAgentSlice: isSubagent })
             : agent === "grok"
               ? spawnManagedGrokSession({
                   name: tmuxName,
@@ -3919,6 +3958,7 @@ export async function cmdServe() {
                   thinkingLevel,
                   lfgSessionId: launchId,
                   lfgUser: assignedUser,
+                  containInAgentSlice: isSubagent,
                 })
             : agent === "cursor"
               ? spawnManagedCursorSession({
@@ -3928,6 +3968,7 @@ export async function cmdServe() {
                   model: resolvedModel ?? "auto",
                   lfgSessionId: launchId,
                   lfgUser: assignedUser,
+                  containInAgentSlice: isSubagent,
                 })
             : agent === "aisdk"
               ? spawnManagedAisdkSession({
@@ -3939,6 +3980,7 @@ export async function cmdServe() {
                   thinkingLevel,
                   lfgSessionId: launchId,
                   lfgUser: assignedUser,
+                  containInAgentSlice: isSubagent,
                 })
               : agent === "codex-aisdk"
                 ? spawnManagedCodexAisdkSession({
@@ -3949,7 +3991,8 @@ export async function cmdServe() {
                     key: codexAisdkKey!,
                     thinkingLevel,
                     lfgSessionId: launchId,
-                  lfgUser: assignedUser,
+                    lfgUser: assignedUser,
+                    containInAgentSlice: isSubagent,
                   })
                 : agent === "opencode"
                   ? spawnManagedOpencodeAisdkSession({
@@ -3959,10 +4002,12 @@ export async function cmdServe() {
                       model: resolvedModel ?? OPENCODE_DEFAULT_MODEL,
                       key: opencodeKey!,
                       lfgSessionId: launchId,
-                  lfgUser: assignedUser,
+                      lfgUser: assignedUser,
+                      containInAgentSlice: isSubagent,
                     })
-                  : spawnManagedSession({ name: tmuxName, cwd, prompt, model: resolvedModel, thinkingLevel, lfgSessionId: launchId, lfgUser: assignedUser });
+                  : spawnManagedSession({ name: tmuxName, cwd, prompt, model: resolvedModel, thinkingLevel, lfgSessionId: launchId, lfgUser: assignedUser, containInAgentSlice: isSubagent });
         if (!r.ok) {
+          if (isSubagent) subagentLimiter.release(tmuxName);
           removeManaged(tmuxName);
           assignUser(tmuxName, null);
           return err(502, r.error || "failed to start session");
@@ -4004,6 +4049,9 @@ export async function cmdServe() {
           // whether the child landed under the right user instead of guessing.
           assignedUser: assignedUser ?? null,
           worktree: worktree?.path ?? null,
+          concurrency: isSubagent
+            ? { max: subagentLimiter.max, queuedForMs: admission.queuedForMs }
+            : undefined,
         });
       }
 
@@ -4322,6 +4370,7 @@ export async function cmdServe() {
           const body = (await req.json().catch(() => null)) as {
             text?: string;
             mode?: "steer" | "queue";
+            fromSessionId?: string;
           } | null;
           const text = body?.text?.trim();
           if (!text) return err(400, "expected { text }");
@@ -4332,6 +4381,26 @@ export async function cmdServe() {
           if (!sess) return err(404, "session not found");
           const sent = sendPromptToLiveSession(sess, text, { mode });
           if (!sent.ok) return err(409, sent.error || "couldn't send message");
+          // Terminal reports also end the child lifecycle. Once this response
+          // has flushed, close the managed child; its transient service reaps
+          // browser/helper descendants and frees the next concurrency slot.
+          if (/^\[subagent (?:complete|blocked|failed)\]/i.test(text) && body?.fromSessionId) {
+            const sender = (await listSessions()).find(
+              (session) =>
+                session.sessionId === body.fromSessionId ||
+                session.nativeSessionId === body.fromSessionId,
+            );
+            const senderParent = sender?.parentSessionId ?? sender?.parentNativeSessionId;
+            if (sender?.managed && sender.spawnedBy === "subagent" && senderParent === m[1]) {
+              setTimeout(() => {
+                void fetch(`http://127.0.0.1:${PORT}/api/sessions/${body.fromSessionId}/close`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ source: "subagent-terminal-state" }),
+                });
+              }, 1_500);
+            }
+          }
           return json({ ok: true, msg: sent.msg });
         }
       }

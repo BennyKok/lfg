@@ -19,6 +19,7 @@ import {
   spawnManagedSession,
   managedCursorSessionArgv,
   cursorChatIdFromOutput,
+  containedAgentCommand,
   parsePrompt,
 } from "./tmux.ts";
 
@@ -120,6 +121,22 @@ describe("coding agent adapter contract", () => {
     ]);
     expect(cursorChatIdFromOutput(`Created chat: ${nativeSessionId}\n`)).toBe(nativeSessionId);
     expect(cursorChatIdFromOutput("chat creation failed")).toBeNull();
+  });
+
+  test("contained subagents run in the shared slice with cleanup and OOM priority", () => {
+    const argv = containedAgentCommand(["/usr/bin/example-agent", "--task", "hello"], {
+      name: "lfg-test",
+      cwd: "/tmp/lfg-test",
+      lfgSessionId: "session-id",
+    });
+    if (process.platform !== "linux") return;
+    expect(argv).toContain("--slice=lfg-agents.slice");
+    expect(argv).toContain("--property=KillMode=control-group");
+    expect(argv).toContain("--property=OOMScoreAdjust=200");
+    expect(argv).toContain("--setenv=LFG_SESSION_ID=session-id");
+    expect(argv).toContain("--setenv=AGENT_BROWSER_SESSION=lfg-test");
+    expect(argv.some((part) => part.startsWith("--setenv=DBUS_SESSION_BUS_ADDRESS="))).toBe(true);
+    expect(argv.slice(-3)).toEqual(["/usr/bin/example-agent", "--task", "hello"]);
   });
 
   test("cursor approval prompts are surfaced to the shared prompt UI", () => {

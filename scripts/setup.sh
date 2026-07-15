@@ -434,6 +434,16 @@ install_linux_service() {
   say "Installing the systemd user service (${SERVICE})..."
   UNIT_DIR="$HOME/.config/systemd/user"
   mkdir -p "$UNIT_DIR"
+  cat > "$UNIT_DIR/lfg-agents.slice" <<'UNIT'
+[Unit]
+Description=LFG managed agent memory boundary
+
+[Slice]
+# Keep reclaim local to the swarm. memory.high throttles first; memory.max is
+# the last-resort cgroup OOM boundary. Idle anonymous pages may use swap.
+MemoryHigh=4G
+MemoryMax=5G
+UNIT
   cat > "$UNIT_DIR/$SERVICE.service" <<UNIT
 [Unit]
 Description=lfg - self-hosted AI coding agent control plane
