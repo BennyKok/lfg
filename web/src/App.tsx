@@ -3869,6 +3869,12 @@ export function App() {
     [mobileProjectOptions, projectFilter, tab],
   );
 
+  // True while the post-commit page-swap animation is in flight. A committed
+  // swipe changes tab/projectFilter, which re-attaches the swipe effect below —
+  // without this guard its cleanup wipes the in-flight transform and the new
+  // page flashes centered for a few frames before sliding in (visible flicker).
+  const swipePageAnim = useRef(false);
+
   useEffect(() => {
     if (!isMobile || (tab !== "live" && tab !== "shipped") || callOpen) return;
     const main = mainRef.current;
@@ -3898,6 +3904,11 @@ export function App() {
       const width = Math.max(320, window.innerWidth || main.clientWidth || 320);
       const out = dir === 1 ? -width : width;
       const inbound = -out;
+      swipePageAnim.current = true;
+      // Covers the full out (130ms) + in (210ms) timeline with headroom.
+      window.setTimeout(() => {
+        swipePageAnim.current = false;
+      }, 480);
       main.style.transition =
         "transform 130ms cubic-bezier(0.32,0.72,0,1), opacity 130ms ease-out";
       main.style.transform = `translateX(${out}px)`;
@@ -3968,9 +3979,14 @@ export function App() {
       main.removeEventListener("touchmove", onMove);
       main.removeEventListener("touchend", onEnd);
       main.removeEventListener("touchcancel", onEnd);
-      main.style.transition = "";
-      main.style.transform = "";
-      main.style.opacity = "";
+      // A committed swipe re-runs this effect mid-animation (tab/project just
+      // changed); resetting styles here would kill the slide and flash the new
+      // page centered. The animation always ends by clearing the styles itself.
+      if (!swipePageAnim.current) {
+        main.style.transition = "";
+        main.style.transform = "";
+        main.style.opacity = "";
+      }
     };
   }, [callOpen, composerExpanded, cycleMobileProjectFilter, isMobile, tab]);
 
