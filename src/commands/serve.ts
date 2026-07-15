@@ -231,6 +231,7 @@ import {
   listImageArtifacts,
   type ImageArtifactMessage,
 } from "../artifacts.ts";
+import { getOrCreateImagePreview } from "../artifact-previews.ts";
 
 // Where the user keeps the repos lfg can launch agents into. Scanned for git
 // repos at runtime; defaults to ~/repos. The lfg repo itself (PATHS.root) is
@@ -4063,10 +4064,23 @@ export async function cmdServe() {
         if (m && req.method === "GET") {
           const artifact = getImageArtifact(m[1]);
           if (!artifact) return err(404, "artifact not found");
-          const file = Bun.file(artifact.filePath);
+          const wantsPreview = url.searchParams.get("preview") === "1";
+          let filePath = artifact.filePath;
+          let contentType = artifact.mimeType;
+          if (wantsPreview && (artifact.media ?? "image") === "image") {
+            try {
+              filePath = await getOrCreateImagePreview(artifact);
+              contentType = "image/webp";
+            } catch (error) {
+              // A corrupt/unsupported input should not leave the transcript with
+              // a broken image. The immutable original remains a safe fallback.
+              console.warn("artifact preview generation failed", artifact.id, error);
+            }
+          }
+          const file = Bun.file(filePath);
           if (!(await file.exists())) return err(404, "artifact file not found");
           const baseHeaders: Record<string, string> = {
-            "Content-Type": artifact.mimeType,
+            "Content-Type": contentType,
             "Cache-Control": "private, max-age=31536000, immutable",
             "X-Content-Type-Options": "nosniff",
             // Video seeking (and Safari playback) needs byte-range support.

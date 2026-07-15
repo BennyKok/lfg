@@ -2,6 +2,15 @@
 
 Recent product updates and deployment notes.
 
+## July 15, 2026 - Durable sessions and faster image viewing (v0.1.36)
+
+- Session worktrees now live under a persistent LFG-managed root instead of a
+  temporary directory, and Claude and Codex resume flows show full history.
+- Image artifacts now use cached, size-bounded WebP previews in transcripts and
+  the lightbox, reducing transfer and decode costs while preserving originals.
+- Refined session-management and resume surfaces, including modal layering,
+  keyboard handling, and responsive navigation behavior.
+
 ## July 14, 2026 - Desktop polish and upload progress (v0.1.35)
 
 - Refreshed the desktop navigation rail, header, and session stage to match the

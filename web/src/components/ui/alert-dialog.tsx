@@ -29,18 +29,17 @@ function AlertDialogOverlay({
     <AlertDialogPrimitive.Backdrop
       data-slot="alert-dialog-overlay"
       className={cn(
-        // z-[80] sits above the Drawer (z-[70]) so a destructive
-        // confirm AlertDialog opened from within a Drawer (e.g. Project
-        // info → Delete project) doesn't get its click overlay
-        // intercepted by the Drawer's overlay. AlertDialog is the
-        // highest-priority modal layer; it always wins.
+        // z-[160] sits above every app-level sheet and drawer (the full-screen
+        // session sheet is z-[90], menus are z-[120], and the tallest drawers
+        // are z-[150]). A destructive confirmation opened from one of those
+        // surfaces must remain visible and receive clicks.
         //
         // pointer-events-auto is critical: vaul (the Drawer lib) sets
         // `pointer-events: none` on <body> while a Drawer is open, and
         // base-ui portals our AlertDialog content as a descendant of
         // body — so without overriding here every click is dropped and
         // the confirm flow silently no-ops.
-        "pointer-events-auto fixed inset-0 isolate z-[80] bg-black/80 duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+        "pointer-events-auto fixed inset-0 isolate z-[160] bg-black/80 duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
         className
       )}
       {...props}
@@ -51,6 +50,7 @@ function AlertDialogOverlay({
 function AlertDialogContent({
   className,
   size = "default",
+  onKeyDown,
   ...props
 }: AlertDialogPrimitive.Popup.Props & {
   size?: "default" | "sm"
@@ -63,9 +63,15 @@ function AlertDialogContent({
         ref={(node) => {
           if (node) haptic("warning")
         }}
+        onKeyDown={(event) => {
+          // Modal keystrokes must not also trigger document-level shortcuts on
+          // the screen underneath (for example Escape/arrows in session chat).
+          event.stopPropagation()
+          onKeyDown?.(event)
+        }}
         data-size={size}
         className={cn(
-          "group/alert-dialog-content pointer-events-auto fixed top-1/2 left-1/2 z-[80] grid w-full -translate-x-1/2 -translate-y-1/2 gap-6 rounded-4xl bg-background p-6 ring-1 ring-foreground/5 duration-100 outline-none data-[size=default]:max-w-xs data-[size=sm]:max-w-xs data-[size=default]:sm:max-w-md data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "group/alert-dialog-content pointer-events-auto fixed top-1/2 left-1/2 z-[160] grid w-full -translate-x-1/2 -translate-y-1/2 gap-6 rounded-4xl bg-background p-6 ring-1 ring-foreground/5 duration-100 outline-none data-[size=default]:max-w-xs data-[size=sm]:max-w-xs data-[size=default]:sm:max-w-md data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
           className
         )}
         {...props}

@@ -951,10 +951,6 @@ const MANAGE_SESSION_PROMPTS: ManageSessionPromptTemplate[] = [
       "Manage the selected session scope end to end: review current live sessions, summarize the plan, close only sessions that are clearly completed, send concise follow-up nudges for sessions with local commits or open PRs, and report remaining blockers. Leave anything uncertain open.",
   },
 ];
-const SMART_CLEAR_PROMPT =
-  MANAGE_SESSION_PROMPTS.find((template) => template.id === "clean") ??
-  MANAGE_SESSION_PROMPTS[0];
-
 function manageSessionsScopeText(projectFilter: string): string {
   if (projectFilter === "__all") {
     return "All projects. This was explicitly selected in the UI; include every live project visible to the current user filter.";
@@ -4295,22 +4291,15 @@ export function App() {
         <NavIsland className="shrink-0">
           <div className="flex h-11 items-center rounded-full bg-background/80 px-1.5 backdrop-blur-xl">
             {tab === "live" ? (
-              isMobile ? (
-                <ManageSessionsMenu
-                  projectFilter={projectFilter}
-                  onSelect={(template) => void launchManageSessions(template)}
-                />
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setTab("live")}
-                  aria-label="Live"
-                  aria-current="page"
-                  className="flex items-center rounded-full px-1.5 transition-transform active:scale-[0.96]"
-                >
-                  <img src="/icon.svg" alt="lfg" className="mx-1 size-6 shrink-0" />
-                </button>
-              )
+              <button
+                type="button"
+                onClick={() => setTab("live")}
+                aria-label="Live"
+                aria-current="page"
+                className="flex items-center rounded-full px-1.5 transition-transform active:scale-[0.96]"
+              >
+                <img src="/icon.svg" alt="lfg" className="mx-1 size-6 shrink-0" />
+              </button>
             ) : (
               <button
                 type="button"
@@ -4399,7 +4388,7 @@ export function App() {
             onNew={() =>
               isMobile ? setComposerFocusNonce((n) => n + 1) : setNewOpen(true)
             }
-            onSmartClear={() => launchManageSessions(SMART_CLEAR_PROMPT)}
+            onManageSessions={(template) => void launchManageSessions(template)}
             findings={projectScopedFindings}
             autoAgents={projectScopedAutoAgents}
             onOpenFinding={setOpenFinding}
@@ -5132,9 +5121,11 @@ function UsageRingsButton({
 function ManageSessionsMenu({
   projectFilter,
   onSelect,
+  compact = false,
 }: {
   projectFilter: string;
   onSelect: (template: ManageSessionPromptTemplate) => void;
+  compact?: boolean;
 }) {
   const scopeLabel = projectFilter === "__all" ? "All projects" : shortProject(projectFilter);
 
@@ -5146,11 +5137,17 @@ function ManageSessionsMenu({
             type="button"
             aria-label="Manage sessions"
             title={`Manage sessions: ${scopeLabel}`}
-            className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors duration-200 ease-out hover:text-foreground active:scale-[0.96]"
+            className={cn(
+              "flex shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors duration-200 ease-out hover:text-foreground active:scale-[0.96]",
+              compact
+                ? "gap-1 px-2 py-0.5 text-[11px] font-medium hover:bg-primary/10 hover:text-primary"
+                : "size-9",
+            )}
           />
         }
       >
-        <ClipboardList className="size-[18px]" />
+        <ClipboardList className={compact ? "size-3" : "size-[18px]"} />
+        {compact ? <span>Smart clear</span> : null}
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-72">
         {/* GroupLabel needs a surrounding Group for MenuGroupContext (Base UI
@@ -6248,7 +6245,7 @@ function LiveView({
   onUserChange,
   onOpenSettings,
   onOpenAsk,
-  onSmartClear,
+  onManageSessions,
 }: {
   sessions: Session[];
   users: User[];
@@ -6259,7 +6256,7 @@ function LiveView({
   onUserChange?: (v: string) => void;
   onOpenSettings?: () => void;
   onOpenAsk?: () => void;
-  onSmartClear: () => Promise<void>;
+  onManageSessions: (template: ManageSessionPromptTemplate) => void;
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
@@ -6324,13 +6321,6 @@ function LiveView({
   const working = tree.flatten(workingNodes);
   const idle = tree.flatten(idleNodes);
   const nameFor = (id: string) => autoAgents.find((a) => a.id === id)?.name ?? id;
-
-  // Smart clear starts a manager session instead of destructively closing every
-  // idle card. The manager reviews the whole selected scope and only closes
-  // sessions that are clearly complete.
-  async function smartClear() {
-    await onSmartClear();
-  }
 
   const renderCard = (session: Session, depth = 0) => (
     <div
@@ -6477,14 +6467,11 @@ function LiveView({
             count={idle.length}
             dotClass="bg-success/30 ring-1 ring-inset ring-success/20"
             action={
-              <button
-                type="button"
-                onClick={() => void smartClear()}
-                className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
-              >
-                <ClipboardList className="size-3" />
-                Smart clear
-              </button>
+              <ManageSessionsMenu
+                compact
+                projectFilter={projectFilter}
+                onSelect={onManageSessions}
+              />
             }
           />
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-2">
@@ -10407,6 +10394,62 @@ function TypingIndicator({ visible = true }: { visible?: boolean }) {
   );
 }
 
+// A user turn's text bubble. When the content runs longer than the collapsed
+// clamp (~10 lines) it's truncated with a small "Show more" / "Show less"
+// toggle at the end. Content is injected HTML (pre-escaped user text), so the
+// clamp lives on an inner wrapper and the toggle sits beside it in the bubble.
+function UserBubble({ html, pending }: { html: string; pending?: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflowing, setOverflowing] = useState(false);
+  const bodyRef = useRef<HTMLDivElement>(null);
+
+  // Only measure while collapsed: when clamped, scrollHeight exceeds
+  // clientHeight iff content is being hidden. While expanded the clamp is off
+  // so the two are equal — skip so the toggle keeps showing "Show less".
+  useLayoutEffect(() => {
+    if (expanded) return;
+    const el = bodyRef.current;
+    if (!el) return;
+    const check = () => setOverflowing(el.scrollHeight - el.clientHeight > 1);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [html, expanded]);
+
+  return (
+    <MessageContent
+      className={cn(
+        // MessageContent's own base classes include text-sm; since it and
+        // .msg-text.markdown's font-size both land on this same element,
+        // Tailwind's utilities layer beats our @layer components rule
+        // regardless of selector specificity, so text-sm silently won and
+        // sent bubbles rendered a size smaller than assistant replies.
+        // text-base is also a utility, so it cleanly out-conflicts text-sm
+        // via the same layer instead of fighting it on specificity.
+        "msg-text markdown user-bubble text-base w-fit max-w-[85%]",
+        pending && "is-pending",
+      )}
+    >
+      <div
+        ref={bodyRef}
+        className={cn("user-bubble-body", !expanded && "user-bubble-clamp")}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
+      {overflowing && (
+        <button
+          type="button"
+          className="user-bubble-toggle"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
+    </MessageContent>
+  );
+}
+
 function MessageBubble({
   message,
   live = false,
@@ -10479,21 +10522,12 @@ function MessageBubble({
     >
       {isUser ? (
         // User turns are plain/escaped and rendered as a content-width bubble
-        // hugged to the right. Pending state is handled in the border so the
+        // hugged to the right. Long turns collapse to ~10 lines with a
+        // "Show more" toggle. Pending state is handled in the border so the
         // text stays steady while the send is in flight.
-        <MessageContent
-          className={cn(
-            // MessageContent's own base classes include text-sm; since it and
-            // .msg-text.markdown's font-size both land on this same element,
-            // Tailwind's utilities layer beats our @layer components rule
-            // regardless of selector specificity, so text-sm silently won and
-            // sent bubbles rendered a size smaller than assistant replies.
-            // text-base is also a utility, so it cleanly out-conflicts text-sm
-            // via the same layer instead of fighting it on specificity.
-            "msg-text markdown user-bubble text-base w-fit max-w-[85%]",
-            message.pending && "is-pending",
-          )}
-          dangerouslySetInnerHTML={{ __html: message.html || escapeHtml(message.text || "") }}
+        <UserBubble
+          html={message.html || escapeHtml(message.text || "")}
+          pending={message.pending}
         />
       ) : (
         // Assistant turns render markdown from the raw source via Streamdown,
@@ -11480,21 +11514,16 @@ function NewSessionDialog({
     textarea.scrollTop = textarea.scrollHeight;
   }, [prompt]);
 
-  useLayoutEffect(() => {
-    if (!open) {
-      setResumeOpen(false);
-      setResumable(null);
-    }
-  }, [open]);
-
   useEffect(() => {
-    if (!open || !resumeOpen || resumable) return;
+    // On desktop the resume picker replaces the new-session dialog, so the
+    // dialog is intentionally closed while this request is in flight.
+    if (!resumeOpen || resumable) return;
     api<{ sessions: ResumableSession[] }>("/api/sessions/resumable?limit=20")
       // A 200 with an empty/odd body (seen on mobile Safari) parses to {} so
       // r.sessions is undefined — never store that, or the picker below crashes.
       .then((r) => setResumable(Array.isArray(r.sessions) ? r.sessions : []))
       .catch(() => setResumable([]));
-  }, [open, resumeOpen, resumable]);
+  }, [resumeOpen, resumable]);
 
   function resume(session: ResumableSession) {
     const resumePrompt = prompt.trim();
@@ -11632,7 +11661,10 @@ function NewSessionDialog({
     setModel(localStorage.getItem(`lfg_model_${next}`) || defaultModelFor(next));
   }, [agent, visibleAgentOptions]);
 
-  if (!open) return null;
+  // Keep this component alive while the resume picker is open. On desktop its
+  // owning dialog closes first, otherwise the dialog's modal backdrop and focus
+  // trap sit above the full-screen picker and dismissing the dialog unmounts it.
+  if (!open && !resumeOpen) return null;
 
   function addFiles(files: FileList | File[]) {
     const incoming = Array.from(files).filter((file) => file.size > 0);
@@ -11931,7 +11963,10 @@ function NewSessionDialog({
   const resumeButton = (
     <button
       type="button"
-      onClick={() => setResumeOpen(true)}
+      onClick={() => {
+        setResumeOpen(true);
+        if (variant !== "inline") onClose();
+      }}
       title="Resume a recent session"
       aria-label="Resume a recent session"
       className="ml-auto flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition hover:text-foreground"
@@ -12269,6 +12304,23 @@ function NewSessionDialog({
           {formBody}
         </div>
       </div>
+    );
+  }
+
+  // Desktop resume is a page-level surface, independent of the dialog it was
+  // launched from. Rendering it without the Drawer removes the dialog's z-160
+  // overlay/focus trap and lets Back close only the resume page.
+  if (!open && resumeOpen) {
+    return (
+      <ResumeSessionSheet
+        initial={resumable}
+        scopedProject={composerProject}
+        onPick={(session) => {
+          closeResume();
+          resume(session);
+        }}
+        onClose={closeResume}
+      />
     );
   }
 

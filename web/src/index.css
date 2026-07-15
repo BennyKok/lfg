@@ -624,6 +624,35 @@ html.lfg-keyboard-open {
     color: var(--foreground);
   }
 
+  /* Long user turns collapse to ~10 lines until "Show more" is clicked. */
+  .user-bubble-clamp {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 10;
+    overflow: hidden;
+  }
+
+  .user-bubble-toggle {
+    display: inline-block;
+    margin-top: 4px;
+    padding: 0;
+    background: none;
+    border: 0;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.2;
+    color: var(--foreground);
+    opacity: 0.6;
+    cursor: pointer;
+    transition: opacity 0.12s ease;
+  }
+
+  .user-bubble-toggle:hover {
+    opacity: 0.9;
+    text-decoration: underline;
+  }
+
   .think-live {
     display: -webkit-box;
     overflow: hidden;
