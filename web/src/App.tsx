@@ -3838,28 +3838,33 @@ export function App() {
     return () => es.close();
   }, [applyLiveStatusRows, liveStatusKey, tab, useWsLive]);
 
-  // Project menu changes, including the Shipped virtual page: picking Shipped
-  // flips to the Shipped tab; picking a real project (or "All") returns to Live.
+  // Project menu changes, including the Shipped and Artifacts virtual pages.
   const changeProjectFilter = useCallback((value: string) => {
     if (value === "__shipped") {
       setTab("shipped");
       return;
     }
+    if (value === "__artifacts") {
+      setTab("artifacts");
+      return;
+    }
     setProjectFilter(value);
-    setTab((current) => (current === "shipped" ? "live" : current));
+    setTab((current) => (current === "shipped" || current === "artifacts" ? "live" : current));
   }, []);
 
   const cycleMobileProjectFilter = useCallback(
     (dir: 1 | -1) => {
-      // Swipe cycles through projects plus the Shipped virtual page (never the
+      // Swipe cycles through projects plus the two virtual pages (never the
       // "All" view — still reachable via the project menu).
-      const options = [...mobileProjectOptions, "__shipped"];
+      const options = [...mobileProjectOptions, "__shipped", "__artifacts"];
       if (options.length <= 1) return false;
-      const current = tab === "shipped" ? "__shipped" : projectFilter;
+      const current = tab === "shipped" ? "__shipped" : tab === "artifacts" ? "__artifacts" : projectFilter;
       const next = cycleProjectFilter(options, current, dir);
       if (next === current) return false;
       if (next === "__shipped") {
         setTab("shipped");
+      } else if (next === "__artifacts") {
+        setTab("artifacts");
       } else {
         setTab("live");
         setProjectFilter(next);
@@ -3876,7 +3881,7 @@ export function App() {
   const swipePageAnim = useRef(false);
 
   useEffect(() => {
-    if (!isMobile || (tab !== "live" && tab !== "shipped") || callOpen) return;
+    if (!isMobile || (tab !== "live" && tab !== "shipped" && tab !== "artifacts") || callOpen) return;
     const main = mainRef.current;
     if (!main) return;
     const SWIPE_COMMIT = 64;
@@ -4517,7 +4522,7 @@ export function App() {
       >
         <NavIsland className="shrink-0">
           <div className="flex h-11 items-center rounded-full bg-background/80 px-1.5 backdrop-blur-xl">
-            {tab === "live" || tab === "shipped" ? (
+            {tab === "live" || tab === "shipped" || tab === "artifacts" ? (
               <button
                 type="button"
                 onClick={() => setTab("live")}
@@ -4545,11 +4550,11 @@ export function App() {
 
         <NavIsland className="shrink-0">
           <div className="flex h-11 items-center gap-1.5 rounded-full bg-background/80 px-2 backdrop-blur-xl">
-            {tab === "live" || tab === "shipped" ? (
+            {tab === "live" || tab === "shipped" || tab === "artifacts" ? (
               <>
-                {!isMobile || tab === "shipped" ? (
+                {!isMobile || tab !== "live" ? (
                   <ProjectFilterMenu
-                    value={tab === "shipped" ? "__shipped" : projectFilter}
+                    value={tab === "shipped" ? "__shipped" : tab === "artifacts" ? "__artifacts" : projectFilter}
                     projects={projectOptions}
                     onChange={changeProjectFilter}
                   />
@@ -4660,6 +4665,12 @@ export function App() {
               setTab("live");
               setLiveFocus({ sid, n: Date.now() });
             }}
+          />
+        ) : tab === "artifacts" ? (
+          <ShippedPage
+            artifactsOnly
+            liveSessionIds={new Set()}
+            onOpenSession={() => {}}
           />
         ) : tab === "changelog" ? (
           <ChangelogPage />
@@ -5435,12 +5446,12 @@ function ProjectFilterMenu({
   solidSurface?: boolean;
 }) {
   const active = value !== "__all";
-  // Shipped is a VIRTUAL page in this menu — not a folder/project, but it sits
-  // in the dropdown and in the swipe cycle like one.
+  // Shipped and Artifacts are virtual pages in this menu.
   const shipped = value === "__shipped";
-  // Swipe cycles through projects + Shipped (not "All"); the dropdown below
+  const artifacts = value === "__artifacts";
+  // Swipe cycles through projects + pages (not "All"); the dropdown below
   // still lists "All projects" as a tappable option.
-  const options = [...projects, "__shipped"];
+  const options = [...projects, "__shipped", "__artifacts"];
   const touchStartY = useRef<number | null>(null);
   const didSwipe = useRef(false);
 
@@ -5462,7 +5473,7 @@ function ProjectFilterMenu({
             : "border-border bg-muted/70 text-muted-foreground",
       )}
       aria-label="Filter live sessions by project"
-      title={shipped ? "Shipped" : active ? shortProject(value) : "All projects"}
+      title={shipped ? "Shipped" : artifacts ? "Artifacts" : active ? shortProject(value) : "All projects"}
       onTouchStart={(event) => {
         touchStartY.current = event.touches[0]?.clientY ?? null;
         didSwipe.current = false;
@@ -5483,12 +5494,14 @@ function ProjectFilterMenu({
     >
       {shipped ? (
         <Megaphone className="size-3.5 shrink-0" />
+      ) : artifacts ? (
+        <LayoutDashboard className="size-3.5 shrink-0" />
       ) : (
         <Folder className="size-3.5 shrink-0" />
       )}
       {active ? (
         <span className="truncate text-xs font-medium">
-          {shipped ? "Shipped" : shortProject(value)}
+          {shipped ? "Shipped" : artifacts ? "Artifacts" : shortProject(value)}
         </span>
       ) : null}
       <select
@@ -5512,6 +5525,7 @@ function ProjectFilterMenu({
         ))}
         <optgroup label="Pages">
           <option value="__shipped">Shipped</option>
+          <option value="__artifacts">Artifacts</option>
         </optgroup>
       </select>
     </label>
@@ -14986,10 +15000,9 @@ function ShipMedia({
     );
   }
   if (item.kind === "html") {
-    // Live artifacts stay INLINE in the feed (autosized embed) under a slim
-    // header that marks them as artifacts — title, live badge, expand into
-    // the native full-page viewer. They also remain findable afterward in
-    // the Artifacts gallery segment.
+    // Keep the showcase feed scannable: HTML artifacts are represented by one
+    // compact row and open in the native full-page viewer. The dedicated
+    // Artifacts page owns rich previews and browsing.
     const open = () =>
       onExpand?.({
         url: item.url,
@@ -14999,41 +15012,26 @@ function ShipMedia({
         version: item.version,
       });
     return (
-      <div className="col-span-full">
-        <div className="flex items-center justify-between gap-3 border-b border-border/60 bg-gradient-to-br from-sky-500/[0.05] to-violet-500/[0.06] px-3 py-2 text-xs">
-          <button
-            type="button"
-            onClick={open}
-            className="flex min-w-0 items-center gap-2 font-medium transition-colors hover:text-foreground"
-          >
-            <LayoutDashboard className="size-3.5 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 truncate">{item.caption || item.name}</span>
-          </button>
-          <span className="flex shrink-0 items-center gap-2 text-muted-foreground">
-            {(item.version ?? 1) > 1 ? (
-              <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
-                <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" />
-                live · v{item.version}
-              </span>
-            ) : null}
-            <button
-              type="button"
-              onClick={open}
-              aria-label="Open artifact full screen"
-              className="transition-colors hover:text-foreground"
-            >
-              <Maximize2 className="size-3.5" />
-            </button>
+      <button
+        type="button"
+        onClick={open}
+        className="group col-span-full flex w-full items-center gap-3 bg-gradient-to-br from-sky-500/[0.05] to-violet-500/[0.06] px-3 py-2.5 text-left transition-colors hover:bg-foreground/[0.04] active:bg-foreground/[0.06]"
+      >
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-background/70 shadow-sm">
+          <LayoutDashboard className="size-4 text-muted-foreground" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-xs font-medium">{item.caption || item.name}</span>
+          <span className="mt-0.5 block text-[10px] text-muted-foreground">HTML artifact</span>
+        </span>
+        {(item.version ?? 1) > 1 ? (
+          <span className="flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+            <span className="size-1.5 rounded-full bg-emerald-500" />
+            live · v{item.version}
           </span>
-        </div>
-        <AutoHeightArtifactFrame
-          key={`${item.url}?v=${item.version ?? 0}`}
-          src={`${item.url}?v=${item.version ?? 0}`}
-          title={item.caption || item.name}
-          minHeight={180}
-          maxHeight={520}
-        />
-      </div>
+        ) : null}
+        <Maximize2 className="size-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
+      </button>
     );
   }
   return (
@@ -15167,9 +15165,11 @@ const GALLERY_PAGE = 24;
 function ShippedPage({
   onOpenSession,
   liveSessionIds,
+  artifactsOnly = false,
 }: {
   onOpenSession: (sessionId: string) => void;
   liveSessionIds: Set<string>;
+  artifactsOnly?: boolean;
 }) {
   const [posts, setPosts] = useState<ShipPost[] | null>(null);
   const [postsTotal, setPostsTotal] = useState(0);
@@ -15177,15 +15177,15 @@ function ShippedPage({
   const [error, setError] = useState<string | null>(null);
   // Post whose (ended) session transcript is open read-only.
   const [viewing, setViewing] = useState<ShipPost | null>(null);
-  // Feed | Artifacts segment; the gallery lists every artifact across sessions.
-  const [view, setView] = useState<"feed" | "artifacts">("feed");
+  // Shipped and Artifacts are separate virtual pages. This shared loader keeps
+  // their paging/realtime behavior aligned without exposing a nested toggle.
+  const view: "feed" | "artifacts" = artifactsOnly ? "artifacts" : "feed";
   const [gallery, setGallery] = useState<GalleryArtifact[] | null>(null);
   const [galleryTotal, setGalleryTotal] = useState(0);
   const [galleryBusy, setGalleryBusy] = useState(false);
-  // Kind filter for the gallery — applied server-side so paging + totals
-  // always describe the filtered set.
-  const [galleryKind, setGalleryKind] = useState<"all" | "html" | "image" | "video">("all");
-  const galleryKindParam = galleryKind === "all" ? "" : `&kind=${galleryKind}`;
+  // "Artifact" means the interactive HTML document. Images and recordings
+  // remain media in transcripts/Shipped and do not appear on this page.
+  const galleryKindParam = "&kind=html";
   // How many items are currently on screen — the polling refresh re-fetches
   // exactly that window so "load more" pages survive the refresh.
   const galleryLen = useRef(GALLERY_PAGE);
@@ -15219,7 +15219,7 @@ function ShippedPage({
       alive = false;
       clearInterval(interval);
     };
-  }, [view, galleryKind]);
+  }, [view]);
 
   const loadMoreGallery = async () => {
     if (galleryBusy) return;
@@ -15244,6 +15244,7 @@ function ShippedPage({
   };
 
   useEffect(() => {
+    if (view !== "feed") return;
     let alive = true;
     const load = async () => {
       try {
@@ -15267,7 +15268,7 @@ function ShippedPage({
       alive = false;
       clearInterval(interval);
     };
-  }, []);
+  }, [view]);
 
   const loadMorePosts = async () => {
     if (postsBusy) return;
@@ -15294,52 +15295,23 @@ function ShippedPage({
   return (
     <div className="mx-auto max-w-xl space-y-4 pb-10">
       <div className="flex items-center justify-between px-1">
-        <h1 className="text-lg font-semibold tracking-[-0.01em]">Shipped</h1>
-        <div className="flex items-center gap-0.5 rounded-full border border-border bg-card/40 p-0.5 text-xs">
-          {(["feed", "artifacts"] as const).map((key) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setView(key)}
-              className={cn(
-                "rounded-full px-3 py-1 font-medium capitalize transition-colors",
-                view === key
-                  ? "bg-foreground text-background"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {key}
-            </button>
-          ))}
+        <div>
+          <h1 className="text-lg font-semibold tracking-[-0.01em]">
+            {artifactsOnly ? "Artifacts" : "Shipped"}
+          </h1>
+          {artifactsOnly ? (
+            <p className="mt-0.5 text-xs text-muted-foreground">Interactive reports and live dashboards</p>
+          ) : null}
         </div>
       </div>
 
       {view === "artifacts" ? (
         <>
-          <div className="flex items-center gap-1.5 px-1">
-            {(["all", "html", "image", "video"] as const).map((k) => (
-              <button
-                key={k}
-                type="button"
-                onClick={() => setGalleryKind(k)}
-                className={cn(
-                  "rounded-full border px-2.5 py-1 text-[11px] font-medium capitalize transition-colors",
-                  galleryKind === k
-                    ? "border-foreground/20 bg-foreground/[0.08] text-foreground"
-                    : "border-border bg-card/40 text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {k === "html" ? "HTML" : k}
-              </button>
-            ))}
-          </div>
           {gallery === null ? (
             <div className="py-10 text-center text-sm text-muted-foreground">Loading…</div>
           ) : gallery.length === 0 ? (
             <div className="rounded-2xl border border-border bg-card/40 px-4 py-10 text-center text-sm text-muted-foreground">
-              {galleryKind === "all"
-                ? "No artifacts yet — agents create them with lfg_display_image, lfg_display_video, and lfg_publish_artifact."
-                : `No ${galleryKind === "html" ? "HTML" : galleryKind} artifacts yet.`}
+              No artifacts yet — agents create them with <code>lfg_publish_artifact</code>.
             </div>
           ) : (
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
