@@ -13,6 +13,7 @@ import {
   spawnManagedAisdkSession,
   spawnManagedCodexAisdkSession,
   spawnManagedCodexSession,
+  spawnManagedCopilotSession,
   spawnManagedCursorSession,
   spawnManagedGrokSession,
   spawnManagedOpencodeAisdkSession,
@@ -35,6 +36,7 @@ const launchers = {
   opencode: spawnManagedOpencodeAisdkSession,
   grok: spawnManagedGrokSession,
   cursor: spawnManagedCursorSession,
+  copilot: spawnManagedCopilotSession,
 } satisfies Record<(typeof SESSION_AGENT_KINDS)[number], unknown>;
 
 describe("coding agent adapter contract", () => {
