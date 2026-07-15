@@ -10364,7 +10364,7 @@ function ToolGroup({ items, live }: { items: Message[]; live: boolean }) {
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger render={pill} />
       <Popover.Portal>
-        <Popover.Positioner side="top" align="start" sideOffset={7} className="isolate z-[130] outline-none">
+        <Popover.Positioner side="top" align="start" sideOffset={7} className="isolate z-[170] outline-none">
           <Popover.Popup
             onMouseEnter={keepHoverOpen}
             onMouseLeave={scheduleHoverClose}
@@ -12900,7 +12900,7 @@ function ModelPicker({
           side="bottom"
           align="start"
           sideOffset={6}
-          className="isolate z-[130] outline-none"
+          className="isolate z-[170] outline-none"
         >
           <Popover.Popup
             initialFocus={searchable ? inputRef : true}

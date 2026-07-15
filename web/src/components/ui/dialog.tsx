@@ -32,9 +32,10 @@ function DialogOverlay({
       data-slot="dialog-overlay"
       className={cn(
         // z-[160] sits above every app-level sheet and drawer (the full-screen
-        // session sheet is z-[90], menus are z-[120], and the tallest drawers
-        // are z-[150]). A Dialog opened from one of those surfaces must remain
-        // visible and receive clicks.
+        // session sheet is z-[90] and the tallest drawers are z-[150]). A
+        // Dialog opened from one of those surfaces must remain visible and
+        // receive clicks. Portalled menus/popovers sit at z-[170] so controls
+        // opened from inside a dialog render above this backdrop.
         //
         // pointer-events-auto is critical: vaul (the Drawer lib) sets
         // `pointer-events: none` on <body> while a Drawer is open, and
