@@ -8,6 +8,9 @@ Recent product updates and deployment notes.
   temporary directory, and Claude and Codex resume flows show full history.
 - Image artifacts now use cached, size-bounded WebP previews in transcripts and
   the lightbox, reducing transfer and decode costs while preserving originals.
+- Image display retries no longer create duplicate transcript entries when the
+  shared SQLite index is busy; durable artifacts succeed and reconcile into the
+  ordered message stream, with a short idempotency window for agent retries.
 - Refined session-management and resume surfaces, including modal layering,
   keyboard handling, and responsive navigation behavior.
 

@@ -22,7 +22,12 @@ import {
   findEntryByAnyId,
   isEntryBusy as isAisdkEntryBusy,
 } from "./aisdk-registry.ts";
-import { hydrateImageArtifactMessage, imageArtifactMessagesSince, type ImageArtifactMessage } from "./artifacts.ts";
+import {
+  collapseArtifactRetryMessages,
+  hydrateImageArtifactMessage,
+  imageArtifactMessagesSince,
+  type ImageArtifactMessage,
+} from "./artifacts.ts";
 import { listQueue, reconcileQueued } from "./sendq.ts";
 import { traceLog } from "./trace-log.ts";
 
@@ -174,8 +179,10 @@ function withImageArtifacts<T extends { role: string; kind: string; text: string
   _sessionId: string,
   messages: T[],
 ): Array<T | ImageArtifactMessage> {
-  return messages.map((message) =>
-    normalizeMediaIdentity(hydrateImageArtifactMessage(message as unknown as import("./sessions.ts").SessionMsg)) as T | ImageArtifactMessage
+  return collapseArtifactRetryMessages(
+    messages.map((message) =>
+      normalizeMediaIdentity(hydrateImageArtifactMessage(message as unknown as import("./sessions.ts").SessionMsg)) as T | ImageArtifactMessage
+    ),
   );
 }
 

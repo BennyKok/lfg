@@ -222,6 +222,7 @@ import {
 } from "../settings.ts";
 import { listSkillCatalog } from "../skills-catalog.ts";
 import {
+  collapseArtifactRetryMessages,
   createImageArtifact,
   createVideoArtifact,
   getImageArtifact,
@@ -947,7 +948,9 @@ function withImageArtifacts<T extends { role: string; kind: string; text: string
   _sessionId: string,
   messages: T[],
 ): Array<T | ImageArtifactMessage> {
-  return messages.map((message) => hydrateImageArtifactMessage(message as unknown as SessionMsg) as T | ImageArtifactMessage);
+  return collapseArtifactRetryMessages(
+    messages.map((message) => hydrateImageArtifactMessage(message as unknown as SessionMsg) as T | ImageArtifactMessage),
+  );
 }
 
 function transcriptMessagesForClient<T extends { role: string; kind: string; text: string; ts?: number | null; id?: string | null }>(
@@ -4143,8 +4146,20 @@ export async function cmdServe() {
               alt: body.alt,
             });
             const transcriptPath = await resolveTranscript(m[1]);
-            indexSessionArtifactMessages(transcriptPath ?? sessionIndexKey(m[1]), m[1]);
-            return json({ ok: true, artifact, message: imageArtifactToMessage(artifact) });
+            const indexPath = transcriptPath ?? sessionIndexKey(m[1]);
+            let indexed = true;
+            try {
+              indexSessionArtifactMessages(indexPath, m[1]);
+            } catch (indexError) {
+              // The file and artifact record are already durable. Reporting the
+              // whole request as failed makes agents retry and creates duplicate
+              // images. Return success and let the existing artifact poller show
+              // it immediately; subsequent transcript catch-up indexes it into
+              // the one ordered message stream.
+              indexed = false;
+              console.warn("artifact transcript indexing deferred", artifact.id, indexError);
+            }
+            return json({ ok: true, artifact, message: imageArtifactToMessage(artifact), indexed });
           } catch (e) {
             return err(400, e instanceof Error ? e.message : "could not create image artifact");
           }
@@ -4168,8 +4183,15 @@ export async function cmdServe() {
               alt: body.alt,
             });
             const transcriptPath = await resolveTranscript(m[1]);
-            indexSessionArtifactMessages(transcriptPath ?? sessionIndexKey(m[1]), m[1]);
-            return json({ ok: true, artifact, message: imageArtifactToMessage(artifact) });
+            const indexPath = transcriptPath ?? sessionIndexKey(m[1]);
+            let indexed = true;
+            try {
+              indexSessionArtifactMessages(indexPath, m[1]);
+            } catch (indexError) {
+              indexed = false;
+              console.warn("artifact transcript indexing deferred", artifact.id, indexError);
+            }
+            return json({ ok: true, artifact, message: imageArtifactToMessage(artifact), indexed });
           } catch (e) {
             return err(400, e instanceof Error ? e.message : "could not create video artifact");
           }
