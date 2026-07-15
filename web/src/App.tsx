@@ -14943,6 +14943,8 @@ type ShipMediaItem = {
   name: string;
   caption?: string;
   version?: number;
+  lastRefreshedAt?: number;
+  refreshStatus?: "idle" | "running" | "success" | "error";
 };
 
 type GalleryArtifact = {
@@ -14957,6 +14959,9 @@ type GalleryArtifact = {
   ts: number;
   version?: number;
   size?: number;
+  lastRefreshedAt?: number;
+  refreshStatus?: "idle" | "running" | "success" | "error";
+  refreshEnabled?: boolean;
 };
 
 type ShipPost = {
@@ -15022,7 +15027,9 @@ function ShipMedia({
         </span>
         <span className="min-w-0 flex-1">
           <span className="block truncate text-xs font-medium">{item.caption || item.name}</span>
-          <span className="mt-0.5 block text-[10px] text-muted-foreground">HTML artifact</span>
+          <span className="mt-0.5 block text-[10px] text-muted-foreground">
+            {item.lastRefreshedAt ? `Refreshed ${timeAgo(item.lastRefreshedAt)}` : "HTML artifact"}
+          </span>
         </span>
         {(item.version ?? 1) > 1 ? (
           <span className="flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
@@ -15183,6 +15190,7 @@ function ShippedPage({
   const [gallery, setGallery] = useState<GalleryArtifact[] | null>(null);
   const [galleryTotal, setGalleryTotal] = useState(0);
   const [galleryBusy, setGalleryBusy] = useState(false);
+  const [deletingArtifactId, setDeletingArtifactId] = useState<string | null>(null);
   // "Artifact" means the interactive HTML document. Images and recordings
   // remain media in transcripts/Shipped and do not appear on this page.
   const galleryKindParam = "&kind=html";
@@ -15191,6 +15199,7 @@ function ShippedPage({
   const galleryLen = useRef(GALLERY_PAGE);
   const postsLen = useRef(FEED_PAGE);
   const openArtifact = useContext(ArtifactViewerContext);
+  const appDialog = useAppDialog();
 
   useEffect(() => {
     if (view !== "artifacts") return;
@@ -15240,6 +15249,35 @@ function ShippedPage({
       // Leave the current page as-is; the next tap retries.
     } finally {
       setGalleryBusy(false);
+    }
+  };
+
+  const deleteGalleryArtifact = async (artifact: GalleryArtifact) => {
+    const label = artifact.title || artifact.caption || artifact.name;
+    const confirmed = await appDialog.confirm({
+      title: `Delete ${label}?`,
+      description: "This permanently removes the artifact and stops its automatic refresh schedule.",
+      confirmLabel: "Delete artifact",
+      destructive: true,
+    });
+    if (!confirmed) return;
+    setDeletingArtifactId(artifact.id);
+    try {
+      await api(
+        `/api/sessions/${encodeURIComponent(artifact.sessionId ?? "")}/artifacts/${encodeURIComponent(artifact.id)}`,
+        {
+          method: "DELETE",
+          headers: { "X-LFG-Session-ID": artifact.sessionId ?? "" },
+        },
+      );
+      setGallery((current) => current?.filter((item) => item.id !== artifact.id) ?? null);
+      setGalleryTotal((total) => Math.max(0, total - 1));
+      galleryLen.current = Math.max(0, galleryLen.current - 1);
+      toast.success("Artifact deleted");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn't delete artifact");
+    } finally {
+      setDeletingArtifactId(null);
     }
   };
 
@@ -15316,34 +15354,24 @@ function ShippedPage({
           ) : (
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
               {gallery.map((a) => (
-                <button
+                <div
                   key={a.id}
-                  type="button"
-                  onClick={() =>
-                    openArtifact({
-                      url: a.url,
-                      kind: a.kind,
-                      title: a.title,
-                      caption: a.caption,
-                      name: a.name,
-                      version: a.version,
-                    })
-                  }
-                  className="group overflow-hidden rounded-xl border border-border bg-card/40 text-left shadow-sm transition-colors hover:border-foreground/20"
+                  className="group relative overflow-hidden rounded-xl border border-border bg-card/40 text-left shadow-sm transition-colors hover:border-foreground/20"
                 >
-                  {a.kind === "image" ? (
-                    <img
-                      src={a.url}
-                      alt={a.caption || a.name}
-                      loading="lazy"
-                      className="h-32 w-full bg-muted object-cover"
-                    />
-                  ) : a.kind === "video" ? (
-                    <video src={a.url} muted preload="metadata" className="h-32 w-full bg-black object-cover" />
-                  ) : (
-                    // Live html artifacts show a real (zoomed-out, inert)
-                    // preview of the document instead of a placeholder icon —
-                    // pointer-events pass through to the tile's click handler.
+                  <button
+                    type="button"
+                    onClick={() =>
+                      openArtifact({
+                        url: a.url,
+                        kind: a.kind,
+                        title: a.title,
+                        caption: a.caption,
+                        name: a.name,
+                        version: a.version,
+                      })
+                    }
+                    className="block w-full text-left active:scale-[0.99]"
+                  >
                     <div className="relative h-32 w-full overflow-hidden bg-background">
                       <iframe
                         src={`${a.url}?v=${a.version ?? 0}`}
@@ -15355,21 +15383,31 @@ function ShippedPage({
                         className="pointer-events-none h-[200%] w-[200%] origin-top-left scale-50 select-none border-0"
                       />
                       {(a.version ?? 1) > 1 ? (
-                        <span className="absolute right-1.5 top-1.5 flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 backdrop-blur dark:text-emerald-400">
-                          <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" />
+                        <span className="absolute left-1.5 top-1.5 flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 backdrop-blur dark:text-emerald-400">
+                          <span className="size-1.5 rounded-full bg-emerald-500" />
                           live · v{a.version}
                         </span>
                       ) : null}
                     </div>
-                  )}
-                  <div className="px-2.5 py-2">
-                    <div className="truncate text-xs font-medium">{a.title || a.caption || a.name}</div>
-                    <div className="mt-0.5 flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
-                      <span className="min-w-0 truncate">{a.sessionTitle ?? a.kind}</span>
-                      <span className="shrink-0">{timeAgo(a.ts)}</span>
+                    <div className="px-2.5 py-2 pr-9">
+                      <div className="truncate text-xs font-medium">{a.title || a.caption || a.name}</div>
+                      <div className="mt-0.5 truncate text-[10px] text-muted-foreground">
+                        {a.lastRefreshedAt
+                          ? `Refreshed ${timeAgo(a.lastRefreshedAt)}`
+                          : `Published ${timeAgo(a.ts)}`}
+                      </div>
                     </div>
-                  </div>
-                </button>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void deleteGalleryArtifact(a)}
+                    disabled={deletingArtifactId === a.id}
+                    aria-label={`Delete ${a.title || a.caption || a.name}`}
+                    className="absolute bottom-1.5 right-1.5 flex size-7 items-center justify-center rounded-full text-muted-foreground opacity-100 transition-[color,background-color,transform,opacity] duration-150 hover:bg-destructive/10 hover:text-destructive active:scale-[0.94] disabled:opacity-50 sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100"
+                  >
+                    {deletingArtifactId === a.id ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+                  </button>
+                </div>
               ))}
             </div>
           )}
@@ -15454,7 +15492,10 @@ function ShippedPage({
                   {post.title}
                 </h2>
                 {post.summary ? (
-                  <div className="mt-0.5 text-[13px] leading-relaxed text-muted-foreground">
+                  // Clamped to keep the feed scannable (tweet-like) — long
+                  // legacy summaries cut off here; the tap-through session
+                  // transcript carries the full detail.
+                  <div className="mt-0.5 line-clamp-4 text-[13px] leading-relaxed text-muted-foreground">
                     <MessageResponse>{post.summary}</MessageResponse>
                   </div>
                 ) : null}

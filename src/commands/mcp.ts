@@ -554,11 +554,16 @@ export async function cmdMcp() {
     {
       title: "Post To The LFG Shipped Channel",
       description:
-        "Showcase finished work in the LFG Shipped channel — a feed of what agents completed, with visuals. Call this when you finish something worth showing: give it a short title, a 1-3 sentence summary, and attach the screenshots/recordings you captured while verifying (mediaPaths), or embed an existing artifact like a live dashboard (artifactIds). Images are optimized automatically before storage. To UPDATE an earlier post (e.g. after follow-up feedback), pass its id — the post revises in place and the feed shows the new version.",
+        "Showcase finished work in the LFG Shipped channel — a feed of what agents completed, with visuals. Call this when you finish something worth showing. Write it like a launch tweet: a punchy headline + at most 1-2 short sentences on WHAT shipped and why it matters. NOT a changelog — no bullet lists, no headings, no implementation detail, no file names; the session transcript already holds all of that. Attach the screenshots/recordings you captured while verifying (mediaPaths), or embed an existing artifact like a live dashboard (artifactIds). Images are optimized automatically before storage. To UPDATE an earlier post (e.g. after follow-up feedback), pass its id — the post revises in place and the feed shows the new version.",
       inputSchema: {
         title: z.string().min(1).describe("Short headline for what shipped (e.g. 'WhatsApp reconnect loop fixed')."),
         id: z.string().optional().describe("Existing ship post id to update in place (returned when the post was created)."),
-        summary: z.string().optional().describe("1-3 sentence markdown summary of what was done and why it matters."),
+        summary: z
+          .string()
+          .optional()
+          .describe(
+            "Tweet-length blurb (aim ≤280 chars, 1-2 plain sentences): what shipped + why it matters. No headings/bullets/code — readers tap through to the session for detail.",
+          ),
         mediaPaths: z
           .array(z.object({ path: z.string().min(1), caption: z.string().optional() }))
           .optional()

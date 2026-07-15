@@ -228,6 +228,7 @@ import {
   collapseArtifactRetryMessages,
   createImageArtifact,
   createVideoArtifact,
+  deleteArtifact,
   getImageArtifact,
   hydrateImageArtifactMessage,
   imageArtifactMessagesSince,
@@ -237,7 +238,7 @@ import {
   publishHtmlArtifact,
   type ImageArtifactMessage,
 } from "../artifacts.ts";
-import { getOrCreateImagePreview } from "../artifact-previews.ts";
+import { deleteImagePreview, getOrCreateImagePreview } from "../artifact-previews.ts";
 import { addShipPost, listShipPosts } from "../shipped.ts";
 import {
   artifactRefreshManager,
@@ -4167,6 +4168,9 @@ export async function cmdServe() {
                   (m2) => m2.sessionId === artifact.sessionId || m2.nativeSessionId === artifact.sessionId,
                 )?.title,
               ts: artifact.updatedAt ?? artifact.createdAt,
+              lastRefreshedAt: artifact.refresh?.lastSuccessAt,
+              refreshStatus: artifact.refresh?.status,
+              refreshEnabled: artifact.refresh?.enabled,
               version: artifact.version,
               size: artifact.size,
               mimeType: artifact.mimeType,
@@ -4258,6 +4262,30 @@ export async function cmdServe() {
             });
           }
           return new Response(file, { headers: baseHeaders });
+        }
+      }
+
+      {
+        // Destructive artifact changes are owner-scoped just like refresh
+        // configuration. Removing an HTML artifact cancels any active script
+        // before its stable id and file disappear.
+        const m = path.match(/^\/api\/sessions\/([0-9a-fA-F-]{36})\/artifacts\/([a-z0-9-]+)$/);
+        if (m && req.method === "DELETE") {
+          if (req.headers.get("x-lfg-session-id") !== m[1]) {
+            return err(403, "artifact deletion requires the owning LFG session");
+          }
+          const artifact = getImageArtifact(m[2]);
+          if (!artifact) return err(404, "artifact not found");
+          if (artifact.sessionId !== m[1]) return err(403, "artifact belongs to a different session");
+          try {
+            const deleted = artifact.media === "html"
+              ? artifactRefreshManager.delete(artifact.id, m[1])
+              : deleteArtifact({ id: artifact.id, sessionId: m[1] });
+            await deleteImagePreview(deleted.id);
+            return json({ ok: true, artifact: deleted });
+          } catch (e) {
+            return err(400, e instanceof Error ? e.message : "could not delete artifact");
+          }
         }
       }
 
@@ -4450,15 +4478,23 @@ export async function cmdServe() {
           const titles = await readTitleOverrides();
           const managed = listManaged();
           const page = listShipPosts(limit, offset);
-          const posts = page.posts.map((post) => ({
-            ...post,
-            sessionTitle: post.sessionId
-              ? (titles[post.sessionId] ??
-                managed.find(
+          const posts = page.posts.map((post) => {
+            const source = post.sessionId
+              ? managed.find(
                   (s) => s.sessionId === post.sessionId || s.nativeSessionId === post.sessionId,
-                )?.title)
-              : undefined,
-          }));
+                )
+              : undefined;
+            return {
+              ...post,
+              sessionTitle: post.sessionId
+                ? (titles[post.sessionId] ?? source?.title)
+                : undefined,
+              // The feed's avatar/byline reflect the session that actually did
+              // the work — the registry is authoritative over whatever the post
+              // was stored with (lfg_ship never sends an agent kind).
+              agent: source?.agent ?? post.agent,
+            };
+          });
           return json({ ok: true, posts, total: page.total });
         }
         if (path === "/api/shipped" && req.method === "POST") {
@@ -4475,7 +4511,15 @@ export async function cmdServe() {
           const shipTitle = body?.title?.trim();
           if (!body || !shipTitle) return err(400, "title required");
           try {
-            const post = await addShipPost({ ...body, title: shipTitle });
+            // Stamp the posting session's agent kind at write time so the feed
+            // byline survives registry pruning; the GET hydration still prefers
+            // the live registry when the session is known.
+            const sourceAgent = body.sessionId
+              ? listManaged().find(
+                  (s) => s.sessionId === body.sessionId || s.nativeSessionId === body.sessionId,
+                )?.agent
+              : undefined;
+            const post = await addShipPost({ ...body, agent: body.agent ?? sourceAgent, title: shipTitle });
             return json({ ok: true, post });
           } catch (e) {
             return err(400, e instanceof Error ? e.message : "could not add shipped post");
