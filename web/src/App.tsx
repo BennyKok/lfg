@@ -70,6 +70,7 @@ import {
   ChevronDown,
   ChevronLeft,
   Maximize2,
+  Megaphone,
   ChevronRight,
   Folder,
   GitFork,
@@ -3148,11 +3149,34 @@ export function App() {
   }, []);
   const rootRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
-  // Horizontal swipe between the Live and Shipped "pages" on mobile — the
-  // Shipped channel reads as a sibling page you swipe onto, not a buried tab.
-  const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
   // Full-page native artifact viewer (no popups/new tabs).
   const [viewerArtifact, setViewerArtifact] = useState<ViewerArtifact | null>(null);
+  // The viewer participates in browser history: opening pushes a state so the
+  // back button / swipe-back closes the viewer and returns to the page you
+  // were on (feed, chat, gallery) instead of leaving the app.
+  const openArtifactViewer = useCallback((artifact: ViewerArtifact) => {
+    setViewerArtifact((current) => {
+      if (!current) {
+        try {
+          window.history.pushState({ lfgArtifactViewer: true }, "");
+        } catch {}
+      }
+      return artifact;
+    });
+  }, []);
+  const closeArtifactViewer = useCallback(() => {
+    if (window.history.state?.lfgArtifactViewer) {
+      // Balanced close: pop our own entry; the popstate handler clears state.
+      window.history.back();
+    } else {
+      setViewerArtifact(null);
+    }
+  }, []);
+  useEffect(() => {
+    const onPop = () => setViewerArtifact(null);
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
   // A "jump to this session" request for the Live view (from Shipped posts).
   // The nonce lets the same session be requested twice in a row.
   const [liveFocus, setLiveFocus] = useState<{ sid: string; n: number } | null>(null);
@@ -3814,20 +3838,39 @@ export function App() {
     return () => es.close();
   }, [applyLiveStatusRows, liveStatusKey, tab, useWsLive]);
 
+  // Project menu changes, including the Shipped virtual page: picking Shipped
+  // flips to the Shipped tab; picking a real project (or "All") returns to Live.
+  const changeProjectFilter = useCallback((value: string) => {
+    if (value === "__shipped") {
+      setTab("shipped");
+      return;
+    }
+    setProjectFilter(value);
+    setTab((current) => (current === "shipped" ? "live" : current));
+  }, []);
+
   const cycleMobileProjectFilter = useCallback(
     (dir: 1 | -1) => {
-      // Swipe cycles only through projects, never the "All" view (still
-      // reachable via the project menu).
-      const options = mobileProjectOptions;
+      // Swipe cycles through projects plus the Shipped virtual page (never the
+      // "All" view — still reachable via the project menu).
+      const options = [...mobileProjectOptions, "__shipped"];
       if (options.length <= 1) return false;
-      setProjectFilter((current) => cycleProjectFilter(options, current, dir));
+      const current = tab === "shipped" ? "__shipped" : projectFilter;
+      const next = cycleProjectFilter(options, current, dir);
+      if (next === current) return false;
+      if (next === "__shipped") {
+        setTab("shipped");
+      } else {
+        setTab("live");
+        setProjectFilter(next);
+      }
       return true;
     },
-    [mobileProjectOptions],
+    [mobileProjectOptions, projectFilter, tab],
   );
 
   useEffect(() => {
-    if (!isMobile || tab !== "live" || callOpen) return;
+    if (!isMobile || (tab !== "live" && tab !== "shipped") || callOpen) return;
     const main = mainRef.current;
     if (!main) return;
     const SWIPE_COMMIT = 64;
@@ -4443,10 +4486,10 @@ export function App() {
     <CodingAgentsContext.Provider value={codingAgents}>
     <AgentModelCatalogContext.Provider value={modelCatalog}>
     <AskProvider>
-    <ArtifactViewerContext.Provider value={setViewerArtifact}>
+    <ArtifactViewerContext.Provider value={openArtifactViewer}>
     <div ref={rootRef} className={APP_SHELL_CLASS}>
       {viewerArtifact ? (
-        <ArtifactViewerPage artifact={viewerArtifact} onClose={() => setViewerArtifact(null)} />
+        <ArtifactViewerPage artifact={viewerArtifact} onClose={closeArtifactViewer} />
       ) : null}
       {/* Two floating "islands" — brand + Live on the left, an icon-only
           Settings button on the right — mirroring the bottom nav's
@@ -4458,12 +4501,12 @@ export function App() {
       >
         <NavIsland className="shrink-0">
           <div className="flex h-11 items-center rounded-full bg-background/80 px-1.5 backdrop-blur-xl">
-            {tab === "live" ? (
+            {tab === "live" || tab === "shipped" ? (
               <button
                 type="button"
                 onClick={() => setTab("live")}
                 aria-label="Live"
-                aria-current="page"
+                aria-current={tab === "live" ? "page" : undefined}
                 className="flex items-center rounded-full px-1.5 transition-transform active:scale-[0.96]"
               >
                 <img src="/icon.svg" alt="lfg" className="mx-1 size-6 shrink-0" />
@@ -4486,33 +4529,29 @@ export function App() {
 
         <NavIsland className="shrink-0">
           <div className="flex h-11 items-center gap-1.5 rounded-full bg-background/80 px-2 backdrop-blur-xl">
-            {tab === "live" ? (
+            {tab === "live" || tab === "shipped" ? (
               <>
-                {!isMobile ? (
+                {!isMobile || tab === "shipped" ? (
                   <ProjectFilterMenu
-                    value={projectFilter}
+                    value={tab === "shipped" ? "__shipped" : projectFilter}
                     projects={projectOptions}
-                    onChange={setProjectFilter}
+                    onChange={changeProjectFilter}
                   />
                 ) : null}
-                {!isMobile ? (
+                {!isMobile && tab === "live" ? (
                   <ManageSessionsMenu
                     projectFilter={projectFilter}
                     onSelect={(template) => void launchManageSessions(template)}
                   />
                 ) : null}
-                <UserFilterMenu
-                  value={userFilter}
-                  users={users}
-                  onChange={changeUserFilter}
-                />
+                {tab === "live" ? (
+                  <UserFilterMenu
+                    value={userFilter}
+                    users={users}
+                    onChange={changeUserFilter}
+                  />
+                ) : null}
               </>
-            ) : null}
-            {tab === "live" || tab === "shipped" ? (
-              <PagerDots
-                page={tab === "shipped" ? "shipped" : "live"}
-                onSelect={(page) => setTab(page)}
-              />
             ) : null}
             <AskNavButton active={tab === "ask"} onOpen={() => setTab("ask")} />
             <IconTab
@@ -4536,23 +4575,6 @@ export function App() {
 
       <main
         ref={mainRef}
-        onTouchStart={(e) => {
-          if (!isMobile || (tab !== "live" && tab !== "shipped")) return;
-          const t = e.touches[0];
-          swipeStartRef.current = { x: t.clientX, y: t.clientY };
-        }}
-        onTouchEnd={(e) => {
-          const start = swipeStartRef.current;
-          swipeStartRef.current = null;
-          if (!isMobile || !start || (tab !== "live" && tab !== "shipped")) return;
-          const t = e.changedTouches[0];
-          const dx = t.clientX - start.x;
-          const dy = t.clientY - start.y;
-          // A deliberate horizontal swipe, not a scroll or a tap.
-          if (Math.abs(dx) < 70 || Math.abs(dy) > 50) return;
-          if (dx < 0 && tab === "live") setTab("shipped");
-          else if (dx > 0 && tab === "shipped") setTab("live");
-        }}
         className={cn(
           "min-h-0 flex-1 px-3 pt-3",
           liveDesktopWorkspace ? "overflow-hidden pb-3" : `overflow-y-auto ${mainBottomPadding}`,
@@ -4565,7 +4587,7 @@ export function App() {
             userFilter={userFilter}
             projectFilter={projectFilter}
             projectOptions={projectOptions}
-            onProjectChange={setProjectFilter}
+            onProjectChange={changeProjectFilter}
             onUserChange={changeUserFilter}
             onOpenSettings={() => setTab("settings")}
             onOpenAsk={() => setTab("ask")}
@@ -5017,49 +5039,6 @@ function TopTab({
   );
 }
 
-// Live and Shipped read as sibling "virtual pages": this pager cycles through
-// them (tap = next page; each dot is also a direct target). Replaces the
-// dedicated megaphone icon so the chrome stays minimal.
-const VIRTUAL_PAGES = ["live", "shipped"] as const;
-type VirtualPage = (typeof VIRTUAL_PAGES)[number];
-
-function PagerDots({
-  page,
-  onSelect,
-  className,
-}: {
-  page: VirtualPage;
-  onSelect: (page: VirtualPage) => void;
-  className?: string;
-}) {
-  const index = VIRTUAL_PAGES.indexOf(page);
-  const next = VIRTUAL_PAGES[(index + 1) % VIRTUAL_PAGES.length];
-  return (
-    <button
-      type="button"
-      onClick={() => onSelect(next)}
-      aria-label={`Switch to ${next === "shipped" ? "Shipped" : "Live"}`}
-      title={`Switch to ${next === "shipped" ? "Shipped" : "Live"}`}
-      className={cn(
-        "flex h-9 items-center gap-1.5 rounded-full px-3 transition-transform active:scale-[0.95]",
-        className,
-      )}
-    >
-      {VIRTUAL_PAGES.map((key) => (
-        <span
-          key={key}
-          className={cn(
-            "rounded-full transition-all duration-300 ease-out",
-            key === page
-              ? "h-1.5 w-5 bg-foreground"
-              : "size-1.5 bg-muted-foreground/40",
-          )}
-        />
-      ))}
-    </button>
-  );
-}
-
 // Icon-only variant of TopTab used in the top-right island (Settings).
 function IconTab({
   active,
@@ -5440,9 +5419,12 @@ function ProjectFilterMenu({
   solidSurface?: boolean;
 }) {
   const active = value !== "__all";
-  // Swipe cycles only through projects (not "All"); the dropdown below still
-  // lists "All projects" as a tappable option.
-  const options = projects;
+  // Shipped is a VIRTUAL page in this menu — not a folder/project, but it sits
+  // in the dropdown and in the swipe cycle like one.
+  const shipped = value === "__shipped";
+  // Swipe cycles through projects + Shipped (not "All"); the dropdown below
+  // still lists "All projects" as a tappable option.
+  const options = [...projects, "__shipped"];
   const touchStartY = useRef<number | null>(null);
   const didSwipe = useRef(false);
 
@@ -5464,7 +5446,7 @@ function ProjectFilterMenu({
             : "border-border bg-muted/70 text-muted-foreground",
       )}
       aria-label="Filter live sessions by project"
-      title={active ? shortProject(value) : "All projects"}
+      title={shipped ? "Shipped" : active ? shortProject(value) : "All projects"}
       onTouchStart={(event) => {
         touchStartY.current = event.touches[0]?.clientY ?? null;
         didSwipe.current = false;
@@ -5483,10 +5465,14 @@ function ProjectFilterMenu({
         touchStartY.current = null;
       }}
     >
-      <Folder className="size-3.5 shrink-0" />
+      {shipped ? (
+        <Megaphone className="size-3.5 shrink-0" />
+      ) : (
+        <Folder className="size-3.5 shrink-0" />
+      )}
       {active ? (
         <span className="truncate text-xs font-medium">
-          {shortProject(value)}
+          {shipped ? "Shipped" : shortProject(value)}
         </span>
       ) : null}
       <select
@@ -5508,6 +5494,9 @@ function ProjectFilterMenu({
             {shortProject(project)}
           </option>
         ))}
+        <optgroup label="Pages">
+          <option value="__shipped">Shipped</option>
+        </optgroup>
       </select>
     </label>
   );
@@ -7400,7 +7389,15 @@ function RailStage({
               </button>
             ) : null}
             {onOpenShipped ? (
-              <PagerDots page="live" onSelect={(page) => page === "shipped" && onOpenShipped()} />
+              <button
+                type="button"
+                onClick={onOpenShipped}
+                aria-label="Shipped"
+                title="Shipped"
+                className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
+              >
+                <Megaphone className="size-4" />
+              </button>
             ) : null}
           </div>
         ) : (
@@ -7421,9 +7418,6 @@ function RailStage({
               <div className="ml-auto flex items-center gap-1">
                 {onOpenAsk ? (
                   <AskNavButton active={false} onOpen={onOpenAsk} />
-                ) : null}
-                {onOpenShipped ? (
-                  <PagerDots page="live" onSelect={(page) => page === "shipped" && onOpenShipped()} />
                 ) : null}
                 {onOpenSettings ? (
                   <IconTab
@@ -14937,9 +14931,13 @@ type ShipPost = {
 function ShipMedia({
   item,
   onExpand,
+  tile = false,
 }: {
   item: ShipMediaItem;
   onExpand?: (artifact: ViewerArtifact) => void;
+  // Multi-media posts render fixed-height tiles (Twitter-style) so a post
+  // never grows unbounded; tap opens the full artifact in the native viewer.
+  tile?: boolean;
 }) {
   if (item.kind === "video") {
     return (
@@ -14948,54 +14946,72 @@ function ShipMedia({
         controls
         playsInline
         preload="metadata"
-        className="block max-h-[22rem] w-full bg-black object-contain"
+        className={cn(
+          "block w-full bg-black",
+          tile ? "h-44 object-cover" : "max-h-[20rem] object-contain",
+        )}
       />
     );
   }
   if (item.kind === "html") {
-    // Live artifacts render as a compact card in the feed — distinct from
-    // media, no heavy inline embed. Tapping opens the full-screen native
-    // viewer where the artifact gets the whole page.
+    // Live artifacts stay INLINE in the feed (autosized embed) under a slim
+    // header that marks them as artifacts — title, live badge, expand into
+    // the native full-page viewer. They also remain findable afterward in
+    // the Artifacts gallery segment.
+    const open = () =>
+      onExpand?.({
+        url: item.url,
+        kind: "html",
+        caption: item.caption,
+        name: item.name,
+        version: item.version,
+      });
     return (
-      <button
-        type="button"
-        onClick={() =>
-          onExpand?.({
-            url: item.url,
-            kind: "html",
-            caption: item.caption,
-            name: item.name,
-            version: item.version,
-          })
-        }
-        className="group col-span-full flex w-full items-center gap-3 bg-gradient-to-br from-sky-500/[0.06] to-violet-500/[0.08] px-4 py-3 text-left transition-colors hover:from-sky-500/[0.1] hover:to-violet-500/[0.12]"
-      >
-        <span className="flex size-10 shrink-0 items-center justify-center rounded-xl border border-border bg-background/70">
-          <LayoutDashboard className="size-[18px] text-muted-foreground" />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] font-medium">
-            {item.caption || item.name}
+      <div className="col-span-full">
+        <div className="flex items-center justify-between gap-3 border-b border-border/60 bg-gradient-to-br from-sky-500/[0.05] to-violet-500/[0.06] px-3 py-2 text-xs">
+          <button
+            type="button"
+            onClick={open}
+            className="flex min-w-0 items-center gap-2 font-medium transition-colors hover:text-foreground"
+          >
+            <LayoutDashboard className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="min-w-0 truncate">{item.caption || item.name}</span>
+          </button>
+          <span className="flex shrink-0 items-center gap-2 text-muted-foreground">
+            {(item.version ?? 1) > 1 ? (
+              <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" />
+                live · v{item.version}
+              </span>
+            ) : null}
+            <button
+              type="button"
+              onClick={open}
+              aria-label="Open artifact full screen"
+              className="transition-colors hover:text-foreground"
+            >
+              <Maximize2 className="size-3.5" />
+            </button>
           </span>
-          <span className="block text-[11px] text-muted-foreground">
-            Live artifact · tap to open
-          </span>
-        </span>
-        {(item.version ?? 1) > 1 ? (
-          <span className="flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
-            <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" />
-            live · v{item.version}
-          </span>
-        ) : null}
-        <Maximize2 className="size-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
-      </button>
+        </div>
+        <AutoHeightArtifactFrame
+          key={`${item.url}?v=${item.version ?? 0}`}
+          src={`${item.url}?v=${item.version ?? 0}`}
+          title={item.caption || item.name}
+          minHeight={180}
+          maxHeight={520}
+        />
+      </div>
     );
   }
   return (
     <ZoomableImage
       src={item.url}
       alt={item.caption || item.name}
-      className="block max-h-[22rem] w-full bg-muted object-cover"
+      className={cn(
+        "block w-full bg-muted object-cover",
+        tile ? "h-44" : "max-h-[20rem]",
+      )}
     />
   );
 }
@@ -15334,7 +15350,12 @@ function ShippedPage({
                 )}
               >
                 {post.mediaItems.slice(0, 4).map((item) => (
-                  <ShipMedia key={item.artifactId} item={item} onExpand={openArtifact} />
+                  <ShipMedia
+                    key={item.artifactId}
+                    item={item}
+                    onExpand={openArtifact}
+                    tile={post.mediaItems.filter((m) => m.kind !== "html").length > 1}
+                  />
                 ))}
               </div>
             ) : null}
