@@ -13,7 +13,8 @@ export type CodingAgentKind =
   | "opencode"
   | "grok"
   | "cursor"
-  | "hermes";
+  | "hermes"
+  | "copilot";
 
 export type CodingAgentSetting = {
   visible: boolean;
@@ -87,6 +88,7 @@ export const CODING_AGENT_KINDS: Exclude<CodingAgentKind, "claude" | "hermes">[]
   "grok",
   "cursor",
   "opencode",
+  "copilot",
 ];
 
 export const CODING_AGENT_LABELS: Record<CodingAgentKind, string> = {
@@ -98,6 +100,7 @@ export const CODING_AGENT_LABELS: Record<CodingAgentKind, string> = {
   grok: "grok",
   cursor: "cursor",
   hermes: "hermes",
+  copilot: "copilot",
 };
 
 const CONFIG_PATH = join(PATHS.data, "coding-agents.json");
@@ -269,6 +272,16 @@ function hermesPath(): string | null {
   ]);
 }
 
+function copilotPath(): string | null {
+  const home = userHome();
+  return which("copilot", [
+    process.env.LFG_COPILOT_PATH ?? "",
+    `${home}/.local/bin/copilot`,
+    `${home}/.bun/bin/copilot`,
+    "/usr/local/bin/copilot",
+  ]);
+}
+
 function hasClaudeAuth(): boolean {
   const home = userHome();
   return !!process.env.ANTHROPIC_API_KEY || existsSync(`${home}/.claude/.credentials.json`);
@@ -336,6 +349,15 @@ function hasHermesConfig(): boolean {
   return !!process.env.LFG_HERMES_PROVIDER || existsSync(`${home}/.hermes`);
 }
 
+function hasCopilotAuth(): boolean {
+  const home = userHome();
+  return (
+    !!process.env.GH_TOKEN ||
+    !!process.env.GITHUB_TOKEN ||
+    existsSync(`${home}/.copilot`)
+  );
+}
+
 function installCommandFor(kind: CodingAgentKind): string | null {
   if (kind === "claude" || kind === "aisdk") return "curl -fsSL https://claude.ai/install.sh | bash";
   if (kind === "codex" || kind === "codex-aisdk") return "bun add -g @openai/codex";
@@ -343,6 +365,7 @@ function installCommandFor(kind: CodingAgentKind): string | null {
   if (kind === "grok") return "curl -fsSL https://x.ai/cli/install.sh | bash";
   if (kind === "cursor") return "curl -fsSL https://cursor.com/install | bash";
   if (kind === "hermes") return "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash";
+  if (kind === "copilot") return "npm install -g @github/copilot";
   return null;
 }
 
@@ -357,6 +380,7 @@ function loginCommandPartsFor(kind: CodingAgentKind): string[] | null {
   if (kind === "grok") return [grokPath() ?? "grok"];
   if (kind === "cursor") return [cursorPath() ?? "cursor-agent", "login"];
   if (kind === "hermes") return [hermesPath() ?? "hermes"];
+  if (kind === "copilot") return [copilotPath() ?? "copilot"];
   return null;
 }
 
@@ -573,6 +597,10 @@ function statusFor(kind: CodingAgentKind): CodingAgentStatus {
     addBinary("Hermes CLI", hermesPath());
     addAuth("Hermes config", hasHermesConfig(), "set LFG_HERMES_PROVIDER if your install needs it");
     instructions.push("Install Hermes and set LFG_HERMES_PROVIDER when your provider is not the default.");
+  } else if (kind === "copilot") {
+    addBinary("GitHub Copilot CLI", copilotPath());
+    addAuth("Copilot auth", hasCopilotAuth(), "run 'copilot' and /login, or set GH_TOKEN with the Copilot Requests scope");
+    instructions.push("Install Copilot CLI (npm install -g @github/copilot; requires Node 22+), then run 'copilot' once and /login, or set GH_TOKEN.");
   } else {
     addBinary("Grok CLI", grokPath());
     addAuth("Grok auth", hasGrokAuth(), "run `grok` once or set XAI_API_KEY");
@@ -685,6 +713,7 @@ function setupEnvFor(kind: CodingAgentKind): Record<string, string> | null {
   if (kind === "grok") return { LFG_INSTALL_GROK: "1" };
   if (kind === "cursor") return { LFG_INSTALL_CURSOR: "1" };
   if (kind === "hermes") return { LFG_INSTALL_HERMES: "1" };
+  if (kind === "copilot") return { LFG_INSTALL_COPILOT: "1" };
   return null;
 }
 
