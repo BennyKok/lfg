@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { PATHS } from "./config.ts";
@@ -7,7 +7,11 @@ import {
   ArtifactRefreshManager,
   prepareArtifactRefreshConfig,
 } from "./artifact-refresh.ts";
-import { getImageArtifact, publishHtmlArtifact } from "./artifacts.ts";
+import {
+  getImageArtifact,
+  imageArtifactMessagesSince,
+  publishHtmlArtifact,
+} from "./artifacts.ts";
 
 const SESSION = "11111111-1111-4111-8111-111111111111";
 const OTHER_SESSION = "22222222-2222-4222-8222-222222222222";
@@ -89,6 +93,10 @@ describe("script-backed HTML artifact refresh", () => {
     expect(result.artifact.version).toBe(2);
     expect(result.artifact.refresh?.status).toBe("success");
     expect(readFileSync(result.artifact.filePath, "utf8")).toContain("second");
+    expect(imageArtifactMessagesSince(SESSION, before.updatedAt!).map((message) => ({
+      id: message.id,
+      version: message.version,
+    }))).toEqual([{ id: `artifact-${before.id}`, version: 2 }]);
   });
 
   test("failure and invalid output preserve the last good HTML and version", async () => {
@@ -211,7 +219,7 @@ describe("script-backed HTML artifact refresh", () => {
 
     await expect(refreshes.refreshNow(artifact.id, OTHER_SESSION)).rejects.toThrow("different session");
     expect((await refreshes.refreshNow(artifact.id, SESSION)).ok).toBe(true);
-    expect(Bun.file(marker).size).toBe(0);
+    expect(existsSync(marker)).toBe(false);
 
     const outside = join(root, "outside.sh");
     writeFileSync(outside, "#!/bin/sh\nexit 0\n");
