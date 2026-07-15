@@ -4167,7 +4167,15 @@ export async function cmdServe() {
             // Updatable + rendered in a sandboxed iframe: never cache (the same
             // URL serves newer versions), and lock the document down — inline
             // script/style only, no network, no parent-frame access.
-            return new Response(file, {
+            // A tiny reporter is injected so embeds can match content height
+            // (the sandboxed frame is cross-origin; postMessage is the only channel).
+            const reporter =
+              '<script>(function(){var last=0;var send=function(){var b=document.body;var h=Math.max(document.documentElement.scrollHeight,b?b.scrollHeight:0);if(Math.abs(h-last)>2){last=h;try{parent.postMessage({type:"lfg-artifact-height",height:h},"*")}catch(e){}}};addEventListener("load",send);setTimeout(send,60);setInterval(send,1000);try{new ResizeObserver(send).observe(document.documentElement)}catch(e){}})();</scr' + "ipt>";
+            let doc = await file.text();
+            doc = doc.includes("</body>")
+              ? doc.replace("</body>", reporter + "</body>")
+              : doc + reporter;
+            return new Response(doc, {
               headers: {
                 "Content-Type": "text/html; charset=utf-8",
                 "Cache-Control": "no-store",

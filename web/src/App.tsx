@@ -735,6 +735,50 @@ function ArtifactViewerPage({
   );
 }
 
+// Sandboxed artifact iframe that sizes itself to the document: the served
+// artifact html carries an injected reporter that postMessages its height.
+function AutoHeightArtifactFrame({
+  src,
+  title,
+  minHeight = 200,
+  maxHeight = 560,
+  className,
+}: {
+  src: string;
+  title?: string;
+  minHeight?: number;
+  maxHeight?: number;
+  className?: string;
+}) {
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const [height, setHeight] = useState<number | null>(null);
+  useEffect(() => {
+    const onMessage = (e: MessageEvent) => {
+      const data = e.data as { type?: string; height?: number } | null;
+      if (!data || data.type !== "lfg-artifact-height") return;
+      if (!frameRef.current || e.source !== frameRef.current.contentWindow) return;
+      if (typeof data.height === "number" && Number.isFinite(data.height) && data.height > 0) {
+        setHeight(Math.max(minHeight, Math.min(maxHeight, Math.ceil(data.height))));
+      }
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [minHeight, maxHeight]);
+  return (
+    <iframe
+      ref={frameRef}
+      src={src}
+      sandbox="allow-scripts"
+      title={title}
+      style={{ height: height ?? minHeight }}
+      className={cn(
+        "block w-full border-0 bg-background transition-[height] duration-300 ease-out",
+        className,
+      )}
+    />
+  );
+}
+
 function agentIconSrc(agent?: string): string {
   const v = `?v=${AGENT_ICON_VERSION}`;
   if (agent === "codex" || agent === "codex-aisdk") return `/agent-codex.svg${v}`;
@@ -3110,6 +3154,9 @@ export function App() {
   const swipeStartRef = useRef<{ x: number; y: number } | null>(null);
   // Full-page native artifact viewer (no popups/new tabs).
   const [viewerArtifact, setViewerArtifact] = useState<ViewerArtifact | null>(null);
+  // A "jump to this session" request for the Live view (from Shipped posts).
+  // The nonce lets the same session be requested twice in a row.
+  const [liveFocus, setLiveFocus] = useState<{ sid: string; n: number } | null>(null);
   const isMobile = useIsMobile();
   const isWide = useIsWide();
   const [keyboardOpen, setKeyboardOpen] = useState(false);
@@ -4539,6 +4586,7 @@ export function App() {
             autoAgents={projectScopedAutoAgents}
             onOpenFinding={setOpenFinding}
             onDismissFinding={(finding) => void dismissFinding(finding)}
+            focus={liveFocus}
           />
         ) : tab === "auto" ? (
           <AutoManageView
@@ -4573,14 +4621,7 @@ export function App() {
             }
             onOpenSession={(sid) => {
               setTab("live");
-              // Focus the session's rail card once the live view mounts.
-              setTimeout(() => {
-                const el = document.querySelector(
-                  `[data-rail-sid="${sid}"]`,
-                ) as HTMLElement | null;
-                el?.scrollIntoView({ block: "center" });
-                el?.click();
-              }, 350);
+              setLiveFocus({ sid, n: Date.now() });
             }}
           />
         ) : tab === "changelog" ? (
@@ -6416,6 +6457,7 @@ function LiveView({
   onOpenAsk,
   onOpenShipped,
   onManageSessions,
+  focus,
 }: {
   sessions: Session[];
   users: User[];
@@ -6440,12 +6482,21 @@ function LiveView({
   autoAgents: AutoAgent[];
   onOpenFinding: (f: AutoFinding) => void;
   onDismissFinding: (f: AutoFinding) => void;
+  // External "jump to session" request (e.g. tapping a Shipped post).
+  focus?: { sid: string; n: number } | null;
 }) {
   const isWide = useIsWide();
   // Full-height detail sheet (mobile tap). Held here, above every card,
   // so it can switch which session it shows without unmounting. `origin` anchors
   // the open/close morph to the title the user tapped.
   const [sheet, setSheet] = useState<{ sid: string; origin: DOMRect } | null>(null);
+
+  // Narrow layout: a focus request opens the full-height chat sheet directly.
+  useEffect(() => {
+    if (!focus || isWide) return;
+    const origin = new DOMRect(window.innerWidth / 2 - 120, 120, 240, 44);
+    setSheet({ sid: focus.sid, origin });
+  }, [focus, isWide]);
 
   const ownBusyOrFresh = (session: Session) =>
     !!busyBySid[session.sessionId ?? ""] || recentlyCreatedSids.has(session.sessionId ?? "");
@@ -6591,6 +6642,7 @@ function LiveView({
         onOpenSettings={onOpenSettings}
         onOpenAsk={onOpenAsk}
         onOpenShipped={onOpenShipped}
+        focus={focus}
       />
     );
   }
@@ -6699,6 +6751,7 @@ function RailStage({
   onOpenSettings,
   onOpenAsk,
   onOpenShipped,
+  focus,
 }: {
   sessions: Session[];
   users: User[];
@@ -6710,6 +6763,7 @@ function RailStage({
   onOpenSettings?: () => void;
   onOpenAsk?: () => void;
   onOpenShipped?: () => void;
+  focus?: { sid: string; n: number } | null;
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
@@ -6764,6 +6818,19 @@ function RailStage({
     for (const s of sessions) if (s.sessionId) m.set(s.sessionId, s);
     return m;
   }, [sessions]);
+
+  // External focus request (Shipped post tap): put the session on stage as the
+  // preview column, cursor it, and scroll its rail row into view.
+  useEffect(() => {
+    if (!focus) return;
+    const sid = focus.sid;
+    if (!bySid.has(sid)) return;
+    setPreview(sid);
+    setCursor(sid);
+    requestAnimationFrame(() => {
+      document.querySelector(`[data-rail-sid="${sid}"]`)?.scrollIntoView({ block: "center" });
+    });
+  }, [focus, bySid]);
 
   // Drop pinned/preview ids the server has stopped returning (session ended),
   // so columns vanish cleanly instead of rendering blanks.
@@ -10675,14 +10742,9 @@ function MessageBubble({
             </span>
           </div>
           {/* Sandboxed: scripts may run for chart rendering, but no same-origin
-              access, no network (CSP on the artifact response), no top-nav. */}
-          <iframe
-            key={src}
-            src={src}
-            sandbox="allow-scripts"
-            title={label}
-            className="block h-[26rem] w-full border-0 bg-background"
-          />
+              access, no network (CSP on the artifact response), no top-nav.
+              Height follows the document via the injected reporter. */}
+          <AutoHeightArtifactFrame key={src} src={src} title={label} minHeight={200} maxHeight={560} />
           {message.caption && message.caption !== label ? (
             <div className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
               {message.caption}
@@ -14866,11 +14928,12 @@ function ShipMedia({
     // Expand pushes the full-screen native viewer, never a popup.
     return (
       <div className="relative">
-        <iframe
+        <AutoHeightArtifactFrame
+          key={`${item.url}?v=${item.version ?? 0}`}
           src={`${item.url}?v=${item.version ?? 0}`}
-          sandbox="allow-scripts"
           title={item.caption || item.name}
-          className="block h-[22rem] w-full border-0 bg-background"
+          minHeight={180}
+          maxHeight={520}
         />
         <button
           type="button"
