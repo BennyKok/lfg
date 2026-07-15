@@ -178,6 +178,24 @@ export function grokBin(): string {
   return (_grokBin = "grok");
 }
 
+let _copilotBin: string | null = null;
+export function copilotBin(): string {
+  if (_copilotBin) return _copilotBin;
+  const onPath = Bun.which("copilot");
+  if (onPath) return (_copilotBin = onPath);
+  const home = process.env.HOME ?? homedir();
+  const candidates = [
+    process.env.LFG_COPILOT_PATH ?? "",
+    `${home}/.local/bin/copilot`,
+    `${home}/.bun/bin/copilot`,
+    "/usr/local/bin/copilot",
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) return (_copilotBin = p);
+  }
+  return (_copilotBin = "copilot");
+}
+
 let _cursorBin: string | null = null;
 function isGrokAgentPath(path: string): boolean {
   try {
@@ -559,6 +577,37 @@ export function spawnManagedGrokSession(opts: {
   if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
   addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
   containTmuxCommand(argv, grokBin(), opts.containInAgentSlice, opts);
+  const create = Bun.spawnSync(argv);
+  if (create.exitCode !== 0)
+    return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
+  return { ok: true };
+}
+
+export function spawnManagedCopilotSession(opts: {
+  name: string;
+  cwd: string;
+  prompt?: string;
+  model?: string;
+  lfgSessionId?: string;
+  lfgUser?: string | null;
+  containInAgentSlice?: boolean;
+}): { ok: boolean; error?: string } {
+  const dec = new TextDecoder();
+  const argv = [
+    "tmux",
+    "new-session",
+    "-d",
+    "-s",
+    opts.name,
+    "-c",
+    opts.cwd,
+    copilotBin(),
+    "--allow-all-tools",
+  ];
+  if (opts.model) argv.push("--model", opts.model);
+  if (opts.prompt && opts.prompt.trim()) argv.push("-p", opts.prompt);
+  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
+  containTmuxCommand(argv, copilotBin(), opts.containInAgentSlice, opts);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
