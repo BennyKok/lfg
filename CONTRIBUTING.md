@@ -1,17 +1,8 @@
 # Contributing
 
 Thanks for your interest in lfg! This is a self-hosted tool for running AI coding
-agents on your own box.
-
-## No pull requests
-
-**This repository does not accept pull requests.** It is developed on a private
-mainline and published here; PRs are closed automatically by a bot.
-
-The best way to contribute is to **open an issue** — bug reports, feature ideas,
-and self-hosting feedback are all welcome. If you want to change the code, fork
-it: the license permits it, and issues linking to your fork are a fine way to
-show a proposed approach.
+agents on your own box — contributions that keep it simple, private, and easy to
+self-host are very welcome.
 
 ## Dev setup
 
@@ -26,7 +17,7 @@ bun run serve                 # backend + built UI at http://127.0.0.1:8766
 cd web && bun install && bun run dev
 ```
 
-Before committing changes (in your fork):
+Before opening a PR:
 
 ```bash
 bunx tsc --noEmit             # typecheck the CLI/server
