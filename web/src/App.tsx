@@ -4737,10 +4737,12 @@ export function App() {
 
       {!callOpen ? (
         <>
-          {isMobile && tab === "live" ? (
-            // Mobile home screen: the create flow lives inline, anchored at the
-            // bottom (same component as the desktop drawer, `variant="inline"`).
-            // The orb has moved up into the top nav island.
+          {isMobile && (tab === "live" || tab === "shipped" || tab === "artifacts") ? (
+            // Mobile bottom composer: the create flow lives inline, anchored at
+            // the bottom (same component as the desktop drawer,
+            // `variant="inline"`). It persists across the swipeable pages
+            // (Live / Shipped / Artifacts) so you can kick off a session — and
+            // swipe between pages — from anywhere. The orb lives in the top nav.
             <NewSessionDialog
               variant="inline"
               open
@@ -15148,7 +15150,7 @@ function ShipTranscriptSheet({ post, onClose }: { post: ShipPost; onClose: () =>
               return m.kind === "video" ? (
                 <video key={m.id ?? i} src={m.url} controls playsInline preload="metadata" className="max-h-60 rounded-lg" />
               ) : (
-                <img key={m.id ?? i} src={m.url} alt={m.alt || m.name || "media"} className="max-h-60 rounded-lg border border-border/60" />
+                <ZoomableImage key={m.id ?? i} src={m.url} alt={m.alt || m.name || "media"} className="max-h-60 rounded-lg border border-border/60" />
               );
             }
             if (m.kind === "html" && m.url) {
