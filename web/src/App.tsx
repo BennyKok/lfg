@@ -4566,8 +4566,12 @@ export function App() {
         <NavIsland className="shrink-0">
           <div className="flex h-11 items-center gap-1.5 rounded-full bg-background/80 px-2 backdrop-blur-xl">
             {tab === "live" || tab === "shipped" || tab === "artifacts" ? (
+              // The island stays identical across the swipeable pages: on
+              // mobile that's avatar + ask + settings (page identity lives in
+              // the heading and the swipe/composer nav); desktop keeps the
+              // project/page dropdown pill.
               <>
-                {!isMobile || tab !== "live" ? (
+                {!isMobile ? (
                   <ProjectFilterMenu
                     value={tab === "shipped" ? "__shipped" : tab === "artifacts" ? "__artifacts" : projectFilter}
                     projects={projectOptions}
@@ -4580,18 +4584,16 @@ export function App() {
                     onSelect={(template) => void launchManageSessions(template)}
                   />
                 ) : null}
-                {tab === "live" ? (
-                  <UserFilterMenu
-                    value={userFilter}
-                    users={users}
-                    onChange={changeUserFilter}
-                  />
-                ) : null}
+                <UserFilterMenu
+                  value={userFilter}
+                  users={users}
+                  onChange={changeUserFilter}
+                />
               </>
             ) : null}
             <AskNavButton active={tab === "ask"} onOpen={() => setTab("ask")} />
             <IconTab
-              active={tab !== "live"}
+              active={tab !== "live" && tab !== "shipped" && tab !== "artifacts"}
               onClick={() => setTab("settings")}
               icon={<Settings className="size-[18px]" />}
               label="Settings"
