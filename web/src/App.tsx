@@ -3224,7 +3224,11 @@ export function App() {
   // Tabs are "live" | "settings" | "ask" | "term" | "browser". Auto agents and runtime
   // extension nav-tabs now render inside the Settings page rather than as their
   // own top-level tabs.
-  const [tab, setTab] = useState<string>("live");
+  // ?tab=shipped|artifacts|settings|… deep-links straight to a page (also lets
+  // tooling/screenshots reach pages that are otherwise gesture-only on mobile).
+  const [tab, setTab] = useState<string>(
+    () => new URLSearchParams(window.location.search).get("tab") || "live",
+  );
   const extNavTabs = useExtensionNavTabs();
   const [autoAgents, setAutoAgents] = useState<AutoAgent[]>([]);
   const [settings, setSettings] = useState<GlobalSettings>({
@@ -3884,6 +3888,12 @@ export function App() {
   // without this guard its cleanup wipes the in-flight transform and the new
   // page flashes centered for a few frames before sliding in (visible flicker).
   const swipePageAnim = useRef(false);
+  // Handler context read via ref so the touch listeners attach once per page
+  // (tab) instead of re-attaching on every render — cycleMobileProjectFilter's
+  // identity changes with every live-session update, and a mid-drag re-attach
+  // resets the gesture state and silently kills the swipe.
+  const pageSwipeCtx = useRef({ cycleMobileProjectFilter, composerExpanded });
+  pageSwipeCtx.current = { cycleMobileProjectFilter, composerExpanded };
 
   useEffect(() => {
     if (!isMobile || (tab !== "live" && tab !== "shipped" && tab !== "artifacts") || callOpen) return;
@@ -3906,7 +3916,7 @@ export function App() {
       main.style.opacity = "";
     };
     const finish = (dir: 1 | -1) => {
-      const changed = cycleMobileProjectFilter(dir);
+      const changed = pageSwipeCtx.current.cycleMobileProjectFilter(dir);
       if (!changed || reducedMotion()) {
         release();
         return;
@@ -3936,7 +3946,7 @@ export function App() {
       }, 130);
     };
     const onStart = (event: TouchEvent) => {
-      if (event.touches.length !== 1 || composerExpanded) return;
+      if (event.touches.length !== 1 || pageSwipeCtx.current.composerExpanded) return;
       const target = event.target instanceof Element ? event.target : null;
       if (!target || blocksLiveProjectSwipe(target)) return;
       const touch = event.touches[0];
@@ -3998,7 +4008,7 @@ export function App() {
         main.style.opacity = "";
       }
     };
-  }, [callOpen, composerExpanded, cycleMobileProjectFilter, isMobile, tab]);
+  }, [callOpen, isMobile, tab]);
 
   // Tab / Shift+Tab cycles the live project filter (mirrors the project menu).
   const projectKb = useRef({ tab, projectFilter, projectOptions, setProjectFilter });
@@ -11724,6 +11734,11 @@ function NewSessionDialog({
   // transform and the bar flashes centered before sliding in again (same race
   // as the page-level swipe in App).
   const composerSwipeAnim = useRef(false);
+  // Same stability trick as the page-level swipe: onProjectSwipe is recreated
+  // on every live-session update, so the listeners read it via ref instead of
+  // re-attaching (a mid-drag re-attach resets gesture state and kills the swipe).
+  const composerSwipeCtx = useRef({ onProjectSwipe, pendingCreates });
+  composerSwipeCtx.current = { onProjectSwipe, pendingCreates };
   useEffect(() => {
     if (variant !== "inline" || !onProjectSwipe) return;
     const shell = inlineShellRef.current;
@@ -11747,7 +11762,7 @@ function NewSessionDialog({
       shell.style.opacity = "";
     };
     const finish = (dir: 1 | -1) => {
-      const changed = onProjectSwipe(dir);
+      const changed = composerSwipeCtx.current.onProjectSwipe?.(dir) ?? false;
       if (!changed || reducedMotion()) {
         release();
         return;
@@ -11777,7 +11792,7 @@ function NewSessionDialog({
       }, 130);
     };
     const onStart = (event: TouchEvent) => {
-      if (event.touches.length !== 1 || pendingCreates > 0) return;
+      if (event.touches.length !== 1 || composerSwipeCtx.current.pendingCreates > 0) return;
       const target = event.target as HTMLElement | null;
       if (!target?.closest("form")) return;
       if (target.closest("select, button, input[type='file'], [data-no-composer-swipe]")) return;
@@ -11859,7 +11874,7 @@ function NewSessionDialog({
         shell.style.opacity = "";
       }
     };
-  }, [onProjectSwipe, pendingCreates, variant]);
+  }, [variant, !onProjectSwipe]);
   useEffect(() => {
     return () => {
       for (const url of previewUrls.current) URL.revokeObjectURL(url);
@@ -15452,90 +15467,85 @@ function ShippedPage({
         </div>
       ) : null}
 
-      {(posts ?? []).map((post) => {
-        const live = !!post.sessionId && liveSessionIds.has(post.sessionId);
-        return (
-          <article
-            key={post.id}
-            className="overflow-hidden rounded-2xl border border-border bg-card/40 shadow-sm"
-          >
-            {/* Tapping the post opens the conversation: straight into the live
-                session when it's still running, read-only transcript when not. */}
-            <button
-              type="button"
-              onClick={() => {
-                if (!post.sessionId) return;
-                if (live) onOpenSession(post.sessionId);
-                else setViewing(post);
-              }}
-              className="flex w-full items-start gap-3 px-4 pb-1 pt-3 text-left transition-colors hover:bg-foreground/[0.02]"
-            >
-              <img
-                src={agentIconSrc(post.agent)}
-                alt={agentIconAlt(post.agent)}
-                className="mt-0.5 size-9 shrink-0 rounded-full border border-border bg-background p-1.5"
-              />
-              <div className="min-w-0 flex-1">
-                <div className="flex items-baseline gap-1.5 text-[13px]">
-                  <span className="font-semibold">{agentIconAlt(post.agent)}</span>
-                  {post.sessionTitle ? (
-                    <span className="min-w-0 truncate text-muted-foreground">
-                      · {post.sessionTitle}
-                    </span>
-                  ) : null}
-                  <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px] text-muted-foreground">
-                    {post.revisions > 1 ? (
-                      <span className="rounded-full bg-primary/10 px-1.5 py-0.5 font-medium text-primary">
-                        updated · v{post.revisions}
-                      </span>
-                    ) : null}
+      {posts?.length ? (
+        // One flat surface with hairline dividers — the posts themselves are
+        // the UI. Byline is agent · project · time; live = dot on the avatar;
+        // everything else (revisions, hints, session titles) lives a tap away.
+        <div className="overflow-hidden rounded-2xl border border-border bg-card/40 shadow-sm">
+          {posts.map((post) => {
+            const live = !!post.sessionId && liveSessionIds.has(post.sessionId);
+            return (
+              <article key={post.id} className="border-b border-border/50 pb-3 last:border-b-0">
+                {/* Tapping the post opens the conversation: straight into the
+                    live session when it's still running, read-only transcript
+                    when not. */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!post.sessionId) return;
+                    if (live) onOpenSession(post.sessionId);
+                    else setViewing(post);
+                  }}
+                  className="flex w-full items-start gap-3 px-4 pt-3 text-left transition-colors hover:bg-foreground/[0.02]"
+                >
+                  <span className="relative mt-0.5 shrink-0">
+                    <img
+                      src={agentIconSrc(post.agent)}
+                      alt={agentIconAlt(post.agent)}
+                      className="size-8 rounded-full border border-border bg-background p-1.5"
+                    />
                     {live ? (
-                      <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
-                        <span className="size-1.5 rounded-full bg-emerald-500" />
-                        active
-                      </span>
+                      <span
+                        title="Session is active"
+                        className="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full bg-emerald-500 ring-2 ring-background"
+                      />
                     ) : null}
-                    {timeAgo(post.ts)}
                   </span>
-                </div>
-                <h2 className="mt-0.5 text-[15px] font-semibold leading-snug tracking-[-0.01em]">
-                  {post.title}
-                </h2>
-                {post.summary ? (
-                  // Clamped to keep the feed scannable (tweet-like) — long
-                  // legacy summaries cut off here; the tap-through session
-                  // transcript carries the full detail.
-                  <div className="mt-0.5 line-clamp-4 text-[13px] leading-relaxed text-muted-foreground">
-                    <MessageResponse>{post.summary}</MessageResponse>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline gap-1.5 text-[13px]">
+                      <span className="min-w-0 truncate font-semibold">{agentIconAlt(post.agent)}</span>
+                      {post.project ? (
+                        <span className="min-w-0 truncate text-muted-foreground">· {post.project}</span>
+                      ) : null}
+                      <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+                        {timeAgo(post.ts)}
+                      </span>
+                    </div>
+                    <h2 className="mt-0.5 text-[15px] font-semibold leading-snug tracking-[-0.01em]">
+                      {post.title}
+                    </h2>
+                    {post.summary ? (
+                      // Clamped to keep the feed scannable (tweet-like) — long
+                      // legacy summaries cut off here; the tap-through session
+                      // transcript carries the full detail.
+                      <div className="mt-0.5 line-clamp-4 text-[13px] leading-relaxed text-muted-foreground">
+                        <MessageResponse>{post.summary}</MessageResponse>
+                      </div>
+                    ) : null}
+                  </div>
+                </button>
+                {post.mediaItems.length ? (
+                  <div
+                    className={cn(
+                      "ml-[3.75rem] mr-4 mt-2 grid gap-0.5 overflow-hidden rounded-xl border border-border/60",
+                      post.mediaItems.length > 1 ? "grid-cols-2" : "grid-cols-1",
+                    )}
+                  >
+                    {post.mediaItems.slice(0, 4).map((item) => (
+                      <ShipMedia
+                        key={item.artifactId}
+                        item={item}
+                        onExpand={openArtifact}
+                        tile={post.mediaItems.filter((m) => m.kind !== "html").length > 1}
+                      />
+                    ))}
                   </div>
                 ) : null}
-              </div>
-            </button>
-            {post.mediaItems.length ? (
-              <div
-                className={cn(
-                  "mx-4 my-2 grid gap-0.5 overflow-hidden rounded-xl border border-border/60",
-                  post.mediaItems.length > 1 ? "grid-cols-2" : "grid-cols-1",
-                )}
-              >
-                {post.mediaItems.slice(0, 4).map((item) => (
-                  <ShipMedia
-                    key={item.artifactId}
-                    item={item}
-                    onExpand={openArtifact}
-                    tile={post.mediaItems.filter((m) => m.kind !== "html").length > 1}
-                  />
-                ))}
-              </div>
-            ) : null}
-            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 px-4 pb-3 text-[11px] text-muted-foreground/80">
-              {post.project ? <span>{post.project}</span> : null}
-              {post.revisions > 1 ? <span>· first shipped {timeAgo(post.firstTs)}</span> : null}
-              <span>· {live ? "tap to open the session" : "tap to view the transcript"}</span>
-            </div>
-          </article>
-        );
-      })}
+              </article>
+            );
+          })}
+        </div>
+      ) : null}
       {posts !== null && posts.length < postsTotal ? (
         <button
           type="button"
