@@ -2,6 +2,23 @@
 
 Recent product updates and deployment notes.
 
+## July 16, 2026 - Shipped feed and live artifacts (v0.1.37)
+
+- New Shipped channel: a feed of agent-published work, available as a virtual
+  page in the project menu with kind filters (all/html/image/video), live HTML
+  previews, load-more paging, tweet-style posts with real agent-kind bylines,
+  and `?tab=` deep links.
+- HTML artifacts are now updatable: a persisted script refresh runner (also
+  exposed over MCP) re-renders them on demand, with visible refresh state,
+  stable revisions across data refreshes, clean cancellation, and deletion.
+- Added a native full-page artifact viewer and a dedicated all-artifacts
+  gallery; tapping a post opens the session that shipped it.
+- Mobile swipe polish: no more composer-bar or mid-swipe flashes when changing
+  project pages, and the right nav island stays identical across swipe pages.
+- Subagents launched inside a slice are now bound to their transcript via
+  cgroup, fixing misattributed output; agent swarms get bounded memory and
+  concurrency.
+
 ## July 15, 2026 - Durable sessions and faster image viewing (v0.1.36)
 
 - Session worktrees now live under a persistent LFG-managed root instead of a
