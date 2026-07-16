@@ -238,10 +238,10 @@ export function createVideoArtifact(input: {
   return createMediaArtifact(input, "video");
 }
 
-// HTML artifacts are UPDATABLE: re-publishing with the same id overwrites the
-// file and bumps `version`/`updatedAt`. The stable message id (`artifact-<id>`)
-// means the client upserts the card in place — that's what makes a "live
-// dashboard" just an agent re-publishing the same artifact on an interval.
+// HTML artifacts are UPDATABLE: an intentional publish bumps the user-facing
+// revision, while a scheduled data refresh only advances updatedAt. The stable
+// message id (`artifact-<id>`) and monotonic updatedAt let clients refresh the
+// same card without pretending fresh data is a new authored revision.
 export function publishHtmlArtifact(input: {
   sessionId: string;
   html: string;
@@ -250,6 +250,9 @@ export function publishHtmlArtifact(input: {
   caption?: string;
   // undefined preserves the current configuration; null removes it.
   refresh?: ArtifactRefreshConfig | null;
+  // Defaults to true. Script refreshes pass false because new data is not a
+  // new authored artifact revision.
+  bumpVersion?: boolean;
 }): ImageArtifact {
   const sessionId = input.sessionId.trim();
   if (!UUID.test(sessionId)) throw new Error("sessionId must be a UUID");
@@ -278,9 +281,14 @@ export function publishHtmlArtifact(input: {
   atomicWrite(filePath, html);
 
   // `imageArtifactMessagesSince` uses a strict greater-than cursor. Keep this
-  // monotonic even when two publishes land in the same millisecond so an open
-  // client reliably receives every new version without a duplicate card.
+  // monotonic even when two writes land in the same millisecond so an open
+  // client reliably receives every refreshed document without a duplicate card.
   const now = Math.max(Date.now(), (existing?.updatedAt ?? 0) + 1);
+  const version = existing
+    ? input.bumpVersion === false
+      ? existing.version ?? 1
+      : (existing.version ?? 0) + 1
+    : 1;
   const artifact: ImageArtifact = {
     id,
     sessionId,
@@ -293,7 +301,7 @@ export function publishHtmlArtifact(input: {
     size: bytes,
     caption: cleanText(input.caption, 300) ?? existing?.caption,
     title: cleanText(input.title, 120) ?? existing?.title,
-    version: (existing?.version ?? 0) + 1,
+    version,
     updatedAt: now,
     refresh: input.refresh === undefined ? existing?.refresh : input.refresh ?? undefined,
   };
@@ -387,7 +395,7 @@ export function imageArtifactToMessage(artifact: ImageArtifact): ImageArtifactMe
     role: "assistant",
     kind: artifact.media ?? "image",
     text: label,
-    // Updatable artifacts surface at their last-publish time so live-ws
+    // Updatable artifacts surface at their last-content-write time so live-ws
     // re-emits them and the client re-sorts/refreshes in place.
     ts: artifact.updatedAt ?? artifact.createdAt,
     artifactId: artifact.id,

@@ -62,7 +62,7 @@ type AskQuestionResponse = {
   answer: string;
 };
 
-const VERSION = "0.1.20";
+const VERSION = "0.1.21";
 
 function baseUrl(): string {
   if (process.env.LFG_BASE) return process.env.LFG_BASE.replace(/\/$/, "");
@@ -525,7 +525,7 @@ export async function cmdMcp() {
     {
       title: "Refresh Or Inspect An LFG HTML Artifact",
       description:
-        "Run the owning HTML artifact's configured server-side script now, or inspect persisted refresh status. Manual runs also work when the automatic schedule is disabled. The stable artifact/card id is retained and the version increases only after valid complete HTML is produced.",
+        "Run the owning HTML artifact's configured server-side script now, or inspect persisted refresh status. Manual runs also work when the automatic schedule is disabled. A successful data refresh updates the stable card and refresh timestamp without creating a new artifact revision.",
       inputSchema: {
         id: z.string().min(3).describe("Stable HTML artifact id."),
         action: z.enum(["now", "status"]).optional().describe("Run now (default) or only return persisted status."),

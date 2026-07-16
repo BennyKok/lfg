@@ -671,6 +671,9 @@ type ViewerArtifact = {
   caption?: string;
   name?: string;
   version?: number;
+  // Changes on every successful content write, including data-only refreshes.
+  // Kept separate from the user-facing authored revision.
+  cacheKey?: number;
 };
 
 const ArtifactViewerContext = createContext<(artifact: ViewerArtifact) => void>(() => {});
@@ -690,7 +693,9 @@ function ArtifactViewerPage({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   const label = artifact.title || artifact.caption || artifact.name || "Artifact";
-  const src = artifact.kind === "html" ? `${artifact.url}?v=${artifact.version ?? 0}` : artifact.url;
+  const src = artifact.kind === "html"
+    ? `${artifact.url}?v=${artifact.cacheKey ?? artifact.version ?? 0}`
+    : artifact.url;
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-background">
       <header className="flex shrink-0 items-center gap-2 border-b border-border px-2 py-2 pt-[calc(0.5rem+env(safe-area-inset-top))]">
@@ -10744,9 +10749,9 @@ function MessageBubble({
 
   if (message.kind === "html" && message.url) {
     const label = message.title || message.caption || message.text || message.name || "Artifact";
-    // ?v= busts the iframe on re-publish: the message id stays stable so the
-    // card upserts in place, but the changed src remounts the document.
-    const src = `${message.url}?v=${message.version ?? message.ts ?? 0}`;
+    // updatedAt/ts busts the iframe for authored publishes and data-only
+    // refreshes. The visible revision remains unchanged for scheduled data.
+    const src = `${message.url}?v=${message.ts ?? message.version ?? 0}`;
     return (
       <AiMessage className={cn("msg", entering && "lfg-msg-in")} from="assistant">
         <MessageContent className="not-prose w-full max-w-[min(42rem,92vw)] overflow-hidden rounded-lg border border-border bg-card p-0 shadow-sm">
@@ -10761,6 +10766,7 @@ function MessageBubble({
                   caption: message.caption,
                   name: message.name,
                   version: message.version,
+                  cacheKey: message.ts,
                 })
               }
               className="flex min-w-0 items-center gap-2 font-medium transition-colors hover:text-foreground"
@@ -10785,6 +10791,7 @@ function MessageBubble({
                     caption: message.caption,
                     name: message.name,
                     version: message.version,
+                    cacheKey: message.ts,
                   })
                 }
                 aria-label="Open artifact full screen"
@@ -14943,6 +14950,7 @@ type ShipMediaItem = {
   name: string;
   caption?: string;
   version?: number;
+  updatedAt?: number;
   lastRefreshedAt?: number;
   refreshStatus?: "idle" | "running" | "success" | "error";
 };
@@ -15015,6 +15023,7 @@ function ShipMedia({
         caption: item.caption,
         name: item.name,
         version: item.version,
+        cacheKey: item.updatedAt,
       });
     return (
       <button
@@ -15368,13 +15377,14 @@ function ShippedPage({
                         caption: a.caption,
                         name: a.name,
                         version: a.version,
+                        cacheKey: a.ts,
                       })
                     }
                     className="block w-full text-left active:scale-[0.99]"
                   >
                     <div className="relative h-32 w-full overflow-hidden bg-background">
                       <iframe
-                        src={`${a.url}?v=${a.version ?? 0}`}
+                        src={`${a.url}?v=${a.ts}`}
                         title={a.title || a.caption || a.name}
                         sandbox="allow-scripts"
                         loading="lazy"

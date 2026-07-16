@@ -298,6 +298,7 @@ export class ArtifactRefreshManager {
         html: output.stdout,
         title: current.title,
         caption: current.caption,
+        bumpVersion: false,
       });
       artifact = updateHtmlArtifactRefreshStatus({
         id,

@@ -37,9 +37,10 @@ schedule by omitting `html` and reusing the same `id`. Set `refreshEnabled` to
 `false` to pause automatic runs while retaining manual refresh, or set
 `refreshScriptPath` to `null` to remove the refresh configuration.
 
-Successful runs increment the existing artifact version and emit the repo's
-normal realtime artifact update, so an open client refreshes the same card.
-Failures leave both the prior HTML and version intact.
+Successful runs update the document and refresh timestamp without incrementing
+the artifact revision. They still emit the normal realtime artifact update, so
+an open client reloads the same card. Failures leave the prior HTML, timestamp,
+and revision intact.
 
 The Artifacts page labels scheduled dashboards with their most recent
 successful refresh time. Delete an artifact from that page with its trash

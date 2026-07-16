@@ -79,7 +79,7 @@ describe("script-backed HTML artifact refresh", () => {
     });
   }
 
-  test("success atomically updates the stable artifact and version", async () => {
+  test("success atomically updates the stable artifact without a new revision", async () => {
     const executable = script(
       "success.sh",
       "#!/bin/sh\nprintf '%s' '<!doctype html><html><body>second</body></html>'\n",
@@ -90,7 +90,8 @@ describe("script-backed HTML artifact refresh", () => {
 
     expect(result.ok).toBe(true);
     expect(result.artifact.id).toBe(before.id);
-    expect(result.artifact.version).toBe(2);
+    expect(result.artifact.version).toBe(1);
+    expect(result.artifact.updatedAt).toBeGreaterThan(before.updatedAt!);
     expect(result.artifact.refresh?.status).toBe("success");
     expect(typeof result.artifact.refresh?.lastSuccessAt).toBe("number");
     expect(imageArtifactMessagesSince(SESSION, before.updatedAt!)[0]?.lastRefreshedAt).toBe(
@@ -100,7 +101,25 @@ describe("script-backed HTML artifact refresh", () => {
     expect(imageArtifactMessagesSince(SESSION, before.updatedAt!).map((message) => ({
       id: message.id,
       version: message.version,
-    }))).toEqual([{ id: `artifact-${before.id}`, version: 2 }]);
+      ts: message.ts,
+    }))).toEqual([{ id: `artifact-${before.id}`, version: 1, ts: result.artifact.updatedAt! }]);
+  });
+
+  test("an intentional re-publish still creates a new revision", () => {
+    const executable = script(
+      "revision.sh",
+      "#!/bin/sh\nprintf '%s' '<!doctype html><html><body>refresh</body></html>'\n",
+    );
+    const before = create({ scriptPath: executable });
+
+    const after = publishHtmlArtifact({
+      sessionId: SESSION,
+      id: before.id,
+      html: "<!doctype html><html><body>authored revision</body></html>",
+    });
+
+    expect(after.version).toBe(2);
+    expect(after.updatedAt).toBeGreaterThan(before.updatedAt!);
   });
 
   test("failure and invalid output preserve the last good HTML and version", async () => {
@@ -144,7 +163,7 @@ describe("script-backed HTML artifact refresh", () => {
     expect(overlap.started).toBe(false);
     expect(overlap.error).toContain("already running");
     expect((await first).ok).toBe(true);
-    expect(getImageArtifact(artifact.id)?.version).toBe(2);
+    expect(getImageArtifact(artifact.id)?.version).toBe(1);
   });
 
   test("a new scheduler instance rehydrates persisted due schedules", async () => {
@@ -156,7 +175,7 @@ describe("script-backed HTML artifact refresh", () => {
 
     await manager().tick(11_000);
 
-    expect(getImageArtifact(artifact.id)?.version).toBe(2);
+    expect(getImageArtifact(artifact.id)?.version).toBe(1);
     expect(readFileSync(artifact.filePath, "utf8")).toContain("rehydrated");
   });
 
