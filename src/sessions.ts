@@ -168,6 +168,17 @@ function makeTmuxProbe(profile: SessionProfile | null): TmuxProbe {
           if (hit) return hit;
           cur = ppidOf(cur);
         }
+        // Slice-contained subagents (systemd-run --unit=lfg-agent-<tmuxName>)
+        // are reparented under `systemd --user`, so the pane never appears in
+        // the parent chain above. Recover the pane via the cgroup unit name;
+        // the unit suffix IS the tmux session name (see containedAgentCommand).
+        const session = tmuxSessionFromAgentCgroup(pid);
+        if (session) {
+          const prefix = `${session}:`;
+          for (const t of map.values()) {
+            if (t.startsWith(prefix)) return t;
+          }
+        }
         return null;
       });
       targets.set(pid, target);
@@ -2292,6 +2303,22 @@ function ppidOf(pid: number): number | null {
     const after = stat.slice(stat.lastIndexOf(")") + 2); // skip ") " then state
     const fields = after.split(" ");
     return Number(fields[1]); // state, ppid, ...
+  } catch {
+    return null;
+  }
+}
+
+// A subagent launched via containedAgentCommand runs as a systemd transient
+// service (`systemd-run --user --unit=lfg-agent-<tmuxName> --slice=lfg-agents.slice`),
+// so systemd reparents it out of the tmux pane's process tree and the ppid walk
+// can't find the pane. The cgroup still records the unit, and by construction
+// the unit suffix IS the tmux session name — recover it so the managed record
+// still binds (nativeSessionId + transcript) for slice-contained subagents.
+function tmuxSessionFromAgentCgroup(pid: number): string | null {
+  try {
+    const cg = readFileSync(`/proc/${pid}/cgroup`, "utf8");
+    const m = cg.match(/lfg-agent-([^./\s]+)\.service/);
+    return m ? m[1] : null;
   } catch {
     return null;
   }
