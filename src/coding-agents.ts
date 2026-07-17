@@ -351,10 +351,19 @@ function hasHermesConfig(): boolean {
 
 function hasCopilotAuth(): boolean {
   const home = userHome();
+  // Precedence matches Copilot CLI's env resolution: a Copilot-specific token
+  // wins over generic GH_TOKEN/GITHUB_TOKEN when both are set.
+  if (process.env.COPILOT_GITHUB_TOKEN) return true;
+  if (process.env.GH_TOKEN) return true;
+  if (process.env.GITHUB_TOKEN) return true;
+  // Interactive /login writes to ~/.copilot/ (session-state and a token/host
+  // file). An empty ~/.copilot/ directory - which any stray tool can create -
+  // is NOT proof of auth, so require an artifact that the login flow itself
+  // produces before reporting the agent as authenticated.
   return (
-    !!process.env.GH_TOKEN ||
-    !!process.env.GITHUB_TOKEN ||
-    existsSync(`${home}/.copilot`)
+    existsSync(`${home}/.copilot/hosts.yml`) ||
+    existsSync(`${home}/.copilot/config.json`) ||
+    existsSync(`${home}/.copilot/session-state`)
   );
 }
 
@@ -599,8 +608,8 @@ function statusFor(kind: CodingAgentKind): CodingAgentStatus {
     instructions.push("Install Hermes and set LFG_HERMES_PROVIDER when your provider is not the default.");
   } else if (kind === "copilot") {
     addBinary("GitHub Copilot CLI", copilotPath());
-    addAuth("Copilot auth", hasCopilotAuth(), "run 'copilot' and /login, or set GH_TOKEN with the Copilot Requests scope");
-    instructions.push("Install Copilot CLI (npm install -g @github/copilot; requires Node 22+), then run 'copilot' once and /login, or set GH_TOKEN.");
+    addAuth("Copilot auth", hasCopilotAuth(), "run 'copilot' and /login, or set COPILOT_GITHUB_TOKEN / GH_TOKEN with the Copilot Requests scope");
+    instructions.push("Install Copilot CLI (npm install -g @github/copilot; requires Node 22+), then run 'copilot' once and /login, or set COPILOT_GITHUB_TOKEN (or GH_TOKEN) with the Copilot Requests scope.");
   } else {
     addBinary("Grok CLI", grokPath());
     addAuth("Grok auth", hasGrokAuth(), "run `grok` once or set XAI_API_KEY");
