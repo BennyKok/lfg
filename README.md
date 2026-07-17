@@ -69,9 +69,10 @@ curl -fsSL https://raw.githubusercontent.com/BennyKok/lfg/main/scripts/setup.sh 
 
 The setup script downloads the latest release, installs production dependencies,
 writes `.env`, and starts the server as a user service bound to loopback.
-When Claude or Codex is already installed, setup also registers the local LFG MCP
-server with that CLI. You can verify or re-run this later in **Settings →
-Coding agents**.
+When Claude or Codex is already installed, setup also registers the local LFG
+MCP server with that CLI. **Settings → Coding agents → Install MCP** verifies
+and registers every installed supported harness: Claude, Codex, OpenCode, Grok,
+and Cursor.
 
 To expose the UI over your private tailnet, opt in to Tailscale Serve:
 
@@ -181,8 +182,8 @@ bun run setup                  # rerun provisioning/update flow
 Installed release builds expose the same commands through `lfg`.
 
 The MCP server talks to the local `lfg serve` API and exposes tools such as
-`lfg_list_sessions`, `lfg_get_session_messages`, `lfg_send_session_message`,
-`lfg_create_subagent`, and `lfg_list_subagents`. Use it from an MCP client with
+`lfg_capabilities`, `lfg_list_sessions`, `lfg_get_session_messages`,
+`lfg_send_session_message`, `lfg_create_subagent`, and `lfg_list_subagents`. Use it from an MCP client with
 `lfg mcp` or `bun run mcp`. When an MCP client also exposes its own generic
 sub-agent/delegation tool, prefer the `lfg_*subagent*` and `lfg_delegate_*`
 tools so child sessions stay visible in LFG, inherit parent/user context, and
@@ -191,6 +192,12 @@ levels deep. Each child is launched with an operating contract that tells it to
 use LFG MCP for any further delegation and to send `[subagent progress]` updates
 plus one terminal `[subagent complete]`, `[subagent blocked]`, or
 `[subagent failed]` message back to its parent session.
+
+Every managed session launched with an initial task also receives a versioned
+LFG runtime contract describing when to display verification media, publish an
+artifact, ask the user, delegate, or post completed work to Shipped. The UI
+marks sessions launched with an older contract so they can be closed and
+resumed to load the current tool catalog and guidance.
 
 Backend trace diagnostics are appended to `data/logs/trace-YYYY-MM-DD.jsonl`.
 The stream includes API timings, transcript indexing/page reads, live stream

@@ -4,6 +4,7 @@
 import { readFileSync, writeFileSync, existsSync, realpathSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { reposRoot } from "./projects";
+import { LFG_CAPABILITY_VERSION, withLfgRuntimeContract } from "./lfg-capabilities.ts";
 
 // Known-good Claude model alias to launch with when a caller doesn't specify
 // one. Never launch a managed `claude` bare — see spawnManagedSession. Opus is
@@ -64,6 +65,7 @@ function addSessionEnv(argv: string[], sessionId?: string | null, user?: string 
   if (i < 0) return;
   const env: string[] = [];
   if (sessionId) env.push("-e", `LFG_SESSION_ID=${sessionId}`);
+  env.push("-e", `LFG_CAPABILITY_VERSION=${LFG_CAPABILITY_VERSION}`);
   // The assigned user rides along so anything the session spawns (lfg MCP,
   // `lfg subagent`) can tag ITS children to the same user even when the parent
   // chain isn't resolvable at create time (headless/cron callers).
@@ -108,6 +110,7 @@ export function containedAgentCommand(command: string[], opts: AgentContainment)
   ];
   if (process.env.PATH) argv.push(`--setenv=PATH=${process.env.PATH}`);
   if (opts.lfgSessionId) argv.push(`--setenv=LFG_SESSION_ID=${opts.lfgSessionId}`);
+  argv.push(`--setenv=LFG_CAPABILITY_VERSION=${LFG_CAPABILITY_VERSION}`);
   if (opts.lfgUser) argv.push(`--setenv=LFG_USER=${opts.lfgUser}`);
   return [...argv, "--", ...command];
 }
@@ -468,7 +471,8 @@ export function spawnManagedSession(opts: {
   // `--` terminates option parsing so the variadic --add-dir can't swallow the
   // positional prompt as a second directory (which strands the new session at
   // an empty composer — the first message never gets submitted).
-  if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
+  const prompt = withLfgRuntimeContract(opts.prompt);
+  if (prompt?.trim()) argv.push("--", prompt);
   addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
   containTmuxCommand(argv, claudeBin(), opts.containInAgentSlice, opts);
   const create = Bun.spawnSync(argv);
@@ -536,7 +540,8 @@ export function spawnManagedCodexSession(opts: {
   ];
   if (opts.model) argv.push("--model", opts.model);
   if (opts.thinkingLevel) argv.push("-c", `reasoning_effort=${JSON.stringify(opts.thinkingLevel)}`);
-  if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
+  const prompt = withLfgRuntimeContract(opts.prompt);
+  if (prompt?.trim()) argv.push("--", prompt);
   addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
   containTmuxCommand(argv, codexBin(), opts.containInAgentSlice, opts);
   const create = Bun.spawnSync(argv);
@@ -574,7 +579,8 @@ export function spawnManagedGrokSession(opts: {
   if (opts.model) argv.push("--model", opts.model);
   const effort = claudeEffortFor(opts.thinkingLevel);
   if (effort) argv.push("--effort", effort);
-  if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
+  const prompt = withLfgRuntimeContract(opts.prompt);
+  if (prompt?.trim()) argv.push("--", prompt);
   addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
   containTmuxCommand(argv, grokBin(), opts.containInAgentSlice, opts);
   const create = Bun.spawnSync(argv);
@@ -615,7 +621,8 @@ export function managedCopilotSessionArgv(opts: ManagedCopilotSessionOptions): s
   ];
   if (process.env.LFG_COPILOT_ALLOW_ALL_TOOLS === "1") argv.push("--allow-all-tools");
   if (opts.model) argv.push("--model", opts.model);
-  if (opts.prompt && opts.prompt.trim()) argv.push("-i", opts.prompt);
+  const prompt = withLfgRuntimeContract(opts.prompt);
+  if (prompt?.trim()) argv.push("-i", prompt);
   addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
   return argv;
 }
@@ -657,7 +664,8 @@ export function managedCursorSessionArgv(opts: ManagedCursorSessionOptions): str
   ];
   if (opts.nativeSessionId) argv.push("--resume", opts.nativeSessionId);
   if (opts.model && opts.model !== "auto") argv.push("--model", opts.model);
-  if (opts.prompt && opts.prompt.trim()) argv.push(opts.prompt);
+  const prompt = withLfgRuntimeContract(opts.prompt);
+  if (prompt?.trim()) argv.push(prompt);
   addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
   return argv;
 }
@@ -765,7 +773,8 @@ export function spawnManagedAisdkSession(opts: {
   // Forward the requested thinking level; the harness maps it onto the
   // claude-code provider's `effort` option (see aisdk-session.ts).
   if (opts.thinkingLevel) argv.push("--thinking-level", opts.thinkingLevel);
-  if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
+  const prompt = withLfgRuntimeContract(opts.prompt);
+  if (prompt?.trim()) argv.push("--", prompt);
   addSessionEnv(argv, opts.lfgSessionId ?? opts.sessionId, opts.lfgUser);
   containTmuxCommand(argv, process.execPath, opts.containInAgentSlice, {
     ...opts,
@@ -815,7 +824,8 @@ export function spawnManagedCodexAisdkSession(opts: {
   ];
   if (opts.thinkingLevel) argv.push("--thinking-level", opts.thinkingLevel);
   if (opts.resume) argv.push("--resume", opts.resume);
-  if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
+  const prompt = withLfgRuntimeContract(opts.prompt);
+  if (prompt?.trim()) argv.push("--", prompt);
   addSessionEnv(argv, opts.lfgSessionId ?? opts.key, opts.lfgUser);
   containTmuxCommand(argv, process.execPath, opts.containInAgentSlice, {
     ...opts,
@@ -861,7 +871,8 @@ export function spawnManagedOpencodeAisdkSession(opts: {
     "--tmux", opts.name,
   ];
   if (opts.resume) argv.push("--resume", opts.resume);
-  if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
+  const prompt = withLfgRuntimeContract(opts.prompt);
+  if (prompt?.trim()) argv.push("--", prompt);
   addSessionEnv(argv, opts.lfgSessionId ?? opts.key, opts.lfgUser);
   containTmuxCommand(argv, process.execPath, opts.containInAgentSlice, {
     ...opts,

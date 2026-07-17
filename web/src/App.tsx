@@ -210,6 +210,7 @@ type CodingAgentInfo = {
   visible: boolean;
   status: {
     configured: boolean;
+    lfgCapabilityAccess: "mcp" | "contract-only";
     setupRunning: boolean;
     setupProgress?: { percent: number; label: string };
     canAutoSetup: boolean;
@@ -308,6 +309,8 @@ type Session = {
   parentNativeSessionId?: string | null;
   parentAgent?: string | null;
   spawnedBy?: string | null;
+  capabilityVersion?: string | null;
+  capabilitiesStale?: boolean;
   // Build health (from the backend). "blocked" means the session can't make
   // progress until a human acts; statusReason/statusDetail explain why.
   status?: "ok" | "blocked";
@@ -8235,6 +8238,15 @@ function CategoryHeader({
 // session), or the build agent ran out of AI credits (explain + tell them to
 // top up). Without this, a frozen session just shows a dead spinner and the
 // user has no idea what happened or what to do.
+function StaleCapabilitiesBanner({ session }: { session: Session }) {
+  if (!session.capabilitiesStale) return null;
+  return (
+    <div className="border-b border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
+      This session started with an older LFG capability contract. Close and resume it to load the latest shipped tools and guidance.
+    </div>
+  );
+}
+
 function PausedBanner({
   session,
   onRefresh,
@@ -8815,6 +8827,7 @@ function SessionChat({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      <StaleCapabilitiesBanner session={session} />
       <PausedBanner session={session} onRefresh={onRefresh} />
       <ChatStream
         sid={sid}
@@ -14976,7 +14989,7 @@ function CodingAgentsPage({
                   title={
                     group.canAutoSetup
                       ? group.actionLabel
-                      : "Install Claude or Codex first"
+                      : "Install a supported coding agent first"
                   }
                 >
                   {group.running ? (
@@ -15011,6 +15024,9 @@ function CodingAgentsPage({
                       <span className="text-sm font-semibold">{agent.label}</span>
                       <Badge variant={configured ? "default" : "secondary"}>
                         {configured ? "Ready" : "Needs setup"}
+                      </Badge>
+                      <Badge variant="outline">
+                        {agent.status.lfgCapabilityAccess === "mcp" ? "LFG tools" : "LFG prompt only"}
                       </Badge>
                     </div>
                     <div className="mt-1 space-y-1">

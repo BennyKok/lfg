@@ -2,9 +2,39 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cleanAuthOutput, listCodingAgents, parseAuthOutput } from "./coding-agents.ts";
+import {
+  cleanAuthOutput,
+  listCodingAgents,
+  parseAuthOutput,
+  withCursorLfgMcp,
+  withOpencodeLfgMcp,
+} from "./coding-agents.ts";
 
 const COPILOT_ENV_KEYS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"] as const;
+
+describe("LFG MCP config merging", () => {
+  const command = ["/usr/bin/bun", "/opt/lfg/src/cli.ts", "mcp"];
+
+  test("preserves OpenCode config while adding the local LFG server", () => {
+    expect(withOpencodeLfgMcp({ theme: "dark", mcp: { other: { enabled: true } } }, command)).toEqual({
+      theme: "dark",
+      mcp: {
+        other: { enabled: true },
+        lfg: { type: "local", command, enabled: true },
+      },
+    });
+  });
+
+  test("preserves Cursor config while adding the LFG server", () => {
+    expect(withCursorLfgMcp({ editor: {}, mcpServers: { other: { command: "other" } } }, command)).toEqual({
+      editor: {},
+      mcpServers: {
+        other: { command: "other" },
+        lfg: { command: "/usr/bin/bun", args: ["/opt/lfg/src/cli.ts", "mcp"] },
+      },
+    });
+  });
+});
 
 async function copilotAuthOk(): Promise<boolean> {
   const agents = await listCodingAgents();

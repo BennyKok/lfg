@@ -1,9 +1,10 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { PATHS } from "./config.ts";
+import { lfgCapabilityAccess } from "./lfg-capabilities.ts";
 
 export type CodingAgentKind =
   | "claude"
@@ -32,6 +33,7 @@ export type CodingAgentCheck = {
 
 export type CodingAgentStatus = {
   configured: boolean;
+  lfgCapabilityAccess: "mcp" | "contract-only";
   checks: CodingAgentCheck[];
   instructions: string[];
   canAutoSetup: boolean;
@@ -334,6 +336,24 @@ function hasCodexLfgMcp(): boolean {
   return args.every((part) => out.text.includes(part));
 }
 
+function commandHasLfgMcp(binary: string | null): boolean {
+  if (!binary) return false;
+  const out = commandOutput([binary, "mcp", "list"]);
+  return out.ok && /\blfg\b/i.test(out.text);
+}
+
+function hasOpencodeLfgMcp(): boolean {
+  return commandHasLfgMcp(opencodePath());
+}
+
+function hasGrokLfgMcp(): boolean {
+  return commandHasLfgMcp(grokPath());
+}
+
+function hasCursorLfgMcp(): boolean {
+  return commandHasLfgMcp(cursorPath());
+}
+
 function hasGrokAuth(): boolean {
   const home = userHome();
   return !!process.env.XAI_API_KEY || existsSync(`${home}/.grok`);
@@ -618,6 +638,7 @@ function statusFor(kind: CodingAgentKind): CodingAgentStatus {
 
   return {
     configured: checks.every((c) => c.ok),
+    lfgCapabilityAccess: lfgCapabilityAccess(kind),
     checks,
     instructions,
     canAutoSetup,
@@ -643,6 +664,9 @@ export async function listSetupChecks(): Promise<SetupCheck[]> {
   const args = mcpCommandArgs();
   const claude = claudePath();
   const codex = codexPath();
+  const opencode = opencodePath();
+  const grok = grokPath();
+  const cursor = cursorPath();
   const checks: CodingAgentCheck[] = [
     { label: "Bun", ok: !!bunPath(), detail: bunPath() ?? "not found" },
     { label: "tmux", ok: !!which("tmux"), detail: which("tmux") ?? "not found" },
@@ -667,6 +691,17 @@ export async function listSetupChecks(): Promise<SetupCheck[]> {
   } else {
     checks.push({ label: "Codex MCP", ok: true, detail: "Codex CLI not installed" });
   }
+  const optionalMcpAgents: Array<[string, string | null, () => boolean]> = [
+    ["OpenCode", opencode, hasOpencodeLfgMcp],
+    ["Grok", grok, hasGrokLfgMcp],
+    ["Cursor", cursor, hasCursorLfgMcp],
+  ];
+  for (const [label, binary, registered] of optionalMcpAgents) {
+    const ok = registered();
+    checks.push(binary
+      ? { label: `${label} MCP`, ok, detail: ok ? "registered" : "not registered" }
+      : { label: `${label} MCP`, ok: true, detail: `${label} CLI not installed` });
+  }
   return [
     {
       key: "lfg-mcp",
@@ -675,9 +710,9 @@ export async function listSetupChecks(): Promise<SetupCheck[]> {
       running: systemSetupRuns.has("lfg-mcp"),
       checks,
       instructions: [
-        "Registers the local LFG MCP server with Claude and Codex when those CLIs are installed.",
+        "Registers the local LFG MCP server with Claude, Codex, OpenCode, Grok, and Cursor when those CLIs are installed.",
       ],
-      canAutoSetup: !!args && (!!claude || !!codex),
+      canAutoSetup: !!args && !!(claude || codex || opencode || grok || cursor),
       actionLabel: "Install MCP",
     },
   ];
@@ -695,6 +730,62 @@ function installCodexMcp(codex: string, args: string[]): void {
   if (!out.ok) throw new Error(out.text.trim() || "Codex MCP install failed");
 }
 
+function mergeJsonConfig(path: string, update: (current: Record<string, unknown>) => Record<string, unknown>): void {
+  const parsed = readJson<Record<string, unknown>>(path);
+  if (existsSync(path) && !parsed) {
+    throw new Error(`Cannot update invalid JSON config: ${path}`);
+  }
+  const current = parsed ?? {};
+  const next = update(current);
+  writeFileSync(path, JSON.stringify(next, null, 2));
+}
+
+export function withOpencodeLfgMcp(current: Record<string, unknown>, args: string[]): Record<string, unknown> {
+  const mcp = typeof current.mcp === "object" && current.mcp !== null
+    ? current.mcp as Record<string, unknown>
+    : {};
+  return {
+    ...current,
+    mcp: {
+      ...mcp,
+      lfg: { type: "local", command: args, enabled: true },
+    },
+  };
+}
+
+export function withCursorLfgMcp(current: Record<string, unknown>, args: string[]): Record<string, unknown> {
+  const mcpServers = typeof current.mcpServers === "object" && current.mcpServers !== null
+    ? current.mcpServers as Record<string, unknown>
+    : {};
+  return {
+    ...current,
+    mcpServers: {
+      ...mcpServers,
+      lfg: { command: args[0], args: args.slice(1) },
+    },
+  };
+}
+
+async function installOpencodeMcp(args: string[]): Promise<void> {
+  const path = join(userHome(), ".config", "opencode", "opencode.json");
+  await mkdir(dirname(path), { recursive: true });
+  mergeJsonConfig(path, (current) => withOpencodeLfgMcp(current, args));
+}
+
+function installGrokMcp(grok: string, args: string[]): void {
+  commandOutput([grok, "mcp", "remove", "lfg", "--scope", "user"]);
+  const out = commandOutput([grok, "mcp", "add", "lfg", "--scope", "user", "--", ...args]);
+  if (!out.ok) throw new Error(out.text.trim() || "Grok MCP install failed");
+}
+
+async function installCursorMcp(args: string[]): Promise<void> {
+  const path = join(userHome(), ".cursor", "mcp.json");
+  await mkdir(dirname(path), { recursive: true });
+  mergeJsonConfig(path, (current) => withCursorLfgMcp(current, args));
+  const cursor = cursorPath();
+  if (cursor) commandOutput([cursor, "mcp", "enable", "lfg"]);
+}
+
 export async function runSetupAction(key: string): Promise<void> {
   if (key !== "lfg-mcp") throw new Error(`unknown setup action "${key}"`);
   if (systemSetupRuns.has(key)) throw new Error(`${key} setup is already running`);
@@ -703,9 +794,17 @@ export async function runSetupAction(key: string): Promise<void> {
     if (!args) throw new Error("Bun is required to register the LFG MCP server");
     const claude = claudePath();
     const codex = codexPath();
-    if (!claude && !codex) throw new Error("Install Claude or Codex first, then register the LFG MCP server");
+    const opencode = opencodePath();
+    const grok = grokPath();
+    const cursor = cursorPath();
+    if (!claude && !codex && !opencode && !grok && !cursor) {
+      throw new Error("Install a supported coding agent first, then register the LFG MCP server");
+    }
     if (claude) installClaudeMcp(claude, args);
     if (codex) installCodexMcp(codex, args);
+    if (opencode) await installOpencodeMcp(args);
+    if (grok) installGrokMcp(grok, args);
+    if (cursor) await installCursorMcp(args);
   })();
   systemSetupRuns.set(key, run);
   try {
