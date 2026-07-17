@@ -7,11 +7,12 @@ Recent product updates and deployment notes.
 ### Added
 
 - **GitHub Copilot CLI** (`@github/copilot`, binary `copilot`) as an 8th supported coding agent:
-  - Settings → Coding agents tile with binary + auth status checks (`GH_TOKEN` / `GITHUB_TOKEN` env or `~/.copilot/` cache).
-  - Tmux-transport session launcher `spawnManagedCopilotSession` passing `--allow-all-tools` to bypass per-tool approval prompts.
+  - Settings → Coding agents tile with binary + auth status checks. Auth precedence: `COPILOT_GITHUB_TOKEN` > `GH_TOKEN` > `GITHUB_TOKEN`, falling back to a real login artifact (`~/.copilot/hosts.yml`, `config.json`, or `session-state/`) rather than a bare `~/.copilot/` directory.
+  - Tmux-transport session launcher `spawnManagedCopilotSession` wired through `serve.ts` so `agent=copilot` requests dispatch to Copilot instead of falling back to Claude. Launches interactively (no `-p` one-shot); the initial prompt is injected over `tmux send-keys` once the composer surfaces so the session stays long-lived and steerable.
+  - `--allow-all-tools` is opt-in through `LFG_COPILOT_ALLOW_ALL_TOOLS=1`. Off by default because LFG's agent slice is resource containment, not a filesystem/network sandbox.
   - Curated model catalog: `claude-sonnet-4.5` (default), `claude-sonnet-4`, `gpt-5`.
-  - `scripts/setup.sh` installs `@github/copilot` when `LFG_INSTALL_COPILOT=1` (requires Node 22+).
-  - New `LFG_COPILOT_PATH` override for the binary path.
+  - `scripts/setup.sh` installs `@github/copilot` when `LFG_INSTALL_COPILOT=1` (requires Node 22+), pinned to `LFG_COPILOT_VERSION` (default `0.0.369`) for reproducibility.
+  - New `LFG_COPILOT_PATH`, `LFG_COPILOT_ALLOW_ALL_TOOLS`, and `LFG_COPILOT_VERSION` env overrides.
 
 ## July 16, 2026 - Shipped feed and live artifacts (v0.1.37)
 
