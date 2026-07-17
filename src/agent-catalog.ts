@@ -48,10 +48,13 @@ export const HERMES_MODELS: string[] = [
   "nousresearch/hermes-4-70b",
   "nousresearch/hermes-3-llama-3.1-405b",
 ];
-// pi resolves these the same way the claude CLI does (fuzzy/glob match against
-// its own Anthropic model catalog via the proxy), so reuse the same alias set
-// as claude/aisdk rather than pi's raw model ids.
-export const PI_MODELS: string[] = ["fable", "opus", "sonnet", "haiku"];
+// pi resolves the Claude aliases the same way the claude CLI does (fuzzy/glob
+// match against its own Anthropic model catalog via the proxy), so reuse the
+// same alias set as claude/aisdk rather than pi's raw model ids. deepseek is
+// the one model the free plan is entitled to (no Claude model clears its
+// minPlan) — pi-session.ts merges it into pi's Anthropic provider config as a
+// custom model id so it resolves like the aliases above instead of erroring.
+export const PI_MODELS: string[] = ["fable", "opus", "sonnet", "haiku", "deepseek/deepseek-v4-flash"];
 export const OPENCODE_MODELS: string[] = [
   "opencode/big-pickle",
   "opencode/deepseek-v4-flash-free",

@@ -7,8 +7,10 @@
 // and drives a multi-turn conversation through the OFFICIAL
 // @mariozechner/pi-coding-agent RpcClient: it spawns `pi --mode rpc` as a child
 // process and speaks a typed JSONL protocol over its stdin/stdout. Auth is pi's
-// own file-based config (~/.pi/agent/{auth,models,settings}.json), which the
-// sandbox provisions to point at a local LLM proxy — there is no interactive
+// own file-based config (~/.pi/agent/{auth,models}.json): the API key comes
+// from the sandbox's ANTHROPIC_API_KEY env var (pi resolves that on its own),
+// and ensurePiProviderConfig() below points pi's "anthropic" provider at the
+// sandbox's local LLM proxy (ANTHROPIC_BASE_URL) — there is no interactive
 // /login step, which is exactly what this backend exists to avoid (unlike
 // "aisdk", which requires one against this proxy).
 //
@@ -32,7 +34,8 @@ import {
 import type { SessionMsg } from "../../sessions.ts";
 import { indexSessionMessagesDirect } from "../../transcript-index.ts";
 import { makeDraftPublisher } from "./draft.ts";
-import { readFileSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
@@ -51,6 +54,54 @@ function arg(argv: string[], name: string): string | undefined {
 function resolvePiCliPath(): string {
   if (process.env.LFG_PI_PATH) return process.env.LFG_PI_PATH;
   return join(import.meta.dir, "../../../node_modules/@mariozechner/pi-coding-agent/dist/cli.js");
+}
+
+// Model ids the sandbox's local LLM proxy accepts that are NOT part of pi's
+// own built-in Anthropic catalog, so pi's fuzzy --model matching would
+// otherwise reject them outright. Merged into the "anthropic" provider's
+// model list below (see docs/models.md "Overriding Built-in Providers") so
+// they resolve exactly like the built-in claude aliases (fable/opus/sonnet/
+// haiku) do. Keep in lockstep with PI_MODELS in agent-catalog.ts.
+const PI_PROXY_MODEL_IDS = ["deepseek/deepseek-v4-flash"];
+
+// Point pi's built-in "anthropic" provider at the sandbox's local LLM proxy
+// and register PI_PROXY_MODEL_IDS as custom models on it, so a plain
+// `--provider anthropic --model <id>` resolves through the proxy instead of
+// hitting the real api.anthropic.com (pi's default) with the sandbox's
+// placeholder ANTHROPIC_API_KEY, which 401s there. Mirrors the routing omg's
+// own in-process pi loop uses (chat-agent-pi.ts's buildModel): same
+// Anthropic-messages wire protocol and proxy, just a file-based config
+// instead of an in-process Model object since this harness shells out to the
+// pi CLI rather than embedding pi-agent-core directly.
+//
+// No-op outside a sandbox (no ANTHROPIC_BASE_URL) — pi keeps talking to the
+// real Anthropic API with whatever real credentials are configured there.
+function ensurePiProviderConfig(): void {
+  const raw = process.env.ANTHROPIC_BASE_URL?.trim();
+  if (!raw) return;
+  const baseUrl = raw.replace(/\/v1\/?$/, "").replace(/\/+$/, "");
+  const dir = join(homedir(), ".pi", "agent");
+  const file = join(dir, "models.json");
+  // biome-ignore lint: pi's models.json shape isn't typed here — we only ever
+  // touch the two fields below and pass the rest through untouched.
+  let config: any = {};
+  try {
+    config = JSON.parse(readFileSync(file, "utf8"));
+  } catch {}
+  config.providers ??= {};
+  config.providers.anthropic ??= {};
+  config.providers.anthropic.baseUrl = baseUrl;
+  const models: Array<{ id?: string }> = Array.isArray(config.providers.anthropic.models)
+    ? config.providers.anthropic.models
+    : [];
+  for (const id of PI_PROXY_MODEL_IDS) {
+    if (!models.some((m) => m?.id === id)) models.push({ id });
+  }
+  config.providers.anthropic.models = models;
+  try {
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(file, JSON.stringify(config, null, 2));
+  } catch {}
 }
 
 const TURN_TIMEOUT_MS = 10 * 60 * 1000;
@@ -95,6 +146,7 @@ export async function cmdPiSession(argv: string[]): Promise<void> {
     process.chdir(cwd);
   } catch {}
 
+  ensurePiProviderConfig();
   const { RpcClient } = await import("@mariozechner/pi-coding-agent");
   const rpcArgs: string[] = [];
   if (thinkingLevel) rpcArgs.push("--thinking", thinkingLevel);
