@@ -18,6 +18,7 @@ import {
   spawnManagedGrokSession,
   spawnManagedOpencodeAisdkSession,
   spawnManagedSession,
+  managedCopilotSessionArgv,
   managedCursorSessionArgv,
   cursorChatIdFromOutput,
   containedAgentCommand,
@@ -139,6 +140,54 @@ describe("coding agent adapter contract", () => {
     expect(argv).toContain("--setenv=AGENT_BROWSER_SESSION=lfg-test");
     expect(argv.some((part) => part.startsWith("--setenv=DBUS_SESSION_BUS_ADDRESS="))).toBe(true);
     expect(argv.slice(-3)).toEqual(["/usr/bin/example-agent", "--task", "hello"]);
+  });
+
+  test("copilot managed sessions default to interactive tool approvals", () => {
+    const prev = process.env.LFG_COPILOT_ALLOW_ALL_TOOLS;
+    delete process.env.LFG_COPILOT_ALLOW_ALL_TOOLS;
+    try {
+      const argv = managedCopilotSessionArgv({
+        name: "lfg-test",
+        cwd: "/tmp/lfg-test",
+        prompt: "hello",
+        model: "claude-sonnet-4.5",
+        lfgSessionId: "session-id",
+        lfgUser: "user@example.com",
+      });
+
+      // -p / --prompt would flip Copilot into programmatic one-shot mode, which
+      // exits after the first turn and breaks LFG's long-lived, steerable
+      // session contract. The initial prompt is injected over tmux send-keys
+      // instead (see submitCopilotInitialPrompt), so it must not appear here.
+      expect(argv).not.toContain("-p");
+      expect(argv).not.toContain("--prompt");
+      expect(argv).not.toContain("hello");
+      // --allow-all-tools is a broad tool-approval bypass. GitHub recommends
+      // it only for isolated environments, so it stays opt-in.
+      expect(argv).not.toContain("--allow-all-tools");
+      expect(argv).toContain("--model");
+      expect(argv).toContain("claude-sonnet-4.5");
+      expect(argv).toContain("LFG_SESSION_ID=session-id");
+      expect(argv).toContain("LFG_USER=user@example.com");
+    } finally {
+      if (prev === undefined) delete process.env.LFG_COPILOT_ALLOW_ALL_TOOLS;
+      else process.env.LFG_COPILOT_ALLOW_ALL_TOOLS = prev;
+    }
+  });
+
+  test("copilot --allow-all-tools is honored when the operator opts in", () => {
+    const prev = process.env.LFG_COPILOT_ALLOW_ALL_TOOLS;
+    process.env.LFG_COPILOT_ALLOW_ALL_TOOLS = "1";
+    try {
+      const argv = managedCopilotSessionArgv({
+        name: "lfg-test",
+        cwd: "/tmp/lfg-test",
+      });
+      expect(argv).toContain("--allow-all-tools");
+    } finally {
+      if (prev === undefined) delete process.env.LFG_COPILOT_ALLOW_ALL_TOOLS;
+      else process.env.LFG_COPILOT_ALLOW_ALL_TOOLS = prev;
+    }
   });
 
   test("cursor approval prompts are surfaced to the shared prompt UI", () => {
