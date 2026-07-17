@@ -56,6 +56,10 @@ LFG_INSTALL_OPENCODE="${LFG_INSTALL_OPENCODE:-0}"
 LFG_INSTALL_GROK="${LFG_INSTALL_GROK:-0}"
 LFG_INSTALL_CURSOR="${LFG_INSTALL_CURSOR:-0}"
 LFG_INSTALL_HERMES="${LFG_INSTALL_HERMES:-0}"
+LFG_INSTALL_COPILOT="${LFG_INSTALL_COPILOT:-0}"
+# Pin the installed @github/copilot version so setup is reproducible. Override
+# with LFG_COPILOT_VERSION=x.y.z (or "latest" for opt-in floating installs).
+LFG_COPILOT_VERSION="${LFG_COPILOT_VERSION:-0.0.369}"
 LFG_INSTALL_MCP="${LFG_INSTALL_MCP:-1}"
 LFG_TAILSCALE_SERVE="${LFG_TAILSCALE_SERVE:-0}"
 LFG_TAILSCALE_SERVE_OVERWRITE="${LFG_TAILSCALE_SERVE_OVERWRITE:-0}"
@@ -276,10 +280,15 @@ if ! command -v hermes >/dev/null 2>&1; then
 fi
 if ! command -v copilot >/dev/null 2>&1; then
   if [ "$LFG_INSTALL_COPILOT" = "1" ]; then
-    say "Installing GitHub Copilot CLI (optional)..."
-    npm install -g @github/copilot >/dev/null 2>&1 || warn "Copilot CLI install failed - the 'copilot' agent kind will be unavailable. Requires Node 22+."
+    if [ "$LFG_COPILOT_VERSION" = "latest" ]; then
+      copilot_pkg="@github/copilot"
+    else
+      copilot_pkg="@github/copilot@${LFG_COPILOT_VERSION}"
+    fi
+    say "Installing GitHub Copilot CLI ($copilot_pkg, optional)..."
+    npm install -g "$copilot_pkg" >/dev/null 2>&1 || warn "Copilot CLI install failed - the 'copilot' agent kind will be unavailable. Requires Node 22+."
   else
-    warn "Copilot CLI not found. Copilot sessions will be unavailable until you install/authenticate copilot. Re-run with LFG_INSTALL_COPILOT=1 only if you want setup to install it via npm (requires Node 22+)."
+    warn "Copilot CLI not found. Copilot sessions will be unavailable until you install/authenticate copilot. Re-run with LFG_INSTALL_COPILOT=1 only if you want setup to install it via npm (requires Node 22+). Pin a specific version with LFG_COPILOT_VERSION."
   fi
 fi
 
