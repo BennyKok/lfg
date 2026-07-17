@@ -13,7 +13,8 @@ export type CodingAgentKind =
   | "opencode"
   | "grok"
   | "cursor"
-  | "hermes";
+  | "hermes"
+  | "pi";
 
 export type CodingAgentSetting = {
   visible: boolean;
@@ -98,6 +99,7 @@ export const CODING_AGENT_LABELS: Record<CodingAgentKind, string> = {
   grok: "grok",
   cursor: "cursor",
   hermes: "hermes",
+  pi: "pi",
 };
 
 const CONFIG_PATH = join(PATHS.data, "coding-agents.json");

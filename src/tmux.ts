@@ -762,6 +762,55 @@ export function spawnManagedCodexAisdkSession(opts: {
   return { ok: true };
 }
 
+// Spawn a headless "pi" session: the lfg pi-session harness, supervised by a
+// tmux session. Mirrors spawnManagedCodexAisdkSession exactly except it points
+// at the pi harness and passes a control-plane KEY (--key) — pi's own session
+// id (like codex's threadId) is only known once the harness starts the RpcClient,
+// so the key is all we know up front (see the harness header).
+export function spawnManagedPiSession(opts: {
+  name: string;
+  cwd: string;
+  prompt?: string;
+  model: string;
+  key: string;
+  thinkingLevel?: string;
+  lfgSessionId?: string;
+  lfgUser?: string | null;
+  containInAgentSlice?: boolean;
+  // When set, resume this existing pi session file instead of starting a fresh
+  // one — the harness passes it through as `--session <id>`.
+  resume?: string;
+}): { ok: boolean; error?: string } {
+  const dec = new TextDecoder();
+  // Harmless for pi: ensureFolderTrusted only patches ~/.claude.json and is a
+  // no-op when that file (or the project entry) is absent. Kept in lockstep
+  // with the other AI-SDK spawn helpers.
+  ensureFolderTrusted(opts.cwd);
+  // Spawn the harness module directly (not via the lfg CLI) so it has no
+  // dependency on the rest of the command surface.
+  const harnessPath = `${import.meta.dir}/agents/backends/pi-session.ts`;
+  const argv = [
+    "tmux", "new-session", "-d", "-s", opts.name, "-c", opts.cwd,
+    process.execPath, harnessPath,
+    "--key", opts.key,
+    "--model", opts.model,
+    "--cwd", opts.cwd,
+    "--tmux", opts.name,
+  ];
+  if (opts.thinkingLevel) argv.push("--thinking-level", opts.thinkingLevel);
+  if (opts.resume) argv.push("--resume", opts.resume);
+  if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
+  addSessionEnv(argv, opts.lfgSessionId ?? opts.key, opts.lfgUser);
+  containTmuxCommand(argv, process.execPath, opts.containInAgentSlice, {
+    ...opts,
+    lfgSessionId: opts.lfgSessionId ?? opts.key,
+  });
+  const create = Bun.spawnSync(argv);
+  if (create.exitCode !== 0)
+    return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
+  return { ok: true };
+}
+
 // Spawn a headless "opencode" session: the lfg opencode-aisdk-session harness,
 // supervised by a tmux session. Mirrors spawnManagedCodexAisdkSession exactly
 // except it points at the opencode harness. Like codex-aisdk it passes a

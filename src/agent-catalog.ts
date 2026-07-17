@@ -48,6 +48,10 @@ export const HERMES_MODELS: string[] = [
   "nousresearch/hermes-4-70b",
   "nousresearch/hermes-3-llama-3.1-405b",
 ];
+// pi resolves these the same way the claude CLI does (fuzzy/glob match against
+// its own Anthropic model catalog via the proxy), so reuse the same alias set
+// as claude/aisdk rather than pi's raw model ids.
+export const PI_MODELS: string[] = ["fable", "opus", "sonnet", "haiku"];
 export const OPENCODE_MODELS: string[] = [
   "opencode/big-pickle",
   "opencode/deepseek-v4-flash-free",
@@ -86,6 +90,7 @@ const MODEL_CATALOG_KEYS: CodingAgentKind[] = [
   "grok",
   "cursor",
   "opencode",
+  "pi",
 ];
 
 export const CODEX_THINKING_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
@@ -113,6 +118,7 @@ const LABELS: Record<CodingAgentKind, string> = {
   grok: "grok",
   cursor: "cursor",
   hermes: "hermes",
+  pi: "pi",
 };
 
 export const MODEL_OPTIONS: Record<CodingAgentKind, { defaultModel: string; models: readonly string[] }> = {
@@ -124,6 +130,7 @@ export const MODEL_OPTIONS: Record<CodingAgentKind, { defaultModel: string; mode
   cursor: { defaultModel: "auto", models: CURSOR_MODELS },
   hermes: { defaultModel: "nousresearch/hermes-4-405b", models: HERMES_MODELS },
   opencode: { defaultModel: "opencode-go/deepseek-v4-flash", models: OPENCODE_MODELS },
+  pi: { defaultModel: "sonnet", models: PI_MODELS },
 };
 
 function mergeModels(...sets: Array<readonly string[] | undefined>): string[] {
@@ -373,7 +380,7 @@ export function resolveModelForAgent(
 }
 
 export function thinkingLevelsForAgent(agent: string): readonly string[] | null {
-  if (agent === "claude" || agent === "aisdk" || agent === "grok") return CLAUDE_THINKING_LEVELS;
+  if (agent === "claude" || agent === "aisdk" || agent === "grok" || agent === "pi") return CLAUDE_THINKING_LEVELS;
   if (agent === "codex" || agent === "codex-aisdk") return CODEX_THINKING_LEVELS;
   if (agent === "cursor") return CURSOR_THINKING_LEVELS;
   return null;

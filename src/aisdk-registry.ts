@@ -46,7 +46,7 @@ export type AisdkEntry = {
   createdAt: number;
   // Which AI-SDK backend this entry drives. Absent on legacy Claude entries —
   // treat a missing value as "claude" so old entries keep working unchanged.
-  agent?: "claude" | "codex" | "opencode";
+  agent?: "claude" | "codex" | "opencode" | "pi";
   // Resume-handle slot, reused by the backends that can't pick their transcript
   // id up front:
   //   - codex: the app-server-assigned thread id, which is ALSO the rollout
@@ -57,6 +57,9 @@ export type AisdkEntry = {
   //     opencode writes no transcript we can read, so the opencode harness
   //     SELF-PERSISTS a Claude-shaped JSONL named by the control-plane key
   //     (== sessionId) and keeps threadId purely as the resume handle.
+  //   - pi: the RpcClient session's own sessionId (pi's session-file uuid).
+  //     Known almost immediately after the harness starts (before turn 1), but
+  //     still patched in asynchronously like the others rather than assumed.
   // The Claude harness leaves this undefined — the deterministic sessionId
   // already IS its transcript id.
   threadId?: string | null;
