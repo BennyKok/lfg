@@ -2,15 +2,22 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { Database } from "bun:sqlite";
 import { PATHS } from "./config.ts";
 import { join } from "node:path";
-import {
-  MAX_CONCURRENT_AGENTS_LIMIT,
-  maxConcurrentAgents,
-} from "./subagent-limiter.ts";
 
 export type GlobalSettings = {
   timeZone: string;
-  maxConcurrentAgents: number;
+  // Hard ceiling on total LIVE agents (main + subagent + fork + voice), 0 =
+  // unlimited.
+  maxLiveAgents: number;
+  // Drain switch: when true, refuse to activate any new agent (create / cold
+  // resume / fork). In-flight agents keep running and can still be messaged.
+  agentsPaused: boolean;
 };
+
+// A soft admission ceiling backed by the systemd slice's hard memory bound.
+export const MAX_LIVE_AGENTS_LIMIT = 64;
+// On by default: live agents are the memory-intensive ones, so we cap them out
+// of the box. 0 means unlimited (opt-out); anything unset falls back to this.
+export const DEFAULT_MAX_LIVE_AGENTS = 16;
 
 const LEGACY_SETTINGS_PATH = join(PATHS.data, "settings.json");
 const SETTINGS_DB_PATH = join(PATHS.data, "lfg.sqlite");
@@ -34,11 +41,12 @@ function sanitize(input: Partial<GlobalSettings> | null | undefined): GlobalSett
   const timeZone = typeof input?.timeZone === "string" && validTimeZone(input.timeZone)
     ? input.timeZone
     : envTimeZone();
-  const requestedMax = Number(input?.maxConcurrentAgents);
-  const maxAgents = Number.isInteger(requestedMax) && requestedMax > 0
-    ? Math.min(requestedMax, MAX_CONCURRENT_AGENTS_LIMIT)
-    : maxConcurrentAgents();
-  return { timeZone, maxConcurrentAgents: maxAgents };
+  const requestedLive = Number(input?.maxLiveAgents);
+  const maxLiveAgents = Number.isInteger(requestedLive) && requestedLive >= 0
+    ? Math.min(requestedLive, MAX_LIVE_AGENTS_LIMIT)
+    : DEFAULT_MAX_LIVE_AGENTS;
+  const agentsPaused = input?.agentsPaused === true;
+  return { timeZone, maxLiveAgents, agentsPaused };
 }
 
 function settingsDb(): Database {
@@ -76,7 +84,8 @@ function settingsDb(): Database {
     const migrate = opened.transaction(() => {
       const now = Date.now();
       write.run("timeZone", JSON.stringify(initial.timeZone), now);
-      write.run("maxConcurrentAgents", JSON.stringify(initial.maxConcurrentAgents), now);
+      write.run("maxLiveAgents", JSON.stringify(initial.maxLiveAgents), now);
+      write.run("agentsPaused", JSON.stringify(initial.agentsPaused), now);
       opened
         .query("INSERT INTO settings_migrations (name, applied_at) VALUES (?, ?)")
         .run("legacy-settings-json-v1", now);
@@ -119,7 +128,8 @@ export async function setGlobalSettings(patch: Partial<GlobalSettings>): Promise
   database.transaction(() => {
     const now = Date.now();
     write.run("timeZone", JSON.stringify(next.timeZone), now);
-    write.run("maxConcurrentAgents", JSON.stringify(next.maxConcurrentAgents), now);
+    write.run("maxLiveAgents", JSON.stringify(next.maxLiveAgents), now);
+    write.run("agentsPaused", JSON.stringify(next.agentsPaused), now);
   })();
   return next;
 }

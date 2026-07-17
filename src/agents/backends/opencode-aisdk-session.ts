@@ -17,9 +17,13 @@
 //
 // Control plane is identical to the other harnesses:
 //   - control IN: we tail a command file (data/aisdk/<key>.cmd) for
-//     send / set_model / interrupt / close, written by the serve endpoints.
+//     send / set_model / interrupt / close / answer / dismiss.
 //   - busy + discovery: a registry entry (data/aisdk/<key>.json) we keep
 //     updated; serve reads it for the live-view busy dot and session list.
+//   - interactive questions: OpenCode's `question` tool has no TUI here, so we
+//     surface pending questions on the registry `prompt` field, drop busy while
+//     waiting, and reply/reject via OpenCode's HTTP question API when the user
+//     answers from the web UI (or auto-reject after a timeout).
 //
 // THE KEY DIFFERENCE from both siblings is the transcript. opencode keeps
 // conversation state server-side, so this harness builds Claude-shaped message
@@ -31,6 +35,7 @@
 // stored in the registry's threadId slot.
 import {
   type AisdkCommand,
+  type AisdkPrompt,
   cmdPath,
   patchEntry,
   removeEntry,
@@ -42,6 +47,10 @@ import { makeDraftPublisher } from "./draft.ts";
 import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+
+// Headless OpenCode can't show its TUI question picker. If the user never
+// answers via LFG, reject after this so the turn can't hang forever.
+const QUESTION_TIMEOUT_MS = 5 * 60 * 1000;
 
 function arg(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(name);
@@ -82,7 +91,27 @@ function modelRef(model: string): { providerID: string; modelID: string } | unde
   return { providerID: model.slice(0, i), modelID: model.slice(i + 1) };
 }
 
-type OcPart = { id?: string; type?: string; text?: string; tool?: string; state?: { input?: unknown }; sessionID?: string };
+type OcPart = {
+  id?: string;
+  type?: string;
+  text?: string;
+  tool?: string;
+  state?: { input?: unknown; status?: string; output?: unknown; error?: string };
+  sessionID?: string;
+  messageID?: string;
+};
+
+type OcQuestionOption = { label?: string; description?: string };
+type OcQuestionInfo = {
+  question?: string;
+  header?: string;
+  options?: OcQuestionOption[];
+};
+type OcPendingQuestion = {
+  id: string;
+  sessionID?: string;
+  questions: OcQuestionInfo[];
+};
 
 function partsToBlocks(parts: OcPart[]): { text: string; blocks: unknown[] } {
   let text = "";
@@ -95,6 +124,78 @@ function partsToBlocks(parts: OcPart[]): { text: string; blocks: unknown[] } {
     }
   }
   return { text, blocks };
+}
+
+async function ocFetchJson<T>(baseUrl: string, path: string, init?: RequestInit): Promise<T | null> {
+  try {
+    const res = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, init);
+    if (!res.ok) return null;
+    if (res.status === 204) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function listPendingQuestions(baseUrl: string): Promise<OcPendingQuestion[]> {
+  const data = await ocFetchJson<OcPendingQuestion[]>(baseUrl, "/question");
+  return Array.isArray(data) ? data : [];
+}
+
+async function replyQuestion(
+  baseUrl: string,
+  requestId: string,
+  answers: string[][],
+): Promise<boolean> {
+  try {
+    const res = await fetch(`${baseUrl.replace(/\/$/, "")}/question/${encodeURIComponent(requestId)}/reply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ answers }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+async function rejectQuestion(baseUrl: string, requestId: string): Promise<boolean> {
+  try {
+    const res = await fetch(
+      `${baseUrl.replace(/\/$/, "")}/question/${encodeURIComponent(requestId)}/reject`,
+      { method: "POST" },
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** @internal exported for unit tests */
+export function pendingToPrompt(pending: OcPendingQuestion): AisdkPrompt | null {
+  const q = pending.questions?.[0];
+  const options = Array.isArray(q?.options) ? q.options : [];
+  if (!q || !options.length) return null;
+  return {
+    question: typeof q.question === "string" ? q.question : "OpenCode needs a choice",
+    header: typeof q.header === "string" ? q.header : undefined,
+    options: options.map((o, i) => ({
+      index: i,
+      label: typeof o?.label === "string" ? o.label : String(o ?? `Option ${i + 1}`),
+      selected: i === 0,
+      description: typeof o?.description === "string" ? o.description : undefined,
+    })),
+  };
+}
+
+/** @internal exported for unit tests */
+export function answersForIndex(pending: OcPendingQuestion, index: number): string[][] {
+  return (pending.questions ?? []).map((q, qi) => {
+    const opts = Array.isArray(q?.options) ? q.options : [];
+    const pick = opts[qi === 0 ? index : 0] ?? opts[0];
+    const label = typeof pick?.label === "string" ? pick.label : "";
+    return label ? [label] : [];
+  });
 }
 
 function latestOpencodeError(opencodeSessionId: string): string | null {
@@ -119,6 +220,7 @@ function latestOpencodeError(opencodeSessionId: string): string | null {
 }
 
 function toolPartMessage(part: OcPart, fallbackId: string): ReturnType<typeof normalizeLineMessages>[number] {
+  const status = part.state?.status ? ` [${part.state.status}]` : "";
   const input = part.state?.input == null
     ? ""
     : (() => {
@@ -128,13 +230,24 @@ function toolPartMessage(part: OcPart, fallbackId: string): ReturnType<typeof no
           return String(part.state.input);
         }
       })();
+  const name = part.tool ?? "tool";
   return {
     id: part.id || fallbackId,
     role: "assistant",
     kind: "tool_use",
-    text: input ? `${part.tool ?? "tool"}: ${input}` : `${part.tool ?? "tool"}`,
+    text: input ? `${name}${status}: ${input}` : `${name}${status}`,
     ts: Date.now(),
   };
+}
+
+// Auto runner has no human — reject any OpenCode question so the turn can't hang.
+async function autoRejectPendingQuestions(baseUrl: string, sessionId: string): Promise<void> {
+  const pending = (await listPendingQuestions(baseUrl)).filter(
+    (q) => !q.sessionID || q.sessionID === sessionId,
+  );
+  for (const q of pending) {
+    await rejectQuestion(baseUrl, q.id);
+  }
 }
 
 // One-shot headless run for the auto/report runner: own server, one session,
@@ -156,14 +269,26 @@ export async function pipeToOpencodeAiSdk(
     const created = await client.session.create({ body: {}, query: { directory: cwd } });
     if (created.error || !created.data?.id)
       throw new Error(`opencode session.create failed: ${JSON.stringify(created.error).slice(0, 300)}`);
-    const res = await client.session.prompt({
-      path: { id: created.data.id },
-      query: { directory: cwd },
-      body: {
-        ...(modelRef(model) ? { model: modelRef(model) } : {}),
-        parts: [{ type: "text", text: prompt }],
-      },
-    });
+    const ocId = created.data.id;
+    // Headless auto runs can't answer OpenCode questions — poll + reject while
+    // the blocking prompt is in flight so the turn can't hang forever.
+    const rejectTimer = setInterval(() => {
+      void autoRejectPendingQuestions(server.url, ocId);
+    }, 1000);
+    let res: { error?: unknown; data?: { parts?: OcPart[] } };
+    try {
+      res = (await client.session.prompt({
+        path: { id: ocId },
+        query: { directory: cwd },
+        body: {
+          ...(modelRef(model) ? { model: modelRef(model) } : {}),
+          parts: [{ type: "text", text: prompt }],
+        },
+      })) as { error?: unknown; data?: { parts?: OcPart[] } };
+    } finally {
+      clearInterval(rejectTimer);
+      await autoRejectPendingQuestions(server.url, ocId);
+    }
     if (res.error)
       throw new Error(`opencode prompt failed: ${JSON.stringify(res.error).slice(0, 500)}`);
     const { text } = partsToBlocks((res.data?.parts ?? []) as OcPart[]);
@@ -203,7 +328,8 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
 
   // One server + client per harness, reused across every turn.
   const server = await createOpencodeServer({});
-  const client = createOpencodeClient({ baseUrl: server.url });
+  const serverUrl = server.url;
+  const client = createOpencodeClient({ baseUrl: serverUrl });
 
   let parentUuid: string | null = null;
 
@@ -278,6 +404,7 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
     cwd,
     model,
     busy: false,
+    prompt: null,
     title: initialPrompt ? initialPrompt.slice(0, 72) : null,
     createdAt: Date.now(),
   });
@@ -286,11 +413,136 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
   let draining = false;
   let closing = false;
   let turnActive = false;
+  // True while OpenCode's `question` tool is waiting for a human answer.
+  // busy is cleared for this window so the UI shows "needs answer" instead of
+  // a permanent Working spinner; the underlying session.prompt() stays open.
+  let waitingOnQuestion = false;
+  // Ref object (not a bare let): TypeScript 7 narrows outer `let` bindings to
+  // `never` inside `for await` loops when they are only mutated from nested
+  // helpers, which broke openQuestionRef.current?.id. A mutable box keeps the type.
+  const openQuestionRef: { current: OcPendingQuestion | null } = { current: null };
+  let questionTimer: ReturnType<typeof setTimeout> | null = null;
   const publishDraft = makeDraftPublisher(key);
 
-  // Live draft: tail the server's SSE event bus and mirror in-progress text
-  // parts for OUR session into the registry draft. Purely cosmetic — the turn
-  // result comes from session.prompt() below — so any parse miss is harmless.
+  function clearQuestionTimer(): void {
+    if (questionTimer) {
+      clearTimeout(questionTimer);
+      questionTimer = null;
+    }
+  }
+
+  function setWorkingBusy(): void {
+    if (closing) return;
+    waitingOnQuestion = false;
+    patchEntry(key, {
+      busy: true,
+      prompt: null,
+    });
+  }
+
+  function surfaceQuestion(pending: OcPendingQuestion): void {
+    if (closing || !turnActive) return;
+    if (pending.sessionID && pending.sessionID !== ocSessionId) return;
+    const prompt = pendingToPrompt(pending);
+    if (!prompt) return;
+    openQuestionRef.current = pending;
+    waitingOnQuestion = true;
+    clearQuestionTimer();
+    // Drop busy so the live view stops showing "Working"; publish the prompt
+    // so the session card can render option buttons.
+    patchEntry(key, {
+      busy: false,
+      prompt,
+      draftText: null,
+      draftUpdatedAt: null,
+    });
+    publishDraft("", true);
+    indexSessionMessagesDirect(key, [
+      {
+        id: pending.id,
+        role: "assistant",
+        kind: "tool_use",
+        text: `question: ${JSON.stringify({ questions: pending.questions }, null, 2)}`,
+        ts: Date.now(),
+      },
+    ]);
+    questionTimer = setTimeout(() => {
+      if (openQuestionRef.current?.id === pending.id) {
+        void handleDismissQuestion("timed out waiting for an answer");
+      }
+    }, QUESTION_TIMEOUT_MS);
+  }
+
+  function clearQuestionState(resumeBusy: boolean): void {
+    clearQuestionTimer();
+    openQuestionRef.current = null;
+    waitingOnQuestion = false;
+    if (closing) return;
+    patchEntry(key, {
+      prompt: null,
+      ...(resumeBusy && turnActive ? { busy: true } : {}),
+    });
+  }
+
+  async function handleAnswerQuestion(index: number): Promise<void> {
+    const pending = openQuestionRef.current;
+    if (!pending) return;
+    const answers = answersForIndex(pending, index);
+    const ok = await replyQuestion(serverUrl, pending.id, answers);
+    if (!ok) {
+      console.error(`opencode-aisdk-session: failed to reply to question ${pending.id}`);
+      return;
+    }
+    const label = answers[0]?.[0] ?? `option ${index}`;
+    indexSessionMessagesDirect(key, [
+      {
+        id: crypto.randomUUID(),
+        role: "user",
+        kind: "text",
+        text: `[answered OpenCode question] ${label}`,
+        ts: Date.now(),
+      },
+    ]);
+    clearQuestionState(true);
+  }
+
+  async function handleDismissQuestion(reason = "dismissed"): Promise<void> {
+    const pending = openQuestionRef.current;
+    if (!pending) return;
+    const ok = await rejectQuestion(serverUrl, pending.id);
+    if (!ok) {
+      console.error(`opencode-aisdk-session: failed to reject question ${pending.id}`);
+      // Still clear local state so the UI unsticks even if OpenCode already
+      // dropped the request (e.g. after interrupt).
+    }
+    indexSessionMessagesDirect(key, [
+      {
+        id: crypto.randomUUID(),
+        role: "user",
+        kind: "text",
+        text: `[skipped OpenCode question] ${reason}`,
+        ts: Date.now(),
+      },
+    ]);
+    clearQuestionState(true);
+  }
+
+  async function syncPendingQuestions(): Promise<void> {
+    if (!ocSessionId || closing) return;
+    const all = await listPendingQuestions(serverUrl);
+    const mine = all.filter((q) => !q.sessionID || q.sessionID === ocSessionId);
+    if (!mine.length) {
+      if (waitingOnQuestion) clearQuestionState(turnActive);
+      return;
+    }
+    // Prefer the newest request for this session.
+    const next = mine[mine.length - 1]!;
+    if (openQuestionRef.current?.id === next.id) return;
+    surfaceQuestion(next);
+  }
+
+  // Live draft + tool stream + question events. Cosmetically drives the live
+  // view; the turn result still comes from session.prompt() below.
   void (async () => {
     try {
       const sub = await client.event.subscribe();
@@ -298,35 +550,100 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
         (sub as { data?: AsyncIterable<unknown> }).data;
       if (!stream) return;
       let draft = "";
-      const indexedToolParts = new Set<string>();
+      // Track last published snapshot per tool part so status transitions
+      // (running → completed) re-index without spamming identical rows.
+      const toolPartSnapshots = new Map<string, string>();
       for await (const raw of stream) {
         if (closing) break;
+        const ev = raw as {
+          type?: string;
+          properties?: Record<string, unknown>;
+        };
+        const props = (ev?.properties ?? {}) as {
+          part?: OcPart & { sessionID?: string };
+          sessionID?: string;
+          id?: string;
+          questions?: OcQuestionInfo[];
+        };
+        const evSession = props.sessionID ?? props.part?.sessionID ?? null;
+
+        // OpenCode question events (v1 + v2 names).
+        if (
+          (ev?.type === "question.asked" || ev?.type === "question.v2.asked") &&
+          (!evSession || evSession === ocSessionId)
+        ) {
+          const id = props.id;
+          const questions = props.questions;
+          if (typeof id === "string" && Array.isArray(questions) && questions.length) {
+            surfaceQuestion({ id, sessionID: ocSessionId ?? undefined, questions });
+          } else {
+            void syncPendingQuestions();
+          }
+          continue;
+        }
+        if (
+          (ev?.type === "question.replied" ||
+            ev?.type === "question.rejected" ||
+            ev?.type === "question.v2.replied" ||
+            ev?.type === "question.v2.rejected") &&
+          (!evSession || evSession === ocSessionId)
+        ) {
+          const repliedId = typeof props.id === "string" ? props.id : null;
+          const openId = openQuestionRef.current?.id ?? null;
+          if (openId && (!repliedId || repliedId === openId)) {
+            clearQuestionState(turnActive);
+          }
+          continue;
+        }
+
         if (!turnActive) continue;
-        const ev = raw as { type?: string; properties?: { part?: OcPart & { sessionID?: string } } };
-        const part = ev?.properties?.part;
+        const part = props.part;
         if (ev?.type === "message.part.updated" && part?.sessionID === ocSessionId) {
-          if (part.type === "text" && typeof part.text === "string") {
-            draft = part.text;
-            publishDraft(draft);
+          if ((part.type === "text" || part.type === "reasoning") && typeof part.text === "string") {
+            // Prefer the latest assistant text blob for the draft; reasoning
+            // only fills in when we don't have text yet.
+            if (part.type === "text") {
+              draft = part.text;
+              publishDraft(draft);
+            } else if (!draft && part.text) {
+              publishDraft(part.text);
+            }
           } else if (part.type === "tool") {
-            const fallbackId = `${ocSessionId}:tool:${part.tool ?? "tool"}:${JSON.stringify(part.state?.input ?? {})}`;
+            const fallbackId = `${ocSessionId}:tool:${part.id ?? part.tool ?? "tool"}`;
             const id = part.id || fallbackId;
-            if (!indexedToolParts.has(id)) {
-              indexedToolParts.add(id);
+            const snap = `${part.tool ?? "tool"}|${part.state?.status ?? ""}|${JSON.stringify(part.state?.input ?? {})}`;
+            if (toolPartSnapshots.get(id) !== snap) {
+              toolPartSnapshots.set(id, snap);
               indexSessionMessagesDirect(key, [toolPartMessage(part, fallbackId)]);
+            }
+            // If a question tool starts, reconcile from /question (events can
+            // lag behind the tool part).
+            if (part.tool === "question" && part.state?.status === "running") {
+              void syncPendingQuestions();
             }
           }
         }
-        if (ev?.type === "session.idle") draft = "";
+        if (ev?.type === "session.idle" && (evSession == null || evSession === ocSessionId)) {
+          draft = "";
+        }
       }
     } catch {
       // Event stream is best-effort; drafts just won't animate if it drops.
     }
   })();
 
+  // Backup poll: catch questions if the SSE event was missed (common after
+  // reconnect / mid-turn subscribe). Cheap while a turn is active.
+  const questionPoll = setInterval(() => {
+    if (closing || !turnActive) return;
+    void syncPendingQuestions();
+  }, 1500);
+
   async function runTurn(prompt: string): Promise<void> {
     writeUser(prompt);
     turnActive = true;
+    waitingOnQuestion = false;
+    openQuestionRef.current = null;
     publishDraft("", true);
     try {
       const res = await client.session.prompt({
@@ -344,9 +661,11 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
         return;
       }
       const { text, blocks } = partsToBlocks((res.data?.parts ?? []) as OcPart[]);
+      // Tools are already streamed into the index as they run — only commit the
+      // final assistant text here to avoid duplicate tool_use rows.
       const content: unknown[] = [];
       if (text.trim()) content.push({ type: "text", text });
-      content.push(...blocks);
+      else if (blocks.length) content.push(...blocks);
       if (!content.length) {
         const logged = latestOpencodeError(ocSessionId!);
         writeAssistant(
@@ -373,6 +692,7 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
       }
     } finally {
       turnActive = false;
+      clearQuestionState(false);
       publishDraft("", true);
     }
   }
@@ -383,11 +703,16 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
     try {
       while (queue.length && !closing) {
         const prompt = queue.shift()!;
-        patchEntry(key, { busy: true, draftText: null, draftUpdatedAt: null });
+        setWorkingBusy();
         try {
           await runTurn(prompt);
         } finally {
-          patchEntry(key, { busy: false, draftText: null, draftUpdatedAt: null });
+          patchEntry(key, {
+            busy: false,
+            draftText: null,
+            draftUpdatedAt: null,
+            prompt: null,
+          });
         }
       }
     } finally {
@@ -396,7 +721,14 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
   }
 
   function interrupt(): void {
-    if (!turnActive || !ocSessionId) return;
+    if (!ocSessionId) return;
+    // Reject any open question first so abort doesn't leave a zombie /question
+    // entry (seen after the kimi-k3 hang).
+    if (openQuestionRef.current) {
+      void rejectQuestion(serverUrl, openQuestionRef.current.id);
+      clearQuestionState(false);
+    }
+    if (!turnActive) return;
     void client.session
       .abort({ path: { id: ocSessionId }, query: { directory: cwd } })
       .catch(() => {});
@@ -404,6 +736,7 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
 
   function shutdown(): void {
     closing = true;
+    clearInterval(questionPoll);
     interrupt();
     removeEntry(key);
     try {
@@ -424,6 +757,10 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
         model = next;
         patchEntry(key, { model });
       }
+    } else if (cmd.type === "answer") {
+      void handleAnswerQuestion(cmd.index);
+    } else if (cmd.type === "dismiss") {
+      void handleDismissQuestion("dismissed");
     } else if (cmd.type === "interrupt") {
       interrupt();
     } else if (cmd.type === "close") {
@@ -471,7 +808,9 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
     const exitWatch = setInterval(() => {
       if (closing) {
         clearInterval(poll);
+        clearInterval(questionPoll);
         clearInterval(exitWatch);
+        clearQuestionTimer();
         resolve();
       }
     }, 100);
