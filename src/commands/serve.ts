@@ -126,7 +126,6 @@ import {
   spawnManagedCodexAisdkSession,
   spawnManagedOpencodeAisdkSession,
   spawnManagedCopilotSession,
-  submitCopilotInitialPrompt,
   dismissCodexUpdatePrompt,
   dismissCursorTrustPrompt,
   dismissResumeSummaryGate,
@@ -4072,18 +4071,6 @@ export async function cmdServe() {
             for (let i = 0; i < 12; i++) {
               await new Promise((res) => setTimeout(res, 500));
               if (dismissCursorTrustPrompt(`${tmuxName}:0.0`)) break;
-            }
-          })();
-        }
-        // Copilot's interactive TUI has no positional-prompt flag; typing it
-        // through the pane keeps the session long-lived and steerable instead of
-        // exiting after one turn (which -p / --prompt would do). Poll until the
-        // composer surfaces, then send the prompt so we don't race the splash.
-        if (agent === "copilot" && prompt && prompt.trim()) {
-          void (async () => {
-            for (let i = 0; i < 40; i++) {
-              await new Promise((res) => setTimeout(res, 500));
-              if (submitCopilotInitialPrompt(`${tmuxName}:0.0`, prompt)) break;
             }
           })();
         }

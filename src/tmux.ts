@@ -593,11 +593,11 @@ export type ManagedCopilotSessionOptions = {
   containInAgentSlice?: boolean;
 };
 
-// The Copilot TUI has no positional-prompt flag: -p / --prompt puts it in
-// programmatic one-shot mode and exits after the first turn, which conflicts
-// with LFG's long-lived, steerable session model. Interactive mode is what we
-// want; the caller injects any initial prompt over tmux send-keys after boot
-// via submitCopilotInitialPrompt.
+// The Copilot TUI has two prompt-delivery flags:
+//   -p / --prompt <text>      programmatic one-shot; exits after the turn
+//   -i / --interactive <text> starts interactive mode and auto-executes <text>
+// LFG wants a long-lived, steerable session, so use -i. It preserves the whole
+// downstream contract (send/steer/answer) that the rest of tmux.ts drives.
 //
 // --allow-all-tools bypasses per-tool approvals. GitHub explicitly recommends
 // it only in isolated environments; LFG's agent slice is resource-only, so it
@@ -615,6 +615,7 @@ export function managedCopilotSessionArgv(opts: ManagedCopilotSessionOptions): s
   ];
   if (process.env.LFG_COPILOT_ALLOW_ALL_TOOLS === "1") argv.push("--allow-all-tools");
   if (opts.model) argv.push("--model", opts.model);
+  if (opts.prompt && opts.prompt.trim()) argv.push("-i", opts.prompt);
   addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
   return argv;
 }
@@ -627,21 +628,6 @@ export function spawnManagedCopilotSession(opts: ManagedCopilotSessionOptions): 
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
   return { ok: true };
-}
-
-// Type the initial prompt into a booted Copilot pane and submit it. Copilot has
-// no CLI flag for a positional prompt in interactive mode (see managedCopilotSessionArgv),
-// so serve.ts fire-and-forgets this after spawn — polling until the composer
-// hint surfaces so we don't race a cold splash.
-export function submitCopilotInitialPrompt(target: string, prompt: string): boolean {
-  const pane = capturePane(target);
-  // Copilot's interactive prompt line begins with `>` once the composer is ready
-  // and prints its command hint (`/help`) at the same time. Wait for both so we
-  // don't send keys into a splash screen or a partially-rendered UI.
-  if (!pane || !/\/help/i.test(pane) || !/^>/m.test(pane)) return false;
-  Bun.spawnSync(["tmux", "send-keys", "-t", target, "-l", prompt]);
-  Bun.spawnSync(["tmux", "send-keys", "-t", target, "Enter"]);
-  return true;
 }
 
 export type ManagedCursorSessionOptions = {

@@ -142,7 +142,7 @@ describe("coding agent adapter contract", () => {
     expect(argv.slice(-3)).toEqual(["/usr/bin/example-agent", "--task", "hello"]);
   });
 
-  test("copilot managed sessions default to interactive tool approvals", () => {
+  test("copilot managed sessions launch interactively and auto-execute the initial prompt", () => {
     const prev = process.env.LFG_COPILOT_ALLOW_ALL_TOOLS;
     delete process.env.LFG_COPILOT_ALLOW_ALL_TOOLS;
     try {
@@ -155,13 +155,15 @@ describe("coding agent adapter contract", () => {
         lfgUser: "user@example.com",
       });
 
-      // -p / --prompt would flip Copilot into programmatic one-shot mode, which
-      // exits after the first turn and breaks LFG's long-lived, steerable
-      // session contract. The initial prompt is injected over tmux send-keys
-      // instead (see submitCopilotInitialPrompt), so it must not appear here.
+      // -p / --prompt puts Copilot into programmatic one-shot mode, which exits
+      // after the first turn and breaks LFG's long-lived, steerable session
+      // contract. -i / --interactive is the supported way to start an
+      // interactive session AND auto-execute an initial prompt.
       expect(argv).not.toContain("-p");
       expect(argv).not.toContain("--prompt");
-      expect(argv).not.toContain("hello");
+      const iAt = argv.indexOf("-i");
+      expect(iAt).toBeGreaterThan(-1);
+      expect(argv[iAt + 1]).toBe("hello");
       // --allow-all-tools is a broad tool-approval bypass. GitHub recommends
       // it only for isolated environments, so it stays opt-in.
       expect(argv).not.toContain("--allow-all-tools");
@@ -173,6 +175,15 @@ describe("coding agent adapter contract", () => {
       if (prev === undefined) delete process.env.LFG_COPILOT_ALLOW_ALL_TOOLS;
       else process.env.LFG_COPILOT_ALLOW_ALL_TOOLS = prev;
     }
+  });
+
+  test("copilot managed sessions omit -i when no initial prompt is provided", () => {
+    const argv = managedCopilotSessionArgv({
+      name: "lfg-test",
+      cwd: "/tmp/lfg-test",
+    });
+    expect(argv).not.toContain("-i");
+    expect(argv).not.toContain("--interactive");
   });
 
   test("copilot --allow-all-tools is honored when the operator opts in", () => {
