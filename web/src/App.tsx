@@ -6949,6 +6949,158 @@ function RailStage({
     }
   }, [railCollapsed, railCollapsedStorageKey]);
 
+  // Desktop trackpad gesture: a two-finger horizontal swipe (macOS delivers
+  // these as `wheel` events with deltaX) cycles the project folder selection —
+  // swipe left for the next folder, right for the previous (mirrors the mobile
+  // page swipe). Listens on the whole document so it works wherever the cursor
+  // hovers — no click/focus needed — but yields to content that genuinely
+  // scrolls horizontally (terminals, code blocks, tables) and to text inputs.
+  // Attached as a non-passive native listener so we can preventDefault and
+  // keep Chrome/Safari from treating the swipe as history back/forward
+  // navigation. Handler context lives in a ref so the listener attaches once
+  // instead of re-attaching every render.
+  const railSwipeCtx = useRef({ projectFilter, projectOptions, onProjectChange });
+  railSwipeCtx.current = { projectFilter, projectOptions, onProjectChange };
+  const workspaceRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const COMMIT = 60; // accumulated horizontal px before we switch
+    const GESTURE_GAP_MS = 250; // silence longer than this = new gesture
+    let acc = 0;
+    let lastTs = 0;
+    let lastMag = 0;
+    let committed = false;
+    let settleTimer = 0;
+    let swapAnim = false;
+    const reducedMotion = () =>
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+    // The pre-commit "rubber band": workspace follows the fingers with damping,
+    // exactly like the mobile page swipe. acc>0 = fingers moving left.
+    const setTx = (px: number) => {
+      const el = workspaceRef.current;
+      if (!el || swapAnim) return;
+      el.style.transition = "none";
+      el.style.transform = px ? `translateX(${px}px)` : "";
+      el.style.opacity = px ? String(Math.max(0.85, 1 - Math.abs(px) / 520)) : "";
+    };
+    // Spring back to rest (gesture ended below the commit threshold).
+    const release = () => {
+      const el = workspaceRef.current;
+      if (!el || swapAnim) return;
+      el.style.transition =
+        "transform 190ms cubic-bezier(0.22,1,0.36,1), opacity 190ms ease-out";
+      el.style.transform = "";
+      el.style.opacity = "";
+    };
+    // Committed: slide the old workspace out in the swipe direction, then the
+    // new one in from the opposite edge (same timeline as mobile finish()).
+    const swap = (dir: 1 | -1) => {
+      const el = workspaceRef.current;
+      if (!el || reducedMotion()) return;
+      const width = Math.max(320, el.clientWidth || window.innerWidth || 320);
+      const out = dir === 1 ? -width : width;
+      swapAnim = true;
+      el.style.transition =
+        "transform 130ms cubic-bezier(0.32,0.72,0,1), opacity 130ms ease-out";
+      el.style.transform = `translateX(${out}px)`;
+      el.style.opacity = "0.15";
+      window.setTimeout(() => {
+        el.style.transition = "none";
+        el.style.transform = `translateX(${-out}px)`;
+        el.style.opacity = "0.35";
+        requestAnimationFrame(() => {
+          el.style.transition =
+            "transform 210ms cubic-bezier(0.22,1,0.36,1), opacity 210ms ease-out";
+          el.style.transform = "";
+          el.style.opacity = "";
+          window.setTimeout(() => {
+            swapAnim = false;
+          }, 240);
+        });
+      }, 130);
+    };
+    // True when the event target (or an ancestor) can actually scroll
+    // horizontally, or handles wheel itself — those keep their native gesture.
+    const yieldsToTarget = (start: EventTarget | null): boolean => {
+      let el = start instanceof Element ? start : null;
+      for (; el && el !== document.body; el = el.parentElement) {
+        if (!(el instanceof HTMLElement)) continue;
+        if (el.closest(".xterm, .live-pane, input, textarea, select, [contenteditable='true']")) {
+          return true;
+        }
+        if (el.scrollWidth > el.clientWidth + 1) {
+          const ox = getComputedStyle(el).overflowX;
+          if (ox === "auto" || ox === "scroll") return true;
+        }
+      }
+      return false;
+    };
+    const onWheel = (e: WheelEvent) => {
+      // Ignore vertical scrolling — only act when the gesture is clearly
+      // horizontal-dominant.
+      if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+      if (yieldsToTarget(e.target)) return;
+      e.preventDefault();
+      const mag = Math.abs(e.deltaX);
+      // A committed swipe keeps emitting wheel events while trackpad inertia
+      // decays — without these checks the momentum tail keeps the gesture
+      // "alive" and swallows the next real swipe. Re-arm on: silence gap,
+      // direction flip, or a fresh finger push (delta spikes against the
+      // decaying tail).
+      const gapReset = e.timeStamp - lastTs > GESTURE_GAP_MS;
+      const dirFlip = committed && acc !== 0 && Math.sign(e.deltaX) !== Math.sign(acc);
+      const freshPush = committed && mag > lastMag * 1.5 + 4;
+      if (gapReset || dirFlip || freshPush) {
+        acc = 0;
+        committed = false;
+      }
+      lastTs = e.timeStamp;
+      lastMag = mag;
+      if (committed) return; // inertia tail of an already-committed swipe
+      acc += e.deltaX;
+      // Follow the fingers (damped) so the swipe has physical feedback.
+      setTx(-acc * 0.45);
+      // Wheel streams have no "end" event: settle back if the gesture dies
+      // below the commit threshold.
+      window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(() => {
+        if (!committed) {
+          acc = 0;
+          release();
+        }
+      }, GESTURE_GAP_MS);
+      if (Math.abs(acc) < COMMIT) return;
+      // Natural scrolling: fingers left → deltaX > 0 → next folder; fingers
+      // right → deltaX < 0 → previous.
+      const dir: 1 | -1 = acc > 0 ? 1 : -1;
+      committed = true;
+      window.clearTimeout(settleTimer);
+      const { projectFilter: current, projectOptions: options, onProjectChange: change } =
+        railSwipeCtx.current;
+      if (!change || options.length === 0) {
+        release();
+        return;
+      }
+      const next = cycleProjectFilter(options, current, dir);
+      if (next === current) {
+        release();
+        return;
+      }
+      change(next);
+      swap(dir);
+    };
+    document.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      document.removeEventListener("wheel", onWheel);
+      window.clearTimeout(settleTimer);
+      const el = workspaceRef.current;
+      if (el) {
+        el.style.transition = "";
+        el.style.transform = "";
+        el.style.opacity = "";
+      }
+    };
+  }, []);
+
   const validPinned = useMemo(() => pinned.filter((id) => bySid.has(id)), [pinned, bySid]);
   const columnIds = useMemo(() => {
     const cols = [...validPinned];
@@ -7402,10 +7554,10 @@ function RailStage({
     ) : null;
 
   return (
-    <div className="flex h-full min-h-0 gap-3">
+    <div ref={workspaceRef} className="flex h-full min-h-0 gap-3">
       <aside
         className="lfg-gborder flex h-full min-h-0 shrink-0 flex-col overflow-hidden rounded-xl border border-transparent bg-card shadow-[0_12px_40px_-28px_rgba(0,0,0,0.5)] transition-[width] duration-200 ease-ios"
-        style={{ width: railCollapsed ? 56 : 280 }}
+        style={{ width: railCollapsed ? 56 : 280, overscrollBehaviorX: "contain" }}
       >
         {railCollapsed ? (
           <div className="flex shrink-0 flex-col items-center gap-1 border-b border-border py-2">
