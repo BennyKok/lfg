@@ -19,6 +19,20 @@ import { PATHS } from "./config.ts";
 
 const DIR = join(PATHS.data, "aisdk");
 
+// Shape-compatible with tmux.ts PanePrompt / web SessionPrompt so live-ws can
+// publish registry prompts on the same SSE `prompt` channel as pane selectors.
+export type AisdkPromptOption = {
+  index: number;
+  label: string;
+  selected: boolean;
+  description?: string;
+};
+export type AisdkPrompt = {
+  question: string;
+  options: AisdkPromptOption[];
+  header?: string;
+};
+
 export type AisdkEntry = {
   sessionId: string;
   harnessPid: number; // pid of the bun harness process (the tmux pane's child)
@@ -46,13 +60,21 @@ export type AisdkEntry = {
   // The Claude harness leaves this undefined — the deterministic sessionId
   // already IS its transcript id.
   threadId?: string | null;
+  // Pending interactive question for headless harnesses (OpenCode `question`
+  // tool). Live-ws publishes this as a session `prompt` event; answer/dismiss
+  // route through the command file. Null/absent when no question is open.
+  prompt?: AisdkPrompt | null;
 };
 
 export type AisdkCommand =
   | { type: "send"; text: string }
   | { type: "set_model"; model: string }
   | { type: "interrupt" }
-  | { type: "close" };
+  | { type: "close" }
+  // OpenCode (and future headless) interactive questions — option index is the
+  // 0-based index into the registry prompt.options array.
+  | { type: "answer"; index: number }
+  | { type: "dismiss" };
 
 function entryPath(sessionId: string): string {
   return join(DIR, `${sessionId}.json`);

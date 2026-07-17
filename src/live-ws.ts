@@ -551,6 +551,15 @@ export function createLiveWsSupport(opts: {
     if (!tail.pane.target) {
       const entry = findEntryByAnyId(tail.sid);
       if (!entry) return;
+      // Headless harnesses (OpenCode especially) publish interactive questions
+      // on the registry entry — mirror them as the same SSE `prompt` event the
+      // pane path uses so the session card can render option buttons.
+      const prompt = entry.prompt ?? null;
+      const sig = prompt ? JSON.stringify(prompt) : "";
+      if (sig !== tail.lastSig) {
+        tail.lastSig = sig;
+        publishSid(tail.sid, "prompt", { prompt });
+      }
       const busy = isAisdkEntryBusy(entry);
       const bsig = busy ? "1" : "0";
       if (bsig !== tail.lastBusy) {

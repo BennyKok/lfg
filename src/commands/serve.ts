@@ -4872,8 +4872,15 @@ export async function cmdServe() {
             return err(400, "missing option index");
           const sess = (await listSessions()).find((s) => s.sessionId === m[1]);
           if (!sess) return err(404, "session not found");
-          if (!sess.tmuxTarget)
-            return err(409, "session is not in a tmux pane — cannot answer");
+          // Headless harnesses (OpenCode) surface questions on the registry and
+          // accept answers via the command file — no tmux pane involved.
+          if (!sess.tmuxTarget) {
+            const entry = findAisdkEntryByAnyId(m[1]);
+            if (!entry)
+              return err(409, "session is not in a tmux pane — cannot answer");
+            appendAisdkCmd(entry.sessionId, { type: "answer", index: body.index });
+            return json({ ok: true });
+          }
           const r = await answerPrompt(sess.tmuxTarget, body.index);
           if (!r.ok) return err(502, r.error || "answer failed");
           return json({ ok: true });
@@ -4885,8 +4892,13 @@ export async function cmdServe() {
         if (m && req.method === "POST") {
           const sess = (await listSessions()).find((s) => s.sessionId === m[1]);
           if (!sess) return err(404, "session not found");
-          if (!sess.tmuxTarget)
-            return err(409, "session is not in a tmux pane — cannot dismiss");
+          if (!sess.tmuxTarget) {
+            const entry = findAisdkEntryByAnyId(m[1]);
+            if (!entry)
+              return err(409, "session is not in a tmux pane — cannot dismiss");
+            appendAisdkCmd(entry.sessionId, { type: "dismiss" });
+            return json({ ok: true });
+          }
           // Skip the question without answering: Escape cancels the selector.
           const r = await dismissPrompt(sess.tmuxTarget);
           if (!r.ok) return err(502, r.error || "dismiss failed");
