@@ -1,6 +1,6 @@
 import { mkdir, readdir, realpath, stat } from "node:fs/promises";
 import { appendFileSync, statSync, mkdirSync, readFileSync, type Dirent } from "node:fs";
-import { tmpdir, homedir } from "node:os";
+import { tmpdir, homedir, loadavg, cpus, totalmem, freemem } from "node:os";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { marked } from "marked";
@@ -175,7 +175,6 @@ import {
 } from "../repos-store.ts";
 import { projectName, reposRoot } from "../projects.ts";
 import { resolveSessionCwd, startWorktreeSweep } from "../worktree.ts";
-import { SubagentLimiter } from "../subagent-limiter.ts";
 import {
   synthesizeTts,
   transcribeStt,
@@ -219,6 +218,7 @@ import {
   DEFAULT_TIME_ZONE,
   getGlobalSettings,
   getGlobalSettingsSync,
+  MAX_LIVE_AGENTS_LIMIT,
   setGlobalSettings,
   validTimeZone,
   type GlobalSettings,
@@ -367,23 +367,86 @@ const PORT = Number(process.env.LFG_PORT ?? process.env.PORT ?? 8766);
 // if you understand the exposure.
 const HOST = process.env.LFG_HOST ?? "127.0.0.1";
 const MAX_LFG_SUBAGENT_DEPTH = 4;
-const subagentLimiter = new SubagentLimiter(getGlobalSettingsSync().maxConcurrentAgents);
 
-function agentCapacity() {
-  const snapshot = subagentLimiter.snapshot();
-  return {
-    max: snapshot.max,
-    active: snapshot.active.length,
-    queued: snapshot.queued.length,
-  };
+// Admission gate for activating a NEW agent (create / cold resume / fork).
+// Two independent, reject-only controls layered above the systemd slice's hard
+// memory bound:
+//   • agentsPaused  → 503, a manual drain switch (nothing new spins up).
+//   • maxLiveAgents → 429, a soft cap on WORKING agents (0 = unlimited).
+// The cap counts agents with a turn in flight (Session.busy) — the intensive
+// ones — NOT idle-but-open sessions, so a wall of parked sessions never blocks
+// new work. Returns a Response to reject, or null to proceed. NOTE: soft check —
+// concurrent creates can both pass before either starts working, so the cap can
+// be transiently exceeded. The slice remains the authoritative memory bound.
+async function activationGate(): Promise<Response | null> {
+  const settings = getGlobalSettingsSync();
+  if (settings.agentsPaused) {
+    return err(503, "agent activation is paused");
+  }
+  if (settings.maxLiveAgents > 0) {
+    const working = (await listSessionsCached().catch(() => [])).filter((s) => s.busy).length;
+    if (working >= settings.maxLiveAgents) {
+      return err(
+        429,
+        `max working agents (${settings.maxLiveAgents}) reached — wait for one to finish its turn`,
+      );
+    }
+  }
+  return null;
 }
 
-function restoreSubagentLimiter(): void {
-  subagentLimiter.restore(
-    listManaged()
-      .filter((session) => session.spawnedBy === "subagent" && tmuxHasSession(session.tmuxName))
-      .map((session) => session.tmuxName),
-  );
+// Current memory of the aggregate agent slice (the cgroup every contained agent
+// runs in — see tmux.ts). Best-effort: returns nulls if systemd can't answer.
+function sliceMemoryBytes(): { current: number | null; max: number | null } {
+  try {
+    const r = Bun.spawnSync({
+      cmd: [
+        "systemctl", "--user", "show", "lfg-agents.slice",
+        "--property=MemoryCurrent", "--property=MemoryMax", "--value",
+      ],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (r.exitCode !== 0) return { current: null, max: null };
+    const lines = r.stdout.toString().trim().split("\n").map((s) => s.trim());
+    const parse = (v?: string): number | null => {
+      if (!v || v === "[not set]" || v === "infinity") return null;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : null;
+    };
+    return { current: parse(lines[0]), max: parse(lines[1]) };
+  } catch {
+    return { current: null, max: null };
+  }
+}
+
+// Live server snapshot for the settings performance panel + the "working now"
+// counter. "live" = an agent process exists; "working" = it has a turn in
+// flight (Session.busy). The cap counts LIVE agents (a resident-but-idle agent
+// still holds memory); the counter surfaces WORKING for at-a-glance load.
+async function serverStats() {
+  const sessions = await listSessionsCached().catch(() => []);
+  const live = sessions.length;
+  const working = sessions.filter((s) => s.busy).length;
+  const settings = getGlobalSettingsSync();
+  const slice = sliceMemoryBytes();
+  const [load1, load5, load15] = loadavg();
+  return {
+    agents: {
+      live,
+      working,
+      idle: Math.max(0, live - working),
+      max: settings.maxLiveAgents, // 0 = unlimited
+      paused: settings.agentsPaused,
+    },
+    memory: {
+      sliceCurrentBytes: slice.current,
+      sliceMaxBytes: slice.max,
+      hostTotalBytes: totalmem(),
+      hostFreeBytes: freemem(),
+    },
+    cpu: { cores: cpus().length, load1, load5, load15 },
+  };
 }
 
 marked.setOptions({ gfm: true, breaks: false });
@@ -1676,9 +1739,6 @@ function prepareLoginTerminal(kind: string, command: string): string {
 }
 
 export async function cmdServe() {
-  restoreSubagentLimiter();
-  const limiterReaper = setInterval(() => subagentLimiter.reconcile(tmuxHasSession), 2_000);
-  limiterReaper.unref();
   const liveWs = createLiveWsSupport({
     evlog,
     getAgentRun: agentRunSnapshot,
@@ -2226,6 +2286,9 @@ export async function cmdServe() {
       if (path === "/api/setup/checks" && req.method === "GET") {
         return json({ checks: await listSetupChecksCached() });
       }
+      if (path === "/api/server/stats" && req.method === "GET") {
+        return json({ stats: await serverStats() });
+      }
       if (path === "/api/settings") {
         if (req.method === "GET") {
           return json({ settings: await getGlobalSettings() });
@@ -2238,15 +2301,19 @@ export async function cmdServe() {
             if (!validTimeZone(timeZone)) return err(400, `invalid timezone "${timeZone}"`);
             patch.timeZone = timeZone;
           }
-          if (b?.maxConcurrentAgents !== undefined) {
-            const max = Number(b.maxConcurrentAgents);
-            if (!Number.isInteger(max) || max < 1 || max > 6)
-              return err(400, "maxConcurrentAgents must be an integer from 1 to 6");
-            patch.maxConcurrentAgents = max;
+          if (b?.maxLiveAgents !== undefined) {
+            const max = Number(b.maxLiveAgents);
+            if (!Number.isInteger(max) || max < 0 || max > MAX_LIVE_AGENTS_LIMIT)
+              return err(400, `maxLiveAgents must be an integer from 0 to ${MAX_LIVE_AGENTS_LIMIT} (0 = unlimited)`);
+            patch.maxLiveAgents = max;
+          }
+          if (b?.agentsPaused !== undefined) {
+            if (typeof b.agentsPaused !== "boolean")
+              return err(400, "agentsPaused must be a boolean");
+            patch.agentsPaused = b.agentsPaused;
           }
           const settings = await setGlobalSettings(patch);
-          subagentLimiter.setMax(settings.maxConcurrentAgents);
-          return json({ settings, agentCapacity: agentCapacity() });
+          return json({ settings });
         }
         return err(405, "method not allowed");
       }
@@ -2300,7 +2367,6 @@ export async function cmdServe() {
             models: boot.models ?? null,
             settings: boot.settings ?? null,
             sessions: boot.sessions ?? null,
-            agentCapacity: agentCapacity(),
             users: boot.users ?? null,
             repos: boot.repos ?? null,
             skills: boot.skills ?? null,
@@ -3294,7 +3360,7 @@ export async function cmdServe() {
         const sessions = await listSessionsCached();
         warmChatTranscripts(sessions);
         warmRenderedBacklogs(sessions, 40);
-        return json({ sessions, agentCapacity: agentCapacity() });
+        return json({ sessions });
       }
 
       if (path === "/api/install") {
@@ -3472,6 +3538,11 @@ export async function cmdServe() {
             agent: live.agent,
           });
         }
+        // Past this point a resume COLD-STARTS a fresh agent process, so it must
+        // clear the same pause / cap gate as a create. (The already-live branch
+        // above returned early and is never gated — it spawns nothing.)
+        const resumeGate = await activationGate();
+        if (resumeGate) return resumeGate;
         const cachedResume = getCachedResumableSession(sessionId);
 
         // Direct-indexed SDK sessions have no lfg-owned transcript JSONL to
@@ -3870,18 +3941,19 @@ export async function cmdServe() {
           }
           assignedUser = cursor?.assignedUser ?? undefined;
         }
+        // Global pause / live-agent cap. Applies to every activation — main and
+        // subagent alike. Fork reaches here via its internal POST to
+        // /api/sessions/new, so it inherits this gate for free.
+        const gate = await activationGate();
+        if (gate) return gate;
         const tmuxName = `lfg-${randomBytes(3).toString("hex")}`;
         const isSubagent = spawnedBy === "subagent";
-        const admission = isSubagent
-          ? await subagentLimiter.acquire(tmuxName)
-          : { queuedForMs: 0 };
         const cwdResolved = resolveSessionCwd(repo.cwd, tmuxName, {
           voice: !!body?.voice,
           worktree: body?.worktree,
           selfRepo: SELF_REPO,
         });
         if (!cwdResolved.ok) {
-          if (isSubagent) subagentLimiter.release(tmuxName);
           return err(502, cwdResolved.error);
         }
         const cwd = cwdResolved.cwd;
@@ -4028,7 +4100,6 @@ export async function cmdServe() {
                     })
                   : spawnManagedSession({ name: tmuxName, cwd, prompt, model: resolvedModel, thinkingLevel, lfgSessionId: launchId, lfgUser: assignedUser, containInAgentSlice: isSubagent });
         if (!r.ok) {
-          if (isSubagent) subagentLimiter.release(tmuxName);
           removeManaged(tmuxName);
           assignUser(tmuxName, null);
           return err(502, r.error || "failed to start session");
@@ -4070,9 +4141,6 @@ export async function cmdServe() {
           // whether the child landed under the right user instead of guessing.
           assignedUser: assignedUser ?? null,
           worktree: worktree?.path ?? null,
-          concurrency: isSubagent
-            ? { max: subagentLimiter.max, queuedForMs: admission.queuedForMs }
-            : undefined,
         });
       }
 
