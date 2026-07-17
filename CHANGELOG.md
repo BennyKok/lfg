@@ -2,6 +2,18 @@
 
 Recent product updates and deployment notes.
 
+## [Unreleased]
+
+### Added
+
+- **GitHub Copilot CLI** (`@github/copilot`, binary `copilot`) as an 8th supported coding agent:
+  - Settings → Coding agents tile with binary + auth status checks. Auth precedence: `COPILOT_GITHUB_TOKEN` > `GH_TOKEN` > `GITHUB_TOKEN`, falling back to a real login artifact (`~/.copilot/hosts.yml`, `config.json`, or `session-state/`) rather than a bare `~/.copilot/` directory.
+  - Tmux-transport session launcher `spawnManagedCopilotSession` wired through `serve.ts` so `agent=copilot` requests dispatch to Copilot instead of falling back to Claude. Launches interactively via Copilot's supported `-i, --interactive <prompt>` flag, which starts a long-lived TUI and auto-executes the initial prompt (no `-p` one-shot, no send-keys polling).
+  - `--allow-all-tools` is opt-in through `LFG_COPILOT_ALLOW_ALL_TOOLS=1`. Off by default because LFG's agent slice is resource containment, not a filesystem/network sandbox.
+  - Curated model catalog: `claude-sonnet-4.5` (default), `claude-sonnet-4`, `gpt-5`.
+  - `scripts/setup.sh` installs `@github/copilot` when `LFG_INSTALL_COPILOT=1` (requires Node 22+), pinned to `LFG_COPILOT_VERSION` (default `1.0.71`) for reproducibility and to avoid GHSA-g8r9-g2v8-jv6f (`<=0.0.422`, prompt-injection RCE via shell parameter expansion) and GHSA-9ccr-r5hg-74gf (`<=1.0.42`, `core.fsmonitor` RCE via nested bare repo).
+  - New `LFG_COPILOT_PATH`, `LFG_COPILOT_ALLOW_ALL_TOOLS`, and `LFG_COPILOT_VERSION` env overrides.
+
 ## July 16, 2026 - Shipped feed and live artifacts (v0.1.37)
 
 - New Shipped channel: a feed of agent-published work, available as a virtual

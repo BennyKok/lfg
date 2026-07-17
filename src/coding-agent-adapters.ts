@@ -12,6 +12,7 @@ export const CODING_AGENT_ADAPTERS = {
   codex: { transport: "tmux", managedLaunch: true },
   grok: { transport: "tmux", managedLaunch: true },
   cursor: { transport: "tmux", managedLaunch: true },
+  copilot: { transport: "tmux", managedLaunch: true },
   aisdk: { transport: "command-file", managedLaunch: true },
   "codex-aisdk": { transport: "command-file", managedLaunch: true },
   opencode: { transport: "command-file", managedLaunch: true },
@@ -25,6 +26,7 @@ export const SESSION_AGENT_KINDS = [
   "opencode",
   "grok",
   "cursor",
+  "copilot",
 ] as const satisfies readonly CodingAgentKind[];
 
 export const TMUX_AGENT_KINDS = [
@@ -32,6 +34,7 @@ export const TMUX_AGENT_KINDS = [
   "codex",
   "grok",
   "cursor",
+  "copilot",
 ] as const satisfies readonly CodingAgentKind[];
 
 export const COMMAND_FILE_AGENT_KINDS = [

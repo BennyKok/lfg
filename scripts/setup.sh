@@ -56,6 +56,14 @@ LFG_INSTALL_OPENCODE="${LFG_INSTALL_OPENCODE:-0}"
 LFG_INSTALL_GROK="${LFG_INSTALL_GROK:-0}"
 LFG_INSTALL_CURSOR="${LFG_INSTALL_CURSOR:-0}"
 LFG_INSTALL_HERMES="${LFG_INSTALL_HERMES:-0}"
+LFG_INSTALL_COPILOT="${LFG_INSTALL_COPILOT:-0}"
+# Pin the installed @github/copilot version so setup is reproducible. Override
+# with LFG_COPILOT_VERSION=x.y.z (or "latest" for opt-in floating installs).
+# 1.0.71 audits clean; <=1.0.42 is affected by GHSA-9ccr-r5hg-74gf
+# (core.fsmonitor RCE via nested bare repo) and <=0.0.422 is affected by
+# GHSA-g8r9-g2v8-jv6f (shell parameter-expansion bypass of the read-only
+# safety classification, exploitable through prompt injection).
+LFG_COPILOT_VERSION="${LFG_COPILOT_VERSION:-1.0.71}"
 LFG_INSTALL_MCP="${LFG_INSTALL_MCP:-1}"
 LFG_TAILSCALE_SERVE="${LFG_TAILSCALE_SERVE:-0}"
 LFG_TAILSCALE_SERVE_OVERWRITE="${LFG_TAILSCALE_SERVE_OVERWRITE:-0}"
@@ -198,9 +206,9 @@ BUN_BIN="$(command -v bun || true)"
 [ -n "$BUN_BIN" ] || die "Bun is required but was not found on PATH."
 BUN_BIN="$(cd "$(dirname "$BUN_BIN")" && pwd)/$(basename "$BUN_BIN")"
 
-# ---- 3. agent CLIs (claude / codex / opencode / grok / cursor / hermes) ----
+# ---- 3. agent CLIs (claude / codex / opencode / grok / cursor / hermes / copilot) ----
 # The release bundle ships NO vendored agent binaries - lfg drives whatever
-# `claude` / `codex` / `opencode` / `grok` / `agent` / `hermes` it finds on PATH (override via LFG_*_PATH).
+# `claude` / `codex` / `opencode` / `grok` / `agent` / `hermes` / `copilot` it finds on PATH (override via LFG_*_PATH).
 # Never install or upgrade these by default: they own user auth/config.
 if ! command -v claude >/dev/null 2>&1; then
   if [ "$LFG_INSTALL_CLAUDE" = "1" ]; then
@@ -272,6 +280,19 @@ if ! command -v hermes >/dev/null 2>&1; then
     curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash || warn "Hermes install failed - the 'hermes' agent kind will be unavailable."
   else
     warn "Hermes CLI not found. Hermes sessions will be unavailable until you install/authenticate hermes. Re-run with LFG_INSTALL_HERMES=1 only if you want setup to run Nous Research's installer."
+  fi
+fi
+if ! command -v copilot >/dev/null 2>&1; then
+  if [ "$LFG_INSTALL_COPILOT" = "1" ]; then
+    if [ "$LFG_COPILOT_VERSION" = "latest" ]; then
+      copilot_pkg="@github/copilot"
+    else
+      copilot_pkg="@github/copilot@${LFG_COPILOT_VERSION}"
+    fi
+    say "Installing GitHub Copilot CLI ($copilot_pkg, optional)..."
+    npm install -g "$copilot_pkg" >/dev/null 2>&1 || warn "Copilot CLI install failed - the 'copilot' agent kind will be unavailable. Requires Node 22+."
+  else
+    warn "Copilot CLI not found. Copilot sessions will be unavailable until you install/authenticate copilot. Re-run with LFG_INSTALL_COPILOT=1 only if you want setup to install it via npm (requires Node 22+). Pin a specific version with LFG_COPILOT_VERSION."
   fi
 fi
 

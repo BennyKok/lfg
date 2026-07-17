@@ -9,7 +9,7 @@ Run AI coding agents on your own machine, from anywhere.
 </a>
 
 `lfg` turns a Linux box or macOS workstation into a private control plane for
-Claude Code, Codex, OpenCode, Grok, and Hermes. It starts each agent in a long-lived `tmux`
+Claude Code, Codex, OpenCode, Cursor, Grok, Hermes, and GitHub Copilot. It starts each agent in a long-lived `tmux`
 session, streams the transcript to a web UI, and lets you answer prompts or steer
 work from your phone or laptop.
 
@@ -49,6 +49,7 @@ reliably on GitHub.
   - `cursor-agent` (Cursor CLI)
   - `grok`
   - `hermes`
+  - `copilot` (GitHub Copilot CLI, requires Node 22+)
 - Optional: [Tailscale](https://tailscale.com) for private remote access
 
 ## Quick Start
@@ -87,8 +88,8 @@ template, signs you in if needed, creates a sandbox from its prebuilt image,
 starts `lfg serve` on port `8766`, and opens the workspace URL.
 
 On a fresh workspace, open **Settings → Coding agents** in LFG. That screen
-checks whether Claude, Codex, OpenCode, Hermes, or Grok is installed and signed
-in, and it can run the installer for supported CLIs. OAuth-based CLIs still need
+checks whether Claude, Codex, OpenCode, Cursor, Grok, Hermes, or GitHub Copilot
+is installed and signed in, and it can run the installer for supported CLIs. OAuth-based CLIs still need
 you to complete their normal terminal/browser login once, or you can configure
 API-key based providers with environment variables such as `ANTHROPIC_API_KEY`
 or `OPENAI_API_KEY`.
@@ -146,7 +147,7 @@ Hetzner user requirements:
 - Tailscale account plus an ephemeral/preauthorized auth key for unattended
   setup. The installer joins the server with `tailscale up --authkey ...` and
   exposes the loopback-only UI through `tailscale serve`.
-- After boot, authenticate `claude`, `codex`, `opencode`, Cursor CLI, or `hermes` on the server, or
+- After boot, authenticate `claude`, `codex`, `opencode`, Cursor CLI, `hermes`, or GitHub Copilot CLI on the server, or
   configure API-key based providers in `.env`.
 
 ## Local Development
@@ -212,6 +213,9 @@ Common settings:
 | `LFG_CURSOR_PATH` | Override the Cursor CLI binary path (`cursor-agent`, or a non-Grok `agent`). |
 | `LFG_HERMES_PATH` | Override the `hermes` binary path. |
 | `LFG_HERMES_PROVIDER` | Optional provider override passed to `hermes chat --provider`; empty uses Hermes' configured/default provider. |
+| `LFG_COPILOT_PATH` | Override the `copilot` binary path. Auth via interactive `/login` (device flow) or `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` with the *Copilot Requests* scope. |
+| `LFG_COPILOT_ALLOW_ALL_TOOLS` | Set to `1` to pass `--allow-all-tools` when spawning a Copilot session. Off by default — the pane keeps interactive per-tool approvals. GitHub recommends the bypass only in isolated environments; LFG's agent slice is resource-only, not a filesystem/network sandbox, so enable this only when your host itself is the trust boundary. |
+| `LFG_COPILOT_VERSION` | Pinned `@github/copilot` version installed by `scripts/setup.sh` when `LFG_INSTALL_COPILOT=1`. Default `1.0.71` (audits clean); avoid `<=1.0.42` (GHSA-9ccr-r5hg-74gf, `core.fsmonitor` RCE) and `<=0.0.422` (GHSA-g8r9-g2v8-jv6f, prompt-injection RCE via shell parameter expansion). Set to `latest` for floating installs. |
 | `ANTHROPIC_API_KEY` | Optional API key for Claude SDK-backed flows. |
 | `LFG_WHATSAPP_*` | Optional WhatsApp bridge settings. |
 | `LFG_INSTALL_CHANNEL` | Optional install-channel override: `source`, `release`, or `container`. Normally written by setup/container deploys. |
