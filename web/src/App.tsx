@@ -525,6 +525,7 @@ const OPENCODE_MODELS = [
   "opencode-go/glm-5.1",
   "opencode-go/glm-5.2",
   "opencode-go/kimi-k2.6",
+  "opencode-go/kimi-k3",
   "opencode-go/kimi-k2.7-code",
   "opencode-go/mimo-v2.5",
   "opencode-go/mimo-v2.5-pro",
