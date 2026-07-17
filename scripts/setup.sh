@@ -59,7 +59,11 @@ LFG_INSTALL_HERMES="${LFG_INSTALL_HERMES:-0}"
 LFG_INSTALL_COPILOT="${LFG_INSTALL_COPILOT:-0}"
 # Pin the installed @github/copilot version so setup is reproducible. Override
 # with LFG_COPILOT_VERSION=x.y.z (or "latest" for opt-in floating installs).
-LFG_COPILOT_VERSION="${LFG_COPILOT_VERSION:-0.0.369}"
+# 1.0.71 audits clean; <=1.0.42 is affected by GHSA-9ccr-r5hg-74gf
+# (core.fsmonitor RCE via nested bare repo) and <=0.0.422 is affected by
+# GHSA-g8r9-g2v8-jv6f (shell parameter-expansion bypass of the read-only
+# safety classification, exploitable through prompt injection).
+LFG_COPILOT_VERSION="${LFG_COPILOT_VERSION:-1.0.71}"
 LFG_INSTALL_MCP="${LFG_INSTALL_MCP:-1}"
 LFG_TAILSCALE_SERVE="${LFG_TAILSCALE_SERVE:-0}"
 LFG_TAILSCALE_SERVE_OVERWRITE="${LFG_TAILSCALE_SERVE_OVERWRITE:-0}"
