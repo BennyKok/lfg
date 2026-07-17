@@ -15511,6 +15511,7 @@ function ShippedPage({
   const [gallery, setGallery] = useState<GalleryArtifact[] | null>(null);
   const [galleryTotal, setGalleryTotal] = useState(0);
   const [galleryBusy, setGalleryBusy] = useState(false);
+  const [refreshingArtifactId, setRefreshingArtifactId] = useState<string | null>(null);
   const [deletingArtifactId, setDeletingArtifactId] = useState<string | null>(null);
   // "Artifact" means the interactive HTML document. Images and recordings
   // remain media in transcripts/Shipped and do not appear on this page.
@@ -15599,6 +15600,47 @@ function ShippedPage({
       toast.error(error instanceof Error ? error.message : "Couldn't delete artifact");
     } finally {
       setDeletingArtifactId(null);
+    }
+  };
+
+  const refreshGalleryArtifact = async (artifact: GalleryArtifact) => {
+    if (!artifact.sessionId || artifact.refreshEnabled === undefined) return;
+    setRefreshingArtifactId(artifact.id);
+    try {
+      const data = await api<{
+        artifact: {
+          updatedAt?: number;
+          version?: number;
+          size?: number;
+          refresh?: {
+            enabled?: boolean;
+            status?: GalleryArtifact["refreshStatus"];
+            lastSuccessAt?: number;
+          };
+        };
+      }>(
+        `/api/sessions/${encodeURIComponent(artifact.sessionId)}/artifacts/html/${encodeURIComponent(artifact.id)}/refresh`,
+        {
+          method: "POST",
+          headers: { "X-LFG-Session-ID": artifact.sessionId },
+        },
+      );
+      setGallery((current) => current?.map((item) => item.id === artifact.id
+        ? {
+            ...item,
+            ts: data.artifact.updatedAt ?? item.ts,
+            version: data.artifact.version ?? item.version,
+            size: data.artifact.size ?? item.size,
+            lastRefreshedAt: data.artifact.refresh?.lastSuccessAt ?? item.lastRefreshedAt,
+            refreshStatus: data.artifact.refresh?.status ?? item.refreshStatus,
+            refreshEnabled: data.artifact.refresh?.enabled ?? item.refreshEnabled,
+          }
+        : item) ?? null);
+      toast.success("Artifact refreshed");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Couldn't refresh artifact");
+    } finally {
+      setRefreshingArtifactId(null);
     }
   };
 
@@ -15720,15 +15762,28 @@ function ShippedPage({
                       </div>
                     </div>
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => void deleteGalleryArtifact(a)}
-                    disabled={deletingArtifactId === a.id}
-                    aria-label={`Delete ${a.title || a.caption || a.name}`}
-                    className="absolute bottom-1.5 right-1.5 flex size-7 items-center justify-center rounded-full text-muted-foreground opacity-100 transition-[color,background-color,transform,opacity] duration-150 hover:bg-destructive/10 hover:text-destructive active:scale-[0.94] disabled:opacity-50 sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100"
-                  >
-                    {deletingArtifactId === a.id ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
-                  </button>
+                  <div className="absolute bottom-1.5 right-1.5 flex items-center gap-0.5">
+                    {a.refreshEnabled !== undefined ? (
+                      <button
+                        type="button"
+                        onClick={() => void refreshGalleryArtifact(a)}
+                        disabled={refreshingArtifactId === a.id}
+                        aria-label={`Refresh ${a.title || a.caption || a.name}`}
+                        className="flex size-7 items-center justify-center rounded-full text-muted-foreground opacity-100 transition-[color,background-color,transform,opacity] duration-150 hover:bg-foreground/[0.06] hover:text-foreground active:scale-[0.94] disabled:opacity-50 sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100"
+                      >
+                        <RotateCcw className={cn("size-3.5", refreshingArtifactId === a.id && "animate-spin")} />
+                      </button>
+                    ) : null}
+                    <button
+                      type="button"
+                      onClick={() => void deleteGalleryArtifact(a)}
+                      disabled={deletingArtifactId === a.id}
+                      aria-label={`Delete ${a.title || a.caption || a.name}`}
+                      className="flex size-7 items-center justify-center rounded-full text-muted-foreground opacity-100 transition-[color,background-color,transform,opacity] duration-150 hover:bg-destructive/10 hover:text-destructive active:scale-[0.94] disabled:opacity-50 sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100"
+                    >
+                      {deletingArtifactId === a.id ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
