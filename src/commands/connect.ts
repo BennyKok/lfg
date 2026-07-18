@@ -2,7 +2,7 @@ import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { PATHS } from "../config.ts";
 
-// lfg connect — generic remote-access relay client SKELETON.
+// lfg connect — generic remote-access relay client.
 //
 // Lets a self-hosted `lfg serve` box be reached through a WebSocket relay
 // instead of exposing an inbound port. Deliberately provider-agnostic: this
@@ -23,15 +23,19 @@ import { PATHS } from "../config.ts";
 //   client → relay   {type:"pair", code}                     (first connect only)
 //   relay  → client   {type:"paired", token, boxId}           (persist token; reconnect with it instead of a code)
 //   client → relay   {type:"hello", token}                    (subsequent connects)
+//   relay  → client   {type:"hello-ok"}                        (optional; unknown frame types are ignored anyway)
+//   relay  → client   {type:"error", message}                  (pairing/hello rejected — relay closes right after)
 //   relay  → client   {type:"http", id, method, path, headers, bodyB64?}
 //   client → relay   {type:"http-response", id, status, headers, bodyB64?}
 //   either → other    {type:"ping"} / {type:"pong"}
 //
 // This is intentionally the smallest surface that lets a relay reverse-proxy
 // HTTP semantics (incl. serve.ts's SSE/WS endpoints, tunneled as ordinary
-// request/response framing) onto a box with no inbound port open. No relay
-// implementing this protocol exists yet anywhere — this command has not been
-// exercised against a live one.
+// request/response framing) onto a box with no inbound port open. An `error`
+// frame during `hello` means the saved token is no longer valid (expired,
+// revoked, or unknown to the relay) — that will never resolve by retrying,
+// so the reconnect loop below treats it as fatal rather than backing off
+// forever against a token that can't work.
 
 const HELP = `lfg connect — pair this box to a remote-access relay (EXPERIMENTAL)
 
@@ -95,7 +99,7 @@ type HttpFrame = {
   bodyB64?: string;
 };
 
-function isHttpFrame(value: unknown): value is HttpFrame {
+export function isHttpFrame(value: unknown): value is HttpFrame {
   return (
     typeof value === "object" &&
     value !== null &&
@@ -106,8 +110,20 @@ function isHttpFrame(value: unknown): value is HttpFrame {
   );
 }
 
+export function errorFrameMessage(value: unknown): string | null {
+  if (typeof value !== "object" || value === null) return null;
+  if ((value as { type?: unknown }).type !== "error") return null;
+  const message = (value as { message?: unknown }).message;
+  return typeof message === "string" && message ? message : "the relay rejected this connection";
+}
+
+/** A `{type:"error"}` frame the relay sent for `hello` — the saved token is
+ * dead (expired/revoked/unknown); re-pairing is the only fix, so the
+ * reconnect loop treats this as fatal rather than backing off forever. */
+class RelayAuthError extends Error {}
+
 /** Proxies one relayed HTTP request onto this box's own `lfg serve`. */
-async function forwardToLocalServe(frame: HttpFrame): Promise<{
+export async function forwardToLocalServe(frame: HttpFrame): Promise<{
   type: "http-response";
   id: string;
   status: number;
@@ -164,6 +180,12 @@ async function pair(code: string): Promise<void> {
         if (msg.type === "paired" && msg.token && msg.boxId) {
           clearTimeout(timeout);
           resolve({ token: msg.token, boxId: msg.boxId });
+          return;
+        }
+        const errorMessage = errorFrameMessage(msg);
+        if (errorMessage) {
+          clearTimeout(timeout);
+          reject(new Error(errorMessage));
         }
       } catch {
         // ignore malformed frames while waiting for the pairing ack
@@ -197,6 +219,7 @@ async function runConnectLoop(): Promise<void> {
       backoffMs = RECONNECT_MIN_MS;
       console.log(`lfg connect: connected — proxying to local serve on ${LOCAL_HOST}:${LOCAL_PORT}`);
 
+      let authRejected: string | null = null;
       await new Promise<void>((resolveClosed) => {
         ws.addEventListener("message", (event) => {
           void (async () => {
@@ -210,14 +233,26 @@ async function runConnectLoop(): Promise<void> {
               ws.send(JSON.stringify({ type: "pong" }));
               return;
             }
+            const errorMessage = errorFrameMessage(frame);
+            if (errorMessage) {
+              authRejected = errorMessage;
+              ws.close();
+              return;
+            }
             if (isHttpFrame(frame)) ws.send(JSON.stringify(await forwardToLocalServe(frame)));
           })();
         });
         ws.addEventListener("close", () => resolveClosed());
         ws.addEventListener("error", () => resolveClosed());
       });
+      if (authRejected) throw new RelayAuthError(authRejected);
       console.log("lfg connect: relay connection closed — reconnecting");
     } catch (error) {
+      if (error instanceof RelayAuthError) {
+        console.error(`lfg connect: ${error.message}`);
+        console.error("lfg connect: run `lfg connect <code>` with a fresh pairing code to reconnect.");
+        process.exit(1);
+      }
       console.error(`lfg connect: ${String(error)}`);
     }
     await new Promise((r) => setTimeout(r, backoffMs));

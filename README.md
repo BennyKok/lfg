@@ -176,10 +176,35 @@ bun run subagent -- models     # list runtime sub-agent providers/models
 bun run subagent -- create --prompt "..." --agent codex-aisdk
 bun run mcp                    # stdio MCP server for LFG session tools
 bun run whatsapp -- run        # optional WhatsApp sidecar
+bun run connect -- <code>      # pair this box to a remote-access relay (see below)
 bun run setup                  # rerun provisioning/update flow
 ```
 
 Installed release builds expose the same commands through `lfg`.
+
+### `lfg connect` — reach this box through a relay
+
+`lfg serve`'s control API has no application-layer auth of its own (see
+[Security](#security)) — it trusts loopback + your tailnet. `lfg connect`
+lets an *operator-run relay* reach this box instead, without opening any
+inbound port: the box dials **out** to the relay over a WebSocket and holds
+it open, and the relay's own auth (a pairing code, then a persisted bearer
+token) is the boundary. No relay implementation ships with LFG — this is the
+generic client half of a documented protocol any relay operator can
+implement (see the wire protocol at the top of
+[`src/commands/connect.ts`](./src/commands/connect.ts)).
+
+```bash
+LFG_RELAY_URL=wss://your-relay.example/connect lfg connect ABC123   # redeem a one-time code, then stay connected
+lfg connect status                                                  # show the current binding, if any
+lfg connect disconnect                                              # drop the saved binding locally
+```
+
+`LFG_RELAY_URL` is required (no default — this file must never hardcode a
+specific operator's relay). The saved binding token lives in
+`data/relay-credentials.json` (mode `0600`); if the relay reports the token
+invalid, expired, or revoked, reconnecting stops and asks you to re-pair with
+a fresh code rather than retrying forever.
 
 The MCP server talks to the local `lfg serve` API and exposes tools such as
 `lfg_capabilities`, `lfg_list_sessions`, `lfg_get_session_messages`,
@@ -226,6 +251,7 @@ Common settings:
 | `LFG_COPILOT_VERSION` | Pinned `@github/copilot` version installed by `scripts/setup.sh` when `LFG_INSTALL_COPILOT=1`. Default `1.0.71` (audits clean); avoid `<=1.0.42` (GHSA-9ccr-r5hg-74gf, `core.fsmonitor` RCE) and `<=0.0.422` (GHSA-g8r9-g2v8-jv6f, prompt-injection RCE via shell parameter expansion). Set to `latest` for floating installs. |
 | `ANTHROPIC_API_KEY` | Optional API key for Claude SDK-backed flows. |
 | `LFG_WHATSAPP_*` | Optional WhatsApp bridge settings. |
+| `LFG_RELAY_URL` | Relay WebSocket URL for `lfg connect` (required to use it — no default). See [Commands](#commands). |
 | `LFG_INSTALL_CHANNEL` | Optional install-channel override: `source`, `release`, or `container`. Normally written by setup/container deploys. |
 
 ## Security

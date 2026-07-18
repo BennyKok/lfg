@@ -12,6 +12,7 @@
     "subagent": "bun run src/cli.ts subagent",
     "mcp": "bun run src/cli.ts mcp",
     "whatsapp": "bun run src/cli.ts whatsapp",
+    "connect": "bun run src/cli.ts connect",
     "setup": "bun run src/cli.ts setup",
     "test": "bun test",
     "typecheck": "bun x tsc -p tsconfig.json --noEmit",

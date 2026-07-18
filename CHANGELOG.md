@@ -4,6 +4,15 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+- `lfg connect` — a new generic remote-access relay client. Lets a
+  self-hosted box be reached through an operator-run relay without opening
+  any inbound port: the box dials out over a WebSocket, authenticates with a
+  one-time pairing code (then a persisted bearer token), and proxies HTTP
+  traffic onto its own local `lfg serve`. No relay implementation ships with
+  LFG — `LFG_RELAY_URL` is a required, provider-agnostic setting (see the
+  README's "lfg connect" section and the wire protocol documented in
+  `src/commands/connect.ts`).
+
 ## July 18, 2026 - Transferable live dashboards (v0.1.42)
 
 - Re-publishing a stable HTML artifact id from a later session now updates the
