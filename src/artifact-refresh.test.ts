@@ -122,6 +122,32 @@ describe("script-backed HTML artifact refresh", () => {
     expect(after.updatedAt).toBeGreaterThan(before.updatedAt!);
   });
 
+  test("an old owner's in-flight refresh cannot reclaim a taken-over artifact", async () => {
+    const executable = script(
+      "takeover.sh",
+      "#!/bin/sh\nsleep 0.1\nprintf '%s' '<!doctype html><html><body>stale refresh</body></html>'\n",
+    );
+    const before = create({ scriptPath: executable });
+    const refreshes = manager();
+    const running = refreshes.refreshNow(before.id, SESSION);
+    await Bun.sleep(20);
+
+    const takeover = publishHtmlArtifact({
+      sessionId: OTHER_SESSION,
+      id: before.id,
+      html: "<!doctype html><html><body>new owner</body></html>",
+    });
+    const result = await running;
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("owner changed");
+    expect(getImageArtifact(before.id)?.sessionId).toBe(OTHER_SESSION);
+    expect(getImageArtifact(before.id)?.version).toBe(2);
+    expect(readFileSync(before.filePath, "utf8")).toContain("new owner");
+    expect(takeover.refresh?.scriptPath).toBe(before.refresh?.scriptPath);
+    expect(takeover.refresh?.scopeRoot).toBe(before.refresh?.scopeRoot);
+  });
+
   test("failure and invalid output preserve the last good HTML and version", async () => {
     const executable = script("failure.sh", "#!/bin/sh\nprintf 'not a document'\n");
     const before = create({ scriptPath: executable });

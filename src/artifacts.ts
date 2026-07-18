@@ -268,8 +268,12 @@ export function publishHtmlArtifact(input: {
 
   const index = readIndex();
   const existing = requestedId ? index[requestedId] : null;
-  if (existing && (existing.sessionId !== sessionId || (existing.media ?? "image") !== "html")) {
-    throw new Error("artifact id belongs to a different session or media kind");
+  // Explicit HTML ids are project-level: a later session may intentionally
+  // take over the stable card. Preserve the record below so its file, creation
+  // time, refresh configuration, and version chain continue in place. Media
+  // ids remain kind-safe, so HTML can never replace an image or video.
+  if (existing && (existing.media ?? "image") !== "html") {
+    throw new Error("artifact id belongs to a different media kind");
   }
 
   const id = requestedId ?? `${Date.now().toString(36)}-${randomBytes(6).toString("hex")}`;

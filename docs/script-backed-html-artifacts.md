@@ -42,6 +42,12 @@ the artifact revision. They still emit the normal realtime artifact update, so
 an open client reloads the same card. Failures leave the prior HTML, timestamp,
 and revision intact.
 
+Stable HTML artifact ids are project-level. If a later session publishes new
+HTML with the same id, it takes ownership of the existing artifact, updates the
+same card, and continues the revision chain. The refresh configuration transfers
+with the artifact and can be rebound to an executable inside the new owner's
+cwd; the previous session can no longer refresh, reconfigure, or delete it.
+
 The Artifacts page labels scheduled dashboards with their most recent
 successful refresh time. Delete an artifact from that page with its trash
 button, or call `lfg_delete_artifact` with its stable `id`. Deletion is limited

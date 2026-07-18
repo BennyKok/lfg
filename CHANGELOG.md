@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 18, 2026 - Transferable live dashboards (v0.1.42)
+
+- Re-publishing a stable HTML artifact id from a later session now updates the
+  same dashboard, transfers ownership and refresh control, and continues its
+  existing revision history.
+
 ## July 18, 2026 - Correct Pi and Copilot icons (v0.1.41)
 
 - Pi now uses its official block logo instead of a generic pi glyph, with a
