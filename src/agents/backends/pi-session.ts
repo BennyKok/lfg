@@ -31,6 +31,7 @@ import {
   removeEntry,
   writeEntry,
 } from "../../aisdk-registry.ts";
+import { agentProfileCliArgs, loadAgentProfileFromEnv } from "../../agent-profile.ts";
 import type { SessionMsg } from "../../sessions.ts";
 import { indexSessionMessagesDirect } from "../../transcript-index.ts";
 import { makeDraftPublisher } from "./draft.ts";
@@ -44,6 +45,12 @@ function arg(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
 }
+
+// Env var pointing at a custom agent profile directory — extra system-prompt
+// text, extra skills, and a display-name override, layered on top of pi's own
+// built-in defaults. Unset (the default for every existing LFG user) means no
+// customization at all. See src/agent-profile.ts for the directory layout.
+const PI_PROFILE_DIR_ENV = "LFG_PI_PROFILE_DIR";
 
 // pi has no separately-installed global binary we can rely on being present or
 // readable (sandboxes symlink /usr/local/bin/pi into root's bun install, which
@@ -147,10 +154,25 @@ export async function cmdPiSession(argv: string[]): Promise<void> {
   } catch {}
 
   ensurePiProviderConfig();
+  // Custom agent profile (optional): append the operator's extra system-prompt
+  // and skills as additive CLI args, and pick up a display-name override for the
+  // registry entry below. loadAgentProfileFromEnv returns null (and this whole
+  // block is a no-op) when LFG_PI_PROFILE_DIR is unset or the dir is missing;
+  // missing sub-parts are skipped without failing the harness.
+  const profile = loadAgentProfileFromEnv(PI_PROFILE_DIR_ENV);
+  if (profile) {
+    console.error(
+      `[agent-profile] pi profile active: ${profile.dir}` +
+        `${profile.systemPromptPath ? " +system-prompt" : ""}` +
+        `${profile.skillsDir ? " +skills" : ""}` +
+        `${profile.displayName ? ` name=${JSON.stringify(profile.displayName)}` : ""}`,
+    );
+  }
   const { RpcClient } = await import("@mariozechner/pi-coding-agent");
   const rpcArgs: string[] = [];
   if (thinkingLevel) rpcArgs.push("--thinking", thinkingLevel);
   if (resumeSessionId) rpcArgs.push("--session", resumeSessionId);
+  rpcArgs.push(...agentProfileCliArgs(profile));
   const client = new RpcClient({
     cliPath: resolvePiCliPath(),
     cwd,
@@ -174,6 +196,10 @@ export async function cmdPiSession(argv: string[]): Promise<void> {
     model,
     busy: false,
     title: initialPrompt ? initialPrompt.slice(0, 72) : null,
+    // Display-name override from the custom agent profile, if any — lets the UI
+    // show a branded label instead of the raw "pi" agent kind. Null when no
+    // profile / no name is configured, which keeps behavior unchanged.
+    agentLabel: profile?.displayName ?? null,
     createdAt: Date.now(),
   });
 

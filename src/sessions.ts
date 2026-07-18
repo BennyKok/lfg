@@ -232,6 +232,10 @@ export type SessionMsg = {
 
 export type Session = {
   agent: CodingAgentKind;
+  // Display-name override from a custom agent profile (see src/agent-profile.ts),
+  // or null/absent to fall back to the agent kind. Currently only pi-backed
+  // sessions can set this.
+  agentLabel?: string | null;
   pid: number;
   cmd: string;
   cwd: string | null;
@@ -2193,6 +2197,9 @@ export async function listSessions(): Promise<Session[]> {
     } catch {}
     out.push({
       agent: isCodex ? "codex-aisdk" : isOpencode ? "opencode" : isPi ? "pi" : "aisdk",
+      // Only pi carries a profile display-name override today; other backends
+      // leave it null.
+      agentLabel: isPi ? (e.agentLabel ?? null) : null,
       pid: e.harnessPid,
       cmd: isCodex
         ? `lfg codex-aisdk-session --model ${e.model}`

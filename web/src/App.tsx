@@ -291,6 +291,9 @@ type AgentReport = {
 
 type Session = {
   agent?: "claude" | "aisdk" | "codex" | "codex-aisdk" | "opencode" | "grok" | "cursor" | string;
+  // Display-name override from a custom agent profile (server-side), when set.
+  // Prefer this over the raw agent kind for labels/tooltips.
+  agentLabel?: string | null;
   pid?: number;
   cmd?: string;
   cwd?: string;
@@ -8007,7 +8010,8 @@ const RailItem = memo(function RailItem({
         <span className="relative flex size-6 shrink-0 items-center justify-center">
           <img
             src={agentIconSrc(session.agent)}
-            alt={agentIconAlt(session.agent)}
+            alt={session.agentLabel || agentIconAlt(session.agent)}
+            title={session.agentLabel || undefined}
             className="size-6 rounded-md"
           />
           <span
@@ -9796,7 +9800,8 @@ function SessionTitleSheet({
           </Button>
           <img
             src={agentIconSrc(session.agent)}
-            alt={agentIconAlt(session.agent)}
+            alt={session.agentLabel || agentIconAlt(session.agent)}
+            title={session.agentLabel || undefined}
             className="size-7 shrink-0 rounded-lg"
           />
           <SessionTitleLine title={title} />
@@ -10452,7 +10457,8 @@ const onTouchStart = (e: ReactTouchEvent) => {
                 new-session picker keeps a distinct label to tell them apart. */}
             <img
               src={agentIconSrc(session.agent)}
-              alt={agentIconAlt(session.agent)}
+              alt={session.agentLabel || agentIconAlt(session.agent)}
+              title={session.agentLabel || undefined}
               className={cn(
                 "rounded-lg transition-all duration-300 ease-ios",
                 busy || summarizing ? "size-4" : "size-6",

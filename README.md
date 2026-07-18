@@ -220,6 +220,7 @@ Common settings:
 | `LFG_CURSOR_PATH` | Override the Cursor CLI binary path (`cursor-agent`, or a non-Grok `agent`). |
 | `LFG_HERMES_PATH` | Override the `hermes` binary path. |
 | `LFG_HERMES_PROVIDER` | Optional provider override passed to `hermes chat --provider`; empty uses Hermes' configured/default provider. |
+| `LFG_PI_PROFILE_DIR` | Optional [custom agent profile](./docs/custom-agent-profiles.md) directory for the `pi` backend: layers extra system-prompt text, skills, and a display-name override on top of pi's defaults. Empty = unchanged. |
 | `LFG_COPILOT_PATH` | Override the `copilot` binary path. Auth via interactive `/login` (device flow) or `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` with the *Copilot Requests* scope. |
 | `LFG_COPILOT_ALLOW_ALL_TOOLS` | Set to `1` to pass `--allow-all-tools` when spawning a Copilot session. Off by default — the pane keeps interactive per-tool approvals. GitHub recommends the bypass only in isolated environments; LFG's agent slice is resource-only, not a filesystem/network sandbox, so enable this only when your host itself is the trust boundary. |
 | `LFG_COPILOT_VERSION` | Pinned `@github/copilot` version installed by `scripts/setup.sh` when `LFG_INSTALL_COPILOT=1`. Default `1.0.71` (audits clean); avoid `<=1.0.42` (GHSA-9ccr-r5hg-74gf, `core.fsmonitor` RCE) and `<=0.0.422` (GHSA-g8r9-g2v8-jv6f, prompt-injection RCE via shell parameter expansion). Set to `latest` for floating installs. |
