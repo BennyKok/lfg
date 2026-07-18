@@ -43,6 +43,11 @@ export type AisdkEntry = {
   draftText?: string | null; // transient streamed assistant text; never persisted to transcripts
   draftUpdatedAt?: number | null;
   title?: string | null; // first user prompt, for the card before a transcript exists
+  // Display-name override for this session, from a custom agent profile (see
+  // src/agent-profile.ts). When set, the UI shows this branded label instead of
+  // the raw agent kind. Absent/null on every session without a configured
+  // profile — treat a missing value as "use the agent kind".
+  agentLabel?: string | null;
   createdAt: number;
   // Which AI-SDK backend this entry drives. Absent on legacy Claude entries —
   // treat a missing value as "claude" so old entries keep working unchanged.
