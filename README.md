@@ -196,9 +196,14 @@ implement (see the wire protocol at the top of
 
 ```bash
 LFG_RELAY_URL=wss://your-relay.example/connect lfg connect ABC123   # redeem a one-time code, then stay connected
+LFG_RELAY_URL=wss://your-relay.example/connect lfg connect          # resume the saved binding (e.g. after a restart) — no code needed
 lfg connect status                                                  # show the current binding, if any
 lfg connect disconnect                                              # drop the saved binding locally
 ```
+
+Run it under a process supervisor (systemd, `pm2`, etc. — not bundled) for a
+box that should stay connected: a bare `lfg connect` re-invocation resumes the
+saved binding on its own, so a crash/reboot recovers without operator action.
 
 `LFG_RELAY_URL` is required (no default — this file must never hardcode a
 specific operator's relay). The saved binding token lives in

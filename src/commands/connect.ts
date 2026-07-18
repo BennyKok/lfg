@@ -41,6 +41,8 @@ const HELP = `lfg connect — pair this box to a remote-access relay (EXPERIMENT
 
 Usage:
   lfg connect <code>       Redeem a one-time pairing code from a relay, then stay connected
+  lfg connect              Resume the saved binding, if any (safe to re-invoke, e.g. from a
+                           process manager after a restart); shows this help if never paired
   lfg connect status       Show the current relay binding, if any
   lfg connect disconnect   Drop the saved binding and stop
   lfg connect help         Show this help
@@ -289,9 +291,19 @@ export async function cmdConnect(args: string[]): Promise<void> {
     case "help":
     case "-h":
     case "--help":
-    case undefined:
       console.log(HELP);
       return;
+    case undefined: {
+      // A process manager (systemd `Restart=always`, etc.) re-invokes `lfg
+      // connect` with no arguments on every restart — it doesn't have a fresh
+      // pairing code to hand it, and shouldn't need one: the saved token is
+      // still good. Resume the connect loop from it; only fall back to HELP
+      // when there's genuinely nothing paired yet.
+      const creds = await readCredentials();
+      if (creds) return runConnectLoop();
+      console.log(HELP);
+      return;
+    }
     default:
       if (rest.length > 0 || sub.startsWith("-")) {
         console.error(`Unknown connect subcommand: ${sub}\n`);
