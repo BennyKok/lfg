@@ -95,6 +95,7 @@ import {
   Play,
   Plus,
   Power,
+  Github,
   Globe,
   Radio,
   RotateCcw,
@@ -558,6 +559,9 @@ const OPENCODE_MODELS = [
 // model id. Kept in sync with PI_MODELS in src/agent-catalog.ts (the server
 // catalog overrides this fallback at bootstrap).
 const PI_MODELS_FALLBACK = ["fable", "opus", "sonnet", "haiku", "deepseek/deepseek-v4-flash"];
+// Kept in sync with COPILOT_MODELS in src/agent-catalog.ts (the server catalog
+// overrides this fallback at bootstrap).
+const COPILOT_MODELS = ["claude-sonnet-4.5", "claude-sonnet-4", "gpt-5"];
 const THINKING_LEVELS = ["low", "medium", "high", "xhigh"] as const;
 type ThinkingLevel = string;
 type AutoAgentBackend = "aisdk" | "codex-aisdk" | "grok" | "cursor" | "opencode";
@@ -573,7 +577,16 @@ function savedThinkingLevel(): ThinkingLevel {
   return value && (THINKING_LEVELS as readonly string[]).includes(value) ? value : "medium";
 }
 
-type AgentKind = "claude" | "aisdk" | "codex" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "pi";
+type AgentKind =
+  | "claude"
+  | "aisdk"
+  | "codex"
+  | "codex-aisdk"
+  | "opencode"
+  | "grok"
+  | "cursor"
+  | "pi"
+  | "copilot";
 
 // Which agents honor a thinking/reasoning-effort level. Claude (CLI + ai-sdk)
 // takes an `effort`; Codex (CLI + ai-sdk) takes a `reasoning_effort` — both
@@ -603,6 +616,7 @@ const AGENT_MODELS: Record<AgentKind, string[]> = {
   cursor: CURSOR_MODELS,
   opencode: OPENCODE_MODELS,
   pi: PI_MODELS_FALLBACK,
+  copilot: COPILOT_MODELS,
 };
 const AGENT_DEFAULT_MODEL: Record<AgentKind, string> = {
   claude: "sonnet",
@@ -613,6 +627,7 @@ const AGENT_DEFAULT_MODEL: Record<AgentKind, string> = {
   cursor: "auto",
   opencode: "opencode-go/deepseek-v4-flash",
   pi: "sonnet",
+  copilot: "claude-sonnet-4.5",
 };
 const AGENT_THINKING_LEVELS: Record<AgentKind, string[]> = {
   claude: ["low", "medium", "high", "xhigh", "max"],
@@ -623,6 +638,9 @@ const AGENT_THINKING_LEVELS: Record<AgentKind, string[]> = {
   cursor: ["low", "medium", "high", "xhigh", "max"],
   opencode: [],
   pi: ["low", "medium", "high", "xhigh", "max"],
+  // copilot's CLI exposes no reasoning-effort knob (thinkingLevelsForAgent
+  // returns null for it, same as opencode), so the selector stays hidden.
+  copilot: [],
 };
 
 type AgentModelCatalog = {
@@ -681,6 +699,7 @@ const AGENT_OPTIONS: { key: AgentKind; label: string; Icon: typeof Sparkles }[] 
   { key: "cursor", label: "cursor", Icon: TerminalSquare },
   { key: "opencode", label: "opencode", Icon: Boxes },
   { key: "pi", label: "pi", Icon: Pi },
+  { key: "copilot", label: "copilot", Icon: Github },
 ];
 
 // Bump when any agent SVG's artwork changes. The version rides on every icon
@@ -821,6 +840,7 @@ function agentIconSrc(agent?: string): string {
   if (agent === "hermes") return `/agent-hermes.svg${v}`;
   if (agent === "opencode") return `/agent-opencode.svg${v}`;
   if (agent === "pi") return `/agent-pi.svg${v}`;
+  if (agent === "copilot") return `/agent-copilot.svg${v}`;
   return `/agent-claude.svg${v}`;
 }
 function agentIconAlt(agent?: string): string {
@@ -830,6 +850,7 @@ function agentIconAlt(agent?: string): string {
   if (agent === "hermes") return "Hermes";
   if (agent === "opencode") return "OpenCode";
   if (agent === "pi") return "pi";
+  if (agent === "copilot") return "Copilot";
   return "Claude";
 }
 
