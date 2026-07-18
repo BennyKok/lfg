@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 18, 2026 - Custom agent profiles (v0.1.40)
+
+- Agents can now load a custom profile from a directory (`LFG_PI_PROFILE_DIR`):
+  extra system-prompt text, a skills directory, and a display name — injected
+  via pi's native `--append-system-prompt`/`--skill` flags. Lets operators
+  brand and specialize managed pi sessions without forking LFG.
+
 ## July 18, 2026 - More agents and reliable mobile layers (v0.1.39)
 
 - Pi and GitHub Copilot are now first-class coding-agent choices across setup,
