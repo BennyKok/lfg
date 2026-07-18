@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 18, 2026 - Correct Pi and Copilot icons (v0.1.41)
+
+- Pi now uses its official block logo instead of a generic pi glyph, with a
+  fresh cache version so the corrected artwork appears immediately.
+- Pi and GitHub Copilot icons are now served by the production static-asset
+  route, fixing missing icons outside the development server.
+
 ## July 18, 2026 - Custom agent profiles (v0.1.40)
 
 - Agents can now load a custom profile from a directory (`LFG_PI_PROFILE_DIR`):

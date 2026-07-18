@@ -709,7 +709,7 @@ const AGENT_OPTIONS: { key: AgentKind; label: string; Icon: typeof Sparkles }[] 
 // URL so the backend can serve them `immutable` for a year — repeat renders hit
 // the browser cache, never the network — while a redeploy that changes an icon
 // busts the cache by changing the URL.
-const AGENT_ICON_VERSION = "20260712";
+const AGENT_ICON_VERSION = "20260718";
 // Maps an agent-kind to its session-card / picker icon. codex variants share the
 // codex mark; claude variants (incl. aisdk) share the claude mark.
 // ---- Native artifact viewer -------------------------------------------------

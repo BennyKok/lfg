@@ -873,6 +873,8 @@ const STATIC_FILES: Record<string, { path: string; type: string }> = {
   "/agent-opencode.svg": { path: join(WEB_DIR, "agent-opencode.svg"), type: "image/svg+xml" },
   "/agent-grok.svg": { path: join(WEB_DIR, "agent-grok.svg"), type: "image/svg+xml" },
   "/agent-hermes.svg": { path: join(WEB_DIR, "agent-hermes.svg"), type: "image/svg+xml" },
+  "/agent-pi.svg": { path: join(WEB_DIR, "agent-pi.svg"), type: "image/svg+xml" },
+  "/agent-copilot.svg": { path: join(WEB_DIR, "agent-copilot.svg"), type: "image/svg+xml" },
   "/apple-touch-icon.png": { path: join(WEB_DIR, "apple-touch-icon.png"), type: "image/png" },
 };
 
