@@ -126,6 +126,7 @@ import {
   spawnManagedCodexAisdkSession,
   spawnManagedOpencodeAisdkSession,
   spawnManagedPiSession,
+  spawnManagedCopilotSession,
   dismissCodexUpdatePrompt,
   dismissCursorTrustPrompt,
   dismissResumeSummaryGate,
@@ -3823,7 +3824,7 @@ export async function cmdServe() {
           thinkingLevel?: string;
           parentSessionId?: string;
           spawnedBy?: string;
-          agent?: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "hermes" | "pi";
+          agent?: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "copilot" | "hermes" | "pi";
         } | null;
         if (body?.agent === "hermes") {
           return err(400, "agent \"hermes\" is temporarily unavailable");
@@ -3844,9 +3845,11 @@ export async function cmdServe() {
                     ? "cursor"
                     : body?.agent === "pi"
                       ? "pi"
-                      : body?.agent === "claude"
-                        ? "claude"
-                        : "aisdk";
+                      : body?.agent === "copilot"
+                        ? "copilot"
+                        : body?.agent === "claude"
+                          ? "claude"
+                          : "aisdk";
         // Allowlist Claude models — they land on a shell argv. Unknown value =
         // hard 400, never a silent fallback to some other model. Codex model
         // names are provider/catalog driven, so validate shape instead.
@@ -3879,6 +3882,11 @@ export async function cmdServe() {
         }
         if (agent === "cursor" && model && !/^[A-Za-z0-9_.:\/-]{1,120}$/.test(model))
           return err(400, "invalid cursor model name");
+        if (agent === "copilot" && model) {
+          const allowed = modelsForAgent("copilot");
+          if (!allowed.includes(model))
+            return err(400, `unknown model "${model}" (expected one of ${allowed.join(", ")})`);
+        }
         // codex-aisdk drives codex through the AI SDK, so its model is a codex
         // slug (gpt-5.x-codex …) — provider/catalog driven like the tmux codex.
         // Validate by shape, same as the codex branch.
@@ -4092,6 +4100,16 @@ export async function cmdServe() {
                   cwd,
                   prompt,
                   model: resolvedModel ?? "auto",
+                  lfgSessionId: launchId,
+                  lfgUser: assignedUser,
+                  containInAgentSlice: isSubagent,
+                })
+            : agent === "copilot"
+              ? spawnManagedCopilotSession({
+                  name: tmuxName,
+                  cwd,
+                  prompt,
+                  model: resolvedModel,
                   lfgSessionId: launchId,
                   lfgUser: assignedUser,
                   containInAgentSlice: isSubagent,

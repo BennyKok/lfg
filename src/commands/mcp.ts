@@ -6,6 +6,11 @@ import {
   listModelCatalog,
   thinkingLevelsForAgent,
 } from "../agent-catalog.ts";
+import {
+  LFG_CAPABILITIES,
+  LFG_CAPABILITY_VERSION,
+  LFG_MCP_INSTRUCTIONS,
+} from "../lfg-capabilities.ts";
 
 type Repo = { name: string; cwd: string; project?: string };
 type SessionRow = {
@@ -229,7 +234,32 @@ export async function cmdMcp() {
   const server = new McpServer({
     name: "lfg",
     version: VERSION,
+  }, {
+    instructions: LFG_MCP_INSTRUCTIONS,
   });
+
+  server.registerTool(
+    "lfg_capabilities",
+    {
+      title: "Inspect LFG Agent Capabilities",
+      description:
+        "Bootstrap the LFG product workflow. Returns the current capability contract, when to use each LFG feature, and whether this long-lived session launched with an older capability version. Call this when deciding how to present completed work or when an expected LFG tool seems unavailable.",
+      inputSchema: {},
+    },
+    async () => {
+      const launchedWith = process.env.LFG_CAPABILITY_VERSION?.trim() || null;
+      return result({
+        currentVersion: LFG_CAPABILITY_VERSION,
+        launchedWith,
+        stale: !!launchedWith && launchedWith !== LFG_CAPABILITY_VERSION,
+        capabilities: LFG_CAPABILITIES,
+        refreshGuidance:
+          launchedWith && launchedWith !== LFG_CAPABILITY_VERSION
+            ? "This session predates the current LFG capability contract. Finish or pause active work, then close and resume the session to reload its MCP catalog."
+            : null,
+      });
+    },
+  );
 
   server.registerTool(
     "lfg_list_sessions",

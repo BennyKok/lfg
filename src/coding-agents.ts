@@ -1,9 +1,10 @@
-import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { PATHS } from "./config.ts";
+import { lfgCapabilityAccess } from "./lfg-capabilities.ts";
 
 export type CodingAgentKind =
   | "claude"
@@ -14,7 +15,8 @@ export type CodingAgentKind =
   | "grok"
   | "cursor"
   | "hermes"
-  | "pi";
+  | "pi"
+  | "copilot";
 
 export type CodingAgentSetting = {
   visible: boolean;
@@ -32,6 +34,7 @@ export type CodingAgentCheck = {
 
 export type CodingAgentStatus = {
   configured: boolean;
+  lfgCapabilityAccess: "mcp" | "contract-only";
   checks: CodingAgentCheck[];
   instructions: string[];
   canAutoSetup: boolean;
@@ -88,6 +91,7 @@ export const CODING_AGENT_KINDS: Exclude<CodingAgentKind, "claude" | "hermes">[]
   "grok",
   "cursor",
   "opencode",
+  "copilot",
 ];
 
 export const CODING_AGENT_LABELS: Record<CodingAgentKind, string> = {
@@ -100,6 +104,7 @@ export const CODING_AGENT_LABELS: Record<CodingAgentKind, string> = {
   cursor: "cursor",
   hermes: "hermes",
   pi: "pi",
+  copilot: "copilot",
 };
 
 const CONFIG_PATH = join(PATHS.data, "coding-agents.json");
@@ -271,6 +276,16 @@ function hermesPath(): string | null {
   ]);
 }
 
+function copilotPath(): string | null {
+  const home = userHome();
+  return which("copilot", [
+    process.env.LFG_COPILOT_PATH ?? "",
+    `${home}/.local/bin/copilot`,
+    `${home}/.bun/bin/copilot`,
+    "/usr/local/bin/copilot",
+  ]);
+}
+
 function hasClaudeAuth(): boolean {
   const home = userHome();
   return !!process.env.ANTHROPIC_API_KEY || existsSync(`${home}/.claude/.credentials.json`);
@@ -323,6 +338,24 @@ function hasCodexLfgMcp(): boolean {
   return args.every((part) => out.text.includes(part));
 }
 
+function commandHasLfgMcp(binary: string | null): boolean {
+  if (!binary) return false;
+  const out = commandOutput([binary, "mcp", "list"]);
+  return out.ok && /\blfg\b/i.test(out.text);
+}
+
+function hasOpencodeLfgMcp(): boolean {
+  return commandHasLfgMcp(opencodePath());
+}
+
+function hasGrokLfgMcp(): boolean {
+  return commandHasLfgMcp(grokPath());
+}
+
+function hasCursorLfgMcp(): boolean {
+  return commandHasLfgMcp(cursorPath());
+}
+
 function hasGrokAuth(): boolean {
   const home = userHome();
   return !!process.env.XAI_API_KEY || existsSync(`${home}/.grok`);
@@ -338,6 +371,24 @@ function hasHermesConfig(): boolean {
   return !!process.env.LFG_HERMES_PROVIDER || existsSync(`${home}/.hermes`);
 }
 
+function hasCopilotAuth(): boolean {
+  const home = userHome();
+  // Precedence matches Copilot CLI's env resolution: a Copilot-specific token
+  // wins over generic GH_TOKEN/GITHUB_TOKEN when both are set.
+  if (process.env.COPILOT_GITHUB_TOKEN) return true;
+  if (process.env.GH_TOKEN) return true;
+  if (process.env.GITHUB_TOKEN) return true;
+  // Interactive /login writes to ~/.copilot/ (session-state and a token/host
+  // file). An empty ~/.copilot/ directory - which any stray tool can create -
+  // is NOT proof of auth, so require an artifact that the login flow itself
+  // produces before reporting the agent as authenticated.
+  return (
+    existsSync(`${home}/.copilot/hosts.yml`) ||
+    existsSync(`${home}/.copilot/config.json`) ||
+    existsSync(`${home}/.copilot/session-state`)
+  );
+}
+
 function installCommandFor(kind: CodingAgentKind): string | null {
   if (kind === "claude" || kind === "aisdk") return "curl -fsSL https://claude.ai/install.sh | bash";
   if (kind === "codex" || kind === "codex-aisdk") return "bun add -g @openai/codex";
@@ -345,6 +396,7 @@ function installCommandFor(kind: CodingAgentKind): string | null {
   if (kind === "grok") return "curl -fsSL https://x.ai/cli/install.sh | bash";
   if (kind === "cursor") return "curl -fsSL https://cursor.com/install | bash";
   if (kind === "hermes") return "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash";
+  if (kind === "copilot") return "npm install -g @github/copilot";
   return null;
 }
 
@@ -359,6 +411,7 @@ function loginCommandPartsFor(kind: CodingAgentKind): string[] | null {
   if (kind === "grok") return [grokPath() ?? "grok"];
   if (kind === "cursor") return [cursorPath() ?? "cursor-agent", "login"];
   if (kind === "hermes") return [hermesPath() ?? "hermes"];
+  if (kind === "copilot") return [copilotPath() ?? "copilot"];
   return null;
 }
 
@@ -575,6 +628,10 @@ function statusFor(kind: CodingAgentKind): CodingAgentStatus {
     addBinary("Hermes CLI", hermesPath());
     addAuth("Hermes config", hasHermesConfig(), "set LFG_HERMES_PROVIDER if your install needs it");
     instructions.push("Install Hermes and set LFG_HERMES_PROVIDER when your provider is not the default.");
+  } else if (kind === "copilot") {
+    addBinary("GitHub Copilot CLI", copilotPath());
+    addAuth("Copilot auth", hasCopilotAuth(), "run 'copilot' and /login, or set COPILOT_GITHUB_TOKEN / GH_TOKEN with the Copilot Requests scope");
+    instructions.push("Install Copilot CLI (npm install -g @github/copilot; requires Node 22+), then run 'copilot' once and /login, or set COPILOT_GITHUB_TOKEN (or GH_TOKEN) with the Copilot Requests scope.");
   } else {
     addBinary("Grok CLI", grokPath());
     addAuth("Grok auth", hasGrokAuth(), "run `grok` once or set XAI_API_KEY");
@@ -583,6 +640,7 @@ function statusFor(kind: CodingAgentKind): CodingAgentStatus {
 
   return {
     configured: checks.every((c) => c.ok),
+    lfgCapabilityAccess: lfgCapabilityAccess(kind),
     checks,
     instructions,
     canAutoSetup,
@@ -608,6 +666,9 @@ export async function listSetupChecks(): Promise<SetupCheck[]> {
   const args = mcpCommandArgs();
   const claude = claudePath();
   const codex = codexPath();
+  const opencode = opencodePath();
+  const grok = grokPath();
+  const cursor = cursorPath();
   const checks: CodingAgentCheck[] = [
     { label: "Bun", ok: !!bunPath(), detail: bunPath() ?? "not found" },
     { label: "tmux", ok: !!which("tmux"), detail: which("tmux") ?? "not found" },
@@ -632,6 +693,17 @@ export async function listSetupChecks(): Promise<SetupCheck[]> {
   } else {
     checks.push({ label: "Codex MCP", ok: true, detail: "Codex CLI not installed" });
   }
+  const optionalMcpAgents: Array<[string, string | null, () => boolean]> = [
+    ["OpenCode", opencode, hasOpencodeLfgMcp],
+    ["Grok", grok, hasGrokLfgMcp],
+    ["Cursor", cursor, hasCursorLfgMcp],
+  ];
+  for (const [label, binary, registered] of optionalMcpAgents) {
+    const ok = registered();
+    checks.push(binary
+      ? { label: `${label} MCP`, ok, detail: ok ? "registered" : "not registered" }
+      : { label: `${label} MCP`, ok: true, detail: `${label} CLI not installed` });
+  }
   return [
     {
       key: "lfg-mcp",
@@ -640,9 +712,9 @@ export async function listSetupChecks(): Promise<SetupCheck[]> {
       running: systemSetupRuns.has("lfg-mcp"),
       checks,
       instructions: [
-        "Registers the local LFG MCP server with Claude and Codex when those CLIs are installed.",
+        "Registers the local LFG MCP server with Claude, Codex, OpenCode, Grok, and Cursor when those CLIs are installed.",
       ],
-      canAutoSetup: !!args && (!!claude || !!codex),
+      canAutoSetup: !!args && !!(claude || codex || opencode || grok || cursor),
       actionLabel: "Install MCP",
     },
   ];
@@ -660,6 +732,62 @@ function installCodexMcp(codex: string, args: string[]): void {
   if (!out.ok) throw new Error(out.text.trim() || "Codex MCP install failed");
 }
 
+function mergeJsonConfig(path: string, update: (current: Record<string, unknown>) => Record<string, unknown>): void {
+  const parsed = readJson<Record<string, unknown>>(path);
+  if (existsSync(path) && !parsed) {
+    throw new Error(`Cannot update invalid JSON config: ${path}`);
+  }
+  const current = parsed ?? {};
+  const next = update(current);
+  writeFileSync(path, JSON.stringify(next, null, 2));
+}
+
+export function withOpencodeLfgMcp(current: Record<string, unknown>, args: string[]): Record<string, unknown> {
+  const mcp = typeof current.mcp === "object" && current.mcp !== null
+    ? current.mcp as Record<string, unknown>
+    : {};
+  return {
+    ...current,
+    mcp: {
+      ...mcp,
+      lfg: { type: "local", command: args, enabled: true },
+    },
+  };
+}
+
+export function withCursorLfgMcp(current: Record<string, unknown>, args: string[]): Record<string, unknown> {
+  const mcpServers = typeof current.mcpServers === "object" && current.mcpServers !== null
+    ? current.mcpServers as Record<string, unknown>
+    : {};
+  return {
+    ...current,
+    mcpServers: {
+      ...mcpServers,
+      lfg: { command: args[0], args: args.slice(1) },
+    },
+  };
+}
+
+async function installOpencodeMcp(args: string[]): Promise<void> {
+  const path = join(userHome(), ".config", "opencode", "opencode.json");
+  await mkdir(dirname(path), { recursive: true });
+  mergeJsonConfig(path, (current) => withOpencodeLfgMcp(current, args));
+}
+
+function installGrokMcp(grok: string, args: string[]): void {
+  commandOutput([grok, "mcp", "remove", "lfg", "--scope", "user"]);
+  const out = commandOutput([grok, "mcp", "add", "lfg", "--scope", "user", "--", ...args]);
+  if (!out.ok) throw new Error(out.text.trim() || "Grok MCP install failed");
+}
+
+async function installCursorMcp(args: string[]): Promise<void> {
+  const path = join(userHome(), ".cursor", "mcp.json");
+  await mkdir(dirname(path), { recursive: true });
+  mergeJsonConfig(path, (current) => withCursorLfgMcp(current, args));
+  const cursor = cursorPath();
+  if (cursor) commandOutput([cursor, "mcp", "enable", "lfg"]);
+}
+
 export async function runSetupAction(key: string): Promise<void> {
   if (key !== "lfg-mcp") throw new Error(`unknown setup action "${key}"`);
   if (systemSetupRuns.has(key)) throw new Error(`${key} setup is already running`);
@@ -668,9 +796,17 @@ export async function runSetupAction(key: string): Promise<void> {
     if (!args) throw new Error("Bun is required to register the LFG MCP server");
     const claude = claudePath();
     const codex = codexPath();
-    if (!claude && !codex) throw new Error("Install Claude or Codex first, then register the LFG MCP server");
+    const opencode = opencodePath();
+    const grok = grokPath();
+    const cursor = cursorPath();
+    if (!claude && !codex && !opencode && !grok && !cursor) {
+      throw new Error("Install a supported coding agent first, then register the LFG MCP server");
+    }
     if (claude) installClaudeMcp(claude, args);
     if (codex) installCodexMcp(codex, args);
+    if (opencode) await installOpencodeMcp(args);
+    if (grok) installGrokMcp(grok, args);
+    if (cursor) await installCursorMcp(args);
   })();
   systemSetupRuns.set(key, run);
   try {
@@ -687,6 +823,7 @@ function setupEnvFor(kind: CodingAgentKind): Record<string, string> | null {
   if (kind === "grok") return { LFG_INSTALL_GROK: "1" };
   if (kind === "cursor") return { LFG_INSTALL_CURSOR: "1" };
   if (kind === "hermes") return { LFG_INSTALL_HERMES: "1" };
+  if (kind === "copilot") return { LFG_INSTALL_COPILOT: "1" };
   return null;
 }
 

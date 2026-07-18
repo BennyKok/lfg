@@ -9,6 +9,7 @@
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { PATHS } from "./config.ts";
+import { LFG_CAPABILITY_VERSION } from "./lfg-capabilities.ts";
 
 const FILE = `${PATHS.data}/managed-sessions.json`;
 
@@ -16,7 +17,7 @@ export type ManagedSession = {
   tmuxName: string;
   cwd: string;
   createdAt: number;
-  agent?: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "hermes" | "pi";
+  agent?: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "hermes" | "pi" | "copilot";
   // Stable id shown to clients for lfg-created sessions. For agents that mint a
   // native transcript id later (Claude/Codex CLI, Codex AI-SDK, Grok), this is
   // the durable control-plane id while nativeSessionId records the provider id.
@@ -32,6 +33,8 @@ export type ManagedSession = {
   parentNativeSessionId?: string;
   parentAgent?: string;
   spawnedBy?: "subagent" | "fork" | "finding" | "voice" | string;
+  /** LFG agent capability contract/tool catalog present when this process launched. */
+  capabilityVersion?: string;
   /** Main repo checkout when cwd is an auto-provisioned worktree. */
   repoRoot?: string;
   worktreeBranch?: string;
@@ -56,7 +59,10 @@ export function listManaged(): ManagedSession[] {
 
 export function addManaged(rec: ManagedSession): void {
   const all = readAll();
-  all[rec.tmuxName] = rec;
+  all[rec.tmuxName] = {
+    ...rec,
+    capabilityVersion: rec.capabilityVersion ?? LFG_CAPABILITY_VERSION,
+  };
   writeAll(all);
 }
 

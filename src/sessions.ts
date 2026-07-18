@@ -19,6 +19,7 @@ import { homedir } from "node:os";
 import { projectName } from "./projects";
 import { isCommandFileAgent } from "./coding-agent-adapters";
 import type { CodingAgentKind } from "./coding-agents";
+import { LFG_CAPABILITY_VERSION } from "./lfg-capabilities.ts";
 import {
   cachedFingerprints,
   upsertResumableRows,
@@ -243,6 +244,10 @@ export type Session = {
   parentNativeSessionId?: string | null;
   parentAgent?: string | null;
   spawnedBy?: string | null;
+  /** Capability contract/tool catalog recorded when this managed session launched. */
+  capabilityVersion?: string | null;
+  /** True when a long-lived managed session predates the current LFG capability contract. */
+  capabilitiesStale?: boolean;
   launching?: boolean;
   startedAt: number | null;
   transcriptPath: string | null;
@@ -413,6 +418,8 @@ function managedLaunchRow(
     parentNativeSessionId: m.parentNativeSessionId ?? null,
     parentAgent: m.parentAgent ?? null,
     spawnedBy: m.spawnedBy ?? null,
+    capabilityVersion: m.capabilityVersion ?? null,
+    capabilitiesStale: m.capabilityVersion !== LFG_CAPABILITY_VERSION,
     launching: m.launchState === "launching",
     startedAt: m.createdAt,
     transcriptPath,
@@ -432,13 +439,20 @@ function managedLaunchRow(
 
 function managedLineage(m: ManagedSession | undefined): Pick<
   Session,
-  "parentSessionId" | "parentNativeSessionId" | "parentAgent" | "spawnedBy"
+  | "parentSessionId"
+  | "parentNativeSessionId"
+  | "parentAgent"
+  | "spawnedBy"
+  | "capabilityVersion"
+  | "capabilitiesStale"
 > {
   return {
     parentSessionId: m?.parentSessionId ?? null,
     parentNativeSessionId: m?.parentNativeSessionId ?? null,
     parentAgent: m?.parentAgent ?? null,
     spawnedBy: m?.spawnedBy ?? null,
+    capabilityVersion: m?.capabilityVersion ?? null,
+    capabilitiesStale: !!m && m.capabilityVersion !== LFG_CAPABILITY_VERSION,
   };
 }
 
