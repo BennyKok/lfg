@@ -4,6 +4,17 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 18, 2026 - More agents and reliable mobile layers (v0.1.39)
+
+- Pi and GitHub Copilot are now first-class coding-agent choices across setup,
+  session creation, model selection, and managed launches.
+- Agents receive the LFG presentation workflow automatically, including visual
+  verification, live artifact publishing, and shipped-work showcases.
+- Script-backed artifacts can be refreshed manually, and desktop trackpad
+  gestures can cycle the active project without leaving the live view.
+- Mobile nested surfaces now stack correctly: Fork stays above an open chat,
+  and the model selector drawer fully covers its originating control pop-up.
+
 ### Added
 
 - **GitHub Copilot CLI** (`@github/copilot`, binary `copilot`) as an 8th supported coding agent:
