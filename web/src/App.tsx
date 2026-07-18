@@ -13444,10 +13444,10 @@ function ModelPicker({
             shouldScaleBackground={false}
           >
             <VaulDrawer.Portal>
-              <VaulDrawer.Overlay className="fixed inset-0 z-[149] bg-black/80" />
+              <VaulDrawer.Overlay className="fixed inset-0 z-[179] bg-black/80" />
               <VaulDrawer.Content
                 data-slot="model-picker-drawer-content"
-                className="fixed inset-x-0 bottom-0 z-[150] mx-auto flex max-h-[82dvh] max-w-lg select-none flex-col rounded-t-[2rem] border border-border bg-background p-4 pb-[max(env(safe-area-inset-bottom),1rem)] text-foreground shadow-2xl outline-none"
+                className="fixed inset-x-0 bottom-0 z-[180] mx-auto flex max-h-[82dvh] max-w-lg select-none flex-col rounded-t-[2rem] border border-border bg-background p-4 pb-[max(env(safe-area-inset-bottom),1rem)] text-foreground shadow-2xl outline-none"
                 aria-label="Model"
               >
                 <div className="mx-auto mb-3 h-1.5 w-24 shrink-0 rounded-full bg-muted" />
@@ -13603,7 +13603,13 @@ function BottomSheet({
         if (!open) onClose();
       }}
     >
-      <DrawerContent>
+      <DrawerContent
+        // Bottom sheets can be launched from the full-screen chat layer (z-90).
+        // Keep both the scrim and sheet above it without raising every Drawer in
+        // the app, since page-level drawers intentionally sit below some screens.
+        overlayClassName="z-[100]"
+        className="z-[100]"
+      >
         <DrawerTitle className="sr-only">{title}</DrawerTitle>
         <div className="overflow-y-auto overscroll-contain">{children}</div>
       </DrawerContent>
