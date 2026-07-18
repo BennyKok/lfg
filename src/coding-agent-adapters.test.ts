@@ -17,6 +17,7 @@ import {
   spawnManagedCursorSession,
   spawnManagedGrokSession,
   spawnManagedOpencodeAisdkSession,
+  spawnManagedPiSession,
   spawnManagedSession,
   managedCopilotSessionArgv,
   managedCursorSessionArgv,
@@ -37,6 +38,7 @@ const launchers = {
   opencode: spawnManagedOpencodeAisdkSession,
   grok: spawnManagedGrokSession,
   cursor: spawnManagedCursorSession,
+  pi: spawnManagedPiSession,
   copilot: spawnManagedCopilotSession,
 } satisfies Record<(typeof SESSION_AGENT_KINDS)[number], unknown>;
 

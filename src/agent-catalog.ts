@@ -48,6 +48,13 @@ export const HERMES_MODELS: string[] = [
   "nousresearch/hermes-4-70b",
   "nousresearch/hermes-3-llama-3.1-405b",
 ];
+// pi resolves the Claude aliases the same way the claude CLI does (fuzzy/glob
+// match against its own Anthropic model catalog via the proxy), so reuse the
+// same alias set as claude/aisdk rather than pi's raw model ids. deepseek is
+// the one model the free plan is entitled to (no Claude model clears its
+// minPlan) — pi-session.ts merges it into pi's Anthropic provider config as a
+// custom model id so it resolves like the aliases above instead of erroring.
+export const PI_MODELS: string[] = ["fable", "opus", "sonnet", "haiku", "deepseek/deepseek-v4-flash"];
 export const OPENCODE_MODELS: string[] = [
   "opencode/big-pickle",
   "opencode/deepseek-v4-flash-free",
@@ -91,6 +98,7 @@ const MODEL_CATALOG_KEYS: CodingAgentKind[] = [
   "grok",
   "cursor",
   "opencode",
+  "pi",
   "copilot",
 ];
 
@@ -119,6 +127,7 @@ const LABELS: Record<CodingAgentKind, string> = {
   grok: "grok",
   cursor: "cursor",
   hermes: "hermes",
+  pi: "pi",
   copilot: "copilot",
 };
 
@@ -131,6 +140,7 @@ export const MODEL_OPTIONS: Record<CodingAgentKind, { defaultModel: string; mode
   cursor: { defaultModel: "auto", models: CURSOR_MODELS },
   hermes: { defaultModel: "nousresearch/hermes-4-405b", models: HERMES_MODELS },
   opencode: { defaultModel: "opencode-go/deepseek-v4-flash", models: OPENCODE_MODELS },
+  pi: { defaultModel: "sonnet", models: PI_MODELS },
   copilot: { defaultModel: "claude-sonnet-4.5", models: COPILOT_MODELS },
 };
 
@@ -381,7 +391,7 @@ export function resolveModelForAgent(
 }
 
 export function thinkingLevelsForAgent(agent: string): readonly string[] | null {
-  if (agent === "claude" || agent === "aisdk" || agent === "grok") return CLAUDE_THINKING_LEVELS;
+  if (agent === "claude" || agent === "aisdk" || agent === "grok" || agent === "pi") return CLAUDE_THINKING_LEVELS;
   if (agent === "codex" || agent === "codex-aisdk") return CODEX_THINKING_LEVELS;
   if (agent === "cursor") return CURSOR_THINKING_LEVELS;
   return null;

@@ -125,6 +125,7 @@ import {
   spawnManagedAisdkSession,
   spawnManagedCodexAisdkSession,
   spawnManagedOpencodeAisdkSession,
+  spawnManagedPiSession,
   spawnManagedCopilotSession,
   dismissCodexUpdatePrompt,
   dismissCursorTrustPrompt,
@@ -343,6 +344,7 @@ function uploadFilename(req: Request, url: URL): string {
 
 const GROK_DEFAULT_MODEL = "grok-4.5";
 const OPENCODE_DEFAULT_MODEL = "opencode-go/deepseek-v4-flash";
+const PI_DEFAULT_MODEL = "sonnet";
 // Models whose provider currently rejects our requests (Sakana's fugu returns a
 // hard 403 Forbidden, and the local Novita credential currently 403s too — see
 // opencode.log). A session born onto one of these streams zero output and
@@ -642,7 +644,9 @@ function persistManagedResume(session: Session): void {
       ? "codex-aisdk"
       : session.agent === "opencode"
         ? "opencode"
-        : null;
+        : session.agent === "pi"
+          ? "pi"
+          : null;
   if (!backend) return;
   upsertResumableRows([{
     sessionId: session.sessionId,
@@ -651,7 +655,7 @@ function persistManagedResume(session: Session): void {
     title: session.title,
     lastActivityAt: session.lastActivityAt ?? Date.now(),
     lastUserText: session.lastUserText,
-    agent: backend === "codex-aisdk" ? "codex" : backend === "opencode" ? "opencode" : "claude",
+    agent: backend === "codex-aisdk" ? "codex" : backend === "opencode" ? "opencode" : backend === "pi" ? "pi" : "claude",
     path: sessionIndexKey(session.sessionId),
     mtimeMs: session.lastActivityAt ?? Date.now(),
     backend,
@@ -1472,6 +1476,8 @@ async function voiceStatusSnapshot(user?: string | null): Promise<string> {
             ? "grok"
             : s.agent === "hermes"
               ? "hermes"
+          : s.agent === "pi"
+            ? "pi"
           : null;
     const kind = family ? ` <${family}>` : "";
     let status = "IDLE";
@@ -3481,7 +3487,7 @@ export async function cmdServe() {
         const offset = Number(url.searchParams.get("offset")) || 0;
         const search = url.searchParams.get("search")?.trim() || undefined;
         const agentParam = url.searchParams.get("agent")?.trim();
-        const agent = agentParam === "claude" || agentParam === "codex" || agentParam === "opencode"
+        const agent = agentParam === "claude" || agentParam === "codex" || agentParam === "opencode" || agentParam === "pi"
           ? agentParam
           : undefined;
         const project = url.searchParams.get("project")?.trim() || undefined;
@@ -3560,7 +3566,9 @@ export async function cmdServe() {
               ? "gpt-5.5"
               : cachedResume.backend === "opencode"
                 ? OPENCODE_DEFAULT_MODEL
-                : "opus"
+                : cachedResume.backend === "pi"
+                  ? PI_DEFAULT_MODEL
+                  : "opus"
           );
           addManaged({
             tmuxName,
@@ -3599,15 +3607,26 @@ export async function cmdServe() {
                   lfgSessionId: sessionId,
                   lfgUser: assignedUser,
                 })
-              : spawnManagedAisdkSession({
-                  name: tmuxName,
-                  cwd,
-                  prompt,
-                  model: resumeModel,
-                  sessionId,
-                  lfgSessionId: sessionId,
-                  lfgUser: assignedUser,
-                });
+              : cachedResume.backend === "pi"
+                ? spawnManagedPiSession({
+                    name: tmuxName,
+                    cwd,
+                    prompt,
+                    model: resumeModel,
+                    key: sessionId,
+                    resume: resumeHandle,
+                    lfgSessionId: sessionId,
+                    lfgUser: assignedUser,
+                  })
+                : spawnManagedAisdkSession({
+                    name: tmuxName,
+                    cwd,
+                    prompt,
+                    model: resumeModel,
+                    sessionId,
+                    lfgSessionId: sessionId,
+                    lfgUser: assignedUser,
+                  });
           if (!spawned.ok) {
             removeManaged(tmuxName);
             assignUser(tmuxName, null);
@@ -3733,7 +3752,7 @@ export async function cmdServe() {
             user?: string;
             model?: string;
             thinkingLevel?: string;
-            agent?: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "hermes";
+            agent?: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "hermes" | "pi";
           } | null;
           const source = (await listSessions()).find((s) => s.sessionId === sourceId);
           const cachedSource = getCachedResumableSession(sourceId);
@@ -3805,7 +3824,7 @@ export async function cmdServe() {
           thinkingLevel?: string;
           parentSessionId?: string;
           spawnedBy?: string;
-          agent?: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "copilot" | "hermes";
+          agent?: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "copilot" | "hermes" | "pi";
         } | null;
         if (body?.agent === "hermes") {
           return err(400, "agent \"hermes\" is temporarily unavailable");
@@ -3824,9 +3843,11 @@ export async function cmdServe() {
                   ? "grok"
                   : body?.agent === "cursor"
                     ? "cursor"
-                    : body?.agent === "copilot"
-                      ? "copilot"
-                      : body?.agent === "claude"
+                    : body?.agent === "pi"
+                      ? "pi"
+                      : body?.agent === "copilot"
+                        ? "copilot"
+                        : body?.agent === "claude"
                           ? "claude"
                           : "aisdk";
         // Allowlist Claude models — they land on a shell argv. Unknown value =
@@ -3851,6 +3872,11 @@ export async function cmdServe() {
         }
         if (agent === "grok" && model) {
           const allowed = modelsForAgent("grok");
+          if (!allowed.includes(model))
+            return err(400, `unknown model "${model}" (expected one of ${allowed.join(", ")})`);
+        }
+        if (agent === "pi" && model) {
+          const allowed = modelsForAgent("pi");
           if (!allowed.includes(model))
             return err(400, `unknown model "${model}" (expected one of ${allowed.join(", ")})`);
         }
@@ -4003,11 +4029,16 @@ export async function cmdServe() {
         // Mint a stable lfg id up front; listSessions maps it to Grok's native
         // transcript later once Grok creates one.
         const grokKey = agent === "grok" ? crypto.randomUUID() : null;
+        // pi mints its own session id almost immediately (right after the
+        // RpcClient starts, before turn 1) but not synchronously with this
+        // request — same control-plane-key treatment as codex-aisdk.
+        const piKey = agent === "pi" ? crypto.randomUUID() : null;
         const launchId =
           aisdkSessionId ??
           codexAisdkKey ??
           opencodeKey ??
           grokKey ??
+          piKey ??
           crypto.randomUUID();
         const createdAt = Date.now();
         const launchModel =
@@ -4021,7 +4052,9 @@ export async function cmdServe() {
                     ? resolvedModel ?? "gpt-5.5"
                     : agent === "aisdk"
                       ? resolvedModel ?? "opus"
-                      : resolvedModel;
+                      : agent === "pi"
+                        ? resolvedModel ?? PI_DEFAULT_MODEL
+                        : resolvedModel;
         addManaged({
           tmuxName,
           cwd,
@@ -4116,7 +4149,19 @@ export async function cmdServe() {
                       lfgUser: assignedUser,
                       containInAgentSlice: isSubagent,
                     })
-                  : spawnManagedSession({ name: tmuxName, cwd, prompt, model: resolvedModel, thinkingLevel, lfgSessionId: launchId, lfgUser: assignedUser, containInAgentSlice: isSubagent });
+                  : agent === "pi"
+                    ? spawnManagedPiSession({
+                        name: tmuxName,
+                        cwd,
+                        prompt,
+                        model: resolvedModel ?? PI_DEFAULT_MODEL,
+                        key: piKey!,
+                        thinkingLevel,
+                        lfgSessionId: launchId,
+                        lfgUser: assignedUser,
+                        containInAgentSlice: isSubagent,
+                      })
+                    : spawnManagedSession({ name: tmuxName, cwd, prompt, model: resolvedModel, thinkingLevel, lfgSessionId: launchId, lfgUser: assignedUser, containInAgentSlice: isSubagent });
         if (!r.ok) {
           removeManaged(tmuxName);
           assignUser(tmuxName, null);

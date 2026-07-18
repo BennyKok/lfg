@@ -16,6 +16,7 @@ export const CODING_AGENT_ADAPTERS = {
   aisdk: { transport: "command-file", managedLaunch: true },
   "codex-aisdk": { transport: "command-file", managedLaunch: true },
   opencode: { transport: "command-file", managedLaunch: true },
+  pi: { transport: "command-file", managedLaunch: true },
 } as const satisfies Record<Exclude<CodingAgentKind, "hermes">, CodingAgentAdapter>;
 
 export const SESSION_AGENT_KINDS = [
@@ -26,6 +27,7 @@ export const SESSION_AGENT_KINDS = [
   "opencode",
   "grok",
   "cursor",
+  "pi",
   "copilot",
 ] as const satisfies readonly CodingAgentKind[];
 
@@ -41,6 +43,7 @@ export const COMMAND_FILE_AGENT_KINDS = [
   "aisdk",
   "codex-aisdk",
   "opencode",
+  "pi",
 ] as const satisfies readonly CodingAgentKind[];
 
 export function isCommandFileAgent(agent: string | null | undefined): agent is (typeof COMMAND_FILE_AGENT_KINDS)[number] {

@@ -15,6 +15,7 @@ export type CodingAgentKind =
   | "grok"
   | "cursor"
   | "hermes"
+  | "pi"
   | "copilot";
 
 export type CodingAgentSetting = {
@@ -102,6 +103,7 @@ export const CODING_AGENT_LABELS: Record<CodingAgentKind, string> = {
   grok: "grok",
   cursor: "cursor",
   hermes: "hermes",
+  pi: "pi",
   copilot: "copilot",
 };
 

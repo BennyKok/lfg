@@ -56,6 +56,7 @@ const DIRECT_INDEX_MANAGED_AGENTS = new Set<ManagedSession["agent"]>([
   "aisdk",
   "codex-aisdk",
   "opencode",
+  "pi",
 ]);
 
 type SessionProfile = {
@@ -394,7 +395,9 @@ function managedLaunchRow(
           ? `hermes --model ${m.model ?? ""}`.trim()
           : agent === "opencode"
             ? `lfg opencode-aisdk-session --model ${m.model ?? ""}`.trim()
-            : `lfg aisdk-session --model ${m.model ?? ""}`.trim();
+            : agent === "pi"
+              ? `lfg pi-session --model ${m.model ?? ""}`.trim()
+              : `lfg aisdk-session --model ${m.model ?? ""}`.trim();
   const cmd = pid ? readProcCmd(pid, fallbackCmd) : fallbackCmd;
   const model = m.model ?? cmd.match(/--model\s+(\S+)/)?.[1] ?? null;
   const transcriptPath =
@@ -2149,8 +2152,9 @@ export async function listSessions(): Promise<Session[]> {
   for (const e of aisdkEntries) {
     const isCodex = e.agent === "codex";
     const isOpencode = e.agent === "opencode";
+    const isPi = e.agent === "pi";
     const codexThreadId = isCodex ? (e.threadId ?? null) : null;
-    const nativeSessionId = isCodex || isOpencode ? (e.threadId ?? null) : e.sessionId;
+    const nativeSessionId = isCodex || isOpencode || isPi ? (e.threadId ?? null) : e.sessionId;
     const managedRec = e.tmuxName ? managedByName.get(e.tmuxName) : undefined;
     rememberNativeSession(managedRec, nativeSessionId);
     const sessionId = managedVisibleId(managedRec, e.sessionId) ?? e.sessionId;
@@ -2188,13 +2192,15 @@ export async function listSessions(): Promise<Session[]> {
       startedAt = statSync(`/proc/${e.harnessPid}`).ctimeMs;
     } catch {}
     out.push({
-      agent: isCodex ? "codex-aisdk" : isOpencode ? "opencode" : "aisdk",
+      agent: isCodex ? "codex-aisdk" : isOpencode ? "opencode" : isPi ? "pi" : "aisdk",
       pid: e.harnessPid,
       cmd: isCodex
         ? `lfg codex-aisdk-session --model ${e.model}`
         : isOpencode
           ? `lfg opencode-aisdk-session --model ${e.model}`
-          : `lfg aisdk-session --model ${e.model}`,
+          : isPi
+            ? `lfg pi-session --model ${e.model}`
+            : `lfg aisdk-session --model ${e.model}`,
       cwd: e.cwd,
       project,
       title,
@@ -2428,8 +2434,8 @@ export type ResumableSession = {
   // Which engine the session was recorded with. "claude" resumes via the claude
   // CLI (`claude --resume`); "codex" resumes via a codex-aisdk harness keyed to
   // the rollout's threadId. The serve /resume endpoint branches on this.
-  agent: "claude" | "codex" | "opencode";
-  backend?: "aisdk" | "codex-aisdk" | "opencode";
+  agent: "claude" | "codex" | "opencode" | "pi";
+  backend?: "aisdk" | "codex-aisdk" | "opencode" | "pi";
   resumeHandle?: string | null;
   model?: string | null;
   assignedUser?: string | null;
@@ -2569,12 +2575,16 @@ async function refreshResumableCacheOnce(): Promise<void> {
       ? "codex-aisdk"
       : m.agent === "opencode"
         ? "opencode"
-        : "aisdk";
+        : m.agent === "pi"
+          ? "pi"
+          : "aisdk";
     const agent = backend === "codex-aisdk"
       ? "codex"
       : backend === "opencode"
         ? "opencode"
-        : "claude";
+        : backend === "pi"
+          ? "pi"
+          : "claude";
     const sdkEntry = sdkEntries.get(m.sessionId);
     const resumeHandle = backend === "aisdk"
       ? m.sessionId

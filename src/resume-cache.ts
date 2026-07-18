@@ -26,7 +26,7 @@ export type ResumableCacheRow = ResumableSession & {
   managed?: boolean;
 };
 
-export type ResumableBackend = "aisdk" | "codex-aisdk" | "opencode";
+export type ResumableBackend = "aisdk" | "codex-aisdk" | "opencode" | "pi";
 
 export type ResumableQuery = {
   limit?: number;
