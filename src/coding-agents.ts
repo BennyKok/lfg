@@ -92,6 +92,7 @@ export const CODING_AGENT_KINDS: Exclude<CodingAgentKind, "claude" | "hermes">[]
   "cursor",
   "opencode",
   "copilot",
+  "pi",
 ];
 
 export const CODING_AGENT_LABELS: Record<CodingAgentKind, string> = {
@@ -276,6 +277,18 @@ function hermesPath(): string | null {
   ]);
 }
 
+// pi has no standalone-CLI requirement: the backend drives LFG's own bundled
+// copy of @mariozechner/pi-coding-agent over its RPC protocol (see
+// agents/backends/pi-session.ts), with LFG_PI_PATH as an explicit override.
+// Detection therefore mirrors the harness's resolvePiCliPath() instead of
+// scanning PATH for a global binary.
+function piPath(): string | null {
+  const override = process.env.LFG_PI_PATH;
+  if (override && existsSync(override)) return override;
+  const bundled = join(PATHS.root, "node_modules", "@mariozechner", "pi-coding-agent", "dist", "cli.js");
+  return existsSync(bundled) ? bundled : null;
+}
+
 function copilotPath(): string | null {
   const home = userHome();
   return which("copilot", [
@@ -366,6 +379,13 @@ function hasCursorAuth(): boolean {
   return !!process.env.CURSOR_API_KEY || existsSync(`${home}/.cursor`);
 }
 
+// pi's auth is file-based (~/.pi/agent/auth.json) or the ANTHROPIC_API_KEY env
+// var — there is no interactive login step (see pi-session.ts header).
+function hasPiAuth(): boolean {
+  const home = userHome();
+  return !!process.env.ANTHROPIC_API_KEY || existsSync(`${home}/.pi/agent/auth.json`);
+}
+
 function hasHermesConfig(): boolean {
   const home = userHome();
   return !!process.env.LFG_HERMES_PROVIDER || existsSync(`${home}/.hermes`);
@@ -397,6 +417,9 @@ function installCommandFor(kind: CodingAgentKind): string | null {
   if (kind === "cursor") return "curl -fsSL https://cursor.com/install | bash";
   if (kind === "hermes") return "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash";
   if (kind === "copilot") return "npm install -g @github/copilot";
+  // pi ships bundled with LFG (node_modules/@mariozechner/pi-coding-agent) —
+  // there is nothing separate to install.
+  if (kind === "pi") return null;
   return null;
 }
 
@@ -412,6 +435,9 @@ function loginCommandPartsFor(kind: CodingAgentKind): string[] | null {
   if (kind === "cursor") return [cursorPath() ?? "cursor-agent", "login"];
   if (kind === "hermes") return [hermesPath() ?? "hermes"];
   if (kind === "copilot") return [copilotPath() ?? "copilot"];
+  // pi has no login subcommand — auth is file-based (~/.pi/agent/auth.json) or
+  // ANTHROPIC_API_KEY, so there is no terminal login to offer.
+  if (kind === "pi") return null;
   return null;
 }
 
@@ -628,6 +654,16 @@ function statusFor(kind: CodingAgentKind): CodingAgentStatus {
     addBinary("Hermes CLI", hermesPath());
     addAuth("Hermes config", hasHermesConfig(), "set LFG_HERMES_PROVIDER if your install needs it");
     instructions.push("Install Hermes and set LFG_HERMES_PROVIDER when your provider is not the default.");
+  } else if (kind === "pi") {
+    addBinary("pi runtime", piPath());
+    addAuth("pi auth", hasPiAuth(), "set ANTHROPIC_API_KEY or configure ~/.pi/agent/auth.json");
+    instructions.push(
+      "pi ships bundled with LFG. Set ANTHROPIC_API_KEY or configure ~/.pi/agent/auth.json — pi has no login step.",
+    );
+    // No setup.sh install path and no login subcommand: pi is ready as soon as
+    // the bundled runtime exists and its file-based auth is in place.
+    canAutoSetup = false;
+    canLoginInTerminal = false;
   } else if (kind === "copilot") {
     addBinary("GitHub Copilot CLI", copilotPath());
     addAuth("Copilot auth", hasCopilotAuth(), "run 'copilot' and /login, or set COPILOT_GITHUB_TOKEN / GH_TOKEN with the Copilot Requests scope");
@@ -693,6 +729,10 @@ export async function listSetupChecks(): Promise<SetupCheck[]> {
   } else {
     checks.push({ label: "Codex MCP", ok: true, detail: "Codex CLI not installed" });
   }
+  // No row for aisdk/codex-aisdk (they ride the Claude/Codex CLI registrations
+  // above) and none for pi: pi is an RPC backend driving LFG's bundled
+  // @mariozechner/pi-coding-agent — it has no `pi mcp` registration surface, so
+  // there is no LFG MCP to install or check for it.
   const optionalMcpAgents: Array<[string, string | null, () => boolean]> = [
     ["OpenCode", opencode, hasOpencodeLfgMcp],
     ["Grok", grok, hasGrokLfgMcp],

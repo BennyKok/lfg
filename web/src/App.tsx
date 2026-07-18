@@ -90,6 +90,7 @@ import {
   Paperclip,
   Pause,
   Pencil,
+  Pi,
   Pin,
   Play,
   Plus,
@@ -553,6 +554,10 @@ const OPENCODE_MODELS = [
   "opencode-go/qwen3.7-max",
   "opencode-go/qwen3.7-plus",
 ];
+// pi resolves the same Claude aliases as claude/aisdk plus one custom proxy
+// model id. Kept in sync with PI_MODELS in src/agent-catalog.ts (the server
+// catalog overrides this fallback at bootstrap).
+const PI_MODELS_FALLBACK = ["fable", "opus", "sonnet", "haiku", "deepseek/deepseek-v4-flash"];
 const THINKING_LEVELS = ["low", "medium", "high", "xhigh"] as const;
 type ThinkingLevel = string;
 type AutoAgentBackend = "aisdk" | "codex-aisdk" | "grok" | "cursor" | "opencode";
@@ -568,7 +573,7 @@ function savedThinkingLevel(): ThinkingLevel {
   return value && (THINKING_LEVELS as readonly string[]).includes(value) ? value : "medium";
 }
 
-type AgentKind = "claude" | "aisdk" | "codex" | "codex-aisdk" | "opencode" | "grok" | "cursor";
+type AgentKind = "claude" | "aisdk" | "codex" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "pi";
 
 // Which agents honor a thinking/reasoning-effort level. Claude (CLI + ai-sdk)
 // takes an `effort`; Codex (CLI + ai-sdk) takes a `reasoning_effort` — both
@@ -581,7 +586,8 @@ function agentSupportsThinking(agent: AgentKind): boolean {
     agent === "grok" ||
     agent === "cursor" ||
     agent === "codex" ||
-    agent === "codex-aisdk"
+    agent === "codex-aisdk" ||
+    agent === "pi"
   );
 }
 
@@ -596,6 +602,7 @@ const AGENT_MODELS: Record<AgentKind, string[]> = {
   grok: GROK_MODELS,
   cursor: CURSOR_MODELS,
   opencode: OPENCODE_MODELS,
+  pi: PI_MODELS_FALLBACK,
 };
 const AGENT_DEFAULT_MODEL: Record<AgentKind, string> = {
   claude: "sonnet",
@@ -605,6 +612,7 @@ const AGENT_DEFAULT_MODEL: Record<AgentKind, string> = {
   grok: "grok-4.5",
   cursor: "auto",
   opencode: "opencode-go/deepseek-v4-flash",
+  pi: "sonnet",
 };
 const AGENT_THINKING_LEVELS: Record<AgentKind, string[]> = {
   claude: ["low", "medium", "high", "xhigh", "max"],
@@ -614,6 +622,7 @@ const AGENT_THINKING_LEVELS: Record<AgentKind, string[]> = {
   grok: ["low", "medium", "high", "xhigh", "max"],
   cursor: ["low", "medium", "high", "xhigh", "max"],
   opencode: [],
+  pi: ["low", "medium", "high", "xhigh", "max"],
 };
 
 type AgentModelCatalog = {
@@ -671,6 +680,7 @@ const AGENT_OPTIONS: { key: AgentKind; label: string; Icon: typeof Sparkles }[] 
   { key: "grok", label: "grok", Icon: Bot },
   { key: "cursor", label: "cursor", Icon: TerminalSquare },
   { key: "opencode", label: "opencode", Icon: Boxes },
+  { key: "pi", label: "pi", Icon: Pi },
 ];
 
 // Bump when any agent SVG's artwork changes. The version rides on every icon
@@ -810,6 +820,7 @@ function agentIconSrc(agent?: string): string {
   if (agent === "cursor") return `/agent-cursor.svg${v}`;
   if (agent === "hermes") return `/agent-hermes.svg${v}`;
   if (agent === "opencode") return `/agent-opencode.svg${v}`;
+  if (agent === "pi") return `/agent-pi.svg${v}`;
   return `/agent-claude.svg${v}`;
 }
 function agentIconAlt(agent?: string): string {
@@ -818,6 +829,7 @@ function agentIconAlt(agent?: string): string {
   if (agent === "cursor") return "Cursor";
   if (agent === "hermes") return "Hermes";
   if (agent === "opencode") return "OpenCode";
+  if (agent === "pi") return "pi";
   return "Claude";
 }
 

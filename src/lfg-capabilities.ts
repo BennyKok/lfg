@@ -62,5 +62,7 @@ export function withLfgRuntimeContract(prompt: string | undefined): string | und
 }
 
 export function lfgCapabilityAccess(agent: CodingAgentKind): "mcp" | "contract-only" {
-  return agent === "hermes" || agent === "copilot" ? "contract-only" : "mcp";
+  // pi is an RPC backend with no MCP registration surface (its harness drives
+  // the bundled pi CLI directly), so it never gets the LFG MCP toolset.
+  return agent === "hermes" || agent === "copilot" || agent === "pi" ? "contract-only" : "mcp";
 }
