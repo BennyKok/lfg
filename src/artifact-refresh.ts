@@ -12,6 +12,7 @@ import {
   type ArtifactRefreshConfig,
   type ImageArtifact,
 } from "./artifacts.ts";
+import { syncArtifactIndex } from "./transcript-index.ts";
 
 export const MIN_ARTIFACT_REFRESH_INTERVAL_MS = 10_000;
 export const MAX_ARTIFACT_REFRESH_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -304,6 +305,13 @@ export class ArtifactRefreshManager {
         id,
         patch: { status: "success", lastSuccessAt: Date.now(), lastError: undefined },
       }) ?? artifact;
+      // Keep the joined transcript/artifacts row in lockstep with the file store
+      // so page reads never need a second poller to learn the new content time.
+      try {
+        syncArtifactIndex(artifact);
+      } catch {
+        // Live poll will backfill; the HTML file is already durable.
+      }
       return { ok: true, started: true, artifact };
     } catch (error) {
       const message = cleanError(error);

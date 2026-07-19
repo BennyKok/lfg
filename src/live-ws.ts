@@ -10,7 +10,12 @@ import {
   type Session,
 } from "./sessions.ts";
 import { listSessionsCached, noteListSessionsClientActivity } from "./session-cache.ts";
-import { indexedMessagePage, indexedMessagesAfterRowid, isSessionIndexKey } from "./transcript-index.ts";
+import {
+  indexArtifactMessage,
+  indexedMessagePage,
+  indexedMessagesAfterRowid,
+  isSessionIndexKey,
+} from "./transcript-index.ts";
 import { ensureChatTranscriptCaughtUp, subscribeChatTranscript } from "./chat-ingest.ts";
 import {
   capturePane,
@@ -24,6 +29,7 @@ import {
 } from "./aisdk-registry.ts";
 import {
   collapseArtifactRetryMessages,
+  getImageArtifact,
   hydrateImageArtifactMessage,
   imageArtifactMessagesSince,
   type ImageArtifactMessage,
@@ -505,7 +511,9 @@ export function createLiveWsSupport(opts: {
     tail.transcriptDbPolling = true;
     try {
       const page = indexedMessagesAfterRowid(tp, sessionId, afterRowid, LIVE_DB_POLL_LIMIT);
-      const messages = visibleTranscriptMessages(page.messages);
+      // Same join-hydrated messages as backlog snapshots — do not re-fetch media
+      // from a second store on the live path.
+      const messages = withImageArtifacts(sessionId, visibleTranscriptMessages(page.messages));
       if (messages.length) {
         tail.lastMessageAt = Date.now();
         evlog("ws_db_poll_publish", {
@@ -529,12 +537,27 @@ export function createLiveWsSupport(opts: {
     }
   };
 
+  // Live notify for artifact rows that the file-tail path cannot see (media is
+  // not written into agent JSONL). The durable order still lives in the
+  // transcript index: we index first, then emit the same joined message shape
+  // a page read would return. Clients upsert by artifact id and must not
+  // re-sort by timestamp.
   const pollArtifacts = (tail: SidTail) => {
-    const messages = imageArtifactMessagesSince(tail.sid, tail.lastArtifactAt)
+    const recent = imageArtifactMessagesSince(tail.sid, tail.lastArtifactAt)
       .map((message) => normalizeMediaIdentity(message))
       .sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0) || String(mediaIdentity(a) ?? "").localeCompare(String(mediaIdentity(b) ?? "")));
-    for (const message of messages) {
+    if (!recent.length) return;
+    const tp = tail.pane.tp;
+    for (const message of recent) {
       tail.lastArtifactAt = Math.max(tail.lastArtifactAt, message.ts ?? 0);
+      if (tp && message.artifactId) {
+        try {
+          const artifact = getImageArtifact(message.artifactId);
+          if (artifact) indexArtifactMessage(tp, tail.sid, artifact);
+        } catch {
+          // Index is best-effort here; the message still carries full media fields.
+        }
+      }
       publishSid(tail.sid, "msg", { message: msgWithHtml(message) });
     }
   };
