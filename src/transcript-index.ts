@@ -4,7 +4,14 @@ import { Database } from "bun:sqlite";
 import { PATHS } from "./config.ts";
 import { isCursorTurnEndedLine, normalizeLineMessages, type Session, type SessionMsg } from "./sessions.ts";
 import { traceLog } from "./trace-log.ts";
-import { imageArtifactToMessage, listImageArtifacts } from "./artifacts.ts";
+import {
+  getImageArtifact,
+  imageArtifactToMessage,
+  listAllArtifacts,
+  listImageArtifacts,
+  type ImageArtifact,
+  type ImageArtifactMessage,
+} from "./artifacts.ts";
 
 export type IndexedTranscriptMatch = {
   sessionId: string;
@@ -24,6 +31,18 @@ type IndexedMessageRow = {
   ts: number | null;
   text: string;
   byte_offset: number;
+  // Joined from the artifacts table when present (same SQLite DB).
+  artifact_id?: string | null;
+  artifact_media?: string | null;
+  artifact_name?: string | null;
+  artifact_mime_type?: string | null;
+  artifact_size?: number | null;
+  artifact_caption?: string | null;
+  artifact_alt?: string | null;
+  artifact_title?: string | null;
+  artifact_version?: number | null;
+  artifact_updated_at?: number | null;
+  artifact_refresh_json?: string | null;
 };
 
 type IndexedMessageRowidRow = IndexedMessageRow & {
@@ -39,13 +58,16 @@ export type TranscriptIndexCursor = {
   indexedAt: number;
 };
 
-const DB_PATH = join(PATHS.data, "transcript-index.sqlite");
+function dbPath(): string {
+  return join(PATHS.data, "transcript-index.sqlite");
+}
 const INDEX_TEXT_MAX = 12_000;
 const INDEX_CHUNK_BYTES = 1024 * 1024;
 const BACKGROUND_LIMIT = 8;
 const WAL_CHECKPOINT_INTERVAL_MS = 30_000;
 
 let db: Database | null = null;
+let dbOpenedPath: string | null = null;
 let initialized = false;
 let backgroundRunning = false;
 let monitorStarted = false;
@@ -56,61 +78,159 @@ const enqueued = new Set<string>();
 const imports = new Map<string, Promise<{ indexed: number; offset: number; size: number }>>();
 const directNextOffset = new Map<string, number>();
 
-// Media files live in the artifact store, but their message identity and order
-// belong in the transcript index.  Keeping the row here makes media obey the
-// same pagination boundary as prose instead of appending every session image to
-// whichever transcript page happened to be requested.
+// Media files stay on disk, but artifact *metadata* and transcript *order* both
+// live in this SQLite DB. Reads JOIN the two tables so image/video/html cards
+// come from the same query path as prose — never a second poll stream that
+// re-sorts by timestamp and lands media out of place.
+const ARTIFACT_MESSAGE_SELECT = `
+  m.id, m.message_id, m.role, m.kind, m.ts, m.text, m.byte_offset,
+  a.id AS artifact_id,
+  a.media AS artifact_media,
+  a.name AS artifact_name,
+  a.mime_type AS artifact_mime_type,
+  a.size AS artifact_size,
+  a.caption AS artifact_caption,
+  a.alt AS artifact_alt,
+  a.title AS artifact_title,
+  a.version AS artifact_version,
+  a.updated_at AS artifact_updated_at,
+  a.refresh_json AS artifact_refresh_json
+`;
+
+function upsertArtifactRow(d: Database, artifact: ImageArtifact): void {
+  d.query(`
+    INSERT INTO artifacts (
+      id, session_id, media, created_at, updated_at, file_path, name, mime_type,
+      size, caption, alt, title, version, source_path, source_mtime_ms, refresh_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(id) DO UPDATE SET
+      session_id = excluded.session_id,
+      media = excluded.media,
+      created_at = excluded.created_at,
+      updated_at = excluded.updated_at,
+      file_path = excluded.file_path,
+      name = excluded.name,
+      mime_type = excluded.mime_type,
+      size = excluded.size,
+      caption = excluded.caption,
+      alt = excluded.alt,
+      title = excluded.title,
+      version = excluded.version,
+      source_path = excluded.source_path,
+      source_mtime_ms = excluded.source_mtime_ms,
+      refresh_json = excluded.refresh_json
+  `).run(
+    artifact.id,
+    artifact.sessionId,
+    artifact.media ?? "image",
+    artifact.createdAt,
+    artifact.updatedAt ?? null,
+    artifact.filePath,
+    artifact.name,
+    artifact.mimeType,
+    artifact.size,
+    artifact.caption ?? null,
+    artifact.alt ?? null,
+    artifact.title ?? null,
+    artifact.version ?? null,
+    artifact.sourcePath,
+    artifact.sourceMtimeMs ?? null,
+    artifact.refresh ? JSON.stringify(artifact.refresh) : null,
+  );
+}
+
+function deleteArtifactRow(d: Database, artifactId: string): void {
+  d.query("DELETE FROM artifacts WHERE id = ?").run(artifactId);
+  d.query(
+    "DELETE FROM transcript_messages_fts WHERE id IN (SELECT id FROM transcript_messages WHERE message_id = ?)",
+  ).run(`artifact-${artifactId}`);
+  d.query("DELETE FROM transcript_messages WHERE message_id = ?").run(`artifact-${artifactId}`);
+}
+
+/** Mirror one durable artifact into the joined artifacts table + ordered transcript row. */
+export function indexArtifactMessage(path: string, sessionId: string, artifact: ImageArtifact): number {
+  init();
+  const d = database();
+  const message = imageArtifactToMessage(artifact);
+  const messageId = message.id!;
+  const rowId = `${path}\0artifact\0${artifact.id}`;
+  const text = clippedText(message);
+  // Identity is global (artifact-<id>). If the row already lives under any
+  // path for this session, update in place rather than inventing a second
+  // ordered position.
+  const existing = d
+    .query<{ id: string; path: string; byte_offset: number }, [string]>(
+      "SELECT id, path, byte_offset FROM transcript_messages WHERE message_id = ? LIMIT 1",
+    )
+    .get(messageId);
+
+  return d.transaction(() => {
+    upsertArtifactRow(d, artifact);
+    if (existing) {
+      // Stable HTML cards re-publish under the same message id. Update the
+      // existing ordered row in place so live clients refresh without a second
+      // stream inventing a new position.
+      d.query(`
+        UPDATE transcript_messages
+           SET ts = ?, role = ?, kind = ?, text = ?
+         WHERE id = ?
+      `).run(message.ts, message.role, message.kind, text, existing.id);
+      d.query("DELETE FROM transcript_messages_fts WHERE id = ?").run(existing.id);
+      d.query(`
+        INSERT INTO transcript_messages_fts (id, session_id, text)
+        VALUES (?, ?, ?)
+      `).run(existing.id, sessionId, text);
+      pageTotalCache.delete(existing.path);
+      pageTotalCache.delete(path);
+      return 0;
+    }
+
+    const offset = nextDirectOffset(d, path);
+    directNextOffset.set(path, offset + 1);
+    const result = d.query(`
+      INSERT OR IGNORE INTO transcript_messages
+        (id, session_id, path, message_id, byte_offset, ts, role, kind, text)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      rowId,
+      sessionId,
+      path,
+      messageId,
+      offset,
+      message.ts,
+      message.role,
+      message.kind,
+      text,
+    );
+    const inserted = Number(result.changes ?? 0);
+    if (inserted) {
+      d.query(`
+        INSERT INTO transcript_messages_fts (id, session_id, text)
+        SELECT ?, ?, ?
+        WHERE NOT EXISTS (SELECT 1 FROM transcript_messages_fts WHERE id = ?)
+      `).run(rowId, sessionId, text, rowId);
+      pageTotalCache.delete(path);
+    }
+    return inserted;
+  })();
+}
+
+export function removeIndexedArtifact(artifactId: string): void {
+  init();
+  deleteArtifactRow(database(), artifactId);
+  pageTotalCache.clear();
+}
+
+// Backfill any durable artifacts still missing a transcript row. New publishes
+// append at the tail (conversation order at create time). We no longer invent
+// fractional byte_offsets from timestamps — that second ordering model is what
+// put images out of place relative to the rest of the chat.
 function indexMissingArtifactMessages(path: string, sessionId: string): number {
   const artifacts = listImageArtifacts(sessionId);
   if (!artifacts.length) return 0;
-  const d = database();
-  const exists = d.query<{ one: number }, [string]>(
-    "SELECT 1 AS one FROM transcript_messages WHERE message_id = ? LIMIT 1",
-  );
-  const nextRow = d.query<{ byte_offset: number }, [string, number]>(`
-    SELECT byte_offset FROM transcript_messages
-    WHERE path = ? AND ts > ? AND kind NOT IN ('image', 'video')
-    ORDER BY ts ASC, byte_offset ASC LIMIT 1
-  `);
-  const maxRow = d.query<{ byte_offset: number | null }, [string]>(
-    "SELECT max(byte_offset) AS byte_offset FROM transcript_messages WHERE path = ?",
-  );
-  const msgStmt = d.query(`
-    INSERT OR IGNORE INTO transcript_messages
-      (id, session_id, path, message_id, byte_offset, ts, role, kind, text)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `);
-  const ftsStmt = d.query(`
-    INSERT INTO transcript_messages_fts (id, session_id, text)
-    SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM transcript_messages_fts WHERE id = ?)
-  `);
   let inserted = 0;
-  let suffix = 0;
-  d.transaction(() => {
-    for (const artifact of artifacts) {
-      const message = imageArtifactToMessage(artifact);
-      if (exists.get(message.id!)) continue;
-      const next = nextRow.get(path, artifact.createdAt)?.byte_offset;
-      const end = maxRow.get(path)?.byte_offset ?? -1;
-      // SQLite accepts REAL values in this INTEGER-affinity column. A media row
-      // sits immediately before the next timestamped transcript row, or just
-      // after the current tail. Tiny increments preserve multiple-image order.
-      const offset = (next == null ? end + 0.5 : next - 0.5) + (suffix++ * 0.000001);
-      const id = `${path}\0artifact\0${artifact.id}`;
-      const result = msgStmt.run(
-        id, sessionId, path, message.id, offset, message.ts,
-        message.role, message.kind, clippedText(message),
-      );
-      inserted += Number(result.changes ?? 0);
-      ftsStmt.run(id, sessionId, clippedText(message), id);
-    }
-  })();
-  if (inserted) {
-    pageTotalCache.delete(path);
-    if (isSessionIndexKey(path)) {
-      const next = Math.floor((maxRow.get(path)?.byte_offset ?? -1) + 1);
-      directNextOffset.set(path, Math.max(directNextOffset.get(path) ?? 0, next));
-    }
+  for (const artifact of artifacts) {
+    inserted += indexArtifactMessage(path, sessionId, artifact);
   }
   return inserted;
 }
@@ -118,6 +238,18 @@ function indexMissingArtifactMessages(path: string, sessionId: string): number {
 export function indexSessionArtifactMessages(path: string, sessionId: string): number {
   init();
   return indexMissingArtifactMessages(path, sessionId);
+}
+
+/** Update the joined artifacts row (and existing transcript row if any) without inventing a path. */
+export function syncArtifactIndex(artifact: ImageArtifact): number {
+  init();
+  const existing = database()
+    .query<{ path: string }, [string]>(
+      "SELECT path FROM transcript_messages WHERE message_id = ? LIMIT 1",
+    )
+    .get(`artifact-${artifact.id}`);
+  const path = existing?.path ?? sessionIndexKey(artifact.sessionId);
+  return indexArtifactMessage(path, artifact.sessionId, artifact);
 }
 
 export function sessionIndexKey(sessionId: string): string {
@@ -161,9 +293,20 @@ function startWalCheckpointTimer(): void {
 }
 
 function database(): Database {
-  if (db) return db;
-  mkdirSync(dirname(DB_PATH), { recursive: true });
-  db = new Database(DB_PATH, { create: true });
+  const path = dbPath();
+  if (db && dbOpenedPath === path) return db;
+  if (db) {
+    try {
+      db.close();
+    } catch {
+      // ignore close errors when rebinding after PATHS.data changes (tests)
+    }
+    db = null;
+    initialized = false;
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  db = new Database(path, { create: true });
+  dbOpenedPath = path;
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = NORMAL");
   // The index has multiple process writers (serve plus managed harnesses).
@@ -174,6 +317,24 @@ function database(): Database {
   db.exec("PRAGMA wal_autocheckpoint = 1000");
   startWalCheckpointTimer();
   return db;
+}
+
+/** Test helper: drop the open connection so the next call rebinds to PATHS.data. */
+export function resetTranscriptIndexConnectionForTests(): void {
+  if (db) {
+    try {
+      db.close();
+    } catch {
+      // ignore
+    }
+  }
+  db = null;
+  dbOpenedPath = null;
+  initialized = false;
+  directNextOffset.clear();
+  pageTotalCache.clear();
+  enqueued.clear();
+  imports.clear();
 }
 
 function init() {
@@ -244,6 +405,61 @@ function init() {
       PRAGMA user_version = 4;
     `);
   }
+  if (version < 5) {
+    // Version 5 co-locates artifact metadata with transcript order so media
+    // cards are read via JOIN — one data source, one rendering path.
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS artifacts (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        media TEXT NOT NULL DEFAULT 'image',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER,
+        file_path TEXT NOT NULL,
+        name TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        caption TEXT,
+        alt TEXT,
+        title TEXT,
+        version INTEGER,
+        source_path TEXT,
+        source_mtime_ms REAL,
+        refresh_json TEXT
+      );
+      CREATE INDEX IF NOT EXISTS artifacts_session_created
+        ON artifacts(session_id, created_at);
+      PRAGMA user_version = 5;
+    `);
+    // Seed from the durable JSON index so existing sessions JOIN correctly
+    // without waiting for the next publish.
+    for (const artifact of listAllArtifacts()) {
+      upsertArtifactRow(d, artifact);
+    }
+  } else {
+    d.exec(`
+      CREATE TABLE IF NOT EXISTS artifacts (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        media TEXT NOT NULL DEFAULT 'image',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER,
+        file_path TEXT NOT NULL,
+        name TEXT NOT NULL,
+        mime_type TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        caption TEXT,
+        alt TEXT,
+        title TEXT,
+        version INTEGER,
+        source_path TEXT,
+        source_mtime_ms REAL,
+        refresh_json TEXT
+      );
+      CREATE INDEX IF NOT EXISTS artifacts_session_created
+        ON artifacts(session_id, created_at);
+    `);
+  }
   initialized = true;
 }
 
@@ -282,14 +498,59 @@ function clippedText(message: SessionMsg): string {
   return text.length > INDEX_TEXT_MAX ? `${text.slice(0, INDEX_TEXT_MAX)}...` : text;
 }
 
-function rowMessage(row: IndexedMessageRow): SessionMsg {
-  return {
+function rowMessage(row: IndexedMessageRow): SessionMsg | ImageArtifactMessage {
+  const base: SessionMsg = {
     id: row.message_id || row.id,
     role: row.role,
     kind: row.kind,
     text: row.text,
     ts: row.ts,
   };
+  if (row.kind !== "image" && row.kind !== "video" && row.kind !== "html") return base;
+
+  // Prefer the JOIN payload so the page/live stream never needs a second
+  // artifact-store pass to learn url/size/caption.
+  if (row.artifact_id) {
+    let refreshStatus: ImageArtifactMessage["refreshStatus"];
+    let lastRefreshedAt: number | undefined;
+    if (row.artifact_refresh_json) {
+      try {
+        const refresh = JSON.parse(row.artifact_refresh_json) as {
+          status?: ImageArtifactMessage["refreshStatus"];
+          lastSuccessAt?: number;
+        };
+        refreshStatus = refresh.status;
+        lastRefreshedAt = refresh.lastSuccessAt;
+      } catch {
+        // ignore corrupt refresh blob; media still renders
+      }
+    }
+    return {
+      ...base,
+      kind: (row.artifact_media as ImageArtifactMessage["kind"]) || row.kind,
+      artifactId: row.artifact_id,
+      url: `/api/artifacts/${encodeURIComponent(row.artifact_id)}`,
+      name: row.artifact_name || row.text,
+      mimeType: row.artifact_mime_type || "application/octet-stream",
+      size: row.artifact_size ?? 0,
+      caption: row.artifact_caption ?? undefined,
+      alt: row.artifact_alt ?? undefined,
+      title: row.artifact_title ?? undefined,
+      version: row.artifact_version ?? undefined,
+      // Updatable HTML cards surface at last content write.
+      ts: row.artifact_updated_at ?? row.ts,
+      lastRefreshedAt,
+      refreshStatus,
+    };
+  }
+
+  // Legacy rows written before the artifacts table existed: fall back to the
+  // durable file-store record once, so old transcripts still hydrate.
+  if (base.id?.startsWith("artifact-")) {
+    const artifact = getImageArtifact(base.id.slice("artifact-".length));
+    if (artifact) return imageArtifactToMessage(artifact);
+  }
+  return base;
 }
 
 function updateCursorInDb(
@@ -820,10 +1081,15 @@ export async function indexedMessagePage(
   const before = Math.max(0, opts.before ?? Number.MAX_SAFE_INTEGER);
   const rows = d
     .query<IndexedMessageRow, [string, number, number]>(`
-        SELECT id, message_id, role, kind, ts, text, byte_offset
-        FROM transcript_messages
-        WHERE path = ? AND byte_offset < ?
-        ORDER BY byte_offset DESC, id DESC
+        SELECT ${ARTIFACT_MESSAGE_SELECT}
+        FROM transcript_messages m
+        LEFT JOIN artifacts a
+          ON a.id = CASE
+            WHEN m.message_id LIKE 'artifact-%' THEN substr(m.message_id, 10)
+            ELSE NULL
+          END
+        WHERE m.path = ? AND m.byte_offset < ?
+        ORDER BY m.byte_offset DESC, m.id DESC
         LIMIT ?
       `)
     .all(path, before, limit);
@@ -905,10 +1171,15 @@ export function indexedMessagesAfterRowid(
   const rows = bounded
     ? d
         .query<IndexedMessageRowidRow, [string, number, number]>(`
-          SELECT rowid, id, message_id, role, kind, ts, text, byte_offset
-          FROM transcript_messages
-          WHERE path = ? AND rowid > ?
-          ORDER BY rowid ASC
+          SELECT m.rowid AS rowid, ${ARTIFACT_MESSAGE_SELECT}
+          FROM transcript_messages m
+          LEFT JOIN artifacts a
+            ON a.id = CASE
+              WHEN m.message_id LIKE 'artifact-%' THEN substr(m.message_id, 10)
+              ELSE NULL
+            END
+          WHERE m.path = ? AND m.rowid > ?
+          ORDER BY m.rowid ASC
           LIMIT ?
         `)
         .all(path, cursor, bounded)

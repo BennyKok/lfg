@@ -95,8 +95,10 @@ import {
   enqueueTranscriptIndex,
   indexedRecentMessages,
   indexedMessagePage,
+  indexArtifactMessage,
   indexSessionArtifactMessages,
   indexTranscript,
+  removeIndexedArtifact,
   sessionIndexKey,
   searchAllTranscriptIndexes,
   searchTranscriptIndex,
@@ -4414,6 +4416,11 @@ export async function cmdServe() {
             const deleted = artifact.media === "html"
               ? artifactRefreshManager.delete(artifact.id, m[1])
               : deleteArtifact({ id: artifact.id, sessionId: m[1] });
+            try {
+              removeIndexedArtifact(deleted.id);
+            } catch {
+              // best-effort; durable file already gone
+            }
             await deleteImagePreview(deleted.id);
             return json({ ok: true, artifact: deleted });
           } catch (e) {
@@ -4442,13 +4449,13 @@ export async function cmdServe() {
             const indexPath = transcriptPath ?? sessionIndexKey(m[1]);
             let indexed = true;
             try {
-              indexSessionArtifactMessages(indexPath, m[1]);
+              // One ordered append + joined artifacts row — same source the
+              // transcript page reads via JOIN.
+              indexArtifactMessage(indexPath, m[1], artifact);
             } catch (indexError) {
               // The file and artifact record are already durable. Reporting the
               // whole request as failed makes agents retry and creates duplicate
-              // images. Return success and let the existing artifact poller show
-              // it immediately; subsequent transcript catch-up indexes it into
-              // the one ordered message stream.
+              // images. Return success; live notify + later page reads backfill.
               indexed = false;
               console.warn("artifact transcript indexing deferred", artifact.id, indexError);
             }
@@ -4479,7 +4486,7 @@ export async function cmdServe() {
             const indexPath = transcriptPath ?? sessionIndexKey(m[1]);
             let indexed = true;
             try {
-              indexSessionArtifactMessages(indexPath, m[1]);
+              indexArtifactMessage(indexPath, m[1], artifact);
             } catch (indexError) {
               indexed = false;
               console.warn("artifact transcript indexing deferred", artifact.id, indexError);
@@ -4559,7 +4566,7 @@ export async function cmdServe() {
                 refresh: hasRefreshChanges ? refresh : undefined,
               });
               const transcriptPath = await resolveTranscript(m[1]);
-              indexSessionArtifactMessages(transcriptPath ?? sessionIndexKey(m[1]), m[1]);
+              indexArtifactMessage(transcriptPath ?? sessionIndexKey(m[1]), m[1], artifact);
             } else {
               const scopeRoot = typeof body.refreshScriptPath === "string"
                 ? await artifactOwnerCwd(m[1]) ?? undefined
@@ -5321,12 +5328,20 @@ export async function cmdServe() {
                 idleMs,
               });
             };
-            const artifactOne = (sid: string) => {
+            const artifactOne = (sid: string, tp: string | null = null) => {
               if (closed) return;
               const after = lastArtifactAt.get(sid) ?? 0;
               const messages = imageArtifactMessagesSince(sid, after);
               for (const message of messages) {
                 lastArtifactAt.set(sid, Math.max(lastArtifactAt.get(sid) ?? 0, message.ts ?? 0));
+                if (tp && message.artifactId) {
+                  try {
+                    const artifact = getImageArtifact(message.artifactId);
+                    if (artifact) indexArtifactMessage(tp, sid, artifact);
+                  } catch {
+                    // best-effort; message still carries full media fields
+                  }
+                }
                 markMessage(sid);
                 send(`event: msg\ndata: ${JSON.stringify({ sid, m: msgWithHtml(message) })}\n\n`);
               }
@@ -5477,7 +5492,7 @@ export async function cmdServe() {
                     lastBusy.set(p.sid, "?");
                     lastArtifactAt.set(p.sid, 0);
                     lastMessageAt.set(p.sid, Date.now());
-                    artifactOne(p.sid);
+                    artifactOne(p.sid, p.tp);
                     pollOne(p);
                     queueOne(p);
                     return;
@@ -5535,7 +5550,7 @@ export async function cmdServe() {
               void hydrateTargets().then(() => {
                 for (const p of panes) {
                   pollOne(p);
-                  artifactOne(p.sid);
+                  artifactOne(p.sid, p.tp);
                   queueOne(p);
                 }
               });
@@ -5545,7 +5560,7 @@ export async function cmdServe() {
               pi = setInterval(() => {
                 for (const p of panes) {
                   pollOne(p);
-                  artifactOne(p.sid);
+                  artifactOne(p.sid, p.tp);
                   queueOne(p);
                   void reconcileQueued(p.sid).then((c) => c && queueOne(p));
                 }
@@ -5621,6 +5636,14 @@ export async function cmdServe() {
                 const messages = imageArtifactMessagesSince(sid, lastArtifactAt);
                 for (const message of messages) {
                   lastArtifactAt = Math.max(lastArtifactAt, message.ts ?? 0);
+                  if (message.artifactId) {
+                    try {
+                      const artifact = getImageArtifact(message.artifactId);
+                      if (artifact) indexArtifactMessage(tp, sid, artifact);
+                    } catch {
+                      // best-effort
+                    }
+                  }
                   lastMessageAt = Date.now();
                   send(`event: msg\ndata: ${JSON.stringify(msgWithHtml(message))}\n\n`);
                 }

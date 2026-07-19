@@ -274,15 +274,10 @@ function normalizeMessageList(messages: Message[]): Message[] {
   return messages.map(normalizeMessageIdentity);
 }
 
-function insertMediaByTimestamp(messages: Message[], message: Message): Message[] {
-  if ((message.kind !== "image" && message.kind !== "video" && message.kind !== "html") || message.ts == null) {
-    return [...messages, message];
-  }
-  const insertAt = messages.findIndex((item) => item.ts != null && item.ts > message.ts!);
-  if (insertAt < 0) return [...messages, message];
-  return [...messages.slice(0, insertAt), message, ...messages.slice(insertAt)];
-}
-
+// Media order is owned by the server transcript index (joined artifact rows).
+// Live upserts must keep an existing card's position and append brand-new media
+// at the tail — never re-sort by timestamp, which put images out of place when
+// a second poll stream raced the ordered transcript.
 function upsertMessageById(current: Message[], message: Message): Message[] {
   const normalized = normalizeMessageIdentity(message);
   const id = mediaIdentity(normalized);
@@ -301,7 +296,7 @@ function upsertMessageById(current: Message[], message: Message): Message[] {
     const insertAt = Math.min(existingIndex, withoutTransient.length);
     return [...withoutTransient.slice(0, insertAt), normalized, ...withoutTransient.slice(insertAt)];
   }
-  return insertMediaByTimestamp(withoutTransient, normalized);
+  return [...withoutTransient, normalized];
 }
 
 function reconcileSnapshotMessages(current: Message[], incoming: Message[]): Message[] {

@@ -747,8 +747,11 @@ function ArtifactViewerPage({
   const src = artifact.kind === "html"
     ? `${artifact.url}?v=${artifact.cacheKey ?? artifact.version ?? 0}`
     : artifact.url;
+  // z-[100] sits above the mobile bottom composer (z-55), ask-center (z-60),
+  // and floating audio chrome (z-75) so the full-page viewer is not clipped
+  // by home-shell overlays. Dialogs/drawers remain higher (z-150+).
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-background">
+    <div className="fixed inset-0 z-[100] flex flex-col bg-background">
       <header className="flex shrink-0 items-center gap-2 border-b border-border px-2 py-2 pt-[calc(0.5rem+env(safe-area-inset-top))]">
         <button
           type="button"
@@ -769,7 +772,7 @@ function ArtifactViewerPage({
           ) : null}
         </div>
       </header>
-      <div className="min-h-0 flex-1">
+      <div className="min-h-0 flex-1 pb-[env(safe-area-inset-bottom)]">
         {artifact.kind === "html" ? (
           <iframe
             src={src}
@@ -1200,7 +1203,9 @@ function latestLine(messages: Message[]): string {
   const items = buildChatRenderItems(messages);
   const last = items[items.length - 1];
   if (!last) return "";
-  return last.type === "tools" ? toolGroupLabel(last.items) : normText(last.message.text);
+  return last.type === "tools"
+    ? toolGroupLabel(last.items)
+    : plainPreviewText(last.message.text);
 }
 
 function isDraftAssistantMessage(message: Message) {
@@ -1224,13 +1229,10 @@ function collapseThinkingRuns(messages: Message[]) {
   return out;
 }
 
-function insertMediaByTimestamp(messages: Message[], message: Message): Message[] {
-  if ((message.kind !== "image" && message.kind !== "video" && message.kind !== "html") || message.ts == null) {
-    return [...messages, message];
-  }
-  const insertAt = messages.findIndex((item) => item.ts != null && item.ts > message.ts!);
-  if (insertAt < 0) return [...messages, message];
-  return [...messages.slice(0, insertAt), message, ...messages.slice(insertAt)];
+// Media order is owned by the server transcript index. Append live media at the
+// tail; never re-sort by timestamp (that raced a second artifact poll stream).
+function appendLiveMessage(messages: Message[], message: Message): Message[] {
+  return [...messages, message];
 }
 
 function reconcileSnapshotMessages(current: Message[], incoming: Message[]): Message[] {
@@ -1267,6 +1269,22 @@ function escapeHtml(value: string) {
 
 function normText(value?: string) {
   return (value || "").replace(/\s+/g, " ").trim();
+}
+
+// Collapse common markdown markers so one-line previews (collapsed cards,
+// rail subtitles) don't show raw `**bold**` / `` `code` `` / [links](...).
+function plainPreviewText(value?: string) {
+  return normText(value)
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    // Single-marker emphasis only at word boundaries (avoid snake_case).
+    .replace(/(^|[\s(])\*([^*]+)\*([\s).,!?:;]|$)/g, "$1$2$3")
+    .replace(/(^|[\s(])_([^_]+)_([\s).,!?:;]|$)/g, "$1$2$3")
+    .replace(/^#{1,6}\s+/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function messageNeedle(value?: string) {
@@ -2779,7 +2797,7 @@ function useLiveSessionStream(sessions: Session[], streamIds: string[]) {
                 }
                 return true;
               });
-          next = insertMediaByTimestamp(next, message);
+          next = appendLiveMessage(next, message);
         }
         return { ...prev, [sid]: next.slice(-80) };
       });
@@ -4776,12 +4794,16 @@ export function App() {
 
       {!callOpen ? (
         <>
-          {isMobile && (tab === "live" || tab === "shipped" || tab === "artifacts") ? (
+          {isMobile &&
+          !viewerArtifact &&
+          (tab === "live" || tab === "shipped" || tab === "artifacts") ? (
             // Mobile bottom composer: the create flow lives inline, anchored at
             // the bottom (same component as the desktop drawer,
             // `variant="inline"`). It persists across the swipeable pages
             // (Live / Shipped / Artifacts) so you can kick off a session — and
-            // swipe between pages — from anywhere. The orb lives in the top nav.
+            // swipe between pages — from anywhere. Hidden while the full-page
+            // artifact viewer is open so it cannot stack above the content.
+            // The orb lives in the top nav.
             <NewSessionDialog
               variant="inline"
               open
@@ -6454,6 +6476,9 @@ function TreeConnector({
   continueAfter?: boolean;
   subtle?: boolean;
 }) {
+  // Branch geometry is always relative to this element's box. Callers must size
+  // the connector to the *card/row* only — not the card plus nested children —
+  // otherwise `top-1/2` / `bottom-1/2` lands in the gap under the card.
   // Solid (fully opaque) color so any segment overlap can't composite darker.
   const lineClass = "bg-current";
   const borderClass = "border-current";
@@ -6701,12 +6726,27 @@ function LiveView({
     isLast = true,
   ): ReactNode[] => [
     <div key={`child-${sessionStableId(node.session)}`} className="relative">
-      <TreeConnector
-        className="-left-4 -top-2 h-[calc(100%+1rem)] w-4"
-        colorClassName="text-zinc-500"
-        continueAfter={!isLast}
-      />
-      {renderCard(node.session, depth)}
+      {/* Spine through this whole subtree when more siblings follow. Kept
+          outside the card-sized connector so the branch still hits mid-card
+          even when this node has its own nested children. */}
+      {!isLast ? (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute -left-4 -top-2 bottom-0 w-[1.5px] bg-zinc-500"
+        />
+      ) : null}
+      {/* Connector is sized to the card only so elbow/T-junction midpoints
+          land on the card center, not the midpoint of card+descendants.
+          `-top-2` + `h-[calc(100%+1rem)]` keeps the 50% branch on the card
+          midline (8px above + half of height+16px = mid-card). */}
+      <div className="relative">
+        <TreeConnector
+          className="-left-4 -top-2 h-[calc(100%+1rem)] w-4"
+          colorClassName="text-zinc-500"
+          continueAfter={!isLast}
+        />
+        {renderCard(node.session, depth)}
+      </div>
       {node.children.length ? (
         <div className="relative ml-5 mt-1 flex flex-col gap-1.5 pb-1 pl-4 pt-1">
           {node.children.flatMap((child, index) =>
@@ -6986,16 +7026,18 @@ function RailStage({
     }
   }, [railCollapsed, railCollapsedStorageKey]);
 
-  // Desktop trackpad gesture: a two-finger horizontal swipe (macOS delivers
-  // these as `wheel` events with deltaX) cycles the project folder selection —
-  // swipe left for the next folder, right for the previous (mirrors the mobile
-  // page swipe). Listens on the whole document so it works wherever the cursor
-  // hovers — no click/focus needed — but yields to content that genuinely
-  // scrolls horizontally (terminals, code blocks, tables) and to text inputs.
-  // Attached as a non-passive native listener so we can preventDefault and
-  // keep Chrome/Safari from treating the swipe as history back/forward
-  // navigation. Handler context lives in a ref so the listener attaches once
-  // instead of re-attaching every render.
+  // Desktop trackpad / mouse gesture: a two-finger horizontal swipe (macOS
+  // delivers these as `wheel` events with deltaX) cycles the project folder
+  // selection — swipe left for the next folder, right for the previous
+  // (mirrors the mobile page swipe). One continuous gesture commits at most
+  // one page; re-arm only after a silence gap so inertia / a long swipe cannot
+  // skip multiple folders. Listens on the whole document so it works wherever
+  // the cursor hovers — no click/focus needed — but yields to content that
+  // genuinely scrolls horizontally (terminals, code blocks, tables) and to
+  // text inputs. Attached as a non-passive native listener so we can
+  // preventDefault and keep Chrome/Safari from treating the swipe as history
+  // back/forward navigation. Handler context lives in a ref so the listener
+  // attaches once instead of re-attaching every render.
   const railSwipeCtx = useRef({ projectFilter, projectOptions, onProjectChange });
   railSwipeCtx.current = { projectFilter, projectOptions, onProjectChange };
   const workspaceRef = useRef<HTMLDivElement | null>(null);
@@ -7004,7 +7046,6 @@ function RailStage({
     const GESTURE_GAP_MS = 250; // silence longer than this = new gesture
     let acc = 0;
     let lastTs = 0;
-    let lastMag = 0;
     let committed = false;
     let settleTimer = 0;
     let swapAnim = false;
@@ -7077,22 +7118,18 @@ function RailStage({
       if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
       if (yieldsToTarget(e.target)) return;
       e.preventDefault();
-      const mag = Math.abs(e.deltaX);
       // A committed swipe keeps emitting wheel events while trackpad inertia
-      // decays — without these checks the momentum tail keeps the gesture
-      // "alive" and swallows the next real swipe. Re-arm on: silence gap,
-      // direction flip, or a fresh finger push (delta spikes against the
-      // decaying tail).
+      // decays. Only re-arm after a real silence gap so one continuous gesture
+      // (or its momentum tail) can never advance more than one page. Mid-stream
+      // "fresh push" / direction-flip re-arm was jumping multiple folders on a
+      // single long mouse/trackpad swipe.
       const gapReset = e.timeStamp - lastTs > GESTURE_GAP_MS;
-      const dirFlip = committed && acc !== 0 && Math.sign(e.deltaX) !== Math.sign(acc);
-      const freshPush = committed && mag > lastMag * 1.5 + 4;
-      if (gapReset || dirFlip || freshPush) {
+      if (gapReset) {
         acc = 0;
         committed = false;
       }
       lastTs = e.timeStamp;
-      lastMag = mag;
-      if (committed) return; // inertia tail of an already-committed swipe
+      if (committed) return; // inertia tail / rest of an already-committed swipe
       acc += e.deltaX;
       // Follow the fingers (damped) so the swipe has physical feedback.
       setTx(-acc * 0.45);
@@ -7107,7 +7144,7 @@ function RailStage({
       }, GESTURE_GAP_MS);
       if (Math.abs(acc) < COMMIT) return;
       // Natural scrolling: fingers left → deltaX > 0 → next folder; fingers
-      // right → deltaX < 0 → previous.
+      // right → deltaX < 0 → previous. Max 1 page per gesture.
       const dir: 1 | -1 = acc > 0 ? 1 : -1;
       committed = true;
       window.clearTimeout(settleTimer);
@@ -7483,7 +7520,7 @@ function RailStage({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const renderRailItem = (session: Session, depth = 0, isLast = true) => {
+  const renderRailItem = (session: Session) => {
     const sid = session.sessionId ?? "";
     return (
       <RailItem
@@ -7495,19 +7532,72 @@ function RailStage({
         cursored={cursor === sid}
         pinned={validPinned.includes(sid)}
         collapsed={railCollapsed}
-        depth={depth}
-        isLast={isLast}
         onActivate={(shift) => activate(sid, shift)}
         onTogglePin={() => togglePin(sid)}
       />
     );
   };
-  const renderRailNode = (node: SessionTreeNode, depth = 0, isLast = true): ReactNode[] => [
-    renderRailItem(node.session, depth, isLast),
-    ...node.children.flatMap((child, index) =>
-      renderRailNode(child, depth + 1, index === node.children.length - 1),
-    ),
-  ];
+  // Nest children in the DOM (same model as the mobile session tree) so
+  // depth-2+ grandchildren indent further and tree elbows hit mid-row.
+  // Collapsed rail stays a flat icon strip — no indent/connectors.
+  const renderRailNode = (
+    node: SessionTreeNode,
+    depth = 0,
+    isLast = true,
+  ): ReactNode => {
+    const id = sessionStableId(node.session);
+    if (railCollapsed) {
+      return (
+        <div key={id} className="contents">
+          {renderRailItem(node.session)}
+          {node.children.map((child, index) =>
+            renderRailNode(child, depth + 1, index === node.children.length - 1),
+          )}
+        </div>
+      );
+    }
+    if (depth === 0) {
+      if (!node.children.length) return renderRailItem(node.session);
+      return (
+        <div key={id} className="flex flex-col gap-0.5">
+          {renderRailItem(node.session)}
+          <div className="relative ml-3 flex flex-col gap-0.5 pl-3">
+            {node.children.map((child, index) =>
+              renderRailNode(child, 1, index === node.children.length - 1),
+            )}
+          </div>
+        </div>
+      );
+    }
+    return (
+      <div key={id} className="relative">
+        {/* Spine through card+descendants when more siblings follow. */}
+        {!isLast ? (
+          <span
+            aria-hidden
+            className="pointer-events-none absolute -left-3 -top-1 bottom-0 w-[1.5px] bg-zinc-500"
+          />
+        ) : null}
+        {/* Connector sized to the row only so the branch hits mid-row. */}
+        <div className="relative">
+          <TreeConnector
+            className="-left-3 -top-1 h-[calc(100%+0.5rem)] w-3"
+            colorClassName="text-zinc-500"
+            continueAfter={!isLast}
+            subtle
+          />
+          {renderRailItem(node.session)}
+        </div>
+        {node.children.length ? (
+          <div className="relative ml-3 mt-0.5 flex flex-col gap-0.5 pl-3">
+            {node.children.map((child, index) =>
+              renderRailNode(child, depth + 1, index === node.children.length - 1),
+            )}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
 
   const stageColumns = useMemo(() => {
     return columnIds
@@ -7708,7 +7798,7 @@ function RailStage({
                   count={group.count}
                   collapsed={railCollapsed}
                 >
-                  {group.nodes.flatMap((node) => renderRailNode(node))}
+                  {group.nodes.map((node) => renderRailNode(node))}
                 </RailGroup>
               ))}
               {autoRailGroup}
@@ -7717,13 +7807,13 @@ function RailStage({
             <>
               {working.length ? (
                 <RailGroup label="Working" count={working.length} collapsed={railCollapsed}>
-                  {workingNodes.flatMap((node) => renderRailNode(node))}
+                  {workingNodes.map((node) => renderRailNode(node))}
                 </RailGroup>
               ) : null}
               {autoRailGroup}
               {idle.length ? (
                 <RailGroup label="Idle" count={idle.length} collapsed={railCollapsed}>
-                  {idleNodes.flatMap((node) => renderRailNode(node))}
+                  {idleNodes.map((node) => renderRailNode(node))}
                 </RailGroup>
               ) : null}
             </>
@@ -7873,8 +7963,6 @@ const RailItem = memo(function RailItem({
   cursored,
   pinned,
   collapsed,
-  depth = 0,
-  isLast = true,
   onActivate,
   onTogglePin,
 }: {
@@ -7885,8 +7973,6 @@ const RailItem = memo(function RailItem({
   cursored: boolean;
   pinned: boolean;
   collapsed: boolean;
-  depth?: number;
-  isLast?: boolean;
   onActivate: (shiftKey: boolean) => void;
   onTogglePin: () => void;
 }) {
@@ -7950,17 +8036,8 @@ const RailItem = memo(function RailItem({
         "lfg-rail-in relative rounded-xl",
         swiping ? "overflow-hidden" : "overflow-visible",
         cursored && "ring-2 ring-inset ring-primary/60",
-        depth > 0 && !collapsed && "ml-6 pl-4",
       )}
     >
-      {depth > 0 && !collapsed ? (
-        <TreeConnector
-          className="-top-1 left-0 h-[calc(100%+0.5rem)] w-4"
-          colorClassName="text-zinc-500"
-          continueAfter={!isLast}
-          subtle
-        />
-      ) : null}
       {swiping ? (
         <div
           aria-hidden
@@ -10156,7 +10233,7 @@ const SessionCard = memo(function SessionCard({
   const isMobile = useIsMobile();
   // Fall back to the list payload's last message when we aren't streaming this
   // card (collapsed) so the collapsed preview line still shows something.
-  const latest = latestLine(messages) || normText(session.last?.text ?? "");
+  const latest = latestLine(messages) || plainPreviewText(session.last?.text ?? "");
   const sectionRef = useRef<HTMLElement>(null);
   // True while voice dictation is recording in this card's composer — glows the
   // card border so it's clear which session is listening.
