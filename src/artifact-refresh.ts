@@ -41,6 +41,14 @@ function cleanError(error: unknown): string {
   return message.replace(/\s+/g, " ").trim().slice(0, 1_000) || "refresh failed";
 }
 
+function updateRefreshStatus(
+  input: Parameters<typeof updateHtmlArtifactRefreshStatus>[0],
+): ImageArtifact | null {
+  const artifact = updateHtmlArtifactRefreshStatus(input);
+  if (artifact) syncArtifactIndex(artifact);
+  return artifact;
+}
+
 function pathInside(path: string, root: string): boolean {
   const rel = relative(root, path);
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
@@ -174,7 +182,9 @@ export class ArtifactRefreshManager {
       now: input.now,
     });
     if (!refresh || !refresh.enabled) this.cancel(input.id);
-    return updateHtmlArtifactRefresh({ id: input.id, sessionId: input.sessionId, refresh });
+    const updated = updateHtmlArtifactRefresh({ id: input.id, sessionId: input.sessionId, refresh });
+    syncArtifactIndex(updated);
+    return updated;
   }
 
   delete(id: string, sessionId: string): ImageArtifact {
@@ -203,7 +213,7 @@ export class ArtifactRefreshManager {
       validated = validateScript(config.scriptPath, config.scopeRoot);
     } catch (error) {
       const message = cleanError(error);
-      artifact = updateHtmlArtifactRefreshStatus({
+      artifact = updateRefreshStatus({
         id,
         patch: { status: "error", lastStartedAt: Date.now(), lastError: message },
       }) ?? artifact;
@@ -211,7 +221,7 @@ export class ArtifactRefreshManager {
     }
 
     const startedAt = Date.now();
-    artifact = updateHtmlArtifactRefreshStatus({
+    artifact = updateRefreshStatus({
       id,
       patch: { status: "running", lastStartedAt: startedAt },
     }) ?? artifact;
@@ -227,7 +237,7 @@ export class ArtifactRefreshManager {
       });
     } catch (error) {
       const message = cleanError(error);
-      artifact = updateHtmlArtifactRefreshStatus({ id, patch: { status: "error", lastError: message } }) ?? artifact;
+      artifact = updateRefreshStatus({ id, patch: { status: "error", lastError: message } }) ?? artifact;
       return { ok: false, started: true, artifact, error: message };
     }
     this.running.set(id, child);
@@ -287,7 +297,7 @@ export class ArtifactRefreshManager {
     }
     if (!output.ok) {
       const message = cleanError(output.error);
-      artifact = updateHtmlArtifactRefreshStatus({ id, patch: { status: "error", lastError: message } }) ?? current;
+      artifact = updateRefreshStatus({ id, patch: { status: "error", lastError: message } }) ?? current;
       return { ok: false, started: true, artifact, error: message };
     }
 
@@ -301,21 +311,17 @@ export class ArtifactRefreshManager {
         caption: current.caption,
         bumpVersion: false,
       });
-      artifact = updateHtmlArtifactRefreshStatus({
+      artifact = updateRefreshStatus({
         id,
         patch: { status: "success", lastSuccessAt: Date.now(), lastError: undefined },
       }) ?? artifact;
-      // Keep the joined transcript/artifacts row in lockstep with the file store
-      // so page reads never need a second poller to learn the new content time.
-      try {
-        syncArtifactIndex(artifact);
-      } catch {
-        // Live poll will backfill; the HTML file is already durable.
-      }
+      // A refresh is not successful until the canonical joined row commits.
+      // There is no background manifest poller to paper over a split write.
+      syncArtifactIndex(artifact);
       return { ok: true, started: true, artifact };
     } catch (error) {
       const message = cleanError(error);
-      artifact = updateHtmlArtifactRefreshStatus({ id, patch: { status: "error", lastError: message } }) ?? current;
+      artifact = updateRefreshStatus({ id, patch: { status: "error", lastError: message } }) ?? current;
       return { ok: false, started: true, artifact, error: message };
     }
   }

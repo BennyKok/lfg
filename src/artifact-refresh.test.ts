@@ -12,6 +12,7 @@ import {
   imageArtifactMessagesSince,
   publishHtmlArtifact,
 } from "./artifacts.ts";
+import { resetTranscriptIndexConnectionForTests } from "./transcript-index.ts";
 
 const SESSION = "11111111-1111-4111-8111-111111111111";
 const OTHER_SESSION = "22222222-2222-4222-8222-222222222222";
@@ -28,11 +29,13 @@ describe("script-backed HTML artifact refresh", () => {
     scope = join(root, "repo");
     mkdirSync(scope, { recursive: true });
     PATHS.data = join(root, "data");
+    resetTranscriptIndexConnectionForTests();
     managers = [];
   });
 
   afterEach(() => {
     for (const manager of managers) manager.stop();
+    resetTranscriptIndexConnectionForTests();
     PATHS.data = originalData;
     rmSync(root, { recursive: true, force: true });
   });

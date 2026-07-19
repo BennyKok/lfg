@@ -96,12 +96,13 @@ import {
   indexedRecentMessages,
   indexedMessagePage,
   indexArtifactMessage,
-  indexSessionArtifactMessages,
+  indexedArtifactPlacement,
   indexTranscript,
   removeIndexedArtifact,
   sessionIndexKey,
   searchAllTranscriptIndexes,
   searchTranscriptIndex,
+  subscribeIndexedArtifactMessages,
 } from "../transcript-index.ts";
 import {
   ensureChatTranscriptCaughtUp,
@@ -235,7 +236,6 @@ import {
   deleteArtifact,
   getImageArtifact,
   hydrateImageArtifactMessage,
-  imageArtifactMessagesSince,
   imageArtifactToMessage,
   listAllArtifacts,
   listImageArtifacts,
@@ -4413,13 +4413,17 @@ export async function cmdServe() {
           if (!artifact) return err(404, "artifact not found");
           if (artifact.sessionId !== m[1]) return err(403, "artifact belongs to a different session");
           try {
-            const deleted = artifact.media === "html"
-              ? artifactRefreshManager.delete(artifact.id, m[1])
-              : deleteArtifact({ id: artifact.id, sessionId: m[1] });
+            const placementPath = indexedArtifactPlacement(artifact.id);
+            if (artifact.media === "html") artifactRefreshManager.cancel(artifact.id);
+            // Remove the visible placement first. If file/catalog deletion
+            // fails, restore exactly that placement before returning failure.
+            removeIndexedArtifact(artifact.id);
+            let deleted;
             try {
-              removeIndexedArtifact(deleted.id);
-            } catch {
-              // best-effort; durable file already gone
+              deleted = deleteArtifact({ id: artifact.id, sessionId: m[1] });
+            } catch (deleteError) {
+              if (placementPath) indexArtifactMessage(placementPath, m[1], artifact);
+              throw deleteError;
             }
             await deleteImagePreview(deleted.id);
             return json({ ok: true, artifact: deleted });
@@ -4439,27 +4443,26 @@ export async function cmdServe() {
           } | null;
           if (!body?.path?.trim()) return err(400, "path required");
           try {
+            const transcriptPath = await resolveTranscript(m[1]);
+            const indexPath = transcriptPath ?? sessionIndexKey(m[1]);
             const artifact = createImageArtifact({
               sessionId: m[1],
               path: body.path,
               caption: body.caption,
               alt: body.alt,
             });
-            const transcriptPath = await resolveTranscript(m[1]);
-            const indexPath = transcriptPath ?? sessionIndexKey(m[1]);
-            let indexed = true;
             try {
               // One ordered append + joined artifacts row — same source the
               // transcript page reads via JOIN.
               indexArtifactMessage(indexPath, m[1], artifact);
             } catch (indexError) {
-              // The file and artifact record are already durable. Reporting the
-              // whole request as failed makes agents retry and creates duplicate
-              // images. Return success; live notify + later page reads backfill.
-              indexed = false;
-              console.warn("artifact transcript indexing deferred", artifact.id, indexError);
+              // Creation is retry-deduped, so a retry reuses this exact blob.
+              // Never acknowledge a display until metadata + placement commit
+              // atomically in SQLite; otherwise the transcript can render an
+              // empty or missing card.
+              throw indexError;
             }
-            return json({ ok: true, artifact, message: imageArtifactToMessage(artifact), indexed });
+            return json({ ok: true, artifact, message: imageArtifactToMessage(artifact), indexed: true });
           } catch (e) {
             return err(400, e instanceof Error ? e.message : "could not create image artifact");
           }
@@ -4476,22 +4479,20 @@ export async function cmdServe() {
           } | null;
           if (!body?.path?.trim()) return err(400, "path required");
           try {
+            const transcriptPath = await resolveTranscript(m[1]);
+            const indexPath = transcriptPath ?? sessionIndexKey(m[1]);
             const artifact = createVideoArtifact({
               sessionId: m[1],
               path: body.path,
               caption: body.caption,
               alt: body.alt,
             });
-            const transcriptPath = await resolveTranscript(m[1]);
-            const indexPath = transcriptPath ?? sessionIndexKey(m[1]);
-            let indexed = true;
             try {
               indexArtifactMessage(indexPath, m[1], artifact);
             } catch (indexError) {
-              indexed = false;
-              console.warn("artifact transcript indexing deferred", artifact.id, indexError);
+              throw indexError;
             }
-            return json({ ok: true, artifact, message: imageArtifactToMessage(artifact), indexed });
+            return json({ ok: true, artifact, message: imageArtifactToMessage(artifact), indexed: true });
           } catch (e) {
             return err(400, e instanceof Error ? e.message : "could not create video artifact");
           }
@@ -4557,6 +4558,7 @@ export async function cmdServe() {
                 });
                 if (!refresh || !refresh.enabled) artifactRefreshManager.cancel(body.id ?? "");
               }
+              const transcriptPath = await resolveTranscript(m[1]);
               artifact = publishHtmlArtifact({
                 sessionId: m[1],
                 html: body.html,
@@ -4565,7 +4567,6 @@ export async function cmdServe() {
                 caption: body.caption,
                 refresh: hasRefreshChanges ? refresh : undefined,
               });
-              const transcriptPath = await resolveTranscript(m[1]);
               indexArtifactMessage(transcriptPath ?? sessionIndexKey(m[1]), m[1], artifact);
             } else {
               const scopeRoot = typeof body.refreshScriptPath === "string"
@@ -5293,6 +5294,7 @@ export async function cmdServe() {
         let di: ReturnType<typeof setInterval> | null = null;
         let hb: ReturnType<typeof setInterval> | null = null;
         const transcriptUnsubs = new Map<string, () => void>();
+        let artifactUnsub: (() => void) | null = null;
         let closed = false;
         const stream = new ReadableStream({
           start(controller) {
@@ -5307,7 +5309,6 @@ export async function cmdServe() {
             send(`: open\n\n`);
             evlog("live_stream_start", { rid, idsCount: ids.length });
             const lastSig = new Map<string, string>();
-            const lastArtifactAt = new Map<string, number>();
             const lastMessageAt = new Map<string, number>();
             const lastStallLogAt = new Map<string, number>();
             const markMessage = (sid: string) => lastMessageAt.set(sid, Date.now());
@@ -5328,24 +5329,11 @@ export async function cmdServe() {
                 idleMs,
               });
             };
-            const artifactOne = (sid: string, tp: string | null = null) => {
-              if (closed) return;
-              const after = lastArtifactAt.get(sid) ?? 0;
-              const messages = imageArtifactMessagesSince(sid, after);
-              for (const message of messages) {
-                lastArtifactAt.set(sid, Math.max(lastArtifactAt.get(sid) ?? 0, message.ts ?? 0));
-                if (tp && message.artifactId) {
-                  try {
-                    const artifact = getImageArtifact(message.artifactId);
-                    if (artifact) indexArtifactMessage(tp, sid, artifact);
-                  } catch {
-                    // best-effort; message still carries full media fields
-                  }
-                }
-                markMessage(sid);
-                send(`event: msg\ndata: ${JSON.stringify({ sid, m: msgWithHtml(message) })}\n\n`);
-              }
-            };
+            artifactUnsub = subscribeIndexedArtifactMessages(({ sessionId, message }) => {
+              if (closed || !ids.includes(sessionId)) return;
+              markMessage(sessionId);
+              send(`event: msg\ndata: ${JSON.stringify({ sid: sessionId, m: msgWithHtml(message) })}\n\n`);
+            });
             const subscribeTranscriptOne = (p: LivePane, tp: string) => {
               if (transcriptUnsubs.has(p.sid)) return;
               p.tp = tp;
@@ -5490,9 +5478,7 @@ export async function cmdServe() {
                     lastSig.set(p.sid, " ");
                     lastQ.set(p.sid, "[]");
                     lastBusy.set(p.sid, "?");
-                    lastArtifactAt.set(p.sid, 0);
                     lastMessageAt.set(p.sid, Date.now());
-                    artifactOne(p.sid, p.tp);
                     pollOne(p);
                     queueOne(p);
                     return;
@@ -5503,15 +5489,6 @@ export async function cmdServe() {
                   const readMs = performance.now() - backlogT0;
                   const renderT0 = performance.now();
                   const msgs = transcriptMessagesForClient(p.sid, page.messages).map(msgWithHtml);
-                  lastArtifactAt.set(
-                    p.sid,
-                    Math.max(
-                      0,
-                      ...msgs
-                        .filter((msg) => msg.kind === "image" || msg.kind === "video" || msg.kind === "html")
-                        .map((msg) => msg.ts ?? 0),
-                    ),
-                  );
                   evlog("live_stream_backlog", {
                     rid,
                     sid: p.sid,
@@ -5550,7 +5527,6 @@ export async function cmdServe() {
               void hydrateTargets().then(() => {
                 for (const p of panes) {
                   pollOne(p);
-                  artifactOne(p.sid, p.tp);
                   queueOne(p);
                 }
               });
@@ -5560,7 +5536,6 @@ export async function cmdServe() {
               pi = setInterval(() => {
                 for (const p of panes) {
                   pollOne(p);
-                  artifactOne(p.sid, p.tp);
                   queueOne(p);
                   void reconcileQueued(p.sid).then((c) => c && queueOne(p));
                 }
@@ -5575,6 +5550,7 @@ export async function cmdServe() {
             closed = true;
             for (const unsub of transcriptUnsubs.values()) unsub();
             transcriptUnsubs.clear();
+            artifactUnsub?.();
             if (iv) clearInterval(iv);
             if (pi) clearInterval(pi);
             if (di) clearInterval(di);
@@ -5598,7 +5574,7 @@ export async function cmdServe() {
           let pi: ReturnType<typeof setInterval> | null = null;
           let di: ReturnType<typeof setInterval> | null = null;
           let qi: ReturnType<typeof setInterval> | null = null;
-          let ai: ReturnType<typeof setInterval> | null = null;
+          let artifactUnsub: (() => void) | null = null;
           let hb: ReturnType<typeof setInterval> | null = null;
           let transcriptUnsub: (() => void) | null = null;
           let closed = false;
@@ -5612,7 +5588,6 @@ export async function cmdServe() {
                   closed = true;
                 }
               };
-              let lastArtifactAt = 0;
               let lastMessageAt = Date.now();
               let lastStallLogAt = 0;
               const traceStallIfNeeded = (busy: boolean) => {
@@ -5631,23 +5606,11 @@ export async function cmdServe() {
                   idleMs,
                 });
               };
-              const pollArtifacts = () => {
-                if (closed) return;
-                const messages = imageArtifactMessagesSince(sid, lastArtifactAt);
-                for (const message of messages) {
-                  lastArtifactAt = Math.max(lastArtifactAt, message.ts ?? 0);
-                  if (message.artifactId) {
-                    try {
-                      const artifact = getImageArtifact(message.artifactId);
-                      if (artifact) indexArtifactMessage(tp, sid, artifact);
-                    } catch {
-                      // best-effort
-                    }
-                  }
-                  lastMessageAt = Date.now();
-                  send(`event: msg\ndata: ${JSON.stringify(msgWithHtml(message))}\n\n`);
-                }
-              };
+              artifactUnsub = subscribeIndexedArtifactMessages(({ sessionId, message }) => {
+                if (closed || sessionId !== sid) return;
+                lastMessageAt = Date.now();
+                send(`event: msg\ndata: ${JSON.stringify(msgWithHtml(message))}\n\n`);
+              });
               const ensureTranscript = async () => {
                 if (closed) return;
                 try {
@@ -5680,12 +5643,6 @@ export async function cmdServe() {
                   sid,
                   page.messages,
                 ).map(msgWithHtml);
-                lastArtifactAt = Math.max(
-                  0,
-                  ...msgs
-                    .filter((msg) => msg.kind === "image" || msg.kind === "video" || msg.kind === "html")
-                    .map((msg) => msg.ts ?? 0),
-                );
                 for (const msg of msgs)
                   send(`event: msg\ndata: ${JSON.stringify(msg)}\n\n`);
                 await ensureTranscript();
@@ -5747,8 +5704,6 @@ export async function cmdServe() {
                 pi = setInterval(pollBusy, 1000);
                 di = setInterval(pollDraft, 150);
               }
-              pollArtifacts();
-              ai = setInterval(pollArtifacts, 1000);
               // Emit the outbound send-queue on change so the composer can show
               // each message's delivery status (pending/queued/delivered/failed).
               let lastQ = "[]";
@@ -5770,11 +5725,11 @@ export async function cmdServe() {
             cancel() {
               closed = true;
               transcriptUnsub?.();
+              artifactUnsub?.();
               if (iv) clearInterval(iv);
               if (pi) clearInterval(pi);
               if (di) clearInterval(di);
               if (qi) clearInterval(qi);
-              if (ai) clearInterval(ai);
               if (hb) clearInterval(hb);
             },
           });

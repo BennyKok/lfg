@@ -94,7 +94,8 @@ type LiveWsMessage =
   | { t: "resumed"; kind: ChannelKind; key: string; seq?: number; fromSeq?: number; toSeq?: number; replayed?: number }
   | { t: "gap"; kind: ChannelKind; key: string; seq?: number }
   | { t: "status"; rows?: StatusRow[]; kind?: ChannelKind; key?: string; seq?: number }
-  | { t: "ping" }
+  | { t: "ping"; id?: string }
+  | { t: "pong"; id?: string }
   | { t: "error"; sid?: string; kind?: ChannelKind; key?: string; seq?: number; message?: string; code?: string };
 
 type AgentRunHandler = {
@@ -335,6 +336,7 @@ export type ConnectionState = {
   lastCloseCode: number | null;
   lastCloseReason: string | null;
   lastMessageAt: number | null;
+  latencyMs: number | null;
 };
 
 const INITIAL_CONNECTION_STATE: ConnectionState = {
@@ -343,6 +345,7 @@ const INITIAL_CONNECTION_STATE: ConnectionState = {
   lastCloseCode: null,
   lastCloseReason: null,
   lastMessageAt: null,
+  latencyMs: null,
 };
 
 export function useLiveSocket(
@@ -401,6 +404,7 @@ export function useLiveSocket(
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingReconnectRef = useRef(false);
   const lastMessageFlushRef = useRef(0);
+  const latencyProbeRef = useRef<{ id: string; startedAt: number } | null>(null);
   const connectRef = useRef<() => void>(() => {});
 
   const [connection, setConnection] = useState<ConnectionState>(INITIAL_CONNECTION_STATE);
@@ -461,7 +465,15 @@ export function useLiveSocket(
 
   const handleMessage = useCallback((payload: LiveWsMessage) => {
     if (payload.t === "ping") {
-      send({ t: "pong" });
+      send({ t: "pong", ...(payload.id ? { id: payload.id } : {}) });
+      return;
+    }
+    if (payload.t === "pong") {
+      const probe = latencyProbeRef.current;
+      if (!payload.id || !probe || payload.id !== probe.id) return;
+      latencyProbeRef.current = null;
+      const latencyMs = Math.max(1, Math.round(performance.now() - probe.startedAt));
+      setConnection((prev) => ({ ...prev, latencyMs }));
       return;
     }
     if ("kind" in payload && payload.kind && "key" in payload && typeof payload.key === "string") {
@@ -667,6 +679,15 @@ export function useLiveSocket(
     closedByHookRef.current = false;
     pendingReconnectRef.current = false;
 
+    const probeLatency = () => {
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      const id = crypto.randomUUID?.() ?? `ping-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      latencyProbeRef.current = { id, startedAt: performance.now() };
+      ws.send(JSON.stringify({ t: "ping", id }));
+    };
+    const latencyTimer = window.setInterval(probeLatency, 5_000);
+
     const noteMessage = () => {
       const now = Date.now();
       if (now - lastMessageFlushRef.current < 2000) return;
@@ -704,6 +725,7 @@ export function useLiveSocket(
         evlog("ws_client_open", { reconnects: reconnectsRef.current });
         reconnectsRef.current = 0;
         setConnection((prev) => ({ ...prev, status: "live", attempt: 0 }));
+        probeLatency();
         const channels = [...desiredChannelsRef.current.values()];
         if (channels.length) {
           ws.send(JSON.stringify({ t: "subscribe", channels: channels.map(channelWithResume) }));
@@ -734,6 +756,7 @@ export function useLiveSocket(
           attempt,
           lastCloseCode: code,
           lastCloseReason: reason,
+          latencyMs: null,
         }));
         // While the tab is hidden, don't keep hammering retries in the
         // background — pause and let the visibilitychange listener below
@@ -771,6 +794,8 @@ export function useLiveSocket(
       closedByHookRef.current = true;
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("online", onOnline);
+      window.clearInterval(latencyTimer);
+      latencyProbeRef.current = null;
       if (reconnectTimerRef.current != null) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;

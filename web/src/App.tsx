@@ -31,7 +31,7 @@ import {
   takePrimeToken,
   useAudioMode,
 } from "./audio-mode";
-import { liveTransportMode, useLiveSocket } from "./useLiveSocket";
+import { liveTransportMode, useLiveSocket, type ConnectionState } from "./useLiveSocket";
 import {
   LfgChatTransport,
   appendLfgTranscriptEvent,
@@ -4788,6 +4788,7 @@ export function App() {
             onOpenExt={setTab}
             settings={settings}
             onSettingsChange={updateSettings}
+            connection={useWsLive ? wsLiveStream.connection : null}
           />
         )}
       </main>
@@ -16206,6 +16207,7 @@ function SettingsView({
   onRedoOnboarding,
   extTabs,
   onOpenExt,
+  connection,
 }: {
   dark: boolean;
   toggleTheme: () => void;
@@ -16221,6 +16223,7 @@ function SettingsView({
   onRedoOnboarding: () => Promise<void>;
   extTabs: ExtensionNavTab[];
   onOpenExt: (id: string) => void;
+  connection: ConnectionState | null;
 }) {
   const initial = (user ?? "").trim().slice(0, 1).toUpperCase() || "?";
   const audioMode = useAudioMode();
@@ -16242,6 +16245,62 @@ function SettingsView({
           </div>
         </div>
       </div>
+
+      {/* Live browser-to-server RTT, measured over the same socket that carries
+          session updates. This is intentionally dynamic rather than a cached
+          health-check number so remote-access latency is visible here. */}
+      <section className="space-y-2">
+        <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Connection
+        </h2>
+        <div className="overflow-hidden rounded-2xl border border-border bg-card/40">
+          <div className="flex items-center justify-between gap-4 px-4 py-2.5">
+            <div className="flex min-w-0 items-center gap-3">
+              <span className="flex size-7 shrink-0 items-center justify-center rounded-[7px] bg-primary text-white">
+                <Gauge className="size-4" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-medium">Ping</span>
+                <span className="block truncate text-xs text-muted-foreground">
+                  Browser to LFG server
+                </span>
+              </span>
+            </div>
+            <div className="flex shrink-0 items-center gap-2" aria-live="polite">
+              <span
+                className={cn(
+                  "size-2 rounded-full",
+                  connection?.status !== "live"
+                    ? "bg-muted-foreground/40"
+                    : connection.latencyMs == null
+                      ? "animate-pulse bg-primary"
+                      : connection.latencyMs <= 150
+                        ? "bg-success"
+                        : connection.latencyMs <= 300
+                          ? "bg-warning"
+                          : "bg-destructive",
+                )}
+              />
+              <span className="min-w-[5.5rem] text-right text-sm font-semibold tabular-nums">
+                {connection == null
+                  ? "Unavailable"
+                  : connection.status === "live"
+                  ? connection.latencyMs == null
+                    ? "Measuring…"
+                    : `${connection.latencyMs} ms`
+                  : connection.status === "reconnecting"
+                    ? "Reconnecting…"
+                    : connection.status === "offline"
+                      ? "Offline"
+                      : "Connecting…"}
+              </span>
+            </div>
+          </div>
+        </div>
+        <p className="px-4 text-xs text-muted-foreground">
+          Live round-trip latency, refreshed every five seconds.
+        </p>
+      </section>
 
       {/* Usage — opens as its own page. */}
       <section className="space-y-2">

@@ -4,6 +4,17 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 19, 2026 - Consistent live media and connection health (v0.1.43)
+
+- Settings now shows the real browser-to-server WebSocket ping, refreshed every
+  five seconds with clear live, reconnecting, and offline states.
+- Transcript media now has one explicit, atomic placement and ordering path.
+  Gallery and Shipped assets can no longer leak into chat, empty cards are
+  suppressed, stable artifact ownership remains singular, and legacy orphaned
+  or misclassified placements are repaired during migration.
+- Transcript reads no longer scan and rewrite artifact metadata or run one JSON
+  poller per open pane, restoring millisecond artifact delivery and responsive
+  local API requests on large indexes.
 - `lfg connect` — a new generic remote-access relay client. Lets a
   self-hosted box be reached through an operator-run relay without opening
   any inbound port: the box dials out over a WebSocket, authenticates with a

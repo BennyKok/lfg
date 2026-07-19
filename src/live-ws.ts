@@ -11,10 +11,10 @@ import {
 } from "./sessions.ts";
 import { listSessionsCached, noteListSessionsClientActivity } from "./session-cache.ts";
 import {
-  indexArtifactMessage,
   indexedMessagePage,
   indexedMessagesAfterRowid,
   isSessionIndexKey,
+  subscribeIndexedArtifactMessages,
 } from "./transcript-index.ts";
 import { ensureChatTranscriptCaughtUp, subscribeChatTranscript } from "./chat-ingest.ts";
 import {
@@ -29,9 +29,7 @@ import {
 } from "./aisdk-registry.ts";
 import {
   collapseArtifactRetryMessages,
-  getImageArtifact,
   hydrateImageArtifactMessage,
-  imageArtifactMessagesSince,
   type ImageArtifactMessage,
 } from "./artifacts.ts";
 import { listQueue, reconcileQueued } from "./sendq.ts";
@@ -278,7 +276,6 @@ type SidTail = {
   lastSig: string;
   lastBusy: string;
   lastQ: string;
-  lastArtifactAt: number;
   lastMessageAt: number;
   lastStallLogAt: number;
   lastDraft: Map<string, DraftState>;
@@ -375,6 +372,15 @@ export function createLiveWsSupport(opts: {
   const publishSid = (sid: string, type: SendType, fields: Record<string, unknown>) => {
     publishChannelDelta(transcriptChannel(sid), { t: type, sid, ...fields });
   };
+
+  // Artifact publishes fan out only after their SQLite row commits. This is
+  // the same ordered source used by snapshots, removing the parallel JSON
+  // poller that could show a blank media card ahead of transcript prose.
+  subscribeIndexedArtifactMessages(({ sessionId, message }) => {
+    const tail = sidTails.get(sessionId);
+    if (tail) tail.lastMessageAt = Date.now();
+    publishSid(sessionId, "msg", { message: msgWithHtml(normalizeMediaIdentity(message)) });
+  });
 
   const stopStatusLoopIfIdle = () => {
     if (openSockets.size || !statusInterval) return;
@@ -537,31 +543,6 @@ export function createLiveWsSupport(opts: {
     }
   };
 
-  // Live notify for artifact rows that the file-tail path cannot see (media is
-  // not written into agent JSONL). The durable order still lives in the
-  // transcript index: we index first, then emit the same joined message shape
-  // a page read would return. Clients upsert by artifact id and must not
-  // re-sort by timestamp.
-  const pollArtifacts = (tail: SidTail) => {
-    const recent = imageArtifactMessagesSince(tail.sid, tail.lastArtifactAt)
-      .map((message) => normalizeMediaIdentity(message))
-      .sort((a, b) => (a.ts ?? 0) - (b.ts ?? 0) || String(mediaIdentity(a) ?? "").localeCompare(String(mediaIdentity(b) ?? "")));
-    if (!recent.length) return;
-    const tp = tail.pane.tp;
-    for (const message of recent) {
-      tail.lastArtifactAt = Math.max(tail.lastArtifactAt, message.ts ?? 0);
-      if (tp && message.artifactId) {
-        try {
-          const artifact = getImageArtifact(message.artifactId);
-          if (artifact) indexArtifactMessage(tp, tail.sid, artifact);
-        } catch {
-          // Index is best-effort here; the message still carries full media fields.
-        }
-      }
-      publishSid(tail.sid, "msg", { message: msgWithHtml(message) });
-    }
-  };
-
   const pollQueue = (tail: SidTail) => {
     const queue = listQueue(tail.sid);
     const sig = JSON.stringify(queue);
@@ -627,7 +608,6 @@ export function createLiveWsSupport(opts: {
       lastSig: " ",
       lastBusy: "?",
       lastQ: "[]",
-      lastArtifactAt: 0,
       lastMessageAt: Date.now(),
       lastStallLogAt: 0,
       lastDraft: new Map(),
@@ -642,12 +622,10 @@ export function createLiveWsSupport(opts: {
     sidTails.set(sid, tail);
     if (tp) await subscribeTailToTranscript(tail, tp);
     void hydrateTarget(tail).then(() => void pollOne(tail));
-    pollArtifacts(tail);
     pollQueue(tail);
     tail.pollInterval = setInterval(() => {
       void ensureTranscriptSubscription(tail).then(() => pollIndexedTranscript(tail));
       void pollOne(tail);
-      pollArtifacts(tail);
       pollQueue(tail);
       void reconcileQueued(tail.sid).then((changed) => changed && pollQueue(tail));
     }, 1000);
@@ -695,14 +673,6 @@ export function createLiveWsSupport(opts: {
     for (const ws of tail.sockets) {
       const state = sockets.get(ws);
       if (state && !state.closed && state.subscribed.has(id)) safeSend(ws, frame);
-    }
-    if (backlog.messages.length) {
-      tail.lastArtifactAt = Math.max(
-        tail.lastArtifactAt,
-        ...backlog.messages
-          .filter((msg) => msg.kind === "image" || msg.kind === "video" || msg.kind === "html")
-          .map((msg) => msg.ts ?? 0),
-      );
     }
   }
 
@@ -768,17 +738,7 @@ export function createLiveWsSupport(opts: {
     });
     const tail = await ensureSidTail(sid, tp);
     tail.sockets.add(state.ws);
-    if (batchMessages.length) {
-      tail.lastArtifactAt = Math.max(
-        tail.lastArtifactAt,
-        ...batchMessages
-          .filter((msg): msg is { kind?: string; ts?: number | null } => typeof msg === "object" && !!msg)
-          .filter((msg) => msg.kind === "image" || msg.kind === "video" || msg.kind === "html")
-          .map((msg) => msg.ts ?? 0),
-      );
-    }
     void pollOne(tail);
-    pollArtifacts(tail);
     pollQueue(tail);
   };
 
@@ -1010,6 +970,7 @@ export function createLiveWsSupport(opts: {
       }
       const input = msg as {
         t?: string;
+        id?: unknown;
         ids?: unknown;
         channels?: unknown;
         kind?: unknown;
@@ -1020,6 +981,14 @@ export function createLiveWsSupport(opts: {
         resync?: unknown;
       };
       if (input.t === "pong") return;
+      // Browser-initiated ping probes measure the real WebSocket round trip.
+      // Heartbeat pings in the other direction remain id-less and are answered
+      // by the browser with the existing id-less pong.
+      if (input.t === "ping") {
+        const id = typeof input.id === "string" && input.id.length <= 128 ? input.id : undefined;
+        safeSend(ws, { t: "pong", ...(id ? { id } : {}) });
+        return;
+      }
       if (input.t === "subscribe") {
         const channels = Array.isArray(input.channels)
           ? input.channels.map(validChannel).filter((channel): channel is Channel => !!channel)

@@ -5,10 +5,8 @@ import { PATHS } from "./config.ts";
 import { isCursorTurnEndedLine, normalizeLineMessages, type Session, type SessionMsg } from "./sessions.ts";
 import { traceLog } from "./trace-log.ts";
 import {
-  getImageArtifact,
   imageArtifactToMessage,
   listAllArtifacts,
-  listImageArtifacts,
   type ImageArtifact,
   type ImageArtifactMessage,
 } from "./artifacts.ts";
@@ -31,6 +29,7 @@ type IndexedMessageRow = {
   ts: number | null;
   text: string;
   byte_offset: number;
+  order_seq: number;
   // Joined from the artifacts table when present (same SQLite DB).
   artifact_id?: string | null;
   artifact_media?: string | null;
@@ -77,13 +76,23 @@ let walCheckpointRunning = false;
 const enqueued = new Set<string>();
 const imports = new Map<string, Promise<{ indexed: number; offset: number; size: number }>>();
 const directNextOffset = new Map<string, number>();
+type IndexedArtifactEvent = { path: string; sessionId: string; message: ImageArtifactMessage };
+const artifactListeners = new Set<(event: IndexedArtifactEvent) => void>();
+
+/** Live transports subscribe to the same committed row used by transcript reads. */
+export function subscribeIndexedArtifactMessages(
+  listener: (event: IndexedArtifactEvent) => void,
+): () => void {
+  artifactListeners.add(listener);
+  return () => artifactListeners.delete(listener);
+}
 
 // Media files stay on disk, but artifact *metadata* and transcript *order* both
 // live in this SQLite DB. Reads JOIN the two tables so image/video/html cards
 // come from the same query path as prose — never a second poll stream that
 // re-sorts by timestamp and lands media out of place.
 const ARTIFACT_MESSAGE_SELECT = `
-  m.id, m.message_id, m.role, m.kind, m.ts, m.text, m.byte_offset,
+  m.id, m.message_id, m.role, m.kind, m.ts, m.text, m.byte_offset, m.order_seq,
   a.id AS artifact_id,
   a.media AS artifact_media,
   a.name AS artifact_name,
@@ -159,22 +168,34 @@ export function indexArtifactMessage(path: string, sessionId: string, artifact: 
   // path for this session, update in place rather than inventing a second
   // ordered position.
   const existing = d
-    .query<{ id: string; path: string; byte_offset: number }, [string]>(
-      "SELECT id, path, byte_offset FROM transcript_messages WHERE message_id = ? LIMIT 1",
+    .query<{ id: string; path: string; session_id: string; byte_offset: number }, [string]>(
+      "SELECT id, path, session_id, byte_offset FROM transcript_messages WHERE message_id = ? LIMIT 1",
     )
     .get(messageId);
 
-  return d.transaction(() => {
+  const inserted = d.transaction(() => {
     upsertArtifactRow(d, artifact);
     if (existing) {
       // Stable HTML cards re-publish under the same message id. Update the
       // existing ordered row in place so live clients refresh without a second
       // stream inventing a new position.
-      d.query(`
-        UPDATE transcript_messages
-           SET ts = ?, role = ?, kind = ?, text = ?
-         WHERE id = ?
-      `).run(message.ts, message.role, message.kind, text, existing.id);
+      if (existing.path !== path || existing.session_id !== sessionId) {
+        const offset = nextDirectOffset(d, path);
+        const orderSeq = nextOrderSeq(d, path);
+        d.query(`
+          UPDATE transcript_messages
+             SET session_id = ?, path = ?, byte_offset = ?, order_seq = ?,
+                 ts = ?, role = ?, kind = ?, text = ?
+           WHERE id = ?
+        `).run(sessionId, path, offset, orderSeq, message.ts, message.role, message.kind, text, existing.id);
+        directNextOffset.set(path, offset + 1);
+      } else {
+        d.query(`
+          UPDATE transcript_messages
+             SET ts = ?, role = ?, kind = ?, text = ?
+           WHERE id = ?
+        `).run(message.ts, message.role, message.kind, text, existing.id);
+      }
       d.query("DELETE FROM transcript_messages_fts WHERE id = ?").run(existing.id);
       d.query(`
         INSERT INTO transcript_messages_fts (id, session_id, text)
@@ -186,17 +207,19 @@ export function indexArtifactMessage(path: string, sessionId: string, artifact: 
     }
 
     const offset = nextDirectOffset(d, path);
+    const orderSeq = nextOrderSeq(d, path);
     directNextOffset.set(path, offset + 1);
     const result = d.query(`
       INSERT OR IGNORE INTO transcript_messages
-        (id, session_id, path, message_id, byte_offset, ts, role, kind, text)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, session_id, path, message_id, byte_offset, order_seq, ts, role, kind, text)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       rowId,
       sessionId,
       path,
       messageId,
       offset,
+      orderSeq,
       message.ts,
       message.role,
       message.kind,
@@ -213,6 +236,15 @@ export function indexArtifactMessage(path: string, sessionId: string, artifact: 
     }
     return inserted;
   })();
+  const event = { path, sessionId, message };
+  for (const listener of artifactListeners) {
+    try {
+      listener(event);
+    } catch {
+      // A broken client transport must not roll back a committed artifact.
+    }
+  }
+  return inserted;
 }
 
 export function removeIndexedArtifact(artifactId: string): void {
@@ -221,23 +253,13 @@ export function removeIndexedArtifact(artifactId: string): void {
   pageTotalCache.clear();
 }
 
-// Backfill any durable artifacts still missing a transcript row. New publishes
-// append at the tail (conversation order at create time). We no longer invent
-// fractional byte_offsets from timestamps — that second ordering model is what
-// put images out of place relative to the rest of the chat.
-function indexMissingArtifactMessages(path: string, sessionId: string): number {
-  const artifacts = listImageArtifacts(sessionId);
-  if (!artifacts.length) return 0;
-  let inserted = 0;
-  for (const artifact of artifacts) {
-    inserted += indexArtifactMessage(path, sessionId, artifact);
-  }
-  return inserted;
-}
-
-export function indexSessionArtifactMessages(path: string, sessionId: string): number {
+export function indexedArtifactPlacement(artifactId: string): string | null {
   init();
-  return indexMissingArtifactMessages(path, sessionId);
+  return database()
+    .query<{ path: string }, [string]>(
+      "SELECT path FROM transcript_messages WHERE message_id = ? LIMIT 1",
+    )
+    .get(`artifact-${artifactId}`)?.path ?? null;
 }
 
 /** Update the joined artifacts row (and existing transcript row if any) without inventing a path. */
@@ -248,10 +270,13 @@ export function syncArtifactIndex(artifact: ImageArtifact): number {
       "SELECT path FROM transcript_messages WHERE message_id = ? LIMIT 1",
     )
     .get(`artifact-${artifact.id}`);
-  const path = existing?.path ?? sessionIndexKey(artifact.sessionId);
-  return indexArtifactMessage(path, artifact.sessionId, artifact);
+  // Storage/gallery records are not transcript placements. Only update an
+  // artifact that was explicitly displayed through indexArtifactMessage.
+  if (!existing) return 0;
+  return indexArtifactMessage(existing.path, artifact.sessionId, artifact);
 }
 
+/** Cheap bridge check for artifact writers running outside the serve process. */
 export function sessionIndexKey(sessionId: string): string {
   return `lfg://session/${sessionId}`;
 }
@@ -355,6 +380,7 @@ function init() {
       path TEXT NOT NULL,
       message_id TEXT,
       byte_offset INTEGER NOT NULL,
+      order_seq INTEGER,
       ts INTEGER,
       role TEXT NOT NULL,
       kind TEXT NOT NULL,
@@ -364,6 +390,12 @@ function init() {
       ON transcript_messages(session_id, ts);
     CREATE INDEX IF NOT EXISTS transcript_messages_path_offset
       ON transcript_messages(path, byte_offset);
+    -- Artifact reconciliation looks rows up by their stable message id on
+    -- every transcript page. Without this index each lookup scanned the whole
+    -- transcript table (hundreds of MB on a busy install), stalling unrelated
+    -- loopback requests and inflating the live ping display into seconds.
+    CREATE INDEX IF NOT EXISTS transcript_messages_message_id
+      ON transcript_messages(message_id);
     CREATE VIRTUAL TABLE IF NOT EXISTS transcript_messages_fts USING fts5(
       id UNINDEXED,
       session_id UNINDEXED,
@@ -460,6 +492,112 @@ function init() {
         ON artifacts(session_id, created_at);
     `);
   }
+  if (version < 6) {
+    const columns = d.query<{ name: string }, []>("PRAGMA table_info(transcript_messages)").all();
+    if (!columns.some((column) => column.name === "order_seq")) {
+      d.exec("ALTER TABLE transcript_messages ADD COLUMN order_seq INTEGER");
+    }
+    d.exec(`
+      WITH ranked AS (
+        SELECT rowid AS rid,
+               ROW_NUMBER() OVER (PARTITION BY path ORDER BY byte_offset ASC, rowid ASC) - 1 AS seq
+          FROM transcript_messages
+      )
+      UPDATE transcript_messages
+         SET order_seq = (SELECT seq FROM ranked WHERE ranked.rid = transcript_messages.rowid)
+       WHERE order_seq IS NULL;
+      CREATE INDEX IF NOT EXISTS transcript_messages_path_order
+        ON transcript_messages(path, order_seq);
+      PRAGMA user_version = 6;
+    `);
+  } else {
+    d.exec(`CREATE INDEX IF NOT EXISTS transcript_messages_path_order
+      ON transcript_messages(path, order_seq)`);
+  }
+  if (version < 7 || d.query<{ one: number }, []>(
+    "SELECT 1 AS one FROM transcript_messages WHERE order_seq IS NULL LIMIT 1",
+  ).get()) {
+    // A pre-migration serve process may have appended rows while v6 was being
+    // installed. Fold those stragglers into the same deterministic sequence.
+    d.exec(`
+      WITH ranked AS (
+        SELECT rowid AS rid,
+               ROW_NUMBER() OVER (PARTITION BY path ORDER BY byte_offset ASC, rowid ASC) - 1 AS seq
+          FROM transcript_messages
+      )
+      UPDATE transcript_messages
+         SET order_seq = (SELECT seq FROM ranked WHERE ranked.rid = transcript_messages.rowid)
+       WHERE order_seq IS NULL;
+      PRAGMA user_version = 7;
+    `);
+  }
+  if (version < 8) {
+    // Long-running managed harnesses can outlive a serve restart and still use
+    // the pre-order_seq INSERT shape. A DB trigger keeps those concurrent old
+    // writers compatible until their sessions naturally finish.
+    d.exec(`
+      CREATE TRIGGER IF NOT EXISTS transcript_messages_assign_order
+      AFTER INSERT ON transcript_messages
+      WHEN NEW.order_seq IS NULL
+      BEGIN
+        UPDATE transcript_messages
+           SET order_seq = COALESCE((
+             SELECT max(order_seq) + 1
+               FROM transcript_messages
+              WHERE path = NEW.path AND rowid <> NEW.rowid
+           ), 0)
+         WHERE rowid = NEW.rowid;
+      END;
+      WITH ranked AS (
+        SELECT rowid AS rid,
+               ROW_NUMBER() OVER (PARTITION BY path ORDER BY byte_offset ASC, rowid ASC) - 1 AS seq
+          FROM transcript_messages
+      )
+      UPDATE transcript_messages
+         SET order_seq = (SELECT seq FROM ranked WHERE ranked.rid = transcript_messages.rowid)
+       WHERE order_seq IS NULL;
+      PRAGMA user_version = 8;
+    `);
+  }
+  if (version < 9) {
+    // Final one-time import from the legacy blob catalog. From v9 onward the
+    // catalog is not a transcript input: only an explicit display commit may
+    // create a media placement. This keeps Shipped/gallery assets out of chat.
+    for (const artifact of listAllArtifacts()) upsertArtifactRow(d, artifact);
+    d.transaction(() => {
+      // `lfg_ship` optimizes uploaded screenshots to this private temp naming
+      // shape. The old manifest bridge incorrectly promoted those gallery-only
+      // assets into chat. Remove the placement, not the artifact/file, so the
+      // Shipped post keeps its media.
+      d.query(`DELETE FROM transcript_messages_fts
+        WHERE id IN (
+          SELECT m.id FROM transcript_messages m
+          JOIN artifacts a ON m.message_id = 'artifact-' || a.id
+          WHERE a.source_path GLOB '/tmp/lfg-ship-????????????.webp'
+        )`).run();
+      d.query(`DELETE FROM transcript_messages
+        WHERE id IN (
+          SELECT m.id FROM transcript_messages m
+          JOIN artifacts a ON m.message_id = 'artifact-' || a.id
+          WHERE a.source_path GLOB '/tmp/lfg-ship-????????????.webp'
+        )`).run();
+      d.query(`DELETE FROM transcript_messages_fts
+        WHERE id IN (
+          SELECT m.id FROM transcript_messages m
+          WHERE m.kind IN ('image', 'video', 'html')
+            AND m.message_id LIKE 'artifact-%'
+            AND NOT EXISTS (SELECT 1 FROM artifacts a WHERE a.id = substr(m.message_id, 10))
+        )`).run();
+      d.query(`DELETE FROM transcript_messages
+        WHERE kind IN ('image', 'video', 'html')
+          AND message_id LIKE 'artifact-%'
+          AND NOT EXISTS (SELECT 1 FROM artifacts a WHERE a.id = substr(message_id, 10))`).run();
+      d.exec("PRAGMA user_version = 9");
+    })();
+  }
+  d.exec(`CREATE UNIQUE INDEX IF NOT EXISTS transcript_artifact_message_unique
+    ON transcript_messages(message_id)
+    WHERE message_id LIKE 'artifact-%'`);
   initialized = true;
 }
 
@@ -544,12 +682,8 @@ function rowMessage(row: IndexedMessageRow): SessionMsg | ImageArtifactMessage {
     };
   }
 
-  // Legacy rows written before the artifacts table existed: fall back to the
-  // durable file-store record once, so old transcripts still hydrate.
-  if (base.id?.startsWith("artifact-")) {
-    const artifact = getImageArtifact(base.id.slice("artifact-".length));
-    if (artifact) return imageArtifactToMessage(artifact);
-  }
+  // Orphan media rows are excluded by the page queries. Never hydrate from a
+  // second store here: that was the split-brain path that produced empty cards.
   return base;
 }
 
@@ -651,10 +785,11 @@ export function indexTranscriptMessages(
   const started = performance.now();
   const d = database();
   const inserted = d.transaction((pending: typeof rows) => {
+    let orderSeq = nextOrderSeq(d, path);
     const msgStmt = d.query(`
       INSERT OR IGNORE INTO transcript_messages
-        (id, session_id, path, message_id, byte_offset, ts, role, kind, text)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, session_id, path, message_id, byte_offset, order_seq, ts, role, kind, text)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const ftsStmt = d.query(`
       INSERT INTO transcript_messages_fts (id, session_id, text)
@@ -669,6 +804,7 @@ export function indexTranscriptMessages(
         path,
         row.msg.id,
         row.offset,
+        orderSeq++,
         row.msg.ts,
         row.msg.role,
         row.msg.kind,
@@ -707,6 +843,15 @@ function nextDirectOffset(d: Database, path: string): number {
   return next;
 }
 
+function nextOrderSeq(d: Database, path: string): number {
+  const max = d
+    .query<{ max_seq: number | null }, [string]>(
+      "SELECT max(order_seq) AS max_seq FROM transcript_messages WHERE path = ?",
+    )
+    .get(path)?.max_seq;
+  return (max ?? -1) + 1;
+}
+
 export function indexSessionMessagesDirect(sessionId: string, messages: SessionMsg[]): number {
   init();
   const key = sessionIndexKey(sessionId);
@@ -727,10 +872,11 @@ export function indexSessionMessagesDirect(sessionId: string, messages: SessionM
   if (!rows.length) return 0;
   const started = performance.now();
   const inserted = d.transaction((pending: typeof rows) => {
+    let orderSeq = nextOrderSeq(d, key);
     const msgStmt = d.query(`
       INSERT OR IGNORE INTO transcript_messages
-        (id, session_id, path, message_id, byte_offset, ts, role, kind, text)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, session_id, path, message_id, byte_offset, order_seq, ts, role, kind, text)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const ftsStmt = d.query(`
       INSERT INTO transcript_messages_fts (id, session_id, text)
@@ -745,6 +891,7 @@ export function indexSessionMessagesDirect(sessionId: string, messages: SessionM
         key,
         row.msg.id,
         row.offset,
+        orderSeq++,
         row.msg.ts,
         row.msg.role,
         row.msg.kind,
@@ -805,7 +952,7 @@ export function reindexFileHistoryUnderSessionKey(
       `SELECT message_id, role, kind, ts, text
          FROM transcript_messages
         WHERE session_id = ? AND path NOT LIKE 'lfg://%'
-        ORDER BY byte_offset ASC, id ASC`,
+        ORDER BY order_seq ASC, id ASC`,
     )
     .all(sourceSessionId);
   if (!src.length) return 0;
@@ -813,8 +960,8 @@ export function reindexFileHistoryUnderSessionKey(
   const inserted = d.transaction((rows: typeof src) => {
     const msgStmt = d.query(`
       INSERT OR IGNORE INTO transcript_messages
-        (id, session_id, path, message_id, byte_offset, ts, role, kind, text)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, session_id, path, message_id, byte_offset, order_seq, ts, role, kind, text)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const ftsStmt = d.query(`
       INSERT INTO transcript_messages_fts (id, session_id, text)
@@ -824,7 +971,7 @@ export function reindexFileHistoryUnderSessionKey(
     let n = 0;
     for (const r of rows) {
       const id = `${key}\0${r.message_id ?? String(seq)}\0${seq}`;
-      const result = msgStmt.run(id, sessionId, key, r.message_id, seq, r.ts, r.role, r.kind, r.text);
+      const result = msgStmt.run(id, sessionId, key, r.message_id, seq, seq, r.ts, r.role, r.kind, r.text);
       n += Number(result.changes ?? 0);
       ftsStmt.run(id, sessionId, r.text, id);
       seq++;
@@ -884,10 +1031,11 @@ async function indexTranscriptOnce(path: string, sessionId: string): Promise<{
   let committed = cursor;
 
   const insert = d.transaction((rows: Array<{ id: string; msg: SessionMsg; text: string; offset: number }>) => {
+    let orderSeq = nextOrderSeq(d, path);
     const msgStmt = d.query(`
       INSERT OR IGNORE INTO transcript_messages
-        (id, session_id, path, message_id, byte_offset, ts, role, kind, text)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (id, session_id, path, message_id, byte_offset, order_seq, ts, role, kind, text)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     const ftsStmt = d.query(`
       INSERT INTO transcript_messages_fts (id, session_id, text)
@@ -901,6 +1049,7 @@ async function indexTranscriptOnce(path: string, sessionId: string): Promise<{
         path,
         row.msg.id,
         row.offset,
+        orderSeq++,
         row.msg.ts,
         row.msg.role,
         row.msg.kind,
@@ -1075,7 +1224,6 @@ export async function indexedMessagePage(
   init();
   await importTranscriptForRead(path, sessionId);
   const d = database();
-  indexMissingArtifactMessages(path, sessionId);
   const cursor = cursorFor(path);
   const limit = Math.max(1, Math.min(20_000, opts.limit ?? 220));
   const before = Math.max(0, opts.before ?? Number.MAX_SAFE_INTEGER);
@@ -1088,8 +1236,13 @@ export async function indexedMessagePage(
             WHEN m.message_id LIKE 'artifact-%' THEN substr(m.message_id, 10)
             ELSE NULL
           END
-        WHERE m.path = ? AND m.byte_offset < ?
-        ORDER BY m.byte_offset DESC, m.id DESC
+        WHERE m.path = ? AND m.order_seq < ?
+          AND (
+            m.kind NOT IN ('image', 'video', 'html')
+            OR m.message_id NOT LIKE 'artifact-%'
+            OR a.id IS NOT NULL
+          )
+        ORDER BY m.order_seq DESC, m.rowid DESC
         LIMIT ?
       `)
     .all(path, before, limit);
@@ -1109,11 +1262,11 @@ export async function indexedMessagePage(
   }
   rows.reverse();
   const oldest = rows[0];
-  const nextBefore = oldest.byte_offset > 0 ? oldest.byte_offset : null;
+  const nextBefore = oldest.order_seq > 0 ? oldest.order_seq : null;
   const totalKey = isSessionIndexKey(path)
     ? (d
         .query<{ max_offset: number | null }, [string]>(
-          "SELECT max(byte_offset) AS max_offset FROM transcript_messages WHERE path = ?",
+          "SELECT max(order_seq) AS max_offset FROM transcript_messages WHERE path = ?",
         )
         .get(path)?.max_offset ?? 0)
     : (cursor?.offset ?? 0);
@@ -1179,6 +1332,11 @@ export function indexedMessagesAfterRowid(
               ELSE NULL
             END
           WHERE m.path = ? AND m.rowid > ?
+            AND (
+              m.kind NOT IN ('image', 'video', 'html')
+              OR m.message_id NOT LIKE 'artifact-%'
+              OR a.id IS NOT NULL
+            )
           ORDER BY m.rowid ASC
           LIMIT ?
         `)
@@ -1228,11 +1386,11 @@ export async function searchTranscriptIndex(
       text: string;
       byte_offset: number;
     }, [string, string, number]>(`
-      SELECT m.session_id, m.path, m.role, m.kind, m.ts, m.text, m.byte_offset
+      SELECT m.session_id, m.path, m.role, m.kind, m.ts, m.text, m.order_seq AS byte_offset
       FROM transcript_messages_fts f
       JOIN transcript_messages m ON m.id = f.id
       WHERE m.session_id = ? AND transcript_messages_fts MATCH ?
-      ORDER BY COALESCE(m.ts, 0) DESC, m.byte_offset DESC
+      ORDER BY COALESCE(m.ts, 0) DESC, m.order_seq DESC
       LIMIT ?
     `)
     .all(sessionId, q, limit);
@@ -1273,11 +1431,11 @@ export async function searchAllTranscriptIndexes(
       text: string;
       byte_offset: number;
     }, [string, number]>(`
-      SELECT m.session_id, m.path, m.role, m.kind, m.ts, m.text, m.byte_offset
+      SELECT m.session_id, m.path, m.role, m.kind, m.ts, m.text, m.order_seq AS byte_offset
       FROM transcript_messages_fts f
       JOIN transcript_messages m ON m.id = f.id
       WHERE transcript_messages_fts MATCH ?
-      ORDER BY COALESCE(m.ts, 0) DESC, m.byte_offset DESC
+      ORDER BY COALESCE(m.ts, 0) DESC, m.order_seq DESC
       LIMIT ?
     `)
     .all(q, limit);
