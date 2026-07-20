@@ -4,6 +4,20 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 20, 2026 - Responsive chat and resilient indexing (v0.1.44)
+
+- Session and bootstrap requests no longer fan out eager transcript-page reads
+  across the fleet, eliminating the load amplification that stalled chat,
+  artifacts, voice, and the connection ping together.
+- Message delivery now resolves sessions through the shared live cache, avoiding
+  a full process and tmux discovery pass on every send.
+- Artifact refreshes fail fast and retry their SQLite mirror when another writer
+  is active; scheduled refreshes can no longer crash or freeze the LFG server,
+  and durable manifests reconcile automatically after restart.
+- Transcript write transactions acquire the SQLite writer lock up front, trace
+  pages are sampled with seven-day retention, and database planner/search
+  metadata is repaired and optimized during rollout.
+
 ## July 19, 2026 - Consistent live media and connection health (v0.1.43)
 
 - Settings now shows the real browser-to-server WebSocket ping, refreshed every
