@@ -201,10 +201,26 @@ box's own `GET /api/sessions` every `LFG_CONNECT_EVENTS_INTERVAL_MS` (default
 `4000`) and only sent while a relay connection is open — see the "Session
 lifecycle events" doc block at the top of
 [`src/commands/connect.ts`](./src/commands/connect.ts) for the exact
-transition rules and wire shape. **Privacy:** this is off by default because
-the event includes the session's title (derived from your own first prompt in
-that session) and project/agent name, which then leave this box for whatever
-relay `LFG_RELAY_URL` points at.
+transition rules and wire shape.
+
+Not every transition is forwarded, even with the flag on. Two sanity defaults
+apply client-side, for any relay operator, before a frame is ever built:
+a session with a `parentSessionId` (a subagent) never forwards — subagent
+churn on a busy box is routine and constant, and forwarding it would make
+every internal step of someone else's task look like a top-level
+notification; and a `session.completed` for a session that ran under
+`LFG_CONNECT_EVENTS_MIN_DURATION_MS` (default `60000`) is dropped — a
+one-minute-or-shorter run isn't news. `session.needs_attention` is exempt
+from that duration floor (a blocked session is actionable regardless of how
+young it is). See `isTopLevelSession`/`isReportableTransition` in
+[`src/commands/connect.ts`](./src/commands/connect.ts).
+
+**Privacy:** this is off by default because the event includes the session's
+title (derived from your own first prompt in that session) and project/agent
+name, which then leave this box for whatever relay `LFG_RELAY_URL` points at.
+The top-level/60s filter above narrows *which* transitions can trigger that,
+but doesn't change what leaves the box once one does — a forwarded event's
+title is still your own raw prompt text, verbatim.
 
 The MCP server talks to the local `lfg serve` API and exposes tools such as
 `lfg_capabilities`, `lfg_list_sessions`, `lfg_get_session_messages`,
@@ -272,6 +288,7 @@ Configuration lives in `.env`; see [`.env.example`](./.env.example).
 | `LFG_RELAY_URL` | Relay WebSocket URL for `lfg connect` (required to use it — no default). See [Commands](#commands). |
 | `LFG_CONNECT_EVENTS` | Opt-in (default off): `lfg connect` forwards session completed/needs-attention events to the relay. Session titles leave the box when on — see [Commands](#commands). |
 | `LFG_CONNECT_EVENTS_INTERVAL_MS` | Local session-poll interval in ms when `LFG_CONNECT_EVENTS` is on (default `4000`). |
+| `LFG_CONNECT_EVENTS_MIN_DURATION_MS` | Minimum session duration (ms) for a `session.completed` to be forwarded when `LFG_CONNECT_EVENTS` is on (default `60000`). Does not apply to `session.needs_attention`. |
 | `LFG_INSTALL_CHANNEL` | Install channel: `source`, `release`, or `container`. Usually set by setup/deploy. |
 
 ## Security

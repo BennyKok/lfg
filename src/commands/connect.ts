@@ -69,6 +69,22 @@ import { PATHS } from "../config.ts";
 // announcing a completion is still categorically faster than a remote poller
 // checking in every few seconds over the network.
 //
+// Not every transition is forwarded, even with the flag on — two sanity
+// defaults any relay operator gets for free, applied client-side before a
+// frame is ever built:
+//   - top-level only: a session with a parentSessionId (a subagent, spawned
+//     via `lfg subagent` — see src/commands/subagent.ts) never generates a
+//     frame. Subagent churn is routine and constant on a box running any
+//     nontrivial agent workflow; forwarding it would mean every internal
+//     step of someone else's task looks like a top-level notification.
+//   - a minimum duration floor (MIN_REPORTABLE_DURATION_MS, default 60s):
+//     a session.completed for a session that started and finished inside a
+//     minute isn't news — quick blips (a one-line question, a trivial
+//     lookup) shouldn't page anyone. session.needs_attention is exempt from
+//     this floor: a session going "blocked" is actionable no matter how
+//     young it is, unlike routine completion.
+// See isTopLevelSession/isReportableTransition below.
+//
 // PRIVACY NOTE: when enabled, session titles (and project/agent names) leave
 // this box and are sent to whatever relay LFG_RELAY_URL points at, which then
 // (per that relay's own policy) may forward them further (e.g. omg's relay
@@ -77,7 +93,9 @@ import { PATHS } from "../config.ts";
 // session (see firstPromptTitle in src/sessions.ts) and can contain whatever
 // you typed. This is why the flag defaults OFF — turning it on is an explicit
 // choice to let a completion/attention signal (and the small amount of
-// context needed to make it useful) leave the box.
+// context needed to make it useful) leave the box. The top-level/60s filter
+// above narrows WHICH transitions can trigger that, but doesn't change what
+// leaves the box once one does.
 
 const HELP = `lfg connect — pair this box to a remote-access relay (EXPERIMENTAL)
 
@@ -95,6 +113,8 @@ Env:
   LFG_CONNECT_EVENTS         Opt-in (1/true/yes, default off): forward session completed/needs-attention
                              events to the relay. PRIVACY: session titles leave this box when on.
   LFG_CONNECT_EVENTS_INTERVAL_MS  Local session-poll interval in ms when events are enabled (default 4000)
+  LFG_CONNECT_EVENTS_MIN_DURATION_MS  Minimum session duration to report a completion, in ms (default 60000).
+                             Does not apply to session.needs_attention (always reported).
 
 No relay implementation ships with LFG. This is the generic client half of a
 protocol any relay operator can implement — see the wire protocol documented
@@ -209,6 +229,7 @@ function eventsEnabled(): boolean {
 }
 
 const EVENTS_POLL_MS = Number(process.env.LFG_CONNECT_EVENTS_INTERVAL_MS ?? 4_000);
+const MIN_REPORTABLE_DURATION_MS = Number(process.env.LFG_CONNECT_EVENTS_MIN_DURATION_MS ?? 60_000);
 
 /** The subset of src/sessions.ts's `Session` this client reads off GET /api/sessions. */
 export type SessionLite = {
@@ -219,9 +240,45 @@ export type SessionLite = {
   title?: string | null;
   project?: string | null;
   agent?: string | null;
+  // Present (non-null) only for a subagent (see src/commands/subagent.ts) —
+  // absence/null means top-level. This is the only signal isTopLevelSession
+  // needs; subagentDepth is not part of this HTTP payload today, but a
+  // future depth > 0 would mean the same thing and isTopLevelSession is
+  // written to treat it identically if it ever shows up here.
+  parentSessionId?: string | null;
+  subagentDepth?: number | null;
+  // Session.startedAt off GET /api/sessions — when the session was
+  // launched. Used for the reportable-duration floor below.
+  startedAt?: number | null;
 };
 
 type SeenSession = { busy: boolean; status: "ok" | "blocked" };
+
+/** No parentSessionId and no positive subagentDepth — see the doc block at
+ * the top of this file for why subagent churn never leaves the box. */
+export function isTopLevelSession(session: SessionLite): boolean {
+  return !session.parentSessionId && !session.subagentDepth;
+}
+
+/**
+ * Whether this tick's transition is worth forwarding at all, independent of
+ * title hygiene (the gateway's job — see BYO_COMPUTER.md). needs_attention
+ * is exempt from the duration floor: a blocked session is actionable
+ * regardless of age. A session.completed with no startedAt to judge against
+ * is let through rather than silently dropped — an unknown duration isn't
+ * evidence the run was a quick blip.
+ */
+export function isReportableTransition(
+  event: SessionEventFrame["event"],
+  session: SessionLite,
+  ts: number,
+): boolean {
+  if (!isTopLevelSession(session)) return false;
+  if (event === "session.needs_attention") return true;
+  const startedAt = session.startedAt ?? null;
+  if (startedAt == null) return true;
+  return ts - startedAt >= MIN_REPORTABLE_DURATION_MS;
+}
 
 export type SessionEventFrame = {
   type: "event";
@@ -254,6 +311,9 @@ function makeEventFrame(event: SessionEventFrame["event"], session: SessionLite,
  * A session absent from `seen` (first time observed) never emits — it only
  * seeds the baseline, so restarting `lfg connect` against a box with
  * already-finished sessions doesn't fire a burst of stale notifications.
+ * A transition that fails isReportableTransition (not top-level, or a
+ * completion under the duration floor) is diffed the same as any other —
+ * `seen` is still updated — it just never becomes an event.
  */
 export function diffSessionEvents(seen: Map<string, SeenSession>, sessions: SessionLite[], ts: number): SessionEventFrame[] {
   const events: SessionEventFrame[] = [];
@@ -266,9 +326,13 @@ export function diffSessionEvents(seen: Map<string, SeenSession>, sessions: Sess
     const prior = seen.get(session.sessionId);
     if (prior) {
       if (prior.status !== "blocked" && status === "blocked") {
-        events.push(makeEventFrame("session.needs_attention", session, ts));
+        if (isReportableTransition("session.needs_attention", session, ts)) {
+          events.push(makeEventFrame("session.needs_attention", session, ts));
+        }
       } else if (prior.busy && !busy && !session.launching && status === "ok") {
-        events.push(makeEventFrame("session.completed", session, ts));
+        if (isReportableTransition("session.completed", session, ts)) {
+          events.push(makeEventFrame("session.completed", session, ts));
+        }
       }
     }
     seen.set(session.sessionId, { busy, status });

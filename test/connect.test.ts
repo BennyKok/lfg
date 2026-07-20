@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { diffSessionEvents, errorFrameMessage, forwardToLocalServe, isHttpFrame, type SessionLite } from "../src/commands/connect.ts";
+import {
+  diffSessionEvents,
+  errorFrameMessage,
+  forwardToLocalServe,
+  isHttpFrame,
+  isReportableTransition,
+  isTopLevelSession,
+  type SessionLite,
+} from "../src/commands/connect.ts";
 
 describe("isHttpFrame", () => {
   test("accepts a well-formed http frame", () => {
@@ -173,5 +181,98 @@ describe("diffSessionEvents", () => {
     expect(events).toEqual([
       { type: "event", event: "session.completed", sessionId: "a", title: null, project: null, agent: null, ts: 1000 },
     ]);
+  });
+
+  test("a subagent's completion (parentSessionId set) never emits — subagent churn stays on the box", () => {
+    const seen = new Map([["a", { busy: true, status: "ok" as const }]]);
+    const events = diffSessionEvents(
+      seen,
+      [session({ sessionId: "a", busy: false, parentSessionId: "parent-1", startedAt: 0 })],
+      120_000,
+    );
+    expect(events).toEqual([]);
+  });
+
+  test("a subagent's needs_attention never emits either — top-level filter applies to both kinds", () => {
+    const seen = new Map([["a", { busy: true, status: "ok" as const }]]);
+    const events = diffSessionEvents(
+      seen,
+      [session({ sessionId: "a", busy: true, status: "blocked", parentSessionId: "parent-1" })],
+      1000,
+    );
+    expect(events).toEqual([]);
+  });
+
+  test("a top-level completion under the 60s duration floor is dropped", () => {
+    const seen = new Map([["a", { busy: true, status: "ok" as const }]]);
+    const events = diffSessionEvents(seen, [session({ sessionId: "a", busy: false, startedAt: 0 })], 30_000);
+    expect(events).toEqual([]);
+  });
+
+  test("a top-level completion at/over the 60s duration floor is reported", () => {
+    const seen = new Map([["a", { busy: true, status: "ok" as const }]]);
+    const events = diffSessionEvents(seen, [session({ sessionId: "a", busy: false, startedAt: 0 })], 60_000);
+    expect(events.map((e) => e.event)).toEqual(["session.completed"]);
+  });
+
+  test("needs_attention is exempt from the duration floor — reported even for a brand-new session", () => {
+    const seen = new Map([["a", { busy: true, status: "ok" as const }]]);
+    const events = diffSessionEvents(
+      seen,
+      [session({ sessionId: "a", busy: true, status: "blocked", startedAt: 0 })],
+      1_000,
+    );
+    expect(events.map((e) => e.event)).toEqual(["session.needs_attention"]);
+  });
+
+  test("a completion with no startedAt to judge is reported rather than silently dropped", () => {
+    const seen = new Map([["a", { busy: true, status: "ok" as const }]]);
+    const events = diffSessionEvents(seen, [session({ sessionId: "a", busy: false, startedAt: undefined })], 1_000);
+    expect(events.map((e) => e.event)).toEqual(["session.completed"]);
+  });
+});
+
+describe("isTopLevelSession", () => {
+  test("a session with no parentSessionId and no subagentDepth is top-level", () => {
+    expect(isTopLevelSession(session({ sessionId: "a" }))).toBe(true);
+  });
+
+  test("a session with a parentSessionId is not top-level", () => {
+    expect(isTopLevelSession(session({ sessionId: "a", parentSessionId: "parent-1" }))).toBe(false);
+  });
+
+  test("a session with a positive subagentDepth is not top-level, even with no parentSessionId", () => {
+    expect(isTopLevelSession(session({ sessionId: "a", subagentDepth: 2 }))).toBe(false);
+  });
+
+  test("subagentDepth 0/null is treated the same as absent — top-level", () => {
+    expect(isTopLevelSession(session({ sessionId: "a", subagentDepth: 0 }))).toBe(true);
+    expect(isTopLevelSession(session({ sessionId: "a", subagentDepth: null }))).toBe(true);
+  });
+});
+
+describe("isReportableTransition", () => {
+  test("a subagent is never reportable, regardless of event kind or duration", () => {
+    const sub = session({ sessionId: "a", parentSessionId: "parent-1", startedAt: 0 });
+    expect(isReportableTransition("session.completed", sub, 1_000_000)).toBe(false);
+    expect(isReportableTransition("session.needs_attention", sub, 1_000_000)).toBe(false);
+  });
+
+  test("a top-level completion under 60s is not reportable", () => {
+    expect(isReportableTransition("session.completed", session({ sessionId: "a", startedAt: 0 }), 59_999)).toBe(
+      false,
+    );
+  });
+
+  test("a top-level completion at exactly 60s is reportable", () => {
+    expect(isReportableTransition("session.completed", session({ sessionId: "a", startedAt: 0 }), 60_000)).toBe(
+      true,
+    );
+  });
+
+  test("a top-level needs_attention is reportable regardless of duration", () => {
+    expect(
+      isReportableTransition("session.needs_attention", session({ sessionId: "a", startedAt: 0 }), 1),
+    ).toBe(true);
   });
 });
