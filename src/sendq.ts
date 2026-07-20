@@ -23,7 +23,8 @@ import {
   feedbackPromptOpen,
   tmuxDismissFeedback,
 } from "./tmux.ts";
-import { listSessions, resolveTranscript } from "./sessions.ts";
+import { resolveTranscript } from "./sessions.ts";
+import { listSessionsCached } from "./session-cache.ts";
 import { enqueueTranscriptIndex, indexedRecentMessages } from "./transcript-index.ts";
 import { traceLog } from "./trace-log.ts";
 
@@ -256,7 +257,9 @@ function clearFeedbackPrompt(target: string): boolean {
 
 async function deliver(sessionId: string, msg: QueuedMsg): Promise<void> {
   const started = performance.now();
-  const sess = (await listSessions()).find((s) => s.sessionId === sessionId);
+  const sess = (await listSessionsCached()).find(
+    (s) => s.sessionId === sessionId || s.nativeSessionId === sessionId,
+  );
   const target = sess?.tmuxTarget ?? null;
   if (!target) {
     msg.status = "failed";

@@ -1184,19 +1184,6 @@ async function liveSessionIdsCached(): Promise<Set<string>> {
   return ids;
 }
 
-function warmRenderedBacklogs(sessions: Session[], limit = 40): void {
-  for (const session of sessions.slice(0, MESSAGE_HTML_CACHE_MAX)) {
-    const path = session.transcriptPath;
-    const sid = session.sessionId;
-    if (!path || !sid) continue;
-    void indexedMessagePage(path, sid, { limit })
-      .then((page) => {
-        for (const message of transcriptMessagesForClient(sid, page.messages)) msgWithHtml(message);
-      })
-      .catch(() => {});
-  }
-}
-
 function compactForSpeech(text: string, max = 700): string {
   const oneLine = text
     .replace(/```[\s\S]*?```/g, "code block")
@@ -2332,7 +2319,6 @@ export async function cmdServe() {
         noteListSessionsClientActivity();
         const sessionsTask = listSessionsCached().then((sessions) => {
           warmChatTranscripts(sessions);
-          warmRenderedBacklogs(sessions, 40);
           return sessions;
         });
         const reposTask = listRepos();
@@ -3370,7 +3356,6 @@ export async function cmdServe() {
         noteListSessionsClientActivity();
         const sessions = await listSessionsCached();
         warmChatTranscripts(sessions);
-        warmRenderedBacklogs(sessions, 40);
         return json({ sessions });
       }
 
@@ -4709,7 +4694,8 @@ export async function cmdServe() {
           const text = body?.text?.trim();
           if (!text) return err(400, "expected { text }");
           const mode = body?.mode === "queue" ? "queue" : "steer";
-          const sess = (await listSessions()).find(
+          const sessions = await listSessionsCached();
+          const sess = sessions.find(
             (s) => s.sessionId === m[1] || s.nativeSessionId === m[1],
           );
           if (!sess) return err(404, "session not found");
@@ -4719,7 +4705,7 @@ export async function cmdServe() {
           // has flushed, close the managed child; its transient service reaps
           // browser/helper descendants and frees the next concurrency slot.
           if (/^\[subagent (?:complete|blocked|failed)\]/i.test(text) && body?.fromSessionId) {
-            const sender = (await listSessions()).find(
+            const sender = sessions.find(
               (session) =>
                 session.sessionId === body.fromSessionId ||
                 session.nativeSessionId === body.fromSessionId,

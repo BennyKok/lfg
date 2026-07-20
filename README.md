@@ -238,6 +238,9 @@ Configuration lives in `.env`; see [`.env.example`](./.env.example).
 | --- | --- |
 | `LFG_HOST` | Bind address. Keep `127.0.0.1` unless you know the risk. |
 | `LFG_PORT` | Web UI and API port. Defaults to `8766`. |
+| `LFG_TRACE_RETENTION_DAYS` | Days of backend trace logs to retain. Defaults to `7`. |
+| `LFG_TRACE_TRANSCRIPT_PAGE_SAMPLE_RATE` | Sample one fast transcript-page trace in every N calls. Defaults to `100`; slow calls are always retained. |
+| `LFG_TRACE_TRANSCRIPT_PAGES` | Set to `1` to retain every transcript-page trace for a focused diagnostic. |
 | `LFG_REPOS_ROOT` | Directory scanned for git repos. |
 | `LFG_CLAUDE_PATH` | Override the `claude` binary path. |
 | `LFG_CODEX_PATH` | Override the `codex` binary path. |

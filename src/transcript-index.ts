@@ -235,7 +235,7 @@ export function indexArtifactMessage(path: string, sessionId: string, artifact: 
       pageTotalCache.delete(path);
     }
     return inserted;
-  })();
+  }).immediate();
   const event = { path, sessionId, message };
   for (const listener of artifactListeners) {
     try {
@@ -593,7 +593,7 @@ function init() {
           AND message_id LIKE 'artifact-%'
           AND NOT EXISTS (SELECT 1 FROM artifacts a WHERE a.id = substr(message_id, 10))`).run();
       d.exec("PRAGMA user_version = 9");
-    })();
+    }).immediate();
   }
   d.exec(`CREATE UNIQUE INDEX IF NOT EXISTS transcript_artifact_message_unique
     ON transcript_messages(message_id)
@@ -755,7 +755,7 @@ export function deleteTranscriptIndexForPath(path: string): void {
       .run(path);
     d.query("DELETE FROM transcript_messages WHERE path = ?").run(path);
     d.query("DELETE FROM transcript_index_cursors WHERE path = ?").run(path);
-  })();
+  }).immediate();
 }
 
 export function indexTranscriptMessages(
@@ -815,7 +815,7 @@ export function indexTranscriptMessages(
     }
     if (cursor) updateCursorInDb(d, path, sessionId, cursor);
     return insertedRows;
-  })(rows);
+  }).immediate(rows);
   traceLog("transcript_index_live", {
     sessionId,
     path,
@@ -901,7 +901,7 @@ export function indexSessionMessagesDirect(sessionId: string, messages: SessionM
       ftsStmt.run(row.id, sessionId, row.text, row.id);
     }
     return insertedRows;
-  })(rows);
+  }).immediate(rows);
   if (inserted) pageTotalCache.delete(key);
   traceLog("transcript_index_direct", {
     sessionId,
@@ -977,7 +977,7 @@ export function reindexFileHistoryUnderSessionKey(
       seq++;
     }
     return n;
-  })(src);
+  }).immediate(src);
   directNextOffset.set(key, seq);
   pageTotalCache.delete(key);
   return inserted;
@@ -1012,7 +1012,7 @@ async function indexTranscriptOnce(path: string, sessionId: string): Promise<{
     d.transaction(() => {
       d.query("UPDATE transcript_messages SET session_id = ? WHERE path = ?").run(sessionId, path);
       d.query("UPDATE transcript_index_cursors SET session_id = ? WHERE path = ?").run(sessionId, path);
-    })();
+    }).immediate();
   }
 
   if (st.size < cursor) {
@@ -1021,7 +1021,7 @@ async function indexTranscriptOnce(path: string, sessionId: string): Promise<{
         .run(path);
       d.query("DELETE FROM transcript_messages WHERE path = ?").run(path);
       d.query("DELETE FROM transcript_index_cursors WHERE path = ?").run(path);
-    })();
+    }).immediate();
     cursor = 0;
   }
 
@@ -1110,11 +1110,11 @@ async function indexTranscriptOnce(path: string, sessionId: string): Promise<{
     const advance = atEof && holdStart < scanEnd ? holdStart : scanEnd;
     committed += advance;
     indexed += rows.length;
-    insert(rows);
+    insert.immediate(rows);
     if (advance < scanEnd || scanEnd === 0) break;
   }
 
-  if (committed === st.size) insert([]);
+  if (committed === st.size) insert.immediate([]);
   traceLog("transcript_index", {
     sessionId,
     path,

@@ -3,8 +3,8 @@ import { listSessions, type Session } from "./sessions.ts";
 // Must exceed both the status-broadcast cadence (~1s) and the warm-refresh
 // interval below so hot readers (live-ws status loop, monitor) hit a warm cache
 // instead of triggering a blocking full rebuild on the event loop.
-const LIST_SESSIONS_CACHE_TTL_MS = 1500;
-const ACTIVE_REFRESH_INTERVAL_MS = 1200;
+const LIST_SESSIONS_CACHE_TTL_MS = 3000;
+const ACTIVE_REFRESH_INTERVAL_MS = 2500;
 const ACTIVE_REFRESH_IDLE_MS = 30_000;
 
 let cached: { at: number; sessions: Session[] } | null = null;

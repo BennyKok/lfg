@@ -13,6 +13,7 @@ import {
   type ImageArtifact,
 } from "./artifacts.ts";
 import { syncArtifactIndex } from "./transcript-index.ts";
+import { traceLog } from "./trace-log.ts";
 
 export const MIN_ARTIFACT_REFRESH_INTERVAL_MS = 10_000;
 export const MAX_ARTIFACT_REFRESH_INTERVAL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -41,12 +42,9 @@ function cleanError(error: unknown): string {
   return message.replace(/\s+/g, " ").trim().slice(0, 1_000) || "refresh failed";
 }
 
-function updateRefreshStatus(
-  input: Parameters<typeof updateHtmlArtifactRefreshStatus>[0],
-): ImageArtifact | null {
-  const artifact = updateHtmlArtifactRefreshStatus(input);
-  if (artifact) syncArtifactIndex(artifact);
-  return artifact;
+function isSqliteBusy(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /database is (?:locked|busy)|SQLITE_(?:BUSY|LOCKED)/i.test(message);
 }
 
 function pathInside(path: string, root: string): boolean {
@@ -166,6 +164,52 @@ export class ArtifactRefreshManager {
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
   private readonly running = new Map<string, ChildProcess>();
+  private readonly pendingIndexSyncs = new Map<string, ReturnType<typeof setTimeout>>();
+
+  constructor(
+    private readonly writeIndex: (artifact: ImageArtifact) => number = syncArtifactIndex,
+  ) {}
+
+  private syncIndex(artifact: ImageArtifact, attempt = 0): boolean {
+    try {
+      this.writeIndex(artifact);
+      const pending = this.pendingIndexSyncs.get(artifact.id);
+      if (pending) clearTimeout(pending);
+      this.pendingIndexSyncs.delete(artifact.id);
+      return true;
+    } catch (error) {
+      if (!isSqliteBusy(error)) throw error;
+      const current = this.pendingIndexSyncs.get(artifact.id);
+      if (current) clearTimeout(current);
+      const delays = [100, 500, 2_000, 10_000, 30_000];
+      const delayMs = delays[Math.min(attempt, delays.length - 1)];
+      const timer = setTimeout(() => {
+        this.pendingIndexSyncs.delete(artifact.id);
+        const latest = getImageArtifact(artifact.id);
+        if (!latest) return;
+        try {
+          this.syncIndex(latest, attempt + 1);
+        } catch (retryError) {
+          traceLog("artifact_index_sync_error", {
+            artifactId: artifact.id,
+            error: cleanError(retryError),
+          });
+        }
+      }, delayMs);
+      timer.unref?.();
+      this.pendingIndexSyncs.set(artifact.id, timer);
+      traceLog("artifact_index_sync_deferred", { artifactId: artifact.id, attempt, delayMs });
+      return false;
+    }
+  }
+
+  private updateRefreshStatus(
+    input: Parameters<typeof updateHtmlArtifactRefreshStatus>[0],
+  ): ImageArtifact | null {
+    const artifact = updateHtmlArtifactRefreshStatus(input);
+    if (artifact) this.syncIndex(artifact);
+    return artifact;
+  }
 
   configure(input: {
     id: string;
@@ -183,7 +227,7 @@ export class ArtifactRefreshManager {
     });
     if (!refresh || !refresh.enabled) this.cancel(input.id);
     const updated = updateHtmlArtifactRefresh({ id: input.id, sessionId: input.sessionId, refresh });
-    syncArtifactIndex(updated);
+    this.syncIndex(updated);
     return updated;
   }
 
@@ -213,7 +257,7 @@ export class ArtifactRefreshManager {
       validated = validateScript(config.scriptPath, config.scopeRoot);
     } catch (error) {
       const message = cleanError(error);
-      artifact = updateRefreshStatus({
+      artifact = this.updateRefreshStatus({
         id,
         patch: { status: "error", lastStartedAt: Date.now(), lastError: message },
       }) ?? artifact;
@@ -221,7 +265,7 @@ export class ArtifactRefreshManager {
     }
 
     const startedAt = Date.now();
-    artifact = updateRefreshStatus({
+    artifact = this.updateRefreshStatus({
       id,
       patch: { status: "running", lastStartedAt: startedAt },
     }) ?? artifact;
@@ -237,7 +281,7 @@ export class ArtifactRefreshManager {
       });
     } catch (error) {
       const message = cleanError(error);
-      artifact = updateRefreshStatus({ id, patch: { status: "error", lastError: message } }) ?? artifact;
+      artifact = this.updateRefreshStatus({ id, patch: { status: "error", lastError: message } }) ?? artifact;
       return { ok: false, started: true, artifact, error: message };
     }
     this.running.set(id, child);
@@ -297,7 +341,7 @@ export class ArtifactRefreshManager {
     }
     if (!output.ok) {
       const message = cleanError(output.error);
-      artifact = updateRefreshStatus({ id, patch: { status: "error", lastError: message } }) ?? current;
+      artifact = this.updateRefreshStatus({ id, patch: { status: "error", lastError: message } }) ?? current;
       return { ok: false, started: true, artifact, error: message };
     }
 
@@ -311,17 +355,17 @@ export class ArtifactRefreshManager {
         caption: current.caption,
         bumpVersion: false,
       });
-      artifact = updateRefreshStatus({
+      artifact = this.updateRefreshStatus({
         id,
         patch: { status: "success", lastSuccessAt: Date.now(), lastError: undefined },
       }) ?? artifact;
-      // A refresh is not successful until the canonical joined row commits.
-      // There is no background manifest poller to paper over a split write.
-      syncArtifactIndex(artifact);
+      // Mirror the durable manifest into the joined read model. A busy writer
+      // is retried from the latest manifest and reconciled again on restart.
+      this.syncIndex(artifact);
       return { ok: true, started: true, artifact };
     } catch (error) {
       const message = cleanError(error);
-      artifact = updateRefreshStatus({ id, patch: { status: "error", lastError: message } }) ?? current;
+      artifact = this.updateRefreshStatus({ id, patch: { status: "error", lastError: message } }) ?? current;
       return { ok: false, started: true, artifact, error: message };
     }
   }
@@ -335,7 +379,16 @@ export class ArtifactRefreshManager {
         if (!refresh?.enabled || this.running.has(artifact.id)) return false;
         return now >= (refresh.lastStartedAt ?? refresh.configuredAt) + refresh.intervalMs;
       });
-      await Promise.all(due.map((artifact) => this.refreshNow(artifact.id, artifact.sessionId)));
+      const results = await Promise.allSettled(
+        due.map((artifact) => this.refreshNow(artifact.id, artifact.sessionId)),
+      );
+      results.forEach((result, index) => {
+        if (result.status !== "rejected") return;
+        traceLog("artifact_refresh_scheduler_error", {
+          artifactId: due[index]?.id,
+          error: cleanError(result.reason),
+        });
+      });
     } finally {
       this.ticking = false;
     }
@@ -343,8 +396,26 @@ export class ArtifactRefreshManager {
 
   start(tickMs = 1_000): () => void {
     if (!this.timer) {
-      void this.tick();
-      this.timer = setInterval(() => void this.tick(), tickMs);
+      // Reconcile durable manifests after a restart, including any status write
+      // whose SQLite mirror was deferred when the previous process exited.
+      for (const artifact of listAllArtifacts()) {
+        try {
+          this.syncIndex(artifact);
+        } catch (error) {
+          traceLog("artifact_index_sync_error", {
+            artifactId: artifact.id,
+            error: cleanError(error),
+          });
+        }
+      }
+      void this.tick().catch((error) => {
+        traceLog("artifact_refresh_scheduler_error", { error: cleanError(error) });
+      });
+      this.timer = setInterval(() => {
+        void this.tick().catch((error) => {
+          traceLog("artifact_refresh_scheduler_error", { error: cleanError(error) });
+        });
+      }, tickMs);
       this.timer.unref?.();
     }
     return () => this.stop();
@@ -355,6 +426,8 @@ export class ArtifactRefreshManager {
     this.timer = null;
     for (const child of this.running.values()) killProcessTree(child);
     this.running.clear();
+    for (const timer of this.pendingIndexSyncs.values()) clearTimeout(timer);
+    this.pendingIndexSyncs.clear();
   }
 }
 

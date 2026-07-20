@@ -1,15 +1,46 @@
-import { appendFile, mkdir } from "node:fs/promises";
+import { appendFile, mkdir, readdir, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { PATHS } from "./config.ts";
 
 const LOG_DIR = join(PATHS.data, "logs");
 const MAX_QUEUE = 2_000;
+const RETENTION_DAYS = Math.max(1, Number(process.env.LFG_TRACE_RETENTION_DAYS ?? 7) || 7);
+const TRANSCRIPT_PAGE_SAMPLE_RATE = Math.max(
+  1,
+  Number(process.env.LFG_TRACE_TRANSCRIPT_PAGE_SAMPLE_RATE ?? 100) || 100,
+);
 
 let queue: string[] = [];
 let flushing = false;
+let transcriptPageCount = 0;
+let cleanupStarted = false;
 
 function logPath(): string {
   return join(LOG_DIR, `trace-${new Date().toISOString().slice(0, 10)}.jsonl`);
+}
+
+function keepEvent(event: string, fields: Record<string, unknown>): boolean {
+  if (event !== "transcript_page" || process.env.LFG_TRACE_TRANSCRIPT_PAGES === "1") return true;
+  const durationMs = typeof fields.durationMs === "number" ? fields.durationMs : 0;
+  if (durationMs >= 250) return true;
+  transcriptPageCount++;
+  return transcriptPageCount % TRANSCRIPT_PAGE_SAMPLE_RATE === 0;
+}
+
+async function cleanOldLogs(): Promise<void> {
+  if (cleanupStarted) return;
+  cleanupStarted = true;
+  try {
+    const cutoff = Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    for (const name of await readdir(LOG_DIR)) {
+      const match = /^trace-(\d{4}-\d{2}-\d{2})\.jsonl$/.exec(name);
+      if (!match) continue;
+      const day = Date.parse(`${match[1]}T00:00:00.000Z`);
+      if (Number.isFinite(day) && day < cutoff) await unlink(join(LOG_DIR, name)).catch(() => {});
+    }
+  } catch {
+    // Retention is best-effort and must never affect request handling.
+  }
 }
 
 function scrub(value: unknown): unknown {
@@ -39,6 +70,8 @@ async function flush(): Promise<void> {
 
 export function traceLog(event: string, fields: Record<string, unknown> = {}): void {
   try {
+    if (!keepEvent(event, fields)) return;
+    void cleanOldLogs();
     if (queue.length >= MAX_QUEUE) queue = queue.slice(Math.floor(MAX_QUEUE / 2));
     const safeFields = scrub(fields) as Record<string, unknown>;
     queue.push(

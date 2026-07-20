@@ -208,6 +208,23 @@ describe("script-backed HTML artifact refresh", () => {
     expect(readFileSync(artifact.filePath, "utf8")).toContain("rehydrated");
   });
 
+  test("a busy transcript index cannot reject a scheduler tick or lose refreshed HTML", async () => {
+    const executable = script(
+      "busy-index.sh",
+      "#!/bin/sh\nprintf '%s' '<!doctype html><html><body>survived busy index</body></html>'\n",
+    );
+    const artifact = create({ scriptPath: executable, configuredAt: 1_000, intervalMs: 10_000 });
+    const refreshes = new ArtifactRefreshManager(() => {
+      throw new Error("database is locked");
+    });
+    managers.push(refreshes);
+
+    await expect(refreshes.tick(11_000)).resolves.toBeUndefined();
+
+    expect(readFileSync(artifact.filePath, "utf8")).toContain("survived busy index");
+    expect(getImageArtifact(artifact.id)?.refresh?.status).toBe("success");
+  });
+
   test("updating, disabling, and removing a schedule keeps one owner/config", async () => {
     const executable = script(
       "disabled.sh",
