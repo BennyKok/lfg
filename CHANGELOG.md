@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 20, 2026 - Visible mobile selection (v0.1.47)
+
+- Selecting text from a sent-message bubble now keeps the native highlight and
+  selection handles above the glass card instead of clipping them underneath it.
+
 ## July 20, 2026 - Faster message sharing (v0.1.46)
 
 - Every user and assistant message now has a one-tap copy action. On mobile,
