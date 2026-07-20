@@ -106,6 +106,24 @@ function activeSessionId(input?: string): string {
   return sessionId;
 }
 
+export async function closeLfgSession(sessionIdInput: string) {
+  const sessionId = sessionIdInput.trim();
+  if (!sessionId) throw new Error("sessionId required");
+  const caller = process.env.LFG_SESSION_ID?.trim();
+  if (caller && caller === sessionId) {
+    throw new Error("lfg_close_session cannot close the calling session");
+  }
+  const data = await api<{ ok?: boolean }>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/close`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source: "mcp_lfg_close_session" }),
+    },
+  );
+  return { closed: data.ok !== false, sessionId };
+}
+
 function ownedSessionId(input?: string): string {
   const sessionId = activeSessionId(input);
   const caller = process.env.LFG_SESSION_ID?.trim();
@@ -352,6 +370,19 @@ export async function cmdMcp() {
       });
       return result(data);
     },
+  );
+
+  server.registerTool(
+    "lfg_close_session",
+    {
+      title: "Close LFG Session",
+      description:
+        "Close another LFG runtime session that is clearly finished. Resolve the exact target id with lfg_list_sessions first. The calling session cannot close itself.",
+      inputSchema: {
+        sessionId: z.string().min(1).describe("Exact LFG session id returned by lfg_list_sessions."),
+      },
+    },
+    async ({ sessionId }) => result(await closeLfgSession(sessionId)),
   );
 
   server.registerTool(

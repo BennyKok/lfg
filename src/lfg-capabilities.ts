@@ -3,9 +3,14 @@ import type { CodingAgentKind } from "./coding-agents.ts";
 // Bump whenever an agent-facing LFG capability or its operating guidance
 // changes. Managed sessions persist the value they launched with, which lets
 // the UI identify long-lived sessions whose MCP/tool catalog predates a ship.
-export const LFG_CAPABILITY_VERSION = "2026-07-17.1";
+export const LFG_CAPABILITY_VERSION = "2026-07-20.1";
 
 export const LFG_CAPABILITIES = [
+  {
+    tool: "lfg_close_session",
+    useWhen: "Another live session is clearly complete and should be removed from the active fleet.",
+    guidance: "Resolve the exact id with lfg_list_sessions first; never close the calling session or an active, uncertain, errored, or blocked session.",
+  },
   {
     tool: "lfg_ship",
     useWhen: "Material user-visible work is complete and verified.",
@@ -49,7 +54,8 @@ export function lfgRuntimeContract(): string {
     "- When material user-visible work is complete and verified, call `lfg_ship` with a concise showcase and the strongest media. Do not ship diagnosis, planning, partial, invisible, or trivial work.",
     "- Use `lfg_ask_user` only for a risky, irreversible, or genuinely ambiguous decision. It is fire-and-forget: do not poll or block waiting for the answer.",
     "- When the user or governing instructions explicitly request delegation, prefer `lfg_create_subagent` or `lfg_delegate_*` so children remain visible and linked in LFG.",
-    "- If an exact LFG tool is unavailable, report that this session needs a capability refresh. Do not reverse-engineer or call LFG's private HTTP endpoints as a substitute.",
+    "- Use `lfg_close_session` only after resolving another session's exact id with `lfg_list_sessions`; never close your own session.",
+    "- If an exact LFG tool is unavailable, call `lfg_capabilities`. Report that the session needs a capability refresh only when it returns `stale: true`; otherwise report that the capability is unsupported. Do not reverse-engineer or call LFG's private HTTP endpoints as a substitute.",
     "=== END LFG RUNTIME CONTRACT ===",
   ].join("\n");
 }

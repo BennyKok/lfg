@@ -14,6 +14,7 @@ describe("LFG runtime capabilities", () => {
     expect(prompt).toContain("lfg_publish_artifact");
     expect(prompt).toContain("lfg_ship");
     expect(prompt).toContain("lfg_ask_user");
+    expect(prompt).toContain("lfg_close_session");
     expect(prompt).toEndWith("=== USER TASK ===\nFix the mobile navigation");
   });
 
@@ -29,6 +30,7 @@ describe("LFG runtime capabilities", () => {
 
   test("publishes a bootstrap entry for every promoted workflow", () => {
     expect(LFG_CAPABILITIES.map((item) => item.tool)).toEqual([
+      "lfg_close_session",
       "lfg_ship",
       "lfg_display_image / lfg_display_video",
       "lfg_publish_artifact",
