@@ -192,6 +192,20 @@ specific operator's relay). The saved binding token lives in
 invalid, expired, or revoked, reconnecting stops and asks you to re-pair with
 a fresh code rather than retrying forever.
 
+**Session lifecycle events (opt-in).** Set `LFG_CONNECT_EVENTS=1` to also
+forward a small `event` frame up the relay socket whenever a local session
+finishes (`session.completed`) or needs a human (`session.needs_attention` —
+model unavailable, out of credits, provider auth/error; see `computeStatus` in
+[`src/sessions.ts`](./src/sessions.ts)). This is polled locally against this
+box's own `GET /api/sessions` every `LFG_CONNECT_EVENTS_INTERVAL_MS` (default
+`4000`) and only sent while a relay connection is open — see the "Session
+lifecycle events" doc block at the top of
+[`src/commands/connect.ts`](./src/commands/connect.ts) for the exact
+transition rules and wire shape. **Privacy:** this is off by default because
+the event includes the session's title (derived from your own first prompt in
+that session) and project/agent name, which then leave this box for whatever
+relay `LFG_RELAY_URL` points at.
+
 The MCP server talks to the local `lfg serve` API and exposes tools such as
 `lfg_capabilities`, `lfg_list_sessions`, `lfg_get_session_messages`,
 `lfg_send_session_message`, `lfg_create_subagent`, and `lfg_list_subagents`. Use it from an MCP client with
@@ -256,6 +270,8 @@ Configuration lives in `.env`; see [`.env.example`](./.env.example).
 | `ANTHROPIC_API_KEY` | Optional API key for Claude / Pi flows. |
 | `LFG_WHATSAPP_*` | Optional WhatsApp bridge settings. |
 | `LFG_RELAY_URL` | Relay WebSocket URL for `lfg connect` (required to use it — no default). See [Commands](#commands). |
+| `LFG_CONNECT_EVENTS` | Opt-in (default off): `lfg connect` forwards session completed/needs-attention events to the relay. Session titles leave the box when on — see [Commands](#commands). |
+| `LFG_CONNECT_EVENTS_INTERVAL_MS` | Local session-poll interval in ms when `LFG_CONNECT_EVENTS` is on (default `4000`). |
 | `LFG_INSTALL_CHANNEL` | Install channel: `source`, `release`, or `container`. Usually set by setup/deploy. |
 
 ## Security
