@@ -519,6 +519,37 @@ html.lfg-keyboard-open {
     font-size: 11px;
   }
 
+  /* Message copy stays discoverable on touch screens and steps out of the way
+     until hover/focus on pointer-precise devices. Long press is owned by the
+     message action menu on mobile; "Select text" opts back into native handles. */
+  .message-copy-button {
+    opacity: 0;
+  }
+
+  .group\/message:hover .message-copy-button,
+  .group\/message:focus-within .message-copy-button {
+    opacity: 1;
+  }
+
+  @media (pointer: coarse) {
+    .message-actions-wrap {
+      touch-action: pan-y;
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+
+    .message-actions-wrap.is-selecting,
+    .message-actions-wrap.is-selecting * {
+      -webkit-user-select: text;
+      user-select: text;
+    }
+
+    .message-copy-button {
+      opacity: 1;
+    }
+  }
+
   .msg-text.markdown hr {
     margin: 0.8em 0;
   }
