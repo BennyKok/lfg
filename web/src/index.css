@@ -545,6 +545,22 @@ html.lfg-keyboard-open {
       user-select: text;
     }
 
+    /* WebKit paints native selection handles outside the selected line box.
+       The sent-message glass card normally clips its contents and owns a
+       z-index:0 stacking context, which can put those handles under the card.
+       Lift only the active message and let its selection affordances escape. */
+    .message-actions-wrap.is-selecting {
+      position: relative;
+      z-index: 20;
+    }
+
+    .message-actions-wrap.is-selecting .user-bubble {
+      z-index: auto;
+      overflow: visible;
+      backdrop-filter: none;
+      -webkit-backdrop-filter: none;
+    }
+
     .message-copy-button {
       opacity: 1;
     }

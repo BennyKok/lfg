@@ -11090,6 +11090,27 @@ function MessageActions({
     });
   }, []);
 
+  useEffect(() => {
+    if (!selecting) return;
+    const onSelectionChange = () => {
+      const selection = window.getSelection();
+      const content = contentRef.current;
+      if (
+        !selection ||
+        selection.isCollapsed ||
+        !content ||
+        !selection.anchorNode ||
+        !selection.focusNode ||
+        !content.contains(selection.anchorNode) ||
+        !content.contains(selection.focusNode)
+      ) {
+        setSelecting(false);
+      }
+    };
+    document.addEventListener("selectionchange", onSelectionChange);
+    return () => document.removeEventListener("selectionchange", onSelectionChange);
+  }, [selecting]);
+
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!text || (event.pointerType !== "touch" && event.pointerType !== "pen")) return;
     if ((event.target as HTMLElement).closest("button, a, input, textarea")) return;
