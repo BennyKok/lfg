@@ -287,10 +287,14 @@ export function syncArtifactIndexNonBlocking(
   artifact: ImageArtifact,
   busyTimeoutMs = 100,
 ): number {
-  init();
-  const d = database();
-  d.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.min(1_000, Math.floor(busyTimeoutMs)))}`);
+  const boundedTimeout = Math.max(0, Math.min(1_000, Math.floor(busyTimeoutMs)));
+  // Set the short wait while opening/initializing too: first access may need a
+  // schema write, and waiting there with the default timeout would still stall
+  // startup before this function reached the mirror transaction.
+  const d = database(boundedTimeout);
+  d.exec(`PRAGMA busy_timeout = ${boundedTimeout}`);
   try {
+    init(boundedTimeout);
     return syncArtifactIndex(artifact);
   } finally {
     d.exec(`PRAGMA busy_timeout = ${TRANSCRIPT_BUSY_TIMEOUT_MS}`);
@@ -338,7 +342,7 @@ function startWalCheckpointTimer(): void {
   (timer as { unref?: () => void }).unref?.();
 }
 
-function database(): Database {
+function database(busyTimeoutMs = TRANSCRIPT_BUSY_TIMEOUT_MS): Database {
   const path = dbPath();
   if (db && dbOpenedPath === path) return db;
   if (db) {
@@ -359,7 +363,7 @@ function database(): Database {
   // Resuming a long thread can legitimately hold SQLite's single WAL writer
   // for several seconds, so short writes should wait rather than surface a
   // false failure after their primary data is already durable.
-  db.exec(`PRAGMA busy_timeout = ${TRANSCRIPT_BUSY_TIMEOUT_MS}`);
+  db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`);
   db.exec("PRAGMA wal_autocheckpoint = 1000");
   startWalCheckpointTimer();
   return db;
@@ -383,9 +387,9 @@ export function resetTranscriptIndexConnectionForTests(): void {
   imports.clear();
 }
 
-function init() {
+function init(busyTimeoutMs = TRANSCRIPT_BUSY_TIMEOUT_MS) {
   if (initialized) return;
-  const d = database();
+  const d = database(busyTimeoutMs);
   d.exec(`
     CREATE TABLE IF NOT EXISTS transcript_index_cursors (
       path TEXT PRIMARY KEY,

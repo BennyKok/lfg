@@ -398,7 +398,9 @@ export class ArtifactRefreshManager {
     if (!this.timer) {
       // Reconcile durable manifests after a restart, including any status write
       // whose SQLite mirror was deferred when the previous process exited.
-      for (const artifact of listAllArtifacts()) {
+      for (const artifact of listAllArtifacts().filter(
+        (candidate) => candidate.media === "html" && !!candidate.refresh,
+      )) {
         try {
           this.syncIndex(artifact);
         } catch (error) {
