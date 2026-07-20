@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 20, 2026 - Smart session cleanup (v0.1.45)
+
+- Smart clear and other LFG-managed agents can now close sessions through the
+  supported MCP surface after resolving an exact session id.
+- Session closing refuses self-termination, and capability guidance now reports
+  a refresh only for genuinely stale sessions instead of masking missing tools.
+
 ## July 20, 2026 - Responsive chat and resilient indexing (v0.1.44)
 
 - Session and bootstrap requests no longer fan out eager transcript-page reads
