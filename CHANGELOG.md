@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 20, 2026 - Faster message sharing (v0.1.46)
+
+- Every user and assistant message now has a one-tap copy action. On mobile,
+  long-pressing message text opens quick Copy and Select text actions, so people
+  can either grab the whole response immediately or use native selection handles.
 - `lfg connect` can now optionally forward session completed/needs-attention
   events to the relay it's paired with (`LFG_CONNECT_EVENTS=1`, off by
   default — session titles leave the box when enabled). See the "Session
