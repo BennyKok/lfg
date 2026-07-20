@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+- `lfg connect` can now optionally forward session completed/needs-attention
+  events to the relay it's paired with (`LFG_CONNECT_EVENTS=1`, off by
+  default — session titles leave the box when enabled). See the "Session
+  lifecycle events" section in the README's `lfg connect` docs.
+
 ## July 20, 2026 - Smart session cleanup (v0.1.45)
 
 - Smart clear and other LFG-managed agents can now close sessions through the

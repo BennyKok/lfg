@@ -27,6 +27,11 @@ import { PATHS } from "../config.ts";
 //   relay  → client   {type:"error", message}                  (pairing/hello rejected — relay closes right after)
 //   relay  → client   {type:"http", id, method, path, headers, bodyB64?}
 //   client → relay   {type:"http-response", id, status, headers, bodyB64?}
+//   client → relay   {type:"event", event, sessionId, title?, project?, agent?, ts}
+//                     (opt-in, LFG_CONNECT_EVENTS=1 — see "Session lifecycle
+//                     events" below; no response frame, a relay that doesn't
+//                     understand `event` just ignores or errors it and this
+//                     client doesn't care either way)
 //   either → other    {type:"ping"} / {type:"pong"}
 //
 // This is intentionally the smallest surface that lets a relay reverse-proxy
@@ -36,6 +41,43 @@ import { PATHS } from "../config.ts";
 // revoked, or unknown to the relay) — that will never resolve by retrying,
 // so the reconnect loop below treats it as fatal rather than backing off
 // forever against a token that can't work.
+//
+// Session lifecycle events (opt-in, LFG_CONNECT_EVENTS=1):
+//
+// When enabled, this client also polls its own local `lfg serve` (the same
+// GET /api/sessions any client of this box's HTTP API can call — see
+// src/sessions.ts's Session type) every LFG_CONNECT_EVENTS_INTERVAL_MS (default
+// 4000ms) and diffs busy/status transitions per session. Two transitions are
+// reported as `event` frames up the relay socket, whenever a live connection
+// is open:
+//   - a session that was busy goes idle without being blocked → "session.completed"
+//   - a session's status flips to "blocked" (see computeStatus in
+//     src/sessions.ts — model unavailable, out of credits, provider auth/error)
+//     → "session.needs_attention"
+// The very first poll after connecting only seeds a baseline (no events) so a
+// box that's had long-finished sessions sitting around doesn't fire a burst of
+// stale notifications on startup.
+//
+// This intentionally polls locally rather than opening a second WebSocket to
+// this box's own `/api/live/ws` status channel: `lfg connect` runs as a
+// separate process from `lfg serve` (its only access to this box is the same
+// HTTP surface a remote client would use), and a plain interval against
+// GET /api/sessions is far simpler to reason about and test than a second
+// long-lived socket with its own reconnect/heartbeat state machine. The
+// resulting latency (bounded by the poll interval, a few seconds at most, and
+// entirely on loopback) is negligible next to what it replaces — this box
+// announcing a completion is still categorically faster than a remote poller
+// checking in every few seconds over the network.
+//
+// PRIVACY NOTE: when enabled, session titles (and project/agent names) leave
+// this box and are sent to whatever relay LFG_RELAY_URL points at, which then
+// (per that relay's own policy) may forward them further (e.g. omg's relay
+// forwards to an operator-configured webhook — see BYO_COMPUTER.md in the
+// vibes repo). A session title is derived from your own first prompt in that
+// session (see firstPromptTitle in src/sessions.ts) and can contain whatever
+// you typed. This is why the flag defaults OFF — turning it on is an explicit
+// choice to let a completion/attention signal (and the small amount of
+// context needed to make it useful) leave the box.
 
 const HELP = `lfg connect — pair this box to a remote-access relay (EXPERIMENTAL)
 
@@ -48,8 +90,11 @@ Usage:
   lfg connect help         Show this help
 
 Env:
-  LFG_RELAY_URL       Relay WebSocket URL (required — no default, this file is provider-agnostic)
-  LFG_PORT / LFG_HOST Local 'lfg serve' address to proxy requests to (default 127.0.0.1:8766)
+  LFG_RELAY_URL              Relay WebSocket URL (required — no default, this file is provider-agnostic)
+  LFG_PORT / LFG_HOST        Local 'lfg serve' address to proxy requests to (default 127.0.0.1:8766)
+  LFG_CONNECT_EVENTS         Opt-in (1/true/yes, default off): forward session completed/needs-attention
+                             events to the relay. PRIVACY: session titles leave this box when on.
+  LFG_CONNECT_EVENTS_INTERVAL_MS  Local session-poll interval in ms when events are enabled (default 4000)
 
 No relay implementation ships with LFG. This is the generic client half of a
 protocol any relay operator can implement — see the wire protocol documented
@@ -157,6 +202,110 @@ export async function forwardToLocalServe(frame: HttpFrame): Promise<{
   }
 }
 
+// ---- Session lifecycle events (opt-in) — see the doc block above. ----
+
+function eventsEnabled(): boolean {
+  return /^(1|true|yes)$/i.test(process.env.LFG_CONNECT_EVENTS?.trim() ?? "");
+}
+
+const EVENTS_POLL_MS = Number(process.env.LFG_CONNECT_EVENTS_INTERVAL_MS ?? 4_000);
+
+/** The subset of src/sessions.ts's `Session` this client reads off GET /api/sessions. */
+export type SessionLite = {
+  sessionId: string | null;
+  busy?: boolean;
+  launching?: boolean;
+  status?: "ok" | "blocked";
+  title?: string | null;
+  project?: string | null;
+  agent?: string | null;
+};
+
+type SeenSession = { busy: boolean; status: "ok" | "blocked" };
+
+export type SessionEventFrame = {
+  type: "event";
+  event: "session.completed" | "session.needs_attention";
+  sessionId: string;
+  title: string | null;
+  project: string | null;
+  agent: string | null;
+  ts: number;
+};
+
+function makeEventFrame(event: SessionEventFrame["event"], session: SessionLite, ts: number): SessionEventFrame {
+  return {
+    type: "event",
+    event,
+    sessionId: session.sessionId as string,
+    title: session.title ?? null,
+    project: session.project ?? null,
+    agent: session.agent ?? null,
+    ts,
+  };
+}
+
+/**
+ * Diffs one poll's session list against the previously-seen state (mutated in
+ * place — `seen` is the caller's running baseline across ticks) and returns
+ * the lifecycle events this tick produced. Pure/sync so it's cheaply testable
+ * without a fake server or a fake clock beyond an injected `ts`.
+ *
+ * A session absent from `seen` (first time observed) never emits — it only
+ * seeds the baseline, so restarting `lfg connect` against a box with
+ * already-finished sessions doesn't fire a burst of stale notifications.
+ */
+export function diffSessionEvents(seen: Map<string, SeenSession>, sessions: SessionLite[], ts: number): SessionEventFrame[] {
+  const events: SessionEventFrame[] = [];
+  const presentIds = new Set<string>();
+  for (const session of sessions) {
+    if (!session.sessionId) continue;
+    presentIds.add(session.sessionId);
+    const busy = Boolean(session.busy);
+    const status = session.status ?? "ok";
+    const prior = seen.get(session.sessionId);
+    if (prior) {
+      if (prior.status !== "blocked" && status === "blocked") {
+        events.push(makeEventFrame("session.needs_attention", session, ts));
+      } else if (prior.busy && !busy && !session.launching && status === "ok") {
+        events.push(makeEventFrame("session.completed", session, ts));
+      }
+    }
+    seen.set(session.sessionId, { busy, status });
+  }
+  // Drop sessions no longer listed so a later reappearance (id reuse, or the
+  // session coming back after a transient list gap) re-baselines instead of
+  // comparing against stale state.
+  for (const sessionId of seen.keys()) {
+    if (!presentIds.has(sessionId)) seen.delete(sessionId);
+  }
+  return events;
+}
+
+async function pollSessionEvents(seen: Map<string, SeenSession>, getSocket: () => WebSocket | null): Promise<void> {
+  let sessions: SessionLite[];
+  try {
+    const response = await fetch(`http://${LOCAL_HOST}:${LOCAL_PORT}/api/sessions`);
+    if (!response.ok) return;
+    const body = (await response.json()) as { sessions?: SessionLite[] };
+    sessions = body.sessions ?? [];
+  } catch {
+    return; // local serve unreachable this tick — try again next tick.
+  }
+  const events = diffSessionEvents(seen, sessions, Date.now());
+  if (!events.length) return;
+  const ws = getSocket();
+  if (!ws || ws.readyState !== WebSocket.OPEN) return; // no live relay connection right now — drop this tick's events.
+  for (const frame of events) {
+    try {
+      ws.send(JSON.stringify(frame));
+    } catch {
+      // best-effort — a dead socket or a relay that rejects `event` frames
+      // just loses this one notification, never the connection itself.
+    }
+  }
+}
+
 function connectSocket(relayUrl: string, hello: { type: "pair"; code: string } | { type: "hello"; token: string }): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(relayUrl);
@@ -213,11 +362,28 @@ async function runConnectLoop(): Promise<void> {
     process.exit(1);
   }
 
+  // Session-events watcher lives for the whole process, independent of any
+  // one relay connection: it always polls local serve, and only SENDS a
+  // frame when `currentWs` happens to be open at the moment a transition is
+  // detected (see pollSessionEvents — otherwise it just drops that tick's
+  // events, same "best-effort, poller elsewhere is the fallback" posture as
+  // everything else in this file).
+  let currentWs: WebSocket | null = null;
+  if (eventsEnabled()) {
+    console.log(
+      `lfg connect: forwarding session lifecycle events to the relay every ${EVENTS_POLL_MS}ms (LFG_CONNECT_EVENTS=1) — session titles will be sent to the relay.`,
+    );
+    const seen = new Map<string, SeenSession>();
+    const timer = setInterval(() => void pollSessionEvents(seen, () => currentWs), EVENTS_POLL_MS);
+    timer.unref?.();
+  }
+
   let backoffMs = RECONNECT_MIN_MS;
   for (;;) {
     try {
       console.log(`lfg connect: dialing ${creds.relayUrl} as ${creds.boxId} …`);
       const ws = await connectSocket(creds.relayUrl, { type: "hello", token: creds.token });
+      currentWs = ws;
       backoffMs = RECONNECT_MIN_MS;
       console.log(`lfg connect: connected — proxying to local serve on ${LOCAL_HOST}:${LOCAL_PORT}`);
 
@@ -247,6 +413,7 @@ async function runConnectLoop(): Promise<void> {
         ws.addEventListener("close", () => resolveClosed());
         ws.addEventListener("error", () => resolveClosed());
       });
+      currentWs = null;
       if (authRejected) throw new RelayAuthError(authRejected);
       console.log("lfg connect: relay connection closed — reconnecting");
     } catch (error) {
