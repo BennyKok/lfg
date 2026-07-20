@@ -64,6 +64,7 @@ const INDEX_TEXT_MAX = 12_000;
 const INDEX_CHUNK_BYTES = 1024 * 1024;
 const BACKGROUND_LIMIT = 8;
 const WAL_CHECKPOINT_INTERVAL_MS = 30_000;
+const TRANSCRIPT_BUSY_TIMEOUT_MS = 15_000;
 
 let db: Database | null = null;
 let dbOpenedPath: string | null = null;
@@ -276,6 +277,26 @@ export function syncArtifactIndex(artifact: ImageArtifact): number {
   return indexArtifactMessage(existing.path, artifact.sessionId, artifact);
 }
 
+/**
+ * Artifact manifests are already durable on disk. Their SQLite mirror must not
+ * inherit the long writer wait used by transcript-producing harnesses because
+ * that would freeze serve's event loop (including voice and ping). Callers can
+ * retry this mirror from the latest manifest without losing authored data.
+ */
+export function syncArtifactIndexNonBlocking(
+  artifact: ImageArtifact,
+  busyTimeoutMs = 100,
+): number {
+  init();
+  const d = database();
+  d.exec(`PRAGMA busy_timeout = ${Math.max(0, Math.min(1_000, Math.floor(busyTimeoutMs)))}`);
+  try {
+    return syncArtifactIndex(artifact);
+  } finally {
+    d.exec(`PRAGMA busy_timeout = ${TRANSCRIPT_BUSY_TIMEOUT_MS}`);
+  }
+}
+
 /** Cheap bridge check for artifact writers running outside the serve process. */
 export function sessionIndexKey(sessionId: string): string {
   return `lfg://session/${sessionId}`;
@@ -338,7 +359,7 @@ function database(): Database {
   // Resuming a long thread can legitimately hold SQLite's single WAL writer
   // for several seconds, so short writes should wait rather than surface a
   // false failure after their primary data is already durable.
-  db.exec("PRAGMA busy_timeout = 15000");
+  db.exec(`PRAGMA busy_timeout = ${TRANSCRIPT_BUSY_TIMEOUT_MS}`);
   db.exec("PRAGMA wal_autocheckpoint = 1000");
   startWalCheckpointTimer();
   return db;

@@ -13,6 +13,7 @@ import {
   resetTranscriptIndexConnectionForTests,
   sessionIndexKey,
   syncArtifactIndex,
+  syncArtifactIndexNonBlocking,
   subscribeIndexedArtifactMessages,
 } from "./transcript-index.ts";
 
@@ -174,6 +175,31 @@ describe("joined artifact + transcript reads", () => {
     expect(msg.kind).toBe("html");
     expect(msg.artifactId).toBe("dash-join");
     expect(msg.version).toBe(2);
+  });
+
+  test("a busy artifact mirror fails fast so serve can retry without freezing", () => {
+    const path = sessionIndexKey(SESSION);
+    const first = publishHtmlArtifact({
+      sessionId: SESSION,
+      id: "busy-card",
+      html: "<!doctype html><html><body>v1</body></html>",
+    });
+    indexArtifactMessage(path, SESSION, first);
+    const second = publishHtmlArtifact({
+      sessionId: SESSION,
+      id: "busy-card",
+      html: "<!doctype html><html><body>v2</body></html>",
+    });
+    const locker = new Database(join(PATHS.data, "transcript-index.sqlite"));
+    locker.exec("BEGIN IMMEDIATE");
+    const started = performance.now();
+    try {
+      expect(() => syncArtifactIndexNonBlocking(second, 25)).toThrow(/locked|busy/i);
+      expect(performance.now() - started).toBeLessThan(250);
+    } finally {
+      locker.exec("ROLLBACK");
+      locker.close();
+    }
   });
 
   test("stable HTML ownership moves one placement instead of splitting identity", async () => {

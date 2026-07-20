@@ -12,7 +12,7 @@ import {
   type ArtifactRefreshConfig,
   type ImageArtifact,
 } from "./artifacts.ts";
-import { syncArtifactIndex } from "./transcript-index.ts";
+import { syncArtifactIndexNonBlocking } from "./transcript-index.ts";
 import { traceLog } from "./trace-log.ts";
 
 export const MIN_ARTIFACT_REFRESH_INTERVAL_MS = 10_000;
@@ -167,7 +167,7 @@ export class ArtifactRefreshManager {
   private readonly pendingIndexSyncs = new Map<string, ReturnType<typeof setTimeout>>();
 
   constructor(
-    private readonly writeIndex: (artifact: ImageArtifact) => number = syncArtifactIndex,
+    private readonly writeIndex: (artifact: ImageArtifact) => number = syncArtifactIndexNonBlocking,
   ) {}
 
   private syncIndex(artifact: ImageArtifact, attempt = 0): boolean {
