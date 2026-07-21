@@ -118,10 +118,11 @@ VOICE_PROMPT = (
     "real depth or accuracy — do NOT answer it yourself from memory. You are a "
     "fast lightweight voice brain and would likely be shallow or wrong. Instead "
     "create_session to spin up a coding agent that investigates with full repo and "
-    "tool access and answers it properly. Say one short sentence that you're "
-    "opening a session to look into it, then call create_session with a clear "
-    "one-line prompt capturing the question. Only skip the session if the user "
-    "explicitly says they just want your quick take.\n\n"
+    "tool access and answers it properly. Say one short conversational hold like "
+    "'give me a moment, looking into that' — NEVER say 'advisor', 'session', "
+    "'spinning up', or 'let me ask my advisor' — then call create_session with a "
+    "clear one-line prompt capturing the question. Only skip the session if the "
+    "user explicitly says they just want your quick take.\n\n"
     "You can act on the fleet with tools. ALWAYS resolve a session to its exact "
     "id (from list_sessions or the snapshot) BEFORE reply_to_session, "
     "answer_session_prompt, or close_session — never act on a guessed id.\n"
@@ -156,8 +157,9 @@ VOICE_PROMPT = (
     "- consult_advisor — hand a genuinely HARD or RISKY question to a stronger "
     "deep-thinking model that has full repo + tool access and can act on the "
     "fleet itself. Use it ONLY when careful reasoning is truly needed, NOT for "
-    "simple disambiguation. It takes a while, so first say one short spoken "
-    "sentence telling the user you're checking with the advisor.\n"
+    "simple disambiguation. It takes a while, so first say one short conversational "
+    "hold like 'hold on a minute' or 'give me a moment, looking into that' — "
+    "NEVER mention the advisor, a model, or that you're escalating.\n"
     "Prefer answer_session_prompt over reply_to_session when a session is "
     "waiting on a choice. Never act on your own voice session."
 )
@@ -614,7 +616,7 @@ FLEET_TOOLS = [
 # advisor (a stronger Opus backend session with full repo + tool access).
 ESCALATE_TOOL = {
     "name": "consult_advisor",
-    "description": "Escalate a genuinely HARD or RISKY question to the deep-think advisor: a stronger model with full repo + tool access, so it can both reason carefully AND act on the fleet. Use only when careful reasoning is truly needed, not for simple disambiguation (just ask the user). The advisor runs in the BACKGROUND and answers asynchronously: this returns immediately, and the advisor's reply is spoken to the user automatically when it's ready. So just tell the user in one short sentence that you're checking with the advisor — do NOT wait for or invent its answer.",
+    "description": "Escalate a genuinely HARD or RISKY question to a deeper thinker with full repo + tool access, so it can both reason carefully AND act on the fleet. Use only when careful reasoning is truly needed, not for simple disambiguation (just ask the user). It runs in the BACKGROUND and answers asynchronously: this returns immediately, and the reply is spoken to the user automatically when ready. Tell the user one short conversational hold like 'hold on a minute' or 'give me a moment, looking into that' — NEVER say 'advisor', 'model', or that you're escalating. Do NOT wait for or invent its answer.",
     "input_schema": {
         "type": "object",
         "properties": {"question": {"type": "string"}},
@@ -647,7 +649,7 @@ TOOL_LABELS = {
     "reply_to_session": "Messaging a session",
     "answer_session_prompt": "Answering a prompt",
     "close_session": "Closing a session",
-    "consult_advisor": "Consulting the advisor",
+    "consult_advisor": "Looking into it",
 }
 
 # Spoken-style preambles said the instant a tool call starts, so the user hears
@@ -659,11 +661,11 @@ TOOL_PREAMBLES = {
     "get_fleet_status": "Let me check on the fleet, one moment.",
     "list_sessions": "Let me pull up the sessions, one moment.",
     "list_repos": "Let me look at the repos, one moment.",
-    "create_session": "Okay, spinning up a session for that, one moment.",
+    "create_session": "Give me a moment, looking into that.",
     "reply_to_session": "Okay, sending that over.",
     "answer_session_prompt": "Okay, answering that prompt, one moment.",
     "close_session": "One moment, closing that out.",
-    "consult_advisor": "Let me check with the advisor, one moment.",
+    "consult_advisor": "Hold on a minute.",
 }
 # Said when a tool call has no specific preamble above, so every tool call still
 # gets spoken acknowledgement.
@@ -1217,16 +1219,16 @@ async def dispatch_advisor(question: str) -> str:
     global _ADVISOR_TASK
     if _ADVISOR_TASK is not None and not _ADVISOR_TASK.done():
         return (
-            "The advisor is still working on the previous question. Tell the user "
-            "in one short sentence that it's still thinking and you'll have the "
-            "answer shortly; do NOT start another consult."
+            "Still working on the previous question. Tell the user in one short "
+            "conversational sentence that you're still looking into it — never say "
+            "advisor — and you'll have the answer shortly; do NOT start another consult."
         )
     _ADVISOR_TASK = asyncio.create_task(_run_advisor(question))
     return (
-        "Advisor consult started in the background. In ONE short sentence tell the "
-        "user you're checking with the advisor and will report back in a moment, "
-        "then stop. Do NOT wait for or invent the advisor's answer — it will be "
-        "spoken automatically when ready."
+        "Deeper look started in the background. In ONE short conversational sentence "
+        "tell the user 'hold on a minute' or 'give me a moment, looking into that' — "
+        "NEVER say advisor, model, or that you're escalating — then stop. Do NOT wait "
+        "for or invent the answer; it will be spoken automatically when ready."
     )
 
 
@@ -1584,7 +1586,9 @@ async def _handle_completion(ev: dict) -> None:
     try:
         # session.say serializes after any in-flight speech, so this never cuts
         # the user off mid-turn — it lands in the next gap.
-        await SESSION.say(f"Heads up — {title} just finished.")
+        # Conversational, not a status template. Title is the human-readable
+        # task prompt the user already knows; keep it short.
+        await SESSION.say(f"Quick update — {title} just wrapped up.")
     except Exception as e:
         print(f"[voice] push announce failed: {e}", flush=True)
 

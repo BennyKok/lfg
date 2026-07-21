@@ -59,7 +59,7 @@ CRITICAL for speed and not being annoying:
 - Do NOT call a tool unless the user CLEARLY asks about session/fleet status, asks to act on a specific session, or asks a technical/informative question that warrants a session (see ANSWERING QUESTIONS below). For greetings/small talk, just reply — no tools.
 - If what you heard is short, empty, unclear, or garbled, do NOT guess and do NOT act — briefly ask the user to repeat.
 - For a SIMPLE ambiguity (which of two sessions did they mean?), just ASK the user in one short sentence. Do NOT consult the advisor for that.
-ANSWERING QUESTIONS: for casual, conversational, or quick factual questions, just answer in one short sentence. But for any TECHNICAL or INFORMATIVE question — how something works, what the code/repo/architecture does, why a bug happens, how to build or fix something, research, or anything needing real depth or accuracy — do NOT answer it yourself from memory. You are a fast lightweight voice brain and would likely be shallow or wrong. Instead create_session to spin up a coding agent that investigates with full repo and tool access and answers it properly. Say one short sentence that you're opening a session to look into it, then call create_session with a clear one-line prompt capturing the question. Only skip the session if the user explicitly says they just want your quick take.
+ANSWERING QUESTIONS: for casual, conversational, or quick factual questions, just answer in one short sentence. But for any TECHNICAL or INFORMATIVE question — how something works, what the code/repo/architecture does, why a bug happens, how to build or fix something, research, or anything needing real depth or accuracy — do NOT answer it yourself from memory. You are a fast lightweight voice brain and would likely be shallow or wrong. Instead create_session to spin up a coding agent that investigates with full repo and tool access and answers it properly. Say one short conversational sentence like "give me a moment, looking into that" — NEVER say "advisor", "session", "spinning up", or "let me ask my advisor". Then call create_session with a clear one-line prompt capturing the question. Only skip the session if the user explicitly says they just want your quick take.
 
 You can act on the fleet with tools. ALWAYS resolve a session to its exact id (from list_sessions or the snapshot) BEFORE reply_to_session, answer_session_prompt, or close_session — never act on a guessed id.
 - get_fleet_status — re-read live status of the user's sessions. The snapshot in your context goes stale fast: ALWAYS call this first whenever the user asks what's happening now, the current status, whether a session finished/changed, or anything time-sensitive.
@@ -70,7 +70,7 @@ You can act on the fleet with tools. ALWAYS resolve a session to its exact id (f
 - reply_to_session — send an instruction to another session.
 - answer_session_prompt — pick an option for a session BLOCKED on a permission/plan prompt (use the option index from its snapshot line).
 - close_session — shut down a session the user is done with. Resolve the exact id first; never close your own voice session.
-- consult_advisor — hand a genuinely HARD or RISKY question to a stronger deep-thinking model with full repo + tool access. Use ONLY when careful reasoning is truly needed. It takes a while, so first say one short spoken sentence telling the user you're checking with the advisor.
+- consult_advisor — hand a genuinely HARD or RISKY question to a stronger deep-thinking model with full repo + tool access. Use ONLY when careful reasoning is truly needed. It takes a while, so first say one short conversational hold like "hold on a minute" or "give me a moment, looking into that" — NEVER mention the advisor, a model, or that you're escalating.
 Prefer answer_session_prompt over reply_to_session when a session is waiting on a choice. Never act on your own voice session.`;
 
 // ── tool schemas (Anthropic tool-use), ported from agent.py BRAIN_TOOLS ──────
@@ -172,7 +172,7 @@ const FLEET_TOOLS: AnthropicTool[] = [
 const ESCALATE_TOOL: AnthropicTool = {
   name: "consult_advisor",
   description:
-    "Escalate a genuinely HARD or RISKY question to the deep-think advisor (a stronger model with full repo + tool access). It runs in the BACKGROUND and answers asynchronously — this returns immediately. Tell the user in one short sentence that you're checking with the advisor; do NOT wait for or invent its answer.",
+    "Escalate a genuinely HARD or RISKY question to a deeper thinker with full repo + tool access. It runs in the BACKGROUND and answers asynchronously — this returns immediately. Tell the user one short conversational hold like 'hold on a minute' or 'give me a moment looking into that'; NEVER say 'advisor', 'model', or that you're escalating; do NOT wait for or invent its answer.",
   input_schema: {
     type: "object",
     properties: { question: { type: "string" } },
@@ -348,12 +348,13 @@ async function runTool(
       // The advisor (Opus) is slow and answers out-of-band in the LiveKit
       // worker. ElevenLabs custom-LLM is request/response and can't push
       // unsolicited audio mid-call, so v1 fires the consult in the background
-      // and returns a holding line. Delivering the answer back into the live
-      // call (via ElevenLabs contextual-update / a follow-up turn) is the one
-      // tracked follow-up — see notes in the PR.
+      // and returns a holding line. LiveKit path speaks the answer via
+      // session.say when ready; ElevenLabs still needs contextual-update
+      // wiring for unsolicited push (OPTION-B.md) — but the hold the user
+      // hears must stay conversational and never name the advisor.
       const question = (args.question || "").trim();
       void lfgPost("/api/voice/consult", { question }).catch(() => {});
-      return "advisor is looking into it in the background; tell the user you're checking with the advisor and will follow up";
+      return "deeper look started in the background; tell the user 'hold on a minute' or 'give me a moment, looking into that' — never say advisor — then stop. do not invent the answer";
     }
     return `unknown tool ${name}`;
   } catch (e) {
