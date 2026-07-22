@@ -5,6 +5,7 @@ import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { marked } from "marked";
 import { PATHS, appVersion, installInfo } from "../config.ts";
+import { claudeOauthToken as sharedClaudeOauthToken } from "../claude-creds.ts";
 import {
   applyReleaseUpdate,
   applySourceUpdate,
@@ -1280,13 +1281,7 @@ function sessionSummaryTimeoutMs(): number {
 }
 
 function claudeOauthToken(): string | null {
-  try {
-    const raw = readFileSync(join(homedir(), ".claude", ".credentials.json"), "utf8");
-    const creds = JSON.parse(raw) as { claudeAiOauth?: { accessToken?: string } };
-    return creds?.claudeAiOauth?.accessToken ?? null;
-  } catch {
-    return null;
-  }
+  return sharedClaudeOauthToken();
 }
 
 function sessionSummaryModel(): string {
@@ -3486,10 +3481,7 @@ export async function cmdServe() {
         if (usageCache && Date.now() - usageCache.at < 60_000)
           return json(usageCache.data);
         try {
-          const creds = await Bun.file(
-            join(process.env.HOME || "", ".claude", ".credentials.json"),
-          ).json();
-          const token = creds?.claudeAiOauth?.accessToken;
+          const token = claudeOauthToken();
           if (!token) return err(503, "no Claude credentials on this box");
           const r = await fetch("https://api.anthropic.com/api/oauth/usage", {
             headers: {

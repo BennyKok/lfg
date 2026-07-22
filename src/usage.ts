@@ -18,6 +18,7 @@ import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
+import { claudeOauthToken } from "./claude-creds.ts";
 
 export type UsageWindow = {
   label: string;
@@ -67,8 +68,7 @@ function decodeJwt(token: unknown): Record<string, unknown> | null {
 async function claudeUsage(): Promise<ProviderUsage> {
   const base = { kind: "claude", label: "Claude", plan: null as string | null };
   try {
-    const creds = await Bun.file(join(HOME, ".claude", ".credentials.json")).json();
-    const token = creds?.claudeAiOauth?.accessToken;
+    const token = claudeOauthToken();
     if (!token) return { ...base, available: false, note: "Not signed in on this box" };
     const r = await fetch("https://api.anthropic.com/api/oauth/usage", {
       headers: { Authorization: `Bearer ${token}`, "anthropic-beta": "oauth-2025-04-20" },
