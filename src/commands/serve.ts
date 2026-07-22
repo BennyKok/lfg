@@ -419,6 +419,18 @@ import { handleElevenLlm, handleElevenToken } from "../voice-eleven-llm.ts";
 import { resolveVoiceIntent, type VoiceIntentRequest } from "../voice-intent.ts";
 
 const PORT = Number(process.env.LFG_PORT ?? process.env.PORT ?? 8766);
+
+/** Root URL this box's web UI is reachable at (e.g. `http://box.tailnet.ts.net:8766`
+ * over Tailscale). Optional — when unset, no session URLs are advertised and
+ * external surfaces simply omit their "open session" affordance. */
+const PUBLIC_URL = (process.env.LFG_PUBLIC_URL ?? "").trim().replace(/\/$/, "");
+
+/** Absolute web-UI deep link for a session (`/?session=<id>` — consumed by the
+ * web app's deep-link effect), or null when LFG_PUBLIC_URL is not configured. */
+function publicSessionUrl(sessionId: string): string | null {
+  if (!PUBLIC_URL || !sessionId) return null;
+  return `${PUBLIC_URL}/?session=${encodeURIComponent(sessionId)}`;
+}
 // Bind to loopback by default — the UI is meant to be reached over Tailscale
 // (via `tailscale serve`), never the public internet. Override LFG_HOST only
 // if you understand the exposure.
@@ -4267,6 +4279,12 @@ export async function cmdServe() {
           // whether the child landed under the right user instead of guessing.
           assignedUser: assignedUser ?? null,
           worktree: worktree?.path ?? null,
+          // Absolute deep link to this session in the web UI, advertised only
+          // when the operator configured LFG_PUBLIC_URL (the root URL this
+          // box's UI is reachable at — e.g. a Tailscale MagicDNS address).
+          // External surfaces (relay bridges) attach it as a tappable card;
+          // they are contractually forbidden from guessing URLs themselves.
+          sessionUrl: publicSessionUrl(launchId),
         });
       }
 

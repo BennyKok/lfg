@@ -41,6 +41,7 @@ import {
   type LfgTranscriptSubscribe,
 } from "./lib/lfg-chat-transport";
 import { setThemePreference, THEME_CHANGE_EVENT } from "./lib/theme";
+import { startsInBottomSystemGestureZone } from "./lib/touch-gestures";
 import { ConnectionStatusToasts } from "./ConnectionStatus";
 import type {
   CSSProperties,
@@ -7322,9 +7323,26 @@ function RailStage({
     window.dispatchEvent(new Event("lfg-collapse-change"));
   }, [columnIds]);
 
-  // Never leave the stage empty when there's something to show: preview the
-  // first working session (or the first session) on load.
+  // Deep link: /?session=<id> focuses that session once it appears in the
+  // list (session-link cards from external surfaces, e.g. a relay operator's
+  // messaging bridge, land here). Consumed once — later list refreshes never
+  // re-steal focus.
+  const sessionDeepLinkRef = useRef<string | null | undefined>(undefined);
+  if (sessionDeepLinkRef.current === undefined) {
+    sessionDeepLinkRef.current = new URLSearchParams(window.location.search).get("session");
+  }
   useEffect(() => {
+    const sid = sessionDeepLinkRef.current;
+    if (!sid || !sessions.some((s) => s.sessionId === sid)) return;
+    sessionDeepLinkRef.current = null;
+    setPreview(sid);
+  }, [sessions]);
+
+  // Never leave the stage empty when there's something to show: preview the
+  // first working session (or the first session) on load. (The pending deep
+  // link wins — don't race it with the default pick.)
+  useEffect(() => {
+    if (sessionDeepLinkRef.current) return;
     if (columnIds.length || !sessions.length) return;
     const first = sessions.find((s) => busyBySid[s.sessionId ?? ""]) ?? sessions[0];
     if (first?.sessionId) setPreview(first.sessionId);
@@ -12432,6 +12450,8 @@ function NewSessionDialog({
       if (target.closest("select, button, input[type='file'], [data-no-composer-swipe]")) return;
       if (composerIsEditing(target)) return;
       const touch = event.touches[0];
+      const viewportHeight = window.visualViewport?.height ?? window.innerHeight;
+      if (startsInBottomSystemGestureZone(touch.clientY, viewportHeight)) return;
       st.active = true;
       st.decided = false;
       st.horizontal = false;
