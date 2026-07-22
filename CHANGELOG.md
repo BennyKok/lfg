@@ -4,6 +4,22 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 22, 2026 - Faster, clearer session workflows (v0.1.48)
+
+- Attachments now start uploading as soon as they are selected, and large files
+  transfer in resilient 8 MB chunks so sending a message rarely waits on file
+  bytes and oversized requests are less fragile.
+- Desktop session actions are clearer and more dependable: Fork dialogs stay
+  bright above their backdrop, sent messages remain right-aligned, and session
+  references can be copied directly from the action menu.
+- Settings now reports host disk usage alongside CPU and memory, including a
+  capacity bar that calls out elevated utilization.
+- Voice handoffs use natural conversational holds without exposing internal
+  advisor, model, or session terminology.
+- Optional `lfg connect` lifecycle notifications now ignore subagents and
+  short-lived top-level sessions, keeping remote completion alerts focused on
+  meaningful work.
+
 ## July 20, 2026 - Visible mobile selection (v0.1.47)
 
 - Selecting text from a sent-message bubble now keeps the native highlight and
