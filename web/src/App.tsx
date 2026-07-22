@@ -71,6 +71,7 @@ import {
   ChevronLeft,
   Cpu,
   Gauge,
+  HardDrive,
   MemoryStick,
   Maximize2,
   Megaphone,
@@ -428,10 +429,12 @@ type ComposerAttachment = {
   size: number;
   type: string;
   previewUrl?: string;
-  status: "ready" | "uploading" | "failed";
+  status: "ready" | "uploading" | "uploaded" | "failed";
   progress?: number;
   error?: string;
 };
+
+type UploadedAttachment = { name: string; path: string };
 
 type SkillCatalogItem = {
   name: string;
@@ -482,6 +485,10 @@ type ServerStats = {
     sliceMaxBytes: number | null;
     hostTotalBytes: number;
     hostFreeBytes: number;
+  };
+  disk: {
+    totalBytes: number | null;
+    freeBytes: number | null;
   };
   cpu: { cores: number; load1: number; load5: number; load15: number };
 };
@@ -884,13 +891,21 @@ function uploadFile<T>(
   contentType: string,
   onProgress: (progress: number) => void,
 ): Promise<T> {
-  return new Promise((resolve, reject) => {
+  const chunkSize = 8 * 1024 * 1024;
+  const uploadId = crypto.randomUUID();
+
+  const sendChunk = (chunk: Blob, offset: number): Promise<T> => new Promise((resolve, reject) => {
+    const separator = path.includes("?") ? "&" : "?";
     const request = new XMLHttpRequest();
-    request.open("POST", path);
+    request.open(
+      "POST",
+      `${path}${separator}uploadId=${encodeURIComponent(uploadId)}&offset=${offset}&total=${file.size}`,
+    );
     request.setRequestHeader("Content-Type", contentType || "application/octet-stream");
     request.upload.addEventListener("progress", (event) => {
-      const total = event.total || file.size;
-      if (total > 0) onProgress(Math.min(100, Math.round((event.loaded / total) * 100)));
+      if (file.size > 0) {
+        onProgress(Math.min(100, Math.round(((offset + event.loaded) / file.size) * 100)));
+      }
     });
     request.addEventListener("load", () => {
       let data: unknown = {};
@@ -900,7 +915,7 @@ function uploadFile<T>(
         // Keep the HTTP status error below useful even if a proxy returns HTML.
       }
       if (request.status >= 200 && request.status < 300) {
-        onProgress(100);
+        onProgress(Math.min(100, Math.round(((offset + chunk.size) / file.size) * 100)));
         resolve(data as T);
         return;
       }
@@ -912,8 +927,16 @@ function uploadFile<T>(
     });
     request.addEventListener("error", () => reject(new Error("Upload failed due to a network error")));
     request.addEventListener("abort", () => reject(new Error("Upload cancelled")));
-    request.send(file);
+    request.send(chunk);
   });
+
+  return (async () => {
+    let response: T | undefined;
+    for (let offset = 0; offset < file.size; offset += chunkSize) {
+      response = await sendChunk(file.slice(offset, Math.min(file.size, offset + chunkSize)), offset);
+    }
+    return response as T;
+  })();
 }
 
 function closeSessionRequest(sid: string, source: string) {
@@ -1004,7 +1027,13 @@ function evlog(event: string, fields: Record<string, unknown> = {}) {
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+  if (bytes < 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+  }
+  if (bytes < 1024 * 1024 * 1024 * 1024) {
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(bytes < 10 * 1024 * 1024 * 1024 ? 1 : 0)} GB`;
+  }
+  return `${(bytes / (1024 * 1024 * 1024 * 1024)).toFixed(1)} TB`;
 }
 
 function composeAttachmentMessage(
@@ -1025,16 +1054,106 @@ function applyAnnotatedAttachment(
   previewUrls: MutableRefObject<string[]>,
   id: string,
   file: File,
+  onReplaced?: (att: ComposerAttachment) => void,
 ) {
   const previewUrl = URL.createObjectURL(file);
   previewUrls.current.push(previewUrl);
+  let replaced: ComposerAttachment | null = null;
   setAttachments((current) =>
     current.map((att) => {
       if (att.id !== id) return att;
       if (att.previewUrl) URL.revokeObjectURL(att.previewUrl);
-      return { ...att, file, name: file.name, size: file.size, type: file.type, previewUrl, status: "ready" as const };
+      const next = { ...att, file, name: file.name, size: file.size, type: file.type, previewUrl, status: "ready" as const };
+      delete next.progress;
+      delete next.error;
+      replaced = next;
+      return next;
     }),
   );
+  // The annotated file replaces the original bytes, so any upload already
+  // running (or finished) for this attachment is stale. Hand the new file back
+  // so the caller can restart it.
+  queueMicrotask(() => {
+    if (replaced) onReplaced?.(replaced);
+  });
+}
+
+// Attachments upload as soon as they are attached rather than on send, so the
+// bytes are usually already on the server by the time the user hits enter.
+//
+// Each attachment gets a token that identifies its current upload attempt. A
+// re-upload (retry, or an annotation replacing the file) mints a fresh token,
+// so a superseded attempt that resolves late can no longer write status or
+// progress back into the composer.
+function useEagerUploads(options: {
+  endpoint: (att: ComposerAttachment) => string | null;
+  onPatch: (id: string, patch: Partial<ComposerAttachment>) => void;
+}) {
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+  const inflight = useRef(new Map<string, Promise<UploadedAttachment>>());
+  const tokens = useRef(new Map<string, object>());
+
+  // Start (or restart) the upload for an attachment and cache it by id.
+  const startUpload = useCallback((att: ComposerAttachment): Promise<UploadedAttachment> => {
+    const { endpoint, onPatch } = optionsRef.current;
+    const url = endpoint(att);
+    if (!url) return Promise.reject(new Error("Upload destination is not ready"));
+    const token = {};
+    tokens.current.set(att.id, token);
+    const isCurrent = () => tokens.current.get(att.id) === token;
+    onPatch(att.id, { status: "uploading", progress: 0, error: undefined });
+    const task = uploadFile<{ path: string; name?: string }>(url, att.file, att.type, (progress) => {
+      if (isCurrent()) onPatch(att.id, { progress });
+    })
+      .then((uploaded) => {
+        const result = { name: uploaded.name || att.name, path: uploaded.path };
+        if (isCurrent()) onPatch(att.id, { status: "uploaded", progress: 100, error: undefined });
+        return result;
+      })
+      .catch((err: unknown) => {
+        if (isCurrent()) {
+          // Drop the cached failure so the next resolveUpload retries instead of
+          // replaying the same rejection.
+          inflight.current.delete(att.id);
+          onPatch(att.id, {
+            status: "failed",
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+        throw err;
+      });
+    inflight.current.set(att.id, task);
+    return task;
+  }, []);
+
+  // Fire-and-forget variant for the attach path, where nothing awaits the
+  // result yet and an unhandled rejection would surface as a console error.
+  const prefetchUpload = useCallback(
+    (att: ComposerAttachment) => {
+      void startUpload(att).catch(() => {});
+    },
+    [startUpload],
+  );
+
+  // Send path: reuse the in-flight or finished upload when there is one.
+  const resolveUpload = useCallback(
+    (att: ComposerAttachment): Promise<UploadedAttachment> =>
+      inflight.current.get(att.id) ?? startUpload(att),
+    [startUpload],
+  );
+
+  const forgetUpload = useCallback((id: string) => {
+    inflight.current.delete(id);
+    tokens.current.delete(id);
+  }, []);
+
+  const forgetAllUploads = useCallback(() => {
+    inflight.current.clear();
+    tokens.current.clear();
+  }, []);
+
+  return { prefetchUpload, resolveUpload, forgetUpload, forgetAllUploads };
 }
 
 // Fire-and-forget instrumentation: record which CTA a finding graduated
@@ -1193,6 +1312,10 @@ function titleForSession(session: Session) {
     session.sessionId?.slice(0, 8) ||
     "session"
   );
+}
+
+function sessionReference(sessionId: string): string {
+  return `LFG session reference: ${sessionId}`;
 }
 
 // The most recent activity condensed to one line — used as the collapsed-card
@@ -8690,6 +8813,12 @@ function SessionChat({
   const [launching, setLaunching] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const previewUrls = useRef<string[]>([]);
+  const { prefetchUpload, resolveUpload, forgetUpload, forgetAllUploads } = useEagerUploads({
+    endpoint: (att) =>
+      sid ? `/api/sessions/${sid}/upload?filename=${encodeURIComponent(att.name)}` : null,
+    onPatch: (id, patch) =>
+      setAttachments((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item))),
+  });
   const chatStatusRef = useRef<ReturnType<typeof useChat<LfgChatMessage>>["status"]>("ready");
   const chatTransport = useMemo(
     () =>
@@ -8801,66 +8930,38 @@ function SessionChat({
   function addFiles(files: FileList | File[]) {
     const incoming = Array.from(files).filter((file) => file.size > 0);
     if (!incoming.length) return;
-    setAttachments((current) => {
-      const room = Math.max(0, 8 - current.length);
-      if (!room) {
-        toast.error("Remove an attachment before adding another.");
-        return current;
-      }
-      if (incoming.length > room) toast.error(`Added ${room} of ${incoming.length} files.`);
-      const next = incoming.slice(0, room).map((file) => {
-        const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined;
-        if (previewUrl) previewUrls.current.push(previewUrl);
-        return {
-          id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
-          file,
-          name: file.name || "upload",
-          size: file.size,
-          type: file.type,
-          previewUrl,
-          status: "ready" as const,
-        };
-      });
-      return [...current, ...next];
+    const room = Math.max(0, 8 - attachments.length);
+    if (!room) {
+      toast.error("Remove an attachment before adding another.");
+      return;
+    }
+    if (incoming.length > room) toast.error(`Added ${room} of ${incoming.length} files.`);
+    const next: ComposerAttachment[] = incoming.slice(0, room).map((file) => {
+      const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined;
+      if (previewUrl) previewUrls.current.push(previewUrl);
+      return {
+        id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
+        file,
+        name: file.name || "upload",
+        size: file.size,
+        type: file.type,
+        previewUrl,
+        status: "ready" as const,
+      };
     });
+    setAttachments((current) => [...current, ...next]);
+    // Push the bytes now instead of waiting for send, so the upload is normally
+    // already finished by the time the user submits.
+    next.forEach(prefetchUpload);
   }
 
   function removeAttachment(id: string) {
+    forgetUpload(id);
     setAttachments((current) => {
       const item = current.find((att) => att.id === id);
       if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl);
       return current.filter((att) => att.id !== id);
     });
-  }
-
-  async function uploadAttachment(att: ComposerAttachment): Promise<{ name: string; path: string }> {
-    if (!sid) throw new Error("session not found");
-    setAttachments((current) =>
-      current.map((item) =>
-        item.id === att.id ? { ...item, status: "uploading", progress: 0, error: undefined } : item,
-      ),
-    );
-    try {
-      const uploaded = await uploadFile<{ path: string; name?: string }>(
-        `/api/sessions/${sid}/upload?filename=${encodeURIComponent(att.name)}`,
-        att.file,
-        att.type,
-        (progress) => {
-          setAttachments((current) =>
-            current.map((item) => (item.id === att.id ? { ...item, progress } : item)),
-          );
-        },
-      );
-      return { name: uploaded.name || att.name, path: uploaded.path };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setAttachments((current) =>
-        current.map((item) =>
-          item.id === att.id ? { ...item, status: "failed", error: message } : item,
-        ),
-      );
-      throw err;
-    }
   }
 
   async function sendMessage(
@@ -8889,7 +8990,9 @@ function SessionChat({
           }).catch(() => {});
         }
       }
-      const uploaded = files.length ? await Promise.all(files.map(uploadAttachment)) : [];
+      // Uploads started when the files were attached; this normally resolves
+      // immediately and only actually waits for bytes still in flight.
+      const uploaded = files.length ? await Promise.all(files.map(resolveUpload)) : [];
       const outgoingText = composeAttachmentMessage(text, uploaded);
       // Pulse the composer so the send visibly launches into the transcript.
       setLaunching(true);
@@ -8916,6 +9019,7 @@ function SessionChat({
         if (att.previewUrl) URL.revokeObjectURL(att.previewUrl);
       }
       setAttachments([]);
+      forgetAllUploads();
       setSending(false);
       void onRefresh().catch((err) => {
         onError(err instanceof Error ? err.message : String(err));
@@ -8923,9 +9027,6 @@ function SessionChat({
     } catch (err) {
       onError(err instanceof Error ? err.message : String(err));
       setMessageText(text);
-      setAttachments((current) =>
-        current.map((att) => (att.status === "uploading" ? { ...att, status: "ready" } : att)),
-      );
     } finally {
       setSending(false);
     }
@@ -9172,7 +9273,9 @@ function SessionChat({
           if (!next) setAnnotatingId(null);
         }}
         onSave={(file) => {
-          if (annotatingId) applyAnnotatedAttachment(setAttachments, previewUrls, annotatingId, file);
+          if (annotatingId) {
+            applyAnnotatedAttachment(setAttachments, previewUrls, annotatingId, file, prefetchUpload);
+          }
           setAnnotatingId(null);
         }}
       />
@@ -9283,6 +9386,16 @@ function SessionActionsMenu({
     }
   }
 
+  async function copyReference() {
+    if (!sid) return;
+    try {
+      await copyMessageText(sessionReference(sid));
+      toast.success("Session reference copied");
+    } catch (err) {
+      onError(err instanceof Error ? err.message : "Could not copy session reference");
+    }
+  }
+
   async function close() {
     if (!sid) return;
     const confirmed = await appDialog.confirm({
@@ -9383,6 +9496,10 @@ function SessionActionsMenu({
               </DropdownMenuRadioGroup>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
+          <DropdownMenuItem disabled={!sid} onClick={() => void copyReference()}>
+            <Copy className="size-4" />
+            Copy reference
+          </DropdownMenuItem>
           <DropdownMenuItem disabled={!sid} onClick={() => setForkOpen(true)}>
             <GitFork className="size-4" />
             Fork
@@ -10992,7 +11109,9 @@ function UserBubble({ html, pending }: { html: string; pending?: boolean }) {
         // sent bubbles rendered a size smaller than assistant replies.
         // text-base is also a utility, so it cleanly out-conflicts text-sm
         // via the same layer instead of fighting it on specificity.
-        "msg-text markdown user-bubble text-base w-fit max-w-[85%]",
+        // Width cap lives on MessageActions (definite parent); bubble just
+        // hugs content up to that cap so multi-line turns stay right-aligned.
+        "msg-text markdown user-bubble text-base w-fit max-w-full",
         pending && "is-pending",
       )}
     >
@@ -11154,8 +11273,14 @@ function MessageActions({
   return (
     <div
       className={cn(
-        "message-actions-wrap flex min-w-0 max-w-full flex-col",
-        isUser ? "items-end" : "items-start",
+        // Cap width on this direct child of Message (which has a definite
+        // w-full). Nested max-w-[85%] on the bubble used to resolve against a
+        // content-sized ancestor after MessageActions was introduced, so the
+        // percentage collapsed and long user turns grew full-width / looked
+        // left-aligned. Short turns still hug the trailing edge via items-end
+        // + Message's justify-end.
+        "message-actions-wrap flex min-w-0 flex-col",
+        isUser ? "max-w-[85%] items-end" : "max-w-[92%] items-start",
         selecting && "is-selecting",
       )}
       onPointerDown={onPointerDown}
@@ -12058,6 +12183,19 @@ function NewSessionDialog({
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const previewUrls = useRef<string[]>([]);
+  // An attachment can be mid-upload in either list: submit() moves it from
+  // `attachments` to `pendingUploads` so the composer clears immediately, and
+  // the chip row renders both. Patch both so its progress keeps ticking across
+  // the handoff.
+  const { prefetchUpload, resolveUpload, forgetUpload } = useEagerUploads({
+    endpoint: (att) => `/api/uploads?filename=${encodeURIComponent(att.name)}`,
+    onPatch: (id, patch) => {
+      const apply = (current: ComposerAttachment[]) =>
+        current.map((item) => (item.id === id ? { ...item, ...patch } : item));
+      setAttachments(apply);
+      setPendingUploads(apply);
+    },
+  });
   // Resumable (closed / rebooted-away) sessions. Fetched lazily when the user
   // expands the section so opening the dialog stays instant; reset on close.
   const [resumeOpen, setResumeOpen] = useState(false);
@@ -12538,61 +12676,38 @@ function NewSessionDialog({
   function addFiles(files: FileList | File[]) {
     const incoming = Array.from(files).filter((file) => file.size > 0);
     if (!incoming.length) return;
-    setAttachments((current) => {
-      const room = Math.max(0, 8 - current.length);
-      if (!room) {
-        toast.error("Remove an attachment before adding another.");
-        return current;
-      }
-      if (incoming.length > room) toast.error(`Added ${room} of ${incoming.length} files.`);
-      const next = incoming.slice(0, room).map((file) => {
-        const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined;
-        if (previewUrl) previewUrls.current.push(previewUrl);
-        return {
-          id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
-          file,
-          name: file.name || "upload",
-          size: file.size,
-          type: file.type,
-          previewUrl,
-          status: "ready" as const,
-        };
-      });
-      return [...current, ...next];
+    const room = Math.max(0, 8 - attachments.length);
+    if (!room) {
+      toast.error("Remove an attachment before adding another.");
+      return;
+    }
+    if (incoming.length > room) toast.error(`Added ${room} of ${incoming.length} files.`);
+    const next: ComposerAttachment[] = incoming.slice(0, room).map((file) => {
+      const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined;
+      if (previewUrl) previewUrls.current.push(previewUrl);
+      return {
+        id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
+        file,
+        name: file.name || "upload",
+        size: file.size,
+        type: file.type,
+        previewUrl,
+        status: "ready" as const,
+      };
     });
+    setAttachments((current) => [...current, ...next]);
+    // Push the bytes now instead of waiting for send, so the upload is normally
+    // already finished by the time the user submits.
+    next.forEach(prefetchUpload);
   }
 
   function removeAttachment(id: string) {
+    forgetUpload(id);
     setAttachments((current) => {
       const item = current.find((att) => att.id === id);
       if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl);
       return current.filter((att) => att.id !== id);
     });
-  }
-
-  async function uploadAttachment(att: ComposerAttachment): Promise<{ name: string; path: string }> {
-    const update = (patch: Partial<ComposerAttachment>) => {
-      setAttachments((current) =>
-        current.map((item) => (item.id === att.id ? { ...item, ...patch } : item)),
-      );
-      setPendingUploads((current) =>
-        current.map((item) => (item.id === att.id ? { ...item, ...patch } : item)),
-      );
-    };
-    update({ status: "uploading", progress: 0, error: undefined });
-    try {
-      const uploaded = await uploadFile<{ path: string; name?: string }>(
-        `/api/uploads?filename=${encodeURIComponent(att.name)}`,
-        att.file,
-        att.type,
-        (progress) => update({ progress }),
-      );
-      return { name: uploaded.name || att.name, path: uploaded.path };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      update({ status: "failed", error: message });
-      throw err;
-    }
   }
 
   function submit(e?: FormEvent, overrideText?: string) {
@@ -12614,9 +12729,14 @@ function NewSessionDialog({
     setError(null);
     setPrompt("");
     setAttachments([]);
+    // Carry each attachment's real upload state across. Most will already be
+    // "uploaded" because the bytes went up when the file was attached; only
+    // genuinely unstarted ones should read as uploading.
     setPendingUploads((current) => [
       ...current,
-      ...files.map((att) => ({ ...att, status: "uploading" as const, progress: 0, error: undefined })),
+      ...files.map((att) =>
+        att.status === "ready" ? { ...att, status: "uploading" as const, progress: 0, error: undefined } : att,
+      ),
     ]);
     setPendingCreates((n) => n + 1);
     localStorage.setItem("lfg_v2_agent", launchAgent);
@@ -12636,7 +12756,8 @@ function NewSessionDialog({
     }
     void (async () => {
       try {
-        const uploaded = files.length ? await Promise.all(files.map(uploadAttachment)) : [];
+        // Started at attach time; usually already resolved by now.
+        const uploaded = files.length ? await Promise.all(files.map(resolveUpload)) : [];
         const composedPrompt = composeAttachmentMessage(taskPrompt, uploaded);
         const res = await api<{ sessionId?: string }>("/api/sessions/new", {
           method: "POST",
@@ -12669,6 +12790,7 @@ function NewSessionDialog({
         );
         previewUrls.current = previewUrls.current.filter((url) => !uploadPreviewUrls.has(url));
         setPendingUploads((current) => current.filter((att) => !uploadIds.has(att.id)));
+        for (const id of uploadIds) forgetUpload(id);
         setPendingCreates((n) => Math.max(0, n - 1));
       }
     })();
@@ -12988,7 +13110,13 @@ function NewSessionDialog({
 
       {pendingUploads.length || attachments.length ? (
         <div className="mt-2 flex gap-1.5 overflow-x-auto pb-0.5">
-          {[...pendingUploads, ...attachments].map((att) => (
+          {[
+            // Chips already handed off to an in-flight session creation can no
+            // longer be edited or removed; live composer attachments always can,
+            // even while their upload is still running.
+            ...pendingUploads.map((att) => ({ att, locked: true })),
+            ...attachments.map((att) => ({ att, locked: false })),
+          ].map(({ att, locked }) => (
             <div
               key={att.id}
               className={cn(
@@ -13033,7 +13161,7 @@ function NewSessionDialog({
                   onClick={() => setAnnotatingId(att.id)}
                   aria-label={`Annotate ${att.name}`}
                   title="Annotate"
-                  disabled={att.status === "uploading"}
+                  disabled={locked}
                 >
                   <Pencil className="size-3.5" />
                 </button>
@@ -13044,7 +13172,7 @@ function NewSessionDialog({
                 onClick={() => removeAttachment(att.id)}
                 aria-label={`Remove ${att.name}`}
                 title="Remove"
-                disabled={att.status === "uploading"}
+                disabled={locked}
               >
                 <X className="size-3.5" />
               </button>
@@ -13151,7 +13279,9 @@ function NewSessionDialog({
         if (!next) setAnnotatingId(null);
       }}
       onSave={(file) => {
-        if (annotatingId) applyAnnotatedAttachment(setAttachments, previewUrls, annotatingId, file);
+        if (annotatingId) {
+          applyAnnotatedAttachment(setAttachments, previewUrls, annotatingId, file, prefetchUpload);
+        }
         setAnnotatingId(null);
       }}
     />
@@ -15025,8 +15155,14 @@ function ServerPerformancePanel({ stats }: { stats: ServerStats | null }) {
     : 0;
   const sliceCur = stats?.memory.sliceCurrentBytes ?? null;
   const sliceMax = stats?.memory.sliceMaxBytes ?? null;
+  const diskTotal = stats?.disk?.totalBytes ?? null;
+  const diskFree = stats?.disk?.freeBytes ?? null;
+  const diskUsed = diskTotal != null && diskFree != null ? Math.max(0, diskTotal - diskFree) : null;
+  const diskPct = diskUsed != null && diskTotal != null && diskTotal > 0
+    ? Math.min(100, Math.round((diskUsed / diskTotal) * 100))
+    : null;
 
-  const rows: { icon: ReactNode; label: string; value: string; sub?: string }[] = [
+  const rows: { icon: ReactNode; label: string; value: string; sub?: string; pct?: number | null }[] = [
     {
       icon: <Cpu className="size-4" />,
       label: "CPU load",
@@ -15045,6 +15181,15 @@ function ServerPerformancePanel({ stats }: { stats: ServerStats | null }) {
       value: stats ? `${hostPct}%` : "—",
       sub: stats ? `${formatBytes(hostUsed)} of ${formatBytes(stats.memory.hostTotalBytes)}` : undefined,
     },
+    {
+      icon: <HardDrive className="size-4" />,
+      label: "Host disk",
+      value: diskPct != null ? `${diskPct}%` : "—",
+      sub: diskUsed != null && diskTotal != null
+        ? `${formatBytes(diskUsed)} of ${formatBytes(diskTotal)}`
+        : "capacity unavailable",
+      pct: diskPct,
+    },
   ];
 
   return (
@@ -15062,6 +15207,24 @@ function ServerPerformancePanel({ stats }: { stats: ServerStats | null }) {
               <div className="min-w-0">
                 <div className="text-sm font-medium">{row.label}</div>
                 {row.sub ? <div className="text-xs text-muted-foreground tabular-nums">{row.sub}</div> : null}
+                {row.pct != null ? (
+                  <div
+                    className="mt-1.5 h-1.5 w-32 max-w-full overflow-hidden rounded-full bg-foreground/[0.08]"
+                    role="progressbar"
+                    aria-label={`${row.label} usage`}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={row.pct}
+                  >
+                    <div
+                      className={cn(
+                        "h-full rounded-full transition-all duration-300 ease-ios",
+                        row.pct >= 90 ? "bg-destructive" : row.pct >= 75 ? "bg-amber-500" : "bg-primary",
+                      )}
+                      style={{ width: `${row.pct}%` }}
+                    />
+                  </div>
+                ) : null}
               </div>
             </div>
             <div className="shrink-0 text-sm font-semibold tabular-nums">{row.value}</div>

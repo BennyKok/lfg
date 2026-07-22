@@ -1,5 +1,5 @@
-import { mkdir, readdir, realpath, stat } from "node:fs/promises";
-import { appendFileSync, statSync, mkdirSync, readFileSync, type Dirent } from "node:fs";
+import { mkdir, open, readdir, realpath, stat } from "node:fs/promises";
+import { appendFileSync, statfsSync, statSync, mkdirSync, readFileSync, type Dirent } from "node:fs";
 import { tmpdir, homedir, loadavg, cpus, totalmem, freemem } from "node:os";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -335,6 +335,48 @@ async function persistUpload(req: Request, filename: string, prefix = "upload"):
   return { path: fp, name: filename || name };
 }
 
+async function persistUploadChunk(
+  req: Request,
+  filename: string,
+  prefix: string,
+  uploadId: string,
+  offset: number,
+  total: number,
+): Promise<{ path?: string; name: string; complete: boolean }> {
+  if (!/^[0-9a-f-]{36}$/i.test(uploadId)) throw new Error("invalid upload id");
+  if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("invalid upload offset");
+  if (!Number.isSafeInteger(total) || total <= 0 || offset >= total) throw new Error("invalid upload size");
+
+  const ct = (req.headers.get("content-type") || "").toLowerCase();
+  const ext = uploadExt(ct, filename);
+  const buf = new Uint8Array(await req.arrayBuffer());
+  if (!buf.length) throw new Error("empty upload chunk");
+  if (offset + buf.length > total) throw new Error("upload chunk exceeds file size");
+
+  const dir = join(tmpdir(), "lfg-uploads");
+  mkdirSync(dir, { recursive: true });
+  const safePrefix = prefix.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "upload";
+  const name = `${safePrefix}-${uploadId}-${uploadStem(filename)}.${ext}`;
+  const fp = join(dir, name);
+
+  // The browser sends a file's chunks in order. Writing at an explicit offset
+  // makes a repeated request safe if the connection drops after the server
+  // persisted a chunk but before the browser received its response.
+  if (offset > 0) {
+    const current = await stat(fp).catch(() => null);
+    if (!current || current.size < offset) throw new Error("upload chunk arrived out of order");
+  }
+  const handle = await open(fp, offset === 0 ? "w" : "r+");
+  try {
+    await handle.write(buf, 0, buf.length, offset);
+    const complete = offset + buf.length === total;
+    if (complete) await handle.truncate(total);
+    return { ...(complete ? { path: fp } : {}), name: filename || name, complete };
+  } finally {
+    await handle.close();
+  }
+}
+
 function uploadFilename(req: Request, url: URL): string {
   const rawName = url.searchParams.get("filename") || req.headers.get("x-file-name") || "";
   try {
@@ -342,6 +384,16 @@ function uploadFilename(req: Request, url: URL): string {
   } catch {
     return rawName;
   }
+}
+
+function uploadChunkParams(url: URL): { uploadId: string; offset: number; total: number } | null {
+  const uploadId = url.searchParams.get("uploadId");
+  if (!uploadId) return null;
+  return {
+    uploadId,
+    offset: Number(url.searchParams.get("offset")),
+    total: Number(url.searchParams.get("total")),
+  };
 }
 
 const GROK_DEFAULT_MODEL = "grok-4.5";
@@ -425,6 +477,23 @@ function sliceMemoryBytes(): { current: number | null; max: number | null } {
   }
 }
 
+// Capacity of the filesystem that holds LFG's durable data. Keep this
+// best-effort: Settings should still load in runtimes where statfs is not
+// available or the data directory has not been mounted yet.
+function hostDiskBytes(): { total: number | null; free: number | null } {
+  try {
+    const disk = statfsSync(PATHS.data);
+    const total = Number(disk.blocks) * Number(disk.bsize);
+    const free = Number(disk.bfree) * Number(disk.bsize);
+    if (!Number.isFinite(total) || total <= 0 || !Number.isFinite(free)) {
+      return { total: null, free: null };
+    }
+    return { total, free: Math.max(0, Math.min(total, free)) };
+  } catch {
+    return { total: null, free: null };
+  }
+}
+
 // Live server snapshot for the settings performance panel + the "working now"
 // counter. "live" = an agent process exists; "working" = it has a turn in
 // flight (Session.busy). The cap counts LIVE agents (a resident-but-idle agent
@@ -435,6 +504,7 @@ async function serverStats() {
   const working = sessions.filter((s) => s.busy).length;
   const settings = getGlobalSettingsSync();
   const slice = sliceMemoryBytes();
+  const disk = hostDiskBytes();
   const [load1, load5, load15] = loadavg();
   return {
     agents: {
@@ -449,6 +519,10 @@ async function serverStats() {
       sliceMaxBytes: slice.max,
       hostTotalBytes: totalmem(),
       hostFreeBytes: freemem(),
+    },
+    disk: {
+      totalBytes: disk.total,
+      freeBytes: disk.free,
     },
     cpu: { cores: cpus().length, load1, load5, load15 },
   };
@@ -4659,7 +4733,11 @@ export async function cmdServe() {
         // initial prompt.
         if (path === "/api/uploads" && req.method === "POST") {
           try {
-            const uploaded = await persistUpload(req, uploadFilename(req, url), "new-session");
+            const filename = uploadFilename(req, url);
+            const chunk = uploadChunkParams(url);
+            const uploaded = chunk
+              ? await persistUploadChunk(req, filename, "new-session", chunk.uploadId, chunk.offset, chunk.total)
+              : await persistUpload(req, filename, "new-session");
             return json({ ok: true, ...uploaded });
           } catch (e) {
             return err(400, e instanceof Error ? e.message : "upload failed");
@@ -4675,7 +4753,11 @@ export async function cmdServe() {
         const m = path.match(/^\/api\/sessions\/([0-9a-fA-F-]{36})\/upload$/);
         if (m && req.method === "POST") {
           try {
-            const uploaded = await persistUpload(req, uploadFilename(req, url), m[1]);
+            const filename = uploadFilename(req, url);
+            const chunk = uploadChunkParams(url);
+            const uploaded = chunk
+              ? await persistUploadChunk(req, filename, m[1], chunk.uploadId, chunk.offset, chunk.total)
+              : await persistUpload(req, filename, m[1]);
             return json({ ok: true, ...uploaded });
           } catch (e) {
             return err(400, e instanceof Error ? e.message : "upload failed");

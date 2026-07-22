@@ -125,6 +125,7 @@ function DrawerContent({
       <DialogContent
         data-slot="drawer-content"
         showCloseButton={false}
+        overlayClassName={overlayClassName}
         // Cap height so tall content scrolls inside the dialog instead of
         // overflowing the viewport; callers already carry their own inner
         // scroll containers.

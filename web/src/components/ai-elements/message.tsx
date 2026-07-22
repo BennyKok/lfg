@@ -34,7 +34,10 @@ export function MessageContent({ className, ...props }: MessageContentProps) {
   return (
     <div
       className={cn(
-        "min-w-0 max-w-[92%] text-sm leading-relaxed group-data-[role=user]/message:max-w-[85%]",
+        // Default cap for assistant content that is a direct Message child.
+        // User turns cap width on MessageActions instead (so the percentage
+        // resolves against Message's definite width and stays right-aligned).
+        "min-w-0 max-w-[92%] text-sm leading-relaxed",
         className,
       )}
       {...props}
