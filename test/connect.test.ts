@@ -7,8 +7,20 @@ import {
   isHttpFrame,
   isReportableTransition,
   isTopLevelSession,
+  normalizeComputerUrl,
   type SessionLite,
 } from "../src/commands/connect.ts";
+
+describe("normalizeComputerUrl", () => {
+  test("canonicalizes the explicit outer URL advertised during connect", () => {
+    expect(normalizeComputerUrl(" https://macbook.example/lfg/ ")).toBe("https://macbook.example/lfg");
+  });
+
+  test("rejects local paths, credentials, and non-http schemes", () => {
+    expect(() => normalizeComputerUrl("file:///tmp/lfg")).toThrow("absolute http(s) URL");
+    expect(() => normalizeComputerUrl("https://user:secret@macbook.example")).toThrow("absolute http(s) URL");
+  });
+});
 
 describe("isHttpFrame", () => {
   test("accepts a well-formed http frame", () => {
