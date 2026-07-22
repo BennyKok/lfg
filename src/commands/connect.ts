@@ -302,6 +302,9 @@ export type ShipEventFrame = {
   project: string | null;
   agent: string | null;
   summary: string | null;
+  /** Box-relative artifact paths of the post's image/video media (the
+   * receiving side fetches them back through the relay's request plane). */
+  media: Array<{ path: string; kind: string }>;
   ts: number;
 };
 
@@ -371,7 +374,17 @@ export type ShipPostLite = {
   sessionId?: string | null;
   project?: string | null;
   agent?: string | null;
+  mediaItems?: Array<{ kind?: string; url?: string }>;
 };
+
+/** Image/video media only (html artifacts have no bubble representation),
+ * capped — the relay round-trip on the receiving side pays per item. */
+export function shipFrameMedia(post: ShipPostLite): Array<{ path: string; kind: string }> {
+  return (post.mediaItems ?? [])
+    .filter((m) => (m.kind === "image" || m.kind === "video") && typeof m.url === "string" && m.url.startsWith("/"))
+    .slice(0, 3)
+    .map((m) => ({ path: m.url as string, kind: m.kind as string }));
+}
 
 /**
  * Diffs one poll's ship feed against the previously-seen `id → rev` baseline
@@ -396,6 +409,7 @@ export function diffShipEvents(seenShips: Map<string, number>, posts: ShipPostLi
         project: post.project ?? null,
         agent: post.agent ?? null,
         summary: post.summary ?? null,
+        media: shipFrameMedia(post),
         ts: post.ts ?? Date.now(),
       });
     }
