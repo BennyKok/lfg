@@ -111,7 +111,8 @@ Env:
   LFG_RELAY_URL              Relay WebSocket URL (required — no default, this file is provider-agnostic)
   LFG_PORT / LFG_HOST        Local 'lfg serve' address to proxy requests to (default 127.0.0.1:8766)
   LFG_CONNECT_EVENTS         Opt-in (1/true/yes, default off): forward session completed/needs-attention
-                             events to the relay. PRIVACY: session titles leave this box when on.
+                             events AND shipped-post events to the relay. PRIVACY: session titles and
+                             ship titles/summaries leave this box when on.
   LFG_CONNECT_EVENTS_INTERVAL_MS  Local session-poll interval in ms when events are enabled (default 4000)
   LFG_CONNECT_EVENTS_MIN_DURATION_MS  Minimum session duration to report a completion, in ms (default 60000).
                              Does not apply to session.needs_attention (always reported).
@@ -290,6 +291,20 @@ export type SessionEventFrame = {
   ts: number;
 };
 
+/** A shipped-post announcement (POST /api/shipped → shipped.jsonl). Same
+ * envelope as SessionEventFrame so relays that already tolerate `event`
+ * frames forward it unchanged; `summary` is the extra, ship-specific field. */
+export type ShipEventFrame = {
+  type: "event";
+  event: "ship.posted";
+  sessionId: string;
+  title: string | null;
+  project: string | null;
+  agent: string | null;
+  summary: string | null;
+  ts: number;
+};
+
 function makeEventFrame(event: SessionEventFrame["event"], session: SessionLite, ts: number): SessionEventFrame {
   return {
     type: "event",
@@ -344,6 +359,76 @@ export function diffSessionEvents(seen: Map<string, SeenSession>, sessions: Sess
     if (!presentIds.has(sessionId)) seen.delete(sessionId);
   }
   return events;
+}
+
+/** The subset of a hydrated ship post this client reads off GET /api/shipped. */
+export type ShipPostLite = {
+  id: string;
+  rev: number;
+  ts: number;
+  title: string;
+  summary?: string | null;
+  sessionId?: string | null;
+  project?: string | null;
+  agent?: string | null;
+};
+
+/**
+ * Diffs one poll's ship feed against the previously-seen `id → rev` baseline
+ * (mutated in place, same contract as diffSessionEvents). First observation
+ * of an id only seeds the baseline — restarting `lfg connect` never replays
+ * the whole shipped feed as notifications. A higher rev on a known id IS
+ * forwarded (a re-ship is a deliberate update to the showcase).
+ */
+export function diffShipEvents(seenShips: Map<string, number>, posts: ShipPostLite[], firstPoll: boolean): ShipEventFrame[] {
+  const events: ShipEventFrame[] = [];
+  for (const post of posts) {
+    if (!post.id) continue;
+    const prior = seenShips.get(post.id);
+    if (!firstPoll && (prior === undefined || post.rev > prior)) {
+      events.push({
+        type: "event",
+        event: "ship.posted",
+        // Relays require a session-shaped id on every event frame; a ship
+        // posted without one still needs a stable, unique value.
+        sessionId: post.sessionId?.trim() || `ship:${post.id}`,
+        title: post.title ?? null,
+        project: post.project ?? null,
+        agent: post.agent ?? null,
+        summary: post.summary ?? null,
+        ts: post.ts ?? Date.now(),
+      });
+    }
+    seenShips.set(post.id, post.rev);
+  }
+  return events;
+}
+
+async function pollShipEvents(
+  state: { seenShips: Map<string, number>; seeded: boolean },
+  getSocket: () => WebSocket | null,
+): Promise<void> {
+  let posts: ShipPostLite[];
+  try {
+    const response = await fetch(`http://${LOCAL_HOST}:${LOCAL_PORT}/api/shipped`);
+    if (!response.ok) return;
+    const body = (await response.json()) as { posts?: ShipPostLite[] };
+    posts = body.posts ?? [];
+  } catch {
+    return; // local serve unreachable this tick — try again next tick.
+  }
+  const events = diffShipEvents(state.seenShips, posts, !state.seeded);
+  state.seeded = true;
+  if (!events.length) return;
+  const ws = getSocket();
+  if (!ws || ws.readyState !== WebSocket.OPEN) return; // best-effort, same as sessions.
+  for (const frame of events) {
+    try {
+      ws.send(JSON.stringify(frame));
+    } catch {
+      // best-effort — see pollSessionEvents.
+    }
+  }
 }
 
 async function pollSessionEvents(seen: Map<string, SeenSession>, getSocket: () => WebSocket | null): Promise<void> {
@@ -440,6 +525,12 @@ async function runConnectLoop(): Promise<void> {
     const seen = new Map<string, SeenSession>();
     const timer = setInterval(() => void pollSessionEvents(seen, () => currentWs), EVENTS_POLL_MS);
     timer.unref?.();
+    // Shipped-post watcher — same opt-in, same cadence, same best-effort
+    // posture. A ship (lfg_ship / POST /api/shipped) is an explicit showcase,
+    // so it's forwarded as its own `ship.posted` frame with the summary.
+    const shipState = { seenShips: new Map<string, number>(), seeded: false };
+    const shipTimer = setInterval(() => void pollShipEvents(shipState, () => currentWs), EVENTS_POLL_MS);
+    shipTimer.unref?.();
   }
 
   let backoffMs = RECONNECT_MIN_MS;

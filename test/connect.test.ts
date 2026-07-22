@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   diffSessionEvents,
+  diffShipEvents,
   errorFrameMessage,
   forwardToLocalServe,
   isHttpFrame,
@@ -274,5 +275,48 @@ describe("isReportableTransition", () => {
     expect(
       isReportableTransition("session.needs_attention", session({ sessionId: "a", startedAt: 0 }), 1),
     ).toBe(true);
+  });
+});
+
+describe("diffShipEvents", () => {
+  const post = (over: Partial<import("../src/commands/connect").ShipPostLite>) => ({
+    id: "p1",
+    rev: 1,
+    ts: 1000,
+    title: "dark mode",
+    ...over,
+  });
+
+  test("first poll only seeds the baseline — never replays the feed", () => {
+    const seen = new Map<string, number>();
+    const events = diffShipEvents(seen, [post({}), post({ id: "p2" })], true);
+    expect(events).toEqual([]);
+    expect(seen.get("p1")).toBe(1);
+    expect(seen.get("p2")).toBe(1);
+  });
+
+  test("a new ship after seeding is forwarded with summary + ship-shaped fallback sessionId", () => {
+    const seen = new Map<string, number>([["p1", 1]]);
+    const events = diffShipEvents(seen, [post({}), post({ id: "p2", summary: "now with themes" })], false);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      event: "ship.posted",
+      sessionId: "ship:p2",
+      title: "dark mode",
+      summary: "now with themes",
+    });
+  });
+
+  test("a higher rev on a known id re-forwards; same rev stays silent", () => {
+    const seen = new Map<string, number>([["p1", 1]]);
+    expect(diffShipEvents(seen, [post({ rev: 2 })], false)).toHaveLength(1);
+    expect(diffShipEvents(seen, [post({ rev: 2 })], false)).toEqual([]);
+  });
+
+  test("a ship with a real sessionId keeps it", () => {
+    const seen = new Map<string, number>();
+    seen.set("seed", 1);
+    const events = diffShipEvents(seen, [post({ sessionId: "sess-9" })], false);
+    expect(events[0]!.sessionId).toBe("sess-9");
   });
 });
