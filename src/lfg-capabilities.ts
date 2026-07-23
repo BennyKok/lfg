@@ -3,9 +3,14 @@ import type { CodingAgentKind } from "./coding-agents.ts";
 // Bump whenever an agent-facing LFG capability or its operating guidance
 // changes. Managed sessions persist the value they launched with, which lets
 // the UI identify long-lived sessions whose MCP/tool catalog predates a ship.
-export const LFG_CAPABILITY_VERSION = "2026-07-20.1";
+export const LFG_CAPABILITY_VERSION = "2026-07-23.1";
 
 export const LFG_CAPABILITIES = [
+  {
+    tool: "lfg_send_to_origin",
+    useWhen: "The agent should intentionally deliver text or visual evidence back to the channel that launched this session.",
+    guidance: "Send only user-facing results. The origin adapter owns transport and identity; never request phone numbers or channel credentials.",
+  },
   {
     tool: "lfg_close_session",
     useWhen: "Another live session is clearly complete and should be removed from the active fleet.",
@@ -50,6 +55,7 @@ export function lfgRuntimeContract(): string {
     `=== LFG RUNTIME CONTRACT (capability version ${LFG_CAPABILITY_VERSION}) ===`,
     "- You are running as an LFG-managed coding agent. LFG features are part of the product workflow, not optional implementation trivia.",
     "- After visual or interaction work, capture verification media and show the best evidence with `lfg_display_image` or `lfg_display_video`.",
+    "- Use `lfg_send_to_origin` when the user wants a result intentionally delivered back to the channel that launched this session. The origin adapter owns transport identity and credentials.",
     "- When a report, data view, or live dashboard is materially clearer as interactive HTML than prose, publish it with `lfg_publish_artifact`; use a stable id for updates.",
     "- When material user-visible work is complete and verified, call `lfg_ship` with a concise showcase and the strongest media. Do not ship diagnosis, planning, partial, invisible, or trivial work.",
     "- Use `lfg_ask_user` only for a risky, irreversible, or genuinely ambiguous decision. It is fire-and-forget: do not poll or block waiting for the answer.",

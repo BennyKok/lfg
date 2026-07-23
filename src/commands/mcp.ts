@@ -66,6 +66,17 @@ type ImageArtifactResponse = {
 type AskQuestionResponse = {
   answer: string;
 };
+type OriginDeliveryResponse = {
+  ok?: boolean;
+  delivery?: {
+    id: string;
+    target: "origin";
+    sessionId: string;
+    text: string | null;
+    media: Array<{ path: string; kind: "image" | "video"; mimeType: string }>;
+    createdAt: number;
+  };
+};
 
 const VERSION = "0.1.21";
 
@@ -128,9 +139,31 @@ function ownedSessionId(input?: string): string {
   const sessionId = activeSessionId(input);
   const caller = process.env.LFG_SESSION_ID?.trim();
   if (caller && caller !== sessionId) {
-    throw new Error("script-backed artifacts can only be managed by their owning LFG session");
+    throw new Error("session-owned actions can only target their owning LFG session");
   }
   return sessionId;
+}
+
+export async function sendToOrigin(input: {
+  text?: string;
+  mediaPaths?: string[];
+  artifactIds?: string[];
+  sessionId?: string;
+}) {
+  const sessionId = ownedSessionId(input.sessionId);
+  const data = await api<OriginDeliveryResponse>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/origin-deliveries`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-LFG-Session-ID": sessionId },
+      body: JSON.stringify({
+        text: input.text,
+        mediaPaths: input.mediaPaths,
+        artifactIds: input.artifactIds,
+      }),
+    },
+  );
+  return { delivered: data.ok !== false, sessionId, delivery: data.delivery };
 }
 
 const SUBAGENT_INPUT_SCHEMA = {
@@ -465,6 +498,34 @@ export async function cmdMcp() {
       });
       return result({ answer: data.answer });
     },
+  );
+
+  server.registerTool(
+    "lfg_send_to_origin",
+    {
+      title: "Send A Message To The Originating Channel",
+      description:
+        "Send text and/or session-owned image/video artifacts back to the channel that launched this LFG session. The channel adapter owns final delivery (for example iMessage via Blooio); LFG never receives phone numbers or transport credentials.",
+      inputSchema: {
+        text: z.string().max(4_000).optional().describe("Optional message text delivered with the media."),
+        mediaPaths: z
+          .array(z.string().min(1))
+          .max(3)
+          .optional()
+          .describe("Up to three absolute local image/video paths. LFG stores them as session artifacts before delivery."),
+        artifactIds: z
+          .array(z.string().min(1))
+          .max(3)
+          .optional()
+          .describe("Up to three existing image/video artifact ids owned by this session."),
+        sessionId: z
+          .string()
+          .optional()
+          .describe("Owning LFG session id. Defaults to LFG_SESSION_ID and cannot target another session."),
+      },
+    },
+    async ({ text, mediaPaths, artifactIds, sessionId }) =>
+      result(await sendToOrigin({ text, mediaPaths, artifactIds, sessionId })),
   );
 
   server.registerTool(

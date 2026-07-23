@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { closeLfgSession } from "./mcp.ts";
+import { closeLfgSession, sendToOrigin } from "./mcp.ts";
 
 const originalFetch = globalThis.fetch;
 const originalBase = process.env.LFG_BASE;
@@ -39,5 +39,43 @@ describe("closeLfgSession", () => {
     await expect(closeLfgSession("same-session")).rejects.toThrow(
       "lfg_close_session cannot close the calling session",
     );
+  });
+});
+
+describe("sendToOrigin", () => {
+  test("posts a session-owned channel-neutral delivery", async () => {
+    process.env.LFG_BASE = "http://127.0.0.1:9876";
+    process.env.LFG_SESSION_ID = "11111111-1111-4111-8111-111111111111";
+    let request: { url: string; init?: RequestInit } | undefined;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      request = { url: String(url), init };
+      return Response.json({ ok: true, delivery: { id: "delivery-1", target: "origin" } });
+    }) as typeof fetch;
+
+    await expect(sendToOrigin({
+      text: "here it is",
+      artifactIds: ["shot-1"],
+    })).resolves.toMatchObject({
+      delivered: true,
+      sessionId: "11111111-1111-4111-8111-111111111111",
+    });
+    expect(request?.url).toEndWith(
+      "/api/sessions/11111111-1111-4111-8111-111111111111/origin-deliveries",
+    );
+    expect(request?.init).toMatchObject({
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-LFG-Session-ID": "11111111-1111-4111-8111-111111111111",
+      },
+    });
+  });
+
+  test("cannot deliver as another session", async () => {
+    process.env.LFG_SESSION_ID = "11111111-1111-4111-8111-111111111111";
+    await expect(sendToOrigin({
+      text: "wrong target",
+      sessionId: "22222222-2222-4222-8222-222222222222",
+    })).rejects.toThrow("owning LFG session");
   });
 });

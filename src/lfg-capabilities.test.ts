@@ -11,6 +11,7 @@ describe("LFG runtime capabilities", () => {
     const prompt = withLfgRuntimeContract("Fix the mobile navigation")!;
     expect(prompt).toContain(`capability version ${LFG_CAPABILITY_VERSION}`);
     expect(prompt).toContain("lfg_display_image");
+    expect(prompt).toContain("lfg_send_to_origin");
     expect(prompt).toContain("lfg_publish_artifact");
     expect(prompt).toContain("lfg_ship");
     expect(prompt).toContain("lfg_ask_user");
@@ -30,6 +31,7 @@ describe("LFG runtime capabilities", () => {
 
   test("publishes a bootstrap entry for every promoted workflow", () => {
     expect(LFG_CAPABILITIES.map((item) => item.tool)).toEqual([
+      "lfg_send_to_origin",
       "lfg_close_session",
       "lfg_ship",
       "lfg_display_image / lfg_display_video",

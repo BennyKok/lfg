@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 23, 2026 - Origin channel delivery (v0.1.51)
+
+- Agents can now intentionally send text, screenshots, and videos back to the
+  channel that launched their session through the channel-neutral
+  `lfg_send_to_origin` MCP tool.
+- Deliveries stay bound to their owning session, while phone numbers and
+  transport credentials remain exclusively with the channel adapter.
+
 ## July 23, 2026 - Reliable mobile bundle (v0.1.50)
 
 - Restored the mobile bottom-edge gesture guard to the published source so

@@ -242,6 +242,7 @@ visible, inherit parent/user context, and can run on any configured harness.
 | Area | Tools |
 | --- | --- |
 | Sessions | `lfg_list_sessions`, `lfg_get_session_tree`, `lfg_get_session_messages`, `lfg_send_session_message`, `lfg_close_session` |
+| Origin delivery | `lfg_send_to_origin` |
 | Presentation | `lfg_display_image`, `lfg_display_video`, `lfg_publish_artifact`, `lfg_refresh_artifact`, `lfg_ship` |
 | Delegation | `lfg_create_subagent`, `lfg_delegate_to_agent`, `lfg_delegate_design_task`, `lfg_delegate_backend_task`, `lfg_list_subagents`, `lfg_reparent_session` |
 | Human / advisor | `lfg_ask_user`, `lfg_ask_question` |

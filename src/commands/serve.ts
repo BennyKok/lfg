@@ -240,8 +240,14 @@ import {
   listAllArtifacts,
   listImageArtifacts,
   publishHtmlArtifact,
+  type ImageArtifact,
   type ImageArtifactMessage,
 } from "../artifacts.ts";
+import {
+  createOriginDelivery,
+  listOriginDeliveries,
+  type OriginDeliveryMedia,
+} from "../origin-deliveries.ts";
 import { deleteImagePreview, getOrCreateImagePreview } from "../artifact-previews.ts";
 import { addShipPost, listShipPosts } from "../shipped.ts";
 import {
@@ -4474,6 +4480,58 @@ export async function cmdServe() {
             });
           }
           return new Response(file, { headers: baseHeaders });
+        }
+      }
+
+      {
+        const m = path.match(/^\/api\/sessions\/([0-9a-fA-F-]{36})\/origin-deliveries$/);
+        if (m && req.method === "GET") {
+          const limit = Number(url.searchParams.get("limit") ?? 50);
+          return json({ deliveries: listOriginDeliveries(m[1], limit) });
+        }
+        if (m && req.method === "POST") {
+          if (req.headers.get("x-lfg-session-id") !== m[1]) {
+            return err(403, "origin delivery requires the owning LFG session");
+          }
+          const body = (await req.json().catch(() => null)) as {
+            text?: string;
+            mediaPaths?: string[];
+            artifactIds?: string[];
+          } | null;
+          if (!body) return err(400, "request body required");
+          try {
+            const artifacts: ImageArtifact[] = [];
+            for (const id of (body.artifactIds ?? []).slice(0, 3)) {
+              const artifact = getImageArtifact(id);
+              if (!artifact || artifact.sessionId !== m[1]) {
+                throw new Error(`artifact ${id} does not belong to this session`);
+              }
+              if (artifact.media !== "video" && (artifact.media ?? "image") !== "image") {
+                throw new Error(`artifact ${id} is not image or video media`);
+              }
+              artifacts.push(artifact);
+            }
+            for (const mediaPath of (body.mediaPaths ?? []).slice(0, Math.max(0, 3 - artifacts.length))) {
+              const extension = extname(mediaPath).toLowerCase();
+              const artifact = [".mp4", ".m4v", ".webm", ".mov", ".ogv"].includes(extension)
+                ? createVideoArtifact({ sessionId: m[1], path: mediaPath })
+                : createImageArtifact({ sessionId: m[1], path: mediaPath });
+              artifacts.push(artifact);
+            }
+            const media: OriginDeliveryMedia[] = artifacts.map((artifact) => ({
+              path: `/api/artifacts/${artifact.id}`,
+              kind: artifact.media === "video" ? "video" : "image",
+              mimeType: artifact.mimeType,
+            }));
+            const delivery = createOriginDelivery({
+              sessionId: m[1],
+              text: body.text,
+              media,
+            });
+            return json({ ok: true, delivery });
+          } catch (e) {
+            return err(400, e instanceof Error ? e.message : "could not create origin delivery");
+          }
         }
       }
 
