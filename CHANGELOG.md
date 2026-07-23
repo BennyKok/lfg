@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 23, 2026 - Reliable mobile bundle (v0.1.50)
+
+- Restored the mobile bottom-edge gesture guard to the published source so
+  the web UI builds cleanly while protecting iOS Home and app-switching
+  gestures.
+
 ## July 23, 2026 - Connected session links (v0.1.49)
 
 - Connected computers can now advertise their public URL with
