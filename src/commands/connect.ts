@@ -20,9 +20,9 @@ import { PATHS } from "../config.ts";
 // then a persisted bearer token) — it does not change `serve` itself.
 //
 // Wire protocol (JSON frames over one WebSocket to LFG_RELAY_URL):
-//   client → relay   {type:"pair", code}                     (first connect only)
+//   client → relay   {type:"pair", code, computerUrl?}       (first connect only)
 //   relay  → client   {type:"paired", token, boxId}           (persist token; reconnect with it instead of a code)
-//   client → relay   {type:"hello", token}                    (subsequent connects)
+//   client → relay   {type:"hello", token, computerUrl?}      (subsequent connects)
 //   relay  → client   {type:"hello-ok"}                        (optional; unknown frame types are ignored anyway)
 //   relay  → client   {type:"error", message}                  (pairing/hello rejected — relay closes right after)
 //   relay  → client   {type:"http", id, method, path, headers, bodyB64?}
@@ -100,8 +100,10 @@ import { PATHS } from "../config.ts";
 const HELP = `lfg connect — pair this box to a remote-access relay (EXPERIMENTAL)
 
 Usage:
-  lfg connect <code>       Redeem a one-time pairing code from a relay, then stay connected
-  lfg connect              Resume the saved binding, if any (safe to re-invoke, e.g. from a
+  lfg connect <code> [--url <public-url>]
+                           Redeem a one-time pairing code and advertise the URL where this UI is reachable
+  lfg connect [--url <public-url>]
+                           Resume the saved binding (and optionally update its advertised URL), e.g. from a
                            process manager after a restart); shows this help if never paired
   lfg connect status       Show the current relay binding, if any
   lfg connect disconnect   Drop the saved binding and stop
@@ -109,6 +111,7 @@ Usage:
 
 Env:
   LFG_RELAY_URL              Relay WebSocket URL (required — no default, this file is provider-agnostic)
+  LFG_PUBLIC_URL             Same value as --url; an absolute HTTP(S) root for this computer's web UI
   LFG_PORT / LFG_HOST        Local 'lfg serve' address to proxy requests to (default 127.0.0.1:8766)
   LFG_CONNECT_EVENTS         Opt-in (1/true/yes, default off): forward session completed/needs-attention
                              events AND shipped-post events to the relay. PRIVACY: session titles and
@@ -133,6 +136,27 @@ interface RelayCredentials {
   token: string;
   boxId: string;
   pairedAt: number;
+  computerUrl?: string;
+}
+
+/** Canonicalize the explicit outer URL before it is persisted or sent. The
+ * relay applies the same rules; validating here makes a typo fail at the
+ * command that introduced it instead of looking like an auth failure. */
+export function normalizeComputerUrl(value: string | undefined): string | undefined {
+  const raw = value?.trim();
+  if (!raw) return undefined;
+  try {
+    const url = new URL(raw);
+    if ((url.protocol !== "https:" && url.protocol !== "http:") || url.username || url.password) {
+      throw new Error("invalid public URL");
+    }
+    url.hash = "";
+    url.search = "";
+    url.pathname = url.pathname.replace(/\/$/, "") || "/";
+    return url.href.replace(/\/$/, "");
+  } catch {
+    throw new Error("lfg connect: --url must be an absolute http(s) URL without credentials");
+  }
 }
 
 async function readCredentials(): Promise<RelayCredentials | null> {
@@ -469,7 +493,10 @@ async function pollSessionEvents(seen: Map<string, SeenSession>, getSocket: () =
   }
 }
 
-function connectSocket(relayUrl: string, hello: { type: "pair"; code: string } | { type: "hello"; token: string }): Promise<WebSocket> {
+function connectSocket(
+  relayUrl: string,
+  hello: ({ type: "pair"; code: string } | { type: "hello"; token: string }) & { computerUrl?: string },
+): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(relayUrl);
     ws.addEventListener("open", () => {
@@ -481,10 +508,11 @@ function connectSocket(relayUrl: string, hello: { type: "pair"; code: string } |
 }
 
 /** Redeems a one-time pairing code, persists the returned token, then falls through to the persistent connect loop. */
-async function pair(code: string): Promise<void> {
+async function pair(code: string, explicitComputerUrl?: string): Promise<void> {
   const relayUrl = requireRelayUrl();
+  const computerUrl = normalizeComputerUrl(explicitComputerUrl ?? process.env.LFG_PUBLIC_URL);
   console.log(`lfg connect: redeeming pairing code against ${relayUrl} …`);
-  const ws = await connectSocket(relayUrl, { type: "pair", code });
+  const ws = await connectSocket(relayUrl, { type: "pair", code, ...(computerUrl ? { computerUrl } : {}) });
 
   const paired = await new Promise<{ token: string; boxId: string }>((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error("timed out waiting for relay to confirm pairing")), 15_000);
@@ -511,18 +539,23 @@ async function pair(code: string): Promise<void> {
     });
   });
 
-  await writeCredentials({ relayUrl, token: paired.token, boxId: paired.boxId, pairedAt: Date.now() });
+  await writeCredentials({ relayUrl, token: paired.token, boxId: paired.boxId, pairedAt: Date.now(), computerUrl });
   console.log(`lfg connect: paired as ${paired.boxId} — credentials saved to ${CREDENTIALS_PATH}`);
   ws.close();
   await runConnectLoop();
 }
 
 /** Long-running: reconnects with backoff and proxies relayed HTTP frames onto local serve, forever. */
-async function runConnectLoop(): Promise<void> {
+async function runConnectLoop(explicitComputerUrl?: string): Promise<void> {
   const creds = await readCredentials();
   if (!creds) {
     console.error("lfg connect: no saved binding — run `lfg connect <code>` first.");
     process.exit(1);
+  }
+  const computerUrl = normalizeComputerUrl(explicitComputerUrl ?? process.env.LFG_PUBLIC_URL ?? creds.computerUrl);
+  if (computerUrl !== creds.computerUrl) {
+    creds.computerUrl = computerUrl;
+    await writeCredentials(creds);
   }
 
   // Session-events watcher lives for the whole process, independent of any
@@ -551,7 +584,11 @@ async function runConnectLoop(): Promise<void> {
   for (;;) {
     try {
       console.log(`lfg connect: dialing ${creds.relayUrl} as ${creds.boxId} …`);
-      const ws = await connectSocket(creds.relayUrl, { type: "hello", token: creds.token });
+      const ws = await connectSocket(creds.relayUrl, {
+        type: "hello",
+        token: creds.token,
+        ...(computerUrl ? { computerUrl } : {}),
+      });
       currentWs = ws;
       backoffMs = RECONNECT_MIN_MS;
       console.log(`lfg connect: connected — proxying to local serve on ${LOCAL_HOST}:${LOCAL_PORT}`);
@@ -605,6 +642,7 @@ async function printStatus(): Promise<void> {
     return;
   }
   console.log(`lfg connect: paired as ${creds.boxId} via ${creds.relayUrl} (since ${new Date(creds.pairedAt).toISOString()})`);
+  console.log(`lfg connect: public URL ${creds.computerUrl ?? "not set (reconnect with --url <public-url>)"}`);
 }
 
 async function disconnect(): Promise<void> {
@@ -618,7 +656,13 @@ async function disconnect(): Promise<void> {
 }
 
 export async function cmdConnect(args: string[]): Promise<void> {
-  const [sub, ...rest] = args;
+  const urlIndex = args.indexOf("--url");
+  if (urlIndex >= 0 && (urlIndex === args.length - 1 || args.filter((arg) => arg === "--url").length > 1)) {
+    throw new Error("lfg connect: --url requires exactly one value");
+  }
+  const explicitComputerUrl = urlIndex >= 0 ? args[urlIndex + 1] : undefined;
+  const positional = urlIndex >= 0 ? args.filter((_, index) => index !== urlIndex && index !== urlIndex + 1) : args;
+  const [sub, ...rest] = positional;
   switch (sub) {
     case "status":
       return printStatus();
@@ -636,7 +680,7 @@ export async function cmdConnect(args: string[]): Promise<void> {
       // still good. Resume the connect loop from it; only fall back to HELP
       // when there's genuinely nothing paired yet.
       const creds = await readCredentials();
-      if (creds) return runConnectLoop();
+      if (creds) return runConnectLoop(explicitComputerUrl);
       console.log(HELP);
       return;
     }
@@ -647,6 +691,6 @@ export async function cmdConnect(args: string[]): Promise<void> {
         process.exit(1);
       }
       // Anything else is treated as a pairing code.
-      return pair(sub);
+      return pair(sub, explicitComputerUrl);
   }
 }
