@@ -4,6 +4,15 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 23, 2026 - Connected session links (v0.1.49)
+
+- Connected computers can now advertise their public URL with
+  `lfg connect --url`, or through `LFG_PUBLIC_URL`, so relays can preserve
+  exact links back to individual sessions.
+- Session deep links and shipped-result media now flow through connected
+  relays, making remote completion messages more useful outside the LFG
+  dashboard.
+
 ## July 22, 2026 - Faster, clearer session workflows (v0.1.48)
 
 - Attachments now start uploading as soon as they are selected, and large files
