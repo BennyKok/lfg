@@ -10702,6 +10702,14 @@ const onTouchStart = (e: ReactTouchEvent) => {
               ) : null}
             </div>
           </button>
+        {entering ? (
+          <span
+            className="shrink-0 rounded-full bg-success/15 px-2 py-0.5 text-[10px] font-semibold text-success ring-1 ring-inset ring-success/30"
+            title="Session just started"
+          >
+            🚀 started
+          </span>
+        ) : null}
         {session.status === "blocked" ? (
           <span
             className="shrink-0 rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-semibold text-warning ring-1 ring-inset ring-warning/30"
