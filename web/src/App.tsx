@@ -6703,11 +6703,16 @@ function sessionStableId(session: Session): string {
   return session.sessionId || session.nativeSessionId || session.tmuxName || "";
 }
 
-const MOBILE_PINNED_SESSIONS_KEY = "lfg_mobile_pinned_sessions";
+const PINNED_SESSIONS_KEY = "lfg_pinned_sessions";
+const LEGACY_MOBILE_PINNED_SESSIONS_KEY = "lfg_mobile_pinned_sessions";
 
-function readMobilePinnedSessions(): string[] {
+function readPinnedSessions(): string[] {
   try {
-    const parsed = JSON.parse(localStorage.getItem(MOBILE_PINNED_SESSIONS_KEY) ?? "[]");
+    const parsed = JSON.parse(
+      localStorage.getItem(PINNED_SESSIONS_KEY) ??
+        localStorage.getItem(LEGACY_MOBILE_PINNED_SESSIONS_KEY) ??
+        "[]",
+    );
     return Array.isArray(parsed)
       ? parsed.filter((item): item is string => typeof item === "string")
       : [];
@@ -6832,15 +6837,20 @@ function LiveView({
   // so it can switch which session it shows without unmounting. `origin` anchors
   // the open/close morph to the title the user tapped.
   const [sheet, setSheet] = useState<{ sid: string; origin: DOMRect } | null>(null);
-  const [mobilePinned, setMobilePinned] = useState<string[]>(readMobilePinnedSessions);
-  const mobilePinnedRef = useRef(mobilePinned);
-  mobilePinnedRef.current = mobilePinned;
+  const [topPinned, setTopPinned] = useState<string[]>(readPinnedSessions);
+  const topPinnedRef = useRef(topPinned);
+  topPinnedRef.current = topPinned;
 
-  // Mobile pins are browser-local workspace preferences, like collapsed cards
-  // and desktop stage columns. Sync other tabs without requiring server state.
+  // Top pins are browser-local workspace preferences shared by mobile and
+  // desktop. Sync other tabs without requiring server state.
   useEffect(() => {
     const sync = (event: StorageEvent) => {
-      if (event.key === MOBILE_PINNED_SESSIONS_KEY) setMobilePinned(readMobilePinnedSessions());
+      if (
+        event.key === PINNED_SESSIONS_KEY ||
+        event.key === LEGACY_MOBILE_PINNED_SESSIONS_KEY
+      ) {
+        setTopPinned(readPinnedSessions());
+      }
     };
     window.addEventListener("storage", sync);
     return () => window.removeEventListener("storage", sync);
@@ -6848,18 +6858,18 @@ function LiveView({
 
   useEffect(() => {
     try {
-      localStorage.setItem(MOBILE_PINNED_SESSIONS_KEY, JSON.stringify(mobilePinned));
+      localStorage.setItem(PINNED_SESSIONS_KEY, JSON.stringify(topPinned));
     } catch {
       /* private mode / quota — non-fatal */
     }
-  }, [mobilePinned]);
+  }, [topPinned]);
 
-  const toggleMobilePin = useCallback((sid: string) => {
-    const current = mobilePinnedRef.current;
+  const toggleTopPin = useCallback((sid: string) => {
+    const current = topPinnedRef.current;
     const pinned = current.includes(sid);
     const next = pinned ? current.filter((id) => id !== sid) : [...current, sid];
-    mobilePinnedRef.current = next;
-    setMobilePinned(next);
+    topPinnedRef.current = next;
+    setTopPinned(next);
     haptic("selection");
     toast.success(pinned ? "Session unpinned" : "Session pinned to top");
   }, []);
@@ -6910,7 +6920,7 @@ function LiveView({
 
   // Pinned session families always lead the narrow/mobile layout. A pin on a
   // delegated child lifts its whole family so parent/child nesting stays intact.
-  const pinnedSet = new Set(mobilePinned);
+  const pinnedSet = new Set(topPinned);
   const nodeContainsPin = (node: SessionTreeNode): boolean =>
     pinnedSet.has(sessionStableId(node.session)) || node.children.some(nodeContainsPin);
   const pinnedNodes = tree.roots.filter(nodeContainsPin);
@@ -6957,7 +6967,7 @@ function LiveView({
           onOpenSheet={(sid, origin) => setSheet({ sid, origin })}
           entering={recentlyCreatedSids.has(session.sessionId ?? "")}
           pinned={!!session.sessionId && pinnedSet.has(session.sessionId)}
-          onTogglePin={toggleMobilePin}
+          onTogglePin={toggleTopPin}
         />
       </ErrorBoundary>
     </div>
@@ -7043,6 +7053,8 @@ function LiveView({
         onOpenAsk={onOpenAsk}
         onOpenShipped={onOpenShipped}
         focus={focus}
+        topPinned={topPinned}
+        onToggleTopPin={toggleTopPin}
       />
     );
   }
@@ -7130,7 +7142,7 @@ function LiveView({
         onRefresh={onRefresh}
         onRemove={onRemove}
         pinned={pinnedSet.has(sheet.sid)}
-        onTogglePin={toggleMobilePin}
+        onTogglePin={toggleTopPin}
         onClose={() => setSheet(null)}
       />
     ) : null}
@@ -7166,6 +7178,8 @@ function RailStage({
   onOpenAsk,
   onOpenShipped,
   focus,
+  topPinned,
+  onToggleTopPin,
 }: {
   sessions: Session[];
   users: User[];
@@ -7178,6 +7192,8 @@ function RailStage({
   onOpenAsk?: () => void;
   onOpenShipped?: () => void;
   focus?: { sid: string; n: number } | null;
+  topPinned: string[];
+  onToggleTopPin: (sid: string) => void;
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
@@ -7496,15 +7512,25 @@ function RailStage({
     () => buildSessionTree(sessions, (s) => !!busyBySid[s.sessionId ?? ""]),
     [sessions, busyBySid],
   );
-  const workingNodes = railTree.roots.filter(railTree.effectiveBusy);
-  const idleNodes = railTree.roots.filter((node) => !railTree.effectiveBusy(node));
+  const topPinnedSet = new Set(topPinned);
+  const railNodeContainsTopPin = (node: SessionTreeNode): boolean =>
+    topPinnedSet.has(sessionStableId(node.session)) ||
+    node.children.some(railNodeContainsTopPin);
+  const topPinnedNodes = railTree.roots.filter(railNodeContainsTopPin);
+  const workingNodes = railTree.roots.filter(
+    (node) => !railNodeContainsTopPin(node) && railTree.effectiveBusy(node),
+  );
+  const idleNodes = railTree.roots.filter(
+    (node) => !railNodeContainsTopPin(node) && !railTree.effectiveBusy(node),
+  );
+  const topPinnedSessions = railTree.flatten(topPinnedNodes);
   const working = railTree.flatten(workingNodes);
   const idle = railTree.flatten(idleNodes);
 
   const projectRailGroups = useMemo(() => {
     if (projectFilter !== "__all") return [];
     const groups = new Map<string, { label: string; nodes: SessionTreeNode[]; count: number }>();
-    for (const node of railTree.roots) {
+    for (const node of railTree.roots.filter((item) => !railNodeContainsTopPin(item))) {
       const project = node.session.project || "";
       const key = project || "__no_project";
       const label = project ? shortProject(project) : "No project";
@@ -7520,12 +7546,15 @@ function RailStage({
     return Array.from(groups.entries())
       .map(([key, group]) => ({ key, ...group }))
       .sort((a, b) => a.label.localeCompare(b.label));
-  }, [projectFilter, railTree]);
+  }, [projectFilter, railTree, topPinned]);
 
   const railOrderedSessions =
     projectFilter === "__all"
-      ? projectRailGroups.flatMap((group) => railTree.flatten(group.nodes))
-      : [...working, ...idle];
+      ? [
+          ...topPinnedSessions,
+          ...projectRailGroups.flatMap((group) => railTree.flatten(group.nodes)),
+        ]
+      : [...topPinnedSessions, ...working, ...idle];
 
   // Flat rail order the keyboard cursor walks (matching the visible rail;
   // findings are not navigable). Keep the cursor pointing at a live session.
@@ -7793,6 +7822,7 @@ function RailStage({
         active={columnIds.includes(sid)}
         cursored={cursor === sid}
         pinned={validPinned.includes(sid)}
+        topPinned={topPinnedSet.has(sid)}
         collapsed={railCollapsed}
         onActivate={(shift) => activate(sid, shift)}
         onTogglePin={() => togglePin(sid)}
@@ -7912,6 +7942,8 @@ function RailStage({
             variant="stage"
             onClose={onCloseColumn}
             entering={recentlyCreatedSids.has(sid)}
+            pinned={topPinnedSet.has(sid)}
+            onTogglePin={onToggleTopPin}
           />
         </ErrorBoundary>
       </div>
@@ -8051,6 +8083,15 @@ function RailStage({
           </div>
         )}
         <div className="min-h-0 flex-1 overflow-y-auto px-1.5 py-2">
+          {topPinnedSessions.length ? (
+            <RailGroup
+              label="Pinned"
+              count={topPinnedSessions.length}
+              collapsed={railCollapsed}
+            >
+              {topPinnedNodes.map((node) => renderRailNode(node))}
+            </RailGroup>
+          ) : null}
           {projectFilter === "__all" ? (
             <>
               {projectRailGroups.map((group) => (
@@ -8224,6 +8265,7 @@ const RailItem = memo(function RailItem({
   active,
   cursored,
   pinned,
+  topPinned,
   collapsed,
   onActivate,
   onTogglePin,
@@ -8234,6 +8276,7 @@ const RailItem = memo(function RailItem({
   active: boolean;
   cursored: boolean;
   pinned: boolean;
+  topPinned: boolean;
   collapsed: boolean;
   onActivate: (shiftKey: boolean) => void;
   onTogglePin: () => void;
@@ -8360,6 +8403,13 @@ const RailItem = memo(function RailItem({
               busy ? "animate-pulse bg-warning" : "bg-success",
             )}
           />
+          {topPinned && collapsed ? (
+            <Pin
+              aria-label="Pinned to top"
+              className="absolute -left-1 -top-1 size-3 text-primary"
+              fill="currentColor"
+            />
+          ) : null}
         </span>
         {!collapsed ? (
           <>
@@ -8368,6 +8418,13 @@ const RailItem = memo(function RailItem({
                 <span className="min-w-0 flex-1 truncate text-[13px] font-medium leading-tight">
                   {titleForSession(session)}
                 </span>
+                {topPinned ? (
+                  <Pin
+                    aria-label="Pinned to top"
+                    className="size-3 shrink-0 text-primary"
+                    fill="currentColor"
+                  />
+                ) : null}
                 {session.lastActivityAt || session.startedAt ? (
                   <span className="shrink-0 text-[10px] leading-tight tabular-nums text-muted-foreground/70">
                     {relTime(session.lastActivityAt ?? session.startedAt ?? 0)}
@@ -11024,6 +11081,10 @@ const ChatStream = memo(function ChatStream({
   useEffect(() => {
     const el = ref.current;
     if (!el || !stick) return;
+    // Only write when we're not already pinned: a redundant assignment still
+    // emits a scroll event, which flips `stick` and re-runs this effect — an
+    // self-sustaining loop that React kills with "maximum update depth".
+    if (el.scrollTop === el.scrollHeight - el.clientHeight) return;
     el.scrollTop = el.scrollHeight;
   }, [visibleMessages, busy, stick]);
 
@@ -11039,6 +11100,10 @@ const ChatStream = memo(function ChatStream({
     const el = ref.current;
     if (!sid || !el || loadingOlder || !hasOlder) return;
     if (el.scrollTop > 80) return;
+    // A transcript that doesn't overflow sits at scrollTop 0 *and* at the
+    // bottom, so backfilling it would clear `stick` on every scroll event
+    // while the pin-to-bottom effect keeps setting it. Wait for real overflow.
+    if (el.scrollHeight <= el.clientHeight + 80) return;
     preserveScrollRef.current = { height: el.scrollHeight, top: el.scrollTop };
     setStick(false);
     setLoadingOlder(true);
