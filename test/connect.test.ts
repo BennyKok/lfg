@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
+  diffAskEvents,
+  diffAutoFindingEvents,
   diffSessionEvents,
   diffShipEvents,
   errorFrameMessage,
@@ -330,5 +332,174 @@ describe("diffShipEvents", () => {
     seen.set("seed", 1);
     const events = diffShipEvents(seen, [post({ sessionId: "sess-9" })], false);
     expect(events[0]!.sessionId).toBe("sess-9");
+  });
+});
+
+describe("diffAutoFindingEvents", () => {
+  const finding = (over: Partial<import("../src/commands/connect").AutoFindingLite>) => ({
+    id: "f1",
+    agentId: "inbox-triage",
+    title: "3 stale PRs are blocking the release branch",
+    reasoning: ["PR #12 has been open 9 days", "PR #14 conflicts with main"],
+    suggest: "rebase #14 first",
+    severity: "med" as const,
+    createdAt: 1000,
+    status: "open",
+    ...over,
+  });
+
+  test("first poll only seeds the baseline — never replays the open backlog", () => {
+    const seen = new Set<string>();
+    const events = diffAutoFindingEvents(seen, [finding({}), finding({ id: "f2" })], true);
+    expect(events).toEqual([]);
+    expect([...seen].sort()).toEqual(["f1", "f2"]);
+  });
+
+  test("a new finding after seeding emits one fully-shaped frame", () => {
+    const seen = new Set(["f1"]);
+    const events = diffAutoFindingEvents(seen, [finding({}), finding({ id: "f2", severity: "high" })], false);
+    expect(events).toEqual([
+      {
+        type: "event",
+        event: "auto.finding",
+        sessionId: "auto:f2",
+        title: "3 stale PRs are blocking the release branch",
+        project: null,
+        agent: "inbox-triage",
+        findingId: "f2",
+        severity: "high",
+        reasoning: ["PR #12 has been open 9 days", "PR #14 conflicts with main"],
+        suggest: "rebase #14 first",
+        ts: 1000,
+      },
+    ]);
+  });
+
+  test("a repeat poll of the same open findings emits nothing", () => {
+    const seen = new Set<string>();
+    expect(diffAutoFindingEvents(seen, [finding({})], false)).toHaveLength(1);
+    expect(diffAutoFindingEvents(seen, [finding({})], false)).toEqual([]);
+  });
+
+  test("findings that drop out of the open list are pruned from the baseline", () => {
+    const seen = new Set(["f1", "f2"]);
+    diffAutoFindingEvents(seen, [finding({ id: "f2" })], false);
+    expect([...seen]).toEqual(["f2"]);
+  });
+
+  test("caps emissions per tick so a bulk run can't flood the channel", () => {
+    const seen = new Set<string>();
+    const many = Array.from({ length: 9 }, (_, i) => finding({ id: `bulk-${i}` }));
+    const events = diffAutoFindingEvents(seen, many, false);
+    expect(events).toHaveLength(5);
+    // Over-cap rows are still baselined — they are dropped, not queued.
+    expect(seen.size).toBe(9);
+    expect(diffAutoFindingEvents(seen, many, false)).toEqual([]);
+  });
+
+  test("skips non-open rows (an older serve may ignore ?status=open) and empty titles", () => {
+    const seen = new Set<string>();
+    const events = diffAutoFindingEvents(
+      seen,
+      [finding({ id: "done", status: "dismissed" }), finding({ id: "blank", title: "   " }), finding({ id: "ok" })],
+      false,
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]!.findingId).toBe("ok");
+    expect([...seen]).toEqual(["ok"]);
+  });
+
+  test("caps reasoning lines and normalizes missing optional fields", () => {
+    const seen = new Set<string>();
+    const events = diffAutoFindingEvents(
+      seen,
+      [finding({ reasoning: ["a", "b", "", "c", "d", "e"], suggest: undefined, severity: undefined, agentId: undefined })],
+      false,
+    );
+    expect(events[0]!.reasoning).toEqual(["a", "b", "c", "d"]);
+    expect(events[0]!.suggest).toBeNull();
+    expect(events[0]!.severity).toBe("low");
+    expect(events[0]!.agent).toBeNull();
+  });
+});
+
+describe("diffAskEvents", () => {
+  const ask = (over: Partial<import("../src/commands/connect").AskLite>) => ({
+    id: "q1",
+    question: "Ship the migration now or wait for the backup?",
+    options: ["ship", "wait"],
+    agentId: "release-bot",
+    sessionId: null,
+    status: "open",
+    createdAt: 2000,
+    ...over,
+  });
+
+  test("first poll only seeds the baseline — a parked question isn't re-asked on restart", () => {
+    const seen = new Set<string>();
+    expect(diffAskEvents(seen, [ask({}), ask({ id: "q2" })], true)).toEqual([]);
+    expect([...seen].sort()).toEqual(["q1", "q2"]);
+  });
+
+  test("a new open question emits one fully-shaped frame with the ask: fallback id", () => {
+    const seen = new Set(["q1"]);
+    const events = diffAskEvents(seen, [ask({}), ask({ id: "q2" })], false);
+    expect(events).toEqual([
+      {
+        type: "event",
+        event: "auto.question",
+        sessionId: "ask:q2",
+        title: null,
+        project: null,
+        agent: "release-bot",
+        questionId: "q2",
+        question: "Ship the migration now or wait for the backup?",
+        options: ["ship", "wait"],
+        ts: 2000,
+      },
+    ]);
+  });
+
+  test("a question bound to a live session keeps that sessionId", () => {
+    const seen = new Set<string>();
+    const events = diffAskEvents(seen, [ask({ sessionId: "sess-9" })], false);
+    expect(events[0]!.sessionId).toBe("sess-9");
+  });
+
+  test("a repeat poll of the same open question emits nothing", () => {
+    const seen = new Set<string>();
+    expect(diffAskEvents(seen, [ask({})], false)).toHaveLength(1);
+    expect(diffAskEvents(seen, [ask({})], false)).toEqual([]);
+  });
+
+  test("answered questions drop out of the open list and are pruned", () => {
+    const seen = new Set(["q1", "q2"]);
+    diffAskEvents(seen, [ask({ id: "q2" })], false);
+    expect([...seen]).toEqual(["q2"]);
+  });
+
+  test("caps emissions per tick", () => {
+    const seen = new Set<string>();
+    const many = Array.from({ length: 8 }, (_, i) => ask({ id: `q-${i}` }));
+    expect(diffAskEvents(seen, many, false)).toHaveLength(5);
+    expect(seen.size).toBe(8);
+  });
+
+  test("skips non-open rows and empty question text, and caps options", () => {
+    const seen = new Set<string>();
+    const events = diffAskEvents(
+      seen,
+      [
+        ask({ id: "answered", status: "answered" }),
+        ask({ id: "blank", question: "  " }),
+        ask({ id: "ok", options: ["a", "b", "", "c", "d", "e"], agentId: null }),
+      ],
+      false,
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]!.questionId).toBe("ok");
+    expect(events[0]!.options).toEqual(["a", "b", "c", "d"]);
+    expect(events[0]!.agent).toBeNull();
+    expect([...seen]).toEqual(["ok"]);
   });
 });
