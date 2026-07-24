@@ -24,6 +24,10 @@ export type ResumableCacheRow = ResumableSession & {
   model?: string | null;
   assignedUser?: string | null;
   managed?: boolean;
+  // Some durable transcripts (currently Grok and Cursor) can be discovered
+  // and searched but not resumed by LFG. Keep them in the same derived catalog
+  // without exposing them in the existing Resume picker.
+  resumable?: boolean;
 };
 
 export type ResumableBackend = "aisdk" | "codex-aisdk" | "opencode" | "pi";
@@ -53,6 +57,32 @@ export type ResumableQueryResult = {
   facets: ResumableFacets;
 };
 
+export type HistoricalSession = {
+  sessionId: string;
+  cwd: string | null;
+  project: string;
+  title: string;
+  agent: string;
+  lastActivityAt: number | null;
+  transcriptPath: string | null;
+  assignedUser: string | null;
+};
+
+export type HistoricalQuery = {
+  sessionId?: string;
+  user?: string;
+  project?: string;
+  activeAfter?: number;
+  activeBefore?: number;
+  limit?: number;
+};
+
+export type HistoricalQueryResult = {
+  sessions: HistoricalSession[];
+  total: number;
+  truncated: boolean;
+};
+
 type Row = {
   session_id: string;
   cwd: string | null;
@@ -68,17 +98,17 @@ type Row = {
   model: string | null;
   assigned_user: string | null;
   managed: number;
+  resumable: number;
 };
-
-const DB_PATH = join(PATHS.data, "resume-cache.sqlite");
 
 let db: Database | null = null;
 let initialized = false;
 
 function database(): Database {
   if (db) return db;
-  mkdirSync(dirname(DB_PATH), { recursive: true });
-  db = new Database(DB_PATH, { create: true });
+  const dbPath = join(PATHS.data, "resume-cache.sqlite");
+  mkdirSync(dirname(dbPath), { recursive: true });
+  db = new Database(dbPath, { create: true });
   db.exec("PRAGMA journal_mode = WAL");
   db.exec("PRAGMA synchronous = NORMAL");
   db.exec("PRAGMA busy_timeout = 2500");
@@ -113,6 +143,13 @@ function init(): Database {
     );
     d.exec(migration);
   }
+  if (version < 2) {
+    const migration = readFileSync(
+      new URL("./migrations/resume-cache/002_historical_sessions.sql", import.meta.url),
+      "utf8",
+    );
+    d.exec(migration);
+  }
   initialized = true;
   return d;
 }
@@ -125,7 +162,15 @@ function toSession(row: Row): ResumableSession {
     title: row.title,
     lastActivityAt: row.last_activity_at,
     lastUserText: row.last_user_text,
-    agent: (row.agent === "codex" || row.agent === "opencode" ? row.agent : "claude") as ResumableSession["agent"],
+    agent: (
+      row.agent === "codex" ||
+      row.agent === "opencode" ||
+      row.agent === "pi" ||
+      row.agent === "grok" ||
+      row.agent === "cursor"
+        ? row.agent
+        : "claude"
+    ) as ResumableSession["agent"],
     backend: (row.backend || undefined) as ResumableSession["backend"],
     resumeHandle: row.resume_handle,
     model: row.model,
@@ -153,8 +198,8 @@ export function upsertResumableRows(rows: ResumableCacheRow[]): void {
   const stmt = d.query(`
     INSERT INTO resumable_sessions
       (session_id, cwd, project, title, last_user_text, last_activity_at, agent, path, mtime_ms,
-       backend, resume_handle, model, assigned_user, managed)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       backend, resume_handle, model, assigned_user, managed, resumable)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(session_id) DO UPDATE SET
       cwd = excluded.cwd,
       project = excluded.project,
@@ -168,7 +213,8 @@ export function upsertResumableRows(rows: ResumableCacheRow[]): void {
       resume_handle = COALESCE(excluded.resume_handle, resumable_sessions.resume_handle),
       model = COALESCE(excluded.model, resumable_sessions.model),
       assigned_user = COALESCE(excluded.assigned_user, resumable_sessions.assigned_user),
-      managed = MAX(excluded.managed, resumable_sessions.managed)
+      managed = MAX(excluded.managed, resumable_sessions.managed),
+      resumable = excluded.resumable
   `);
   d.transaction((batch: ResumableCacheRow[]) => {
     for (const r of batch) {
@@ -187,6 +233,7 @@ export function upsertResumableRows(rows: ResumableCacheRow[]): void {
         r.model ?? null,
         r.assignedUser ?? null,
         r.managed ? 1 : 0,
+        r.resumable === false ? 0 : 1,
       );
     }
   })(rows);
@@ -212,9 +259,9 @@ export function getCachedResumableSession(sessionId: string): ResumableSession |
   const row = d
     .query<Row, [string]>(`
       SELECT session_id, cwd, project, title, last_user_text, last_activity_at, agent, path, mtime_ms,
-             backend, resume_handle, model, assigned_user, managed
+             backend, resume_handle, model, assigned_user, managed, resumable
       FROM resumable_sessions
-      WHERE session_id = ?
+      WHERE session_id = ? AND resumable = 1
     `)
     .get(sessionId);
   return row ? toSession(row) : null;
@@ -224,6 +271,13 @@ export function updateResumableUser(sessionId: string, user: string | null): boo
   const result = init()
     .query("UPDATE resumable_sessions SET assigned_user = ? WHERE session_id = ?")
     .run(user, sessionId);
+  return Number(result.changes ?? 0) > 0;
+}
+
+export function updateCachedSessionTitle(sessionId: string, title: string): boolean {
+  const result = init()
+    .query("UPDATE resumable_sessions SET title = ? WHERE session_id = ?")
+    .run(title, sessionId);
   return Number(result.changes ?? 0) > 0;
 }
 
@@ -276,6 +330,7 @@ export function queryResumableCache(opts: ResumableQuery = {}): ResumableQueryRe
     facetWhere.push(exclude.sql);
     facetParams.push(...exclude.params);
   }
+  facetWhere.push("resumable = 1");
   const facetWhereSql = facetWhere.length ? `WHERE ${facetWhere.join(" AND ")}` : "";
 
   const agentFacet = d
@@ -312,7 +367,7 @@ export function queryResumableCache(opts: ResumableQuery = {}): ResumableQueryRe
   const rows = d
     .query<Row, (string | number)[]>(`
       SELECT session_id, cwd, project, title, last_user_text, last_activity_at, agent, path, mtime_ms,
-             backend, resume_handle, model, assigned_user, managed
+             backend, resume_handle, model, assigned_user, managed, resumable
       FROM resumable_sessions
       ${whereSql}
       ORDER BY last_activity_at IS NULL, last_activity_at DESC, session_id DESC
@@ -330,4 +385,78 @@ export function queryResumableCache(opts: ResumableQuery = {}): ResumableQueryRe
         .map((r) => ({ project: r.project, count: r.count })),
     },
   };
+}
+
+function escapedLike(value: string): string {
+  return value.replace(/[%_\\]/g, (ch) => `\\${ch}`);
+}
+
+export function queryHistoricalCache(opts: HistoricalQuery = {}): HistoricalQueryResult {
+  const d = init();
+  const limit = Math.max(1, Math.min(500, opts.limit ?? 200));
+  const where: string[] = [];
+  const params: (string | number)[] = [];
+
+  if (opts.sessionId?.trim()) {
+    where.push("LOWER(session_id) LIKE ? ESCAPE '\\'");
+    params.push(`${escapedLike(opts.sessionId.trim().toLowerCase())}%`);
+  }
+  if (opts.user?.trim()) {
+    where.push("LOWER(COALESCE(assigned_user, '')) = ?");
+    params.push(opts.user.trim().toLowerCase());
+  }
+  if (opts.project?.trim()) {
+    const like = `%${escapedLike(opts.project.trim().toLowerCase())}%`;
+    where.push(
+      "(LOWER(project) LIKE ? ESCAPE '\\' OR LOWER(COALESCE(cwd, '')) LIKE ? ESCAPE '\\')",
+    );
+    params.push(like, like);
+  }
+  if (Number.isFinite(opts.activeAfter)) {
+    where.push("last_activity_at >= ?");
+    params.push(opts.activeAfter!);
+  }
+  if (Number.isFinite(opts.activeBefore)) {
+    where.push("last_activity_at <= ?");
+    params.push(opts.activeBefore!);
+  }
+
+  const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+  const total =
+    d
+      .query<{ count: number }, (string | number)[]>(
+        `SELECT COUNT(*) AS count FROM resumable_sessions ${whereSql}`,
+      )
+      .get(...params)?.count ?? 0;
+  const rows = d
+    .query<Row, (string | number)[]>(`
+      SELECT session_id, cwd, project, title, last_user_text, last_activity_at, agent, path, mtime_ms,
+             backend, resume_handle, model, assigned_user, managed, resumable
+      FROM resumable_sessions
+      ${whereSql}
+      ORDER BY last_activity_at IS NULL, last_activity_at DESC, session_id DESC
+      LIMIT ?
+    `)
+    .all(...params, limit);
+
+  return {
+    sessions: rows.map((row) => ({
+      sessionId: row.session_id,
+      cwd: row.cwd,
+      project: row.project,
+      title: row.title,
+      agent: row.agent,
+      lastActivityAt: row.last_activity_at,
+      transcriptPath: row.path,
+      assignedUser: row.assigned_user,
+    })),
+    total,
+    truncated: total > rows.length,
+  };
+}
+
+export function resetResumeCacheConnectionForTests(): void {
+  db?.close();
+  db = null;
+  initialized = false;
 }

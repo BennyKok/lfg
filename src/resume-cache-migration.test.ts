@@ -33,6 +33,11 @@ describe("resume cache migration", () => {
       "utf8",
     );
     db.exec(sql);
+    const historicalSql = readFileSync(
+      new URL("./migrations/resume-cache/002_historical_sessions.sql", import.meta.url),
+      "utf8",
+    );
+    db.exec(historicalSql);
 
     const columns = db.query<{ name: string }, []>("PRAGMA table_info(resumable_sessions)").all();
     expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining([
@@ -41,8 +46,9 @@ describe("resume cache migration", () => {
       "model",
       "assigned_user",
       "managed",
+      "resumable",
     ]));
-    expect(db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(1);
+    expect(db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(2);
     db.close();
   });
 });

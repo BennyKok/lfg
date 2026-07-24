@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { closeLfgSession, sendToOrigin } from "./mcp.ts";
+import { closeLfgSession, findLfgSessions, sendToOrigin } from "./mcp.ts";
 
 const originalFetch = globalThis.fetch;
 const originalBase = process.env.LFG_BASE;
@@ -39,6 +39,43 @@ describe("closeLfgSession", () => {
     await expect(closeLfgSession("same-session")).rejects.toThrow(
       "lfg_close_session cannot close the calling session",
     );
+  });
+});
+
+describe("findLfgSessions", () => {
+  test("queries the historical session API with composable filters", async () => {
+    process.env.LFG_BASE = "http://127.0.0.1:9876";
+    let request: { url: string; init?: RequestInit } | undefined;
+    globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+      request = { url: String(url), init };
+      return Response.json({ sessions: [], candidateTotal: 0, scanned: 0, truncated: false });
+    }) as typeof fetch;
+
+    await expect(findLfgSessions({
+      sessionId: "abcd",
+      user: "dev@example.com",
+      project: "/repos/lfg",
+      text: "historical finder",
+      activeAfter: "2026-07-01T00:00:00Z",
+      activeBefore: "2026-07-24T00:00:00Z",
+      limit: 20,
+      scanLimit: 100,
+    })).resolves.toMatchObject({ sessions: [], candidateTotal: 0 });
+    expect(request?.url).toBe("http://127.0.0.1:9876/api/sessions/find");
+    expect(request?.init).toMatchObject({
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: "abcd",
+        user: "dev@example.com",
+        project: "/repos/lfg",
+        text: "historical finder",
+        activeAfter: "2026-07-01T00:00:00Z",
+        activeBefore: "2026-07-24T00:00:00Z",
+        limit: 20,
+        scanLimit: 100,
+      }),
+    });
   });
 });
 

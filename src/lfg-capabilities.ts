@@ -19,6 +19,11 @@ export const LFG_CAPABILITIES = [
       "Prefer deciding autonomously and narrating what you did — do NOT ask to check in. from:'user' is fire-and-forget: raise it once, do not poll or block; the answer arrives later as a user message. from:'advisor' returns a concise answer synchronously.",
   },
   {
+    tool: "lfg_find_sessions",
+    useWhen: "An ended or historical LFG session must be located after its tmux pane or process disappeared.",
+    guidance: "Filter by id/prefix, user, project/cwd, title/transcript text, or last-activity range; use lfg_list_sessions for the current live fleet.",
+  },
+  {
     tool: "lfg_close_session",
     useWhen: "Another live session is clearly complete and should be removed from the active fleet.",
     guidance: "Resolve the exact id with lfg_list_sessions first; never close the calling session or an active, uncertain, errored, or blocked session.",
@@ -47,6 +52,7 @@ export function lfgRuntimeContract(): string {
     "- When material user-visible work is complete and verified, use `lfg_output` `to:'shipped'` with a concise headline + tweet-length blurb and the strongest media. Do not ship diagnosis, planning, partial, invisible, or trivial work.",
     "- DECIDE, don't park: make the reasonable call yourself and narrate it. Use `lfg_input` (`from:'user'`) ONLY for a genuinely irreversible, risky, or ambiguous decision — never to check in or report progress. It is fire-and-forget: do not poll or block; the answer arrives later. Use `from:'advisor'` to consult LFG's advisor.",
     "- The channel adapter owns transport identity and credentials; never request phone numbers or channel credentials.",
+    "- Use `lfg_find_sessions` to locate ended or historical sessions by id, owner, project, text, or last-activity range; use `lfg_list_sessions` for the live fleet.",
     "- When the user or governing instructions explicitly request delegation, prefer `lfg_create_subagent` or `lfg_delegate_*` so children remain visible and linked in LFG.",
     "- Use `lfg_close_session` only after resolving another session's exact id with `lfg_list_sessions`; never close your own session.",
     "- If an exact LFG tool is unavailable, call `lfg_capabilities`. Report that the session needs a capability refresh only when it returns `stale: true`; otherwise report that the capability is unsupported. Do not reverse-engineer or call LFG's private HTTP endpoints as a substitute.",

@@ -14,6 +14,7 @@ describe("LFG runtime capabilities", () => {
     expect(prompt).toContain("lfg_input");
     expect(prompt).toContain("to:'thread'");
     expect(prompt).toContain("to:'shipped'");
+    expect(prompt).toContain("lfg_find_sessions");
     expect(prompt).toContain("lfg_close_session");
     expect(prompt).toEndWith("=== USER TASK ===\nFix the mobile navigation");
   });
@@ -32,6 +33,7 @@ describe("LFG runtime capabilities", () => {
     expect(LFG_CAPABILITIES.map((item) => item.tool)).toEqual([
       "lfg_output",
       "lfg_input",
+      "lfg_find_sessions",
       "lfg_close_session",
       "lfg_create_subagent / lfg_delegate_*",
     ]);
