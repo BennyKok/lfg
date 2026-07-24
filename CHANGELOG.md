@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+- Voice advisor moved to Claude Opus 5 (falling back to Sonnet 5), and fixed
+  for how the new models think. The advisor previously shared the voice brain's
+  small reply budget; because these models reason before answering and that
+  reasoning counts against the same budget, hard questions would have come back
+  truncated or silent. The advisor now gets its own, much larger budget while
+  the brain keeps its fast one. Consults that use a fleet tool also no longer
+  fail partway through.
+
 ## July 24, 2026 - Real page URLs and relayed live views (v0.1.52)
 
 - Every page now has its own URL. The dashboard uses real paths

@@ -70,12 +70,18 @@ ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
 # setup — a Haiku→Sonnet→Opus ladder AND a separate slow backend advisor session
 # — with one clear, fast escalation the user can actually follow.
 HAIKU_MODEL = "claude-haiku-4-5"
-OPUS_MODEL = "claude-opus-4-8"
-SONNET_MODEL = "claude-sonnet-4-6"
+OPUS_MODEL = "claude-opus-5"
+SONNET_MODEL = "claude-sonnet-5"
 # The advisor is Opus; if it's momentarily unavailable (e.g. rate-limited) fall
 # back to Sonnet so a consult still returns something useful. Still ONE advisor
 # from the user's view — just resilient, not a recursive ladder.
 ADVISOR_MODELS = [OPUS_MODEL, SONNET_MODEL]
+# Both advisor models think by default (adaptive thinking is on unless disabled),
+# and max_tokens caps thinking + reply TOGETHER — so the advisor needs a far
+# larger budget than the brain or its answer gets truncated mid-thought. The
+# brain is Haiku, which doesn't think, so it keeps the tight low-latency budget.
+BRAIN_MAX_TOKENS = 600
+ADVISOR_MAX_TOKENS = 8000
 # Appended to the system prompt when Opus is answering as the advisor, so it
 # knows it may ACT on the fleet, not just hand back advice.
 ADVISOR_NOTE = (
@@ -1111,6 +1117,18 @@ async def anthropic_stream(
                     cb = ev.get("content_block") or {}
                     if cb.get("type") == "text":
                         blocks[idx] = {"type": "text", "text": ""}
+                    elif cb.get("type") == "thinking":
+                        # Thinking blocks must be assembled and echoed back
+                        # UNCHANGED on the next request of a tool loop, or the
+                        # API rejects the turn. We never speak them (only
+                        # text_delta reaches on_text) and the model may return
+                        # them with empty text — keep them verbatim regardless.
+                        blocks[idx] = {"type": "thinking", "thinking": "", "signature": ""}
+                    elif cb.get("type") == "redacted_thinking":
+                        blocks[idx] = {
+                            "type": "redacted_thinking",
+                            "data": cb.get("data", ""),
+                        }
                     elif cb.get("type") == "tool_use":
                         blocks[idx] = {
                             "type": "tool_use",
@@ -1129,6 +1147,12 @@ async def anthropic_stream(
                             blocks[idx]["text"] += chunk
                         if chunk and on_text:
                             on_text(chunk)
+                    elif dt == "thinking_delta":
+                        if idx in blocks:
+                            blocks[idx]["thinking"] += d.get("thinking", "")
+                    elif dt == "signature_delta":
+                        if idx in blocks:
+                            blocks[idx]["signature"] += d.get("signature", "")
                     elif dt == "input_json_delta":
                         json_bufs[idx] = json_bufs.get(idx, "") + d.get("partial_json", "")
                 elif etype == "content_block_stop":
@@ -1177,6 +1201,7 @@ async def _advisor_pass(question: str) -> str:
             system=SYSTEM_PROMPT + ADVISOR_NOTE,
             tools=FLEET_TOOLS,  # no consult_advisor → no recursion
             live_context=LIVE_CONTEXT,
+            max_tokens=ADVISOR_MAX_TOKENS,
         )
         if answer:
             print(f"[voice] advisor ({model}) answered", flush=True)
@@ -1233,7 +1258,14 @@ async def dispatch_advisor(question: str) -> str:
 
 
 async def run_brain(
-    msgs, *, model: str, system: str, emit=None, tools=None, live_context=None
+    msgs,
+    *,
+    model: str,
+    system: str,
+    emit=None,
+    tools=None,
+    live_context=None,
+    max_tokens: int = BRAIN_MAX_TOKENS,
 ) -> str:
     """Tool-use loop at `model`. Speaks each text chunk via emit() when given
     (the live voice turn); always returns the final assistant text. `tools`
@@ -1302,7 +1334,7 @@ async def run_brain(
                     print(f"[voice] stream sentence +{time.time() - turn_t0:.2f}s: {sent}", flush=True)
 
         blocks, stop_reason = await anthropic_stream(
-            msgs, system, model=model, tools=tools, max_tokens=600, on_text=on_text
+            msgs, system, model=model, tools=tools, max_tokens=max_tokens, on_text=on_text
         )
         if blocks is None:
             return ""
