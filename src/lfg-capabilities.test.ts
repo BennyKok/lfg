@@ -10,11 +10,10 @@ describe("LFG runtime capabilities", () => {
   test("injects the product workflow into a normal root task", () => {
     const prompt = withLfgRuntimeContract("Fix the mobile navigation")!;
     expect(prompt).toContain(`capability version ${LFG_CAPABILITY_VERSION}`);
-    expect(prompt).toContain("lfg_display_image");
-    expect(prompt).toContain("lfg_send_to_origin");
-    expect(prompt).toContain("lfg_publish_artifact");
-    expect(prompt).toContain("lfg_ship");
-    expect(prompt).toContain("lfg_ask_user");
+    expect(prompt).toContain("lfg_output");
+    expect(prompt).toContain("lfg_input");
+    expect(prompt).toContain("to:'thread'");
+    expect(prompt).toContain("to:'shipped'");
     expect(prompt).toContain("lfg_close_session");
     expect(prompt).toEndWith("=== USER TASK ===\nFix the mobile navigation");
   });
@@ -31,12 +30,9 @@ describe("LFG runtime capabilities", () => {
 
   test("publishes a bootstrap entry for every promoted workflow", () => {
     expect(LFG_CAPABILITIES.map((item) => item.tool)).toEqual([
-      "lfg_send_to_origin",
+      "lfg_output",
+      "lfg_input",
       "lfg_close_session",
-      "lfg_ship",
-      "lfg_display_image / lfg_display_video",
-      "lfg_publish_artifact",
-      "lfg_ask_user",
       "lfg_create_subagent / lfg_delegate_*",
     ]);
   });

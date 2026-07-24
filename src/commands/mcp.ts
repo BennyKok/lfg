@@ -109,6 +109,19 @@ function sessionParent(session: SessionRow): string | undefined {
   return session.parentSessionId ?? session.parentNativeSessionId ?? undefined;
 }
 
+const IMAGE_EXT = new Set(["png", "jpg", "jpeg", "webp", "gif"]);
+const VIDEO_EXT = new Set(["mp4", "m4v", "webm", "mov", "ogv"]);
+
+// Route a local media path to the correct artifact endpoint by extension.
+function mediaKind(path: string): "image" | "video" {
+  const ext = path.split(".").pop()?.toLowerCase() ?? "";
+  if (VIDEO_EXT.has(ext)) return "video";
+  if (IMAGE_EXT.has(ext)) return "image";
+  throw new Error(
+    `unsupported media extension for "${path}" (images: ${[...IMAGE_EXT].join(", ")}; videos: ${[...VIDEO_EXT].join(", ")})`,
+  );
+}
+
 function activeSessionId(input?: string): string {
   const sessionId = input?.trim() || process.env.LFG_SESSION_ID?.trim();
   if (!sessionId) {
@@ -857,6 +870,142 @@ export async function cmdMcp() {
         return session.parentSessionId === parentSessionId || session.parentNativeSessionId === parentSessionId;
       });
       return result({ parentSessionId: parentSessionId ?? null, subagents });
+    },
+  );
+
+  // ── Merged I/O surface ──────────────────────────────────────────────────
+  // The whole agent<->human channel is two verbs: lfg_output (tell) and
+  // lfg_input (ask). Both wrap the same endpoints as the granular tools, which
+  // remain as compatibility fallbacks. The runtime contract mandates narrating
+  // through lfg_output as work proceeds so a session never goes dark, and using
+  // lfg_input only for a genuinely irreversible decision (non-blocking) so a
+  // session never parks and wedges waiting on a human.
+  server.registerTool(
+    "lfg_output",
+    {
+      title: "Output To The User (tell)",
+      description:
+        "The single verb for everything you send to the human. NARRATE your decisions and progress here as you work — do not go dark. `to` picks the destination: " +
+        "'thread' delivers text and/or media back to the channel that launched this session (e.g. iMessage) — this is your default running narration; " +
+        "'session' shows evidence inline in the LFG transcript (a screenshot/recording via `media`, or a self-contained HTML report/dashboard via `html`); " +
+        "'shipped' posts a finished, verified result to the Shipped feed (`title` + tweet-length `text`, plus the strongest `media`). " +
+        "Attach local files with `media` (images/videos by absolute path) and/or existing artifacts with `artifactIds`. Re-use `id` to update an artifact or ship post in place. This is non-blocking — never wait after calling it.",
+      inputSchema: {
+        to: z
+          .enum(["thread", "session", "shipped"])
+          .describe("Destination: 'thread' (originating channel / iMessage — your running narration), 'session' (inline transcript evidence), 'shipped' (verified completion feed)."),
+        text: z
+          .string()
+          .max(4_000)
+          .optional()
+          .describe("Message text. For 'thread' the narration/message; for 'shipped' the tweet-length blurb (≤280 chars, 1-2 plain sentences, no headings/bullets/code)."),
+        title: z.string().optional().describe("For 'shipped': short headline. For 'session' + html: the artifact card title."),
+        media: z
+          .array(z.object({ path: z.string().min(1), caption: z.string().optional() }))
+          .max(3)
+          .optional()
+          .describe("Up to three absolute local image/video paths (with optional captions) captured while verifying."),
+        artifactIds: z.array(z.string().min(1)).max(3).optional().describe("Existing session-owned artifact ids to deliver/embed."),
+        html: z.string().min(1).optional().describe("For 'session': a complete self-contained HTML document (inline CSS/JS/data only) published as an artifact card."),
+        id: z.string().optional().describe("Stable id to update in place: an artifact id (with html) or an existing ship-post id."),
+        caption: z.string().optional().describe("Short caption for a single 'session' media/artifact card."),
+        project: z.string().optional().describe("For 'shipped': project label shown on the post."),
+        sessionId: z.string().optional().describe("Owning LFG session id. Defaults to LFG_SESSION_ID."),
+      },
+    },
+    async ({ to, text, title, media, artifactIds, html, id, caption, project, sessionId }) => {
+      const mediaPaths = media?.map((m) => m.path);
+      if (to === "thread") {
+        return result(await sendToOrigin({ text, mediaPaths, artifactIds, sessionId }));
+      }
+      if (to === "shipped") {
+        const sid = activeSessionId(sessionId);
+        const data = await api<{ ok: boolean; post: unknown }>("/api/shipped", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title, id, summary: text, mediaPaths: media, artifactIds, project, sessionId: sid }),
+        });
+        return result({ shipped: true, post: data.post });
+      }
+      // to === "session"
+      if (html !== undefined) {
+        const sid = activeSessionId(sessionId);
+        const data = await api<ImageArtifactResponse>(
+          `/api/sessions/${encodeURIComponent(sid)}/artifacts/html`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ html, id, title, caption }),
+          },
+        );
+        return result({ output: "session", sessionId: sid, artifact: data.artifact });
+      }
+      if (mediaPaths?.length) {
+        const sid = activeSessionId(sessionId);
+        const artifacts = [];
+        for (const m of media ?? []) {
+          const endpoint = mediaKind(m.path) === "video" ? "videos" : "images";
+          const data = await api<ImageArtifactResponse>(
+            `/api/sessions/${encodeURIComponent(sid)}/artifacts/${endpoint}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ path: m.path, caption: m.caption ?? caption }),
+            },
+          );
+          artifacts.push(data.artifact);
+        }
+        return result({ output: "session", sessionId: sid, artifacts });
+      }
+      throw new Error("lfg_output to 'session' requires either `html` or `media`");
+    },
+  );
+
+  server.registerTool(
+    "lfg_input",
+    {
+      title: "Input From The User Or Advisor (ask)",
+      description:
+        "The single verb for pulling an answer in. `from: 'user'` (default) asks the human to make a decision — use ONLY for a genuinely irreversible/risky/ambiguous call; NEVER to check in or report progress (narrate through lfg_output instead). It is fire-and-forget: raises a push notification and returns immediately with a question id — do NOT wait, poll, or block; the answer arrives later as a user message starting with [ask-user answer <id>], so continue other safe work or end your turn. `from: 'advisor'` asks LFG's deep-thinking advisor a technical question and waits for a concise answer, optionally grounded in a repo.",
+      inputSchema: {
+        prompt: z
+          .string()
+          .min(1)
+          .describe("The question. For 'user': lead with the decision in one sentence, at most a couple of short context lines, no markdown. For 'advisor': a clear technical question."),
+        from: z.enum(["user", "advisor"]).optional().describe("'user' (default) asks the human to decide; 'advisor' asks LFG's advisor and returns its answer."),
+        options: z
+          .array(z.string())
+          .max(6)
+          .optional()
+          .describe("For 'user': optional one-tap answer suggestions (short labels). The user may still reply with free text."),
+        cwd: z.string().optional().describe("For 'advisor': optional repository directory to inspect for context. Defaults to the LFG repository."),
+        sessionId: z.string().optional().describe("For 'user': session the answer is delivered to. Defaults to LFG_SESSION_ID."),
+        user: z.string().optional().describe("For 'user': user email to notify. Defaults to the calling session's LFG_USER."),
+      },
+    },
+    async ({ prompt, from, options, cwd, sessionId, user }) => {
+      if (from === "advisor") {
+        const data = await api<AskQuestionResponse>("/api/voice/consult", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ question: prompt, cwd }),
+        });
+        return result({ answer: data.answer });
+      }
+      const sid = activeSessionId(sessionId);
+      const who = user?.trim() || process.env.LFG_USER?.trim() || null;
+      const data = await api<{ id: string; status: string }>("/api/ask", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: prompt, options, sessionId: sid, user: who, pushback: true, wait: false }),
+      });
+      return result({
+        id: data.id,
+        status: data.status,
+        next:
+          `The user has been notified. Do not wait or poll. Continue other safe work or end your turn now; ` +
+          `the answer will arrive later as a user message starting with "[ask-user answer ${data.id}]".`,
+      });
     },
   );
 
