@@ -1,5 +1,7 @@
 import { Component, createContext, type ComponentProps, forwardRef, memo, Suspense, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
+import { DEFAULT_TAB, pathnameToTab } from "./lib/app-search";
 import { useChat } from "@ai-sdk/react";
 import {
   DEFAULT_SCHED_TZ,
@@ -3389,9 +3391,10 @@ export function App() {
   // still pending — see the default-profile effect and the resolver near
   // `liveSessions`. Set to null the moment it's consumed (or given up on) so
   // later list refreshes never re-steal focus.
+  const deepLinkSearch = useSearch({ strict: false });
   const sessionDeepLinkRef = useRef<string | null | undefined>(undefined);
   if (sessionDeepLinkRef.current === undefined) {
-    sessionDeepLinkRef.current = new URLSearchParams(window.location.search).get("session");
+    sessionDeepLinkRef.current = deepLinkSearch.session ?? null;
   }
   const isMobile = useIsMobile();
   const isWide = useIsWide();
@@ -3432,10 +3435,27 @@ export function App() {
   // Tabs are "live" | "settings" | "ask" | "term" | "browser". Auto agents and runtime
   // extension nav-tabs now render inside the Settings page rather than as their
   // own top-level tabs.
-  // ?tab=shipped|artifacts|settings|… deep-links straight to a page (also lets
-  // tooling/screenshots reach pages that are otherwise gesture-only on mobile).
-  const [tab, setTab] = useState<string>(
-    () => new URLSearchParams(window.location.search).get("tab") || "live",
+  // Routing lives in the URL now (TanStack Router). The visible page IS the
+  // path: `/settings`, `/usage`, `/<extension-tab>`, with `/` meaning the
+  // default ("live"). Shareable, back/forward-aware, and survives a hard
+  // refresh via the server's SPA fallback. App is mounted at the root route so
+  // switching pages re-renders here rather than remounting the whole app.
+  const navigate = useNavigate();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const tab: string = pathnameToTab(pathname);
+  // Backwards-compatible with the old `useState` API: accepts a literal tab id
+  // (a built-in page or an extension tab) or an updater `(current) => next`, and
+  // navigates to the matching path. Kept identity-stable (reads the current tab
+  // from a ref, not a closure) so passing it to children doesn't churn them.
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
+  const setTab = useCallback(
+    (next: string | ((current: string) => string)) => {
+      const resolved = typeof next === "function" ? next(tabRef.current) : next;
+      if (resolved === DEFAULT_TAB) void navigate({ to: "/" });
+      else void navigate({ to: "/$tab", params: { tab: resolved } });
+    },
+    [navigate],
   );
   const extNavTabs = useExtensionNavTabs();
   const [autoAgents, setAutoAgents] = useState<AutoAgent[]>([]);
@@ -3816,7 +3836,8 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    history.replaceState(null, "", selected === "__live" ? "#/__live" : `#/${selected}`);
+    // (The router owns the URL now; this legacy effect only resets report
+    // state. `selected` is pinned to "__live" — see its declaration.)
     if (selected === "__live") {
       setReports([]);
       setReport(null);
