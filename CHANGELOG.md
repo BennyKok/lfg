@@ -4,6 +4,25 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 24, 2026 - Real page URLs and relayed live views (v0.1.52)
+
+- Every page now has its own URL. The dashboard uses real paths
+  (`/settings`, `/usage`, `/coding-agents`, and so on), so the browser
+  back/forward buttons work across pages, any page is directly shareable, and
+  a page survives a hard refresh.
+- Session deep links (`/?session=<id>`) now reliably open the linked session —
+  including on mobile, on a first-run browser still behind the profile picker,
+  and when the session belongs to another profile — and say so clearly when the
+  session has already ended instead of silently doing nothing.
+- The live session view — streaming transcript and live status — now works for
+  sessions opened through a connected relay, not just the local dashboard, by
+  tunneling the session's live WebSocket and SSE streams over the relay's
+  existing outbound socket.
+- Auto-agent findings and ask-user questions now reach relay-connected surfaces.
+- Newly created session cards show a "started" badge so fresh sessions are easy
+  to spot in the live view.
+- Fixed a chat issue that could spin the transcript in a scroll/update loop.
+
 ## July 23, 2026 - Origin channel delivery (v0.1.51)
 
 - Agents can now intentionally send text, screenshots, and videos back to the
