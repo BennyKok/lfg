@@ -27,11 +27,17 @@ import { PATHS } from "../config.ts";
 //   relay  → client   {type:"error", message}                  (pairing/hello rejected — relay closes right after)
 //   relay  → client   {type:"http", id, method, path, headers, bodyB64?}
 //   client → relay   {type:"http-response", id, status, headers, bodyB64?}
-//   client → relay   {type:"event", event, sessionId, title?, project?, agent?, ts}
+//   client → relay   {type:"event", event, sessionId, title?, project?, agent?, ts, …}
 //                     (opt-in, LFG_CONNECT_EVENTS=1 — see "Session lifecycle
 //                     events" below; no response frame, a relay that doesn't
 //                     understand `event` just ignores or errors it and this
-//                     client doesn't care either way)
+//                     client doesn't care either way. Every event kind shares
+//                     that envelope and only ADDS fields — ship.posted adds
+//                     summary/media, auto.finding adds
+//                     findingId/severity/reasoning/suggest, auto.question adds
+//                     questionId/question/options — so a relay that forwards
+//                     `event` frames verbatim needs no change to carry a new
+//                     kind.)
 //   either → other    {type:"ping"} / {type:"pong"}
 //
 // This is intentionally the smallest surface that lets a relay reverse-proxy
@@ -57,6 +63,29 @@ import { PATHS } from "../config.ts";
 // The very first poll after connecting only seeds a baseline (no events) so a
 // box that's had long-finished sessions sitting around doesn't fire a burst of
 // stale notifications on startup.
+//
+// Autonomous-agent events (same flag, same cadence, same first-poll seeding):
+//
+//   - "auto.finding" — a new finding produced by an auto agent (src/auto/*,
+//     read off GET /api/auto/findings?status=open). Auto agents run headless on
+//     a schedule; without this, their output only exists in this box's web UI
+//     and nobody hears about it until they open it. The frame carries the
+//     finding's title, severity, a capped slice of its reasoning, and its
+//     suggested next step, which is enough for a gateway to render something
+//     actionable without a second round-trip.
+//   - "auto.question" — an OPEN ask-user question (src/ask/*, read off
+//     GET /api/ask?status=open). An agent that needs a human decision parks a
+//     question here and ends its turn; the question sits open until somebody
+//     answers. Forwarding it lets a connected chat channel BE that somebody.
+//
+// The answer-back path needs nothing new in this file. A gateway that received
+// an auto.question answers it by proxying an ordinary HTTP request back down
+// the relay's request plane — the relay sends `{type:"http", …}` for
+// `POST /api/ask/<id>/answer`, forwardToLocalServe hands it to local serve, and
+// serve resolves the question (and, for a pushback ask, pushes the reply into
+// the asking session as a new user message). In other words the outbound event
+// and the inbound answer travel over the two planes this protocol already has;
+// `event` frames stay strictly one-way and response-free.
 //
 // This intentionally polls locally rather than opening a second WebSocket to
 // this box's own `/api/live/ws` status channel: `lfg connect` runs as a
@@ -85,7 +114,9 @@ import { PATHS } from "../config.ts";
 //     young it is, unlike routine completion.
 // See isTopLevelSession/isReportableTransition below.
 //
-// PRIVACY NOTE: when enabled, session titles (and project/agent names) leave
+// PRIVACY NOTE: when enabled, session titles (and project/agent names, ship
+// titles/summaries, auto-agent finding titles/reasoning, and the full text of
+// open ask-user questions) leave
 // this box and are sent to whatever relay LFG_RELAY_URL points at, which then
 // (per that relay's own policy) may forward them further (e.g. omg's relay
 // forwards to an operator-configured webhook — see BYO_COMPUTER.md in the
@@ -114,8 +145,9 @@ Env:
   LFG_PUBLIC_URL             Same value as --url; an absolute HTTP(S) root for this computer's web UI
   LFG_PORT / LFG_HOST        Local 'lfg serve' address to proxy requests to (default 127.0.0.1:8766)
   LFG_CONNECT_EVENTS         Opt-in (1/true/yes, default off): forward session completed/needs-attention
-                             events AND shipped-post events to the relay. PRIVACY: session titles and
-                             ship titles/summaries leave this box when on.
+                             events, shipped-post events, new auto-agent findings, and open ask-user
+                             questions to the relay. PRIVACY: session titles, ship titles/summaries,
+                             finding titles/reasoning, and question text leave this box when on.
   LFG_CONNECT_EVENTS_INTERVAL_MS  Local session-poll interval in ms when events are enabled (default 4000)
   LFG_CONNECT_EVENTS_MIN_DURATION_MS  Minimum session duration to report a completion, in ms (default 60000).
                              Does not apply to session.needs_attention (always reported).
@@ -332,6 +364,70 @@ export type ShipEventFrame = {
   ts: number;
 };
 
+/** A new auto-agent finding (src/auto/store.ts's `Finding`, read off
+ * GET /api/auto/findings?status=open). Same envelope as SessionEventFrame /
+ * ShipEventFrame so a relay that only knows how to forward `event` frames
+ * passes it through unchanged; `findingId`/`severity`/`reasoning`/`suggest`
+ * are the finding-specific extras. */
+export type AutoFindingEventFrame = {
+  type: "event";
+  event: "auto.finding";
+  /** `auto:<findingId>` — findings have no session of their own, and relays
+   * require a session-shaped id on every event frame (same trick ship.posted
+   * uses with `ship:<id>`). A finding's own sessionId is deliberately NOT
+   * used: it's set only after the human turns the finding into a session, by
+   * which point the finding is no longer `open` and was already forwarded. */
+  sessionId: string;
+  title: string | null;
+  project: string | null;
+  agent: string | null;
+  findingId: string;
+  severity: "high" | "med" | "low";
+  /** Capped at MAX_FINDING_REASONING lines — a finding's reasoning can run
+   * long, and a chat bubble truncates it anyway. */
+  reasoning: string[];
+  suggest: string | null;
+  ts: number;
+};
+
+/** An open ask-user question (src/ask/store.ts's `AskQuestion`, read off
+ * GET /api/ask?status=open). The receiving gateway answers by proxying
+ * `POST /api/ask/<id>/answer` back through the relay's request plane — see the
+ * doc block at the top of this file; nothing in this frame is a response
+ * channel. */
+export type AskEventFrame = {
+  type: "event";
+  event: "auto.question";
+  /** The question's own sessionId when it has one (so the gateway can
+   * associate the ask with a live coding session it may already be showing),
+   * else `ask:<id>` — same session-shaped-id requirement as above. */
+  sessionId: string;
+  /** Always null: the question text IS the content of this frame, and a
+   * question is not a session/ship title. Keeping title semantics honest
+   * beats duplicating `question` into a field that means something else. */
+  title: null;
+  project: string | null;
+  agent: string | null;
+  questionId: string;
+  question: string;
+  /** Suggested one-tap answers, capped at MAX_ASK_OPTIONS — a gateway
+   * rendering these as buttons has finite room. */
+  options: string[];
+  ts: number;
+};
+
+/** Per-tick emission cap, shared by both watchers below. A bulk import (an
+ * auto agent that just wrote 40 findings, or a first-ever poll on a box with a
+ * long-parked ask backlog that somehow escaped the seeding path) must not turn
+ * into 40 chat notifications. Anything over the cap is simply not forwarded —
+ * it is NOT queued for the next tick, because `seen` is updated for every row
+ * regardless: the box's own UI remains the complete record, and the relay is a
+ * best-effort notification channel (same posture as dropping a tick's events
+ * when the socket is closed). */
+const MAX_EVENTS_PER_TICK = 5;
+const MAX_FINDING_REASONING = 4;
+const MAX_ASK_OPTIONS = 4;
+
 function makeEventFrame(event: SessionEventFrame["event"], session: SessionLite, ts: number): SessionEventFrame {
   return {
     type: "event",
@@ -469,6 +565,183 @@ async function pollShipEvents(
   }
 }
 
+/** The subset of src/auto/store.ts's `Finding` this client reads off
+ * GET /api/auto/findings?status=open. */
+export type AutoFindingLite = {
+  id: string;
+  agentId?: string | null;
+  title?: string | null;
+  reasoning?: string[] | null;
+  suggest?: string | null;
+  severity?: "high" | "med" | "low" | null;
+  createdAt?: number | null;
+  status?: string | null;
+};
+
+/**
+ * Diffs one poll's open-findings list against the previously-seen id baseline
+ * (a Set, mutated in place — same contract as diffShipEvents: the caller owns
+ * it across ticks). First observation of an id only seeds the baseline, so
+ * restarting `lfg connect` on a box with a pile of unread findings never
+ * replays them as a burst of notifications.
+ *
+ * Ids that are no longer present (dismissed, read, or turned into a session —
+ * all of which drop the row out of `status=open`) are pruned from `seen` so a
+ * long-lived process can't grow the set without bound. A finding id is
+ * content-addressed and never reused (see src/auto/store.ts), so pruning can't
+ * cause a re-emit of something already reported.
+ */
+export function diffAutoFindingEvents(
+  seen: Set<string>,
+  findings: AutoFindingLite[],
+  firstPoll: boolean,
+): AutoFindingEventFrame[] {
+  const events: AutoFindingEventFrame[] = [];
+  const presentIds = new Set<string>();
+  for (const finding of findings) {
+    if (!finding.id) continue;
+    // Defensive: we ask for status=open, but an older `lfg serve` on this box
+    // may ignore the query param entirely and hand back everything. Never
+    // announce a finding the human already dealt with.
+    if ((finding.status ?? "open") !== "open") continue;
+    const title = finding.title?.trim();
+    if (!title) continue; // nothing to render on the other side
+    presentIds.add(finding.id);
+    const isNew = !seen.has(finding.id);
+    seen.add(finding.id);
+    if (firstPoll || !isNew) continue;
+    if (events.length >= MAX_EVENTS_PER_TICK) continue; // see MAX_EVENTS_PER_TICK
+    events.push({
+      type: "event",
+      event: "auto.finding",
+      sessionId: `auto:${finding.id}`,
+      title,
+      project: null,
+      agent: finding.agentId ?? null,
+      findingId: finding.id,
+      severity: finding.severity ?? "low",
+      reasoning: (finding.reasoning ?? []).filter((line) => typeof line === "string" && line.trim()).slice(0, MAX_FINDING_REASONING),
+      suggest: finding.suggest?.trim() || null,
+      ts: finding.createdAt ?? Date.now(),
+    });
+  }
+  for (const id of seen) {
+    if (!presentIds.has(id)) seen.delete(id);
+  }
+  return events;
+}
+
+/** The subset of src/ask/store.ts's `AskQuestion` this client reads off
+ * GET /api/ask?status=open. */
+export type AskLite = {
+  id: string;
+  question?: string | null;
+  options?: string[] | null;
+  agentId?: string | null;
+  sessionId?: string | null;
+  user?: string | null;
+  pushback?: boolean;
+  status?: string | null;
+  createdAt?: number | null;
+};
+
+/**
+ * Diffs one poll's open-questions list against the previously-seen id baseline
+ * (mutated in place — same contract as diffAutoFindingEvents).
+ *
+ * Answered/expired questions drop out of `status=open` and are pruned from
+ * `seen`. That prune is safe by construction: ask ids are unique per ask, so a
+ * question re-asked after being answered arrives with a NEW id and is a
+ * genuinely new event that deserves to be forwarded again.
+ */
+export function diffAskEvents(seen: Set<string>, questions: AskLite[], firstPoll: boolean): AskEventFrame[] {
+  const events: AskEventFrame[] = [];
+  const presentIds = new Set<string>();
+  for (const q of questions) {
+    if (!q.id) continue;
+    // Defensive, same reason as diffAutoFindingEvents: never surface a
+    // question that's already been answered or has expired.
+    if ((q.status ?? "open") !== "open") continue;
+    const question = q.question?.trim();
+    if (!question) continue;
+    presentIds.add(q.id);
+    const isNew = !seen.has(q.id);
+    seen.add(q.id);
+    if (firstPoll || !isNew) continue;
+    if (events.length >= MAX_EVENTS_PER_TICK) continue; // see MAX_EVENTS_PER_TICK
+    events.push({
+      type: "event",
+      event: "auto.question",
+      sessionId: q.sessionId?.trim() || `ask:${q.id}`,
+      title: null,
+      project: null,
+      agent: q.agentId ?? null,
+      questionId: q.id,
+      question,
+      options: (q.options ?? []).filter((o) => typeof o === "string" && o.trim()).slice(0, MAX_ASK_OPTIONS),
+      ts: q.createdAt ?? Date.now(),
+    });
+  }
+  for (const id of seen) {
+    if (!presentIds.has(id)) seen.delete(id);
+  }
+  return events;
+}
+
+async function pollAutoFindingEvents(
+  state: { seenFindings: Set<string>; seeded: boolean },
+  getSocket: () => WebSocket | null,
+): Promise<void> {
+  let findings: AutoFindingLite[];
+  try {
+    const response = await fetch(`http://${LOCAL_HOST}:${LOCAL_PORT}/api/auto/findings?status=open`);
+    if (!response.ok) return;
+    const body = (await response.json()) as { findings?: AutoFindingLite[] };
+    findings = body.findings ?? [];
+  } catch {
+    return; // local serve unreachable this tick — try again next tick.
+  }
+  const events = diffAutoFindingEvents(state.seenFindings, findings, !state.seeded);
+  state.seeded = true;
+  if (!events.length) return;
+  const ws = getSocket();
+  if (!ws || ws.readyState !== WebSocket.OPEN) return; // best-effort, same as sessions/ships.
+  for (const frame of events) {
+    try {
+      ws.send(JSON.stringify(frame));
+    } catch {
+      // best-effort — see pollSessionEvents.
+    }
+  }
+}
+
+async function pollAskEvents(
+  state: { seenAsks: Set<string>; seeded: boolean },
+  getSocket: () => WebSocket | null,
+): Promise<void> {
+  let questions: AskLite[];
+  try {
+    const response = await fetch(`http://${LOCAL_HOST}:${LOCAL_PORT}/api/ask?status=open`);
+    if (!response.ok) return;
+    const body = (await response.json()) as { questions?: AskLite[] };
+    questions = body.questions ?? [];
+  } catch {
+    return; // local serve unreachable this tick — try again next tick.
+  }
+  const events = diffAskEvents(state.seenAsks, questions, !state.seeded);
+  state.seeded = true;
+  if (!events.length) return;
+  const ws = getSocket();
+  if (!ws || ws.readyState !== WebSocket.OPEN) return; // best-effort, same as sessions/ships.
+  for (const frame of events) {
+    try {
+      ws.send(JSON.stringify(frame));
+    } catch {
+      // best-effort — see pollSessionEvents.
+    }
+  }
+}
+
 async function pollSessionEvents(seen: Map<string, SeenSession>, getSocket: () => WebSocket | null): Promise<void> {
   let sessions: SessionLite[];
   try {
@@ -567,7 +840,7 @@ async function runConnectLoop(explicitComputerUrl?: string): Promise<void> {
   let currentWs: WebSocket | null = null;
   if (eventsEnabled()) {
     console.log(
-      `lfg connect: forwarding session lifecycle events to the relay every ${EVENTS_POLL_MS}ms (LFG_CONNECT_EVENTS=1) — session titles will be sent to the relay.`,
+      `lfg connect: forwarding session lifecycle, shipped-post, auto-finding and ask-user events to the relay every ${EVENTS_POLL_MS}ms (LFG_CONNECT_EVENTS=1) — session titles, ship titles/summaries, finding titles/reasoning and question text will be sent to the relay.`,
     );
     const seen = new Map<string, SeenSession>();
     const timer = setInterval(() => void pollSessionEvents(seen, () => currentWs), EVENTS_POLL_MS);
@@ -578,6 +851,18 @@ async function runConnectLoop(explicitComputerUrl?: string): Promise<void> {
     const shipState = { seenShips: new Map<string, number>(), seeded: false };
     const shipTimer = setInterval(() => void pollShipEvents(shipState, () => currentWs), EVENTS_POLL_MS);
     shipTimer.unref?.();
+    // Auto-agent findings — headless agents produce these on their own
+    // schedule, so without this watcher their output never leaves the box's
+    // web UI.
+    const findingState = { seenFindings: new Set<string>(), seeded: false };
+    const findingTimer = setInterval(() => void pollAutoFindingEvents(findingState, () => currentWs), EVENTS_POLL_MS);
+    findingTimer.unref?.();
+    // Open ask-user questions — the outbound half of the human-in-the-loop
+    // path; the answer comes back as an ordinary relayed
+    // POST /api/ask/<id>/answer over the request plane (see the doc block).
+    const askState = { seenAsks: new Set<string>(), seeded: false };
+    const askTimer = setInterval(() => void pollAskEvents(askState, () => currentWs), EVENTS_POLL_MS);
+    askTimer.unref?.();
   }
 
   let backoffMs = RECONNECT_MIN_MS;
