@@ -38,11 +38,25 @@ import { PATHS } from "../config.ts";
 //                     questionId/question/options — so a relay that forwards
 //                     `event` frames verbatim needs no change to carry a new
 //                     kind.)
+//   relay  → client   {type:"ws-open",  id, path}               (open a tunnel onto local serve's WebSocket)
+//   client → relay    {type:"ws-ack",   id, ok, error?}
+//   either → other    {type:"ws-msg",   id, dataB64, binary}
+//   either → other    {type:"ws-close", id, code?, reason?}
+//   relay  → client   {type:"stream-open",  id, path}           (open a STREAMING http tunnel — SSE, e.g. /api/live/stream)
+//   client → relay    {type:"stream-head",  id, status, headers}
+//   client → relay    {type:"stream-data",  id, dataB64}
+//   either → other    {type:"stream-close", id, error?}
 //   either → other    {type:"ping"} / {type:"pong"}
 //
 // This is intentionally the smallest surface that lets a relay reverse-proxy
-// HTTP semantics (incl. serve.ts's SSE/WS endpoints, tunneled as ordinary
-// request/response framing) onto a box with no inbound port open. An `error`
+// HTTP semantics onto a box with no inbound port open. Ordinary requests use
+// the buffered http/http-response pair; the ws-* frames add a real duplex
+// tunnel, because a live channel (serve.ts's /api/live/ws) genuinely cannot be
+// expressed as one request/response. That tunnel is what lets a PUBLIC origin
+// render a session hosted on this box at all: a tailnet box resolves to a
+// private 100.x address, and a browser on a public origin is forbidden from
+// loading it (Chrome Private Network Access), so the bytes have to come back
+// over this outbound socket rather than a direct connection. An `error`
 // frame during `hello` means the saved token is no longer valid (expired,
 // revoked, or unknown to the relay) — that will never resolve by retrying,
 // so the reconnect loop below treats it as fatal rather than backing off
@@ -245,6 +259,211 @@ export function errorFrameMessage(value: unknown): string | null {
  * dead (expired/revoked/unknown); re-pairing is the only fix, so the
  * reconnect loop treats this as fatal rather than backing off forever. */
 class RelayAuthError extends Error {}
+
+// ---- WebSocket tunnel (relay ⇄ this box ⇄ local `lfg serve`) ----
+//
+// The buffered `http`/`http-response` pair above can't carry the session UI's
+// live channels (`/api/live/ws`, and SSE on `/api/live/stream`). omg.dev cannot
+// reach this box directly — a tailnet host resolves to a private 100.x address
+// and Chrome's Private Network Access policy blocks a public origin from
+// loading it — so the live channel has to ride the SAME outbound socket the
+// relay already holds. Frames:
+//
+//   relay → box   {type:"ws-open",  id, path}
+//   box  → relay  {type:"ws-ack",   id, ok, error?}
+//   both          {type:"ws-msg",   id, dataB64, binary}
+//   both          {type:"ws-close", id, code?, reason?}
+
+export type WsOpenFrame = { type: "ws-open"; id: string; path: string };
+
+export function isWsOpenFrame(value: unknown): value is WsOpenFrame {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "ws-open" &&
+    typeof (value as { id?: unknown }).id === "string" &&
+    typeof (value as { path?: unknown }).path === "string"
+  );
+}
+
+export function isWsTunnelFrame(value: unknown): value is { type: string; id: string; [k: string]: unknown } {
+  if (typeof value !== "object" || value === null) return false;
+  const type = (value as { type?: unknown }).type;
+  return (
+    (type === "ws-msg" || type === "ws-close") && typeof (value as { id?: unknown }).id === "string"
+  );
+}
+
+/** Live tunnels keyed by the relay-assigned id, so ws-msg/ws-close can route. */
+export type WsTunnels = Map<string, WebSocket>;
+
+/**
+ * Opens the local `lfg serve` WebSocket for a tunnel and wires both directions
+ * onto `send` (the relay socket). Kept exported + dependency-injected so the
+ * dispatch loop stays thin and this is unit-testable without a relay.
+ */
+export function openLocalWsTunnel(
+  frame: WsOpenFrame,
+  tunnels: WsTunnels,
+  send: (payload: unknown) => void,
+  connect: (url: string) => WebSocket = (url) => new WebSocket(url),
+): void {
+  let local: WebSocket;
+  try {
+    local = connect(`ws://${LOCAL_HOST}:${LOCAL_PORT}${frame.path}`);
+  } catch (error) {
+    send({ type: "ws-ack", id: frame.id, ok: false, error: String(error) });
+    return;
+  }
+  local.binaryType = "arraybuffer";
+  tunnels.set(frame.id, local);
+
+  local.addEventListener("open", () => send({ type: "ws-ack", id: frame.id, ok: true }));
+  local.addEventListener("message", (event: MessageEvent) => {
+    const data = event.data;
+    const binary = typeof data !== "string";
+    const buf = binary
+      ? Buffer.from(data as ArrayBuffer)
+      : Buffer.from(String(data), "utf8");
+    send({ type: "ws-msg", id: frame.id, dataB64: buf.toString("base64"), binary });
+  });
+  local.addEventListener("close", (event: CloseEvent) => {
+    tunnels.delete(frame.id);
+    send({ type: "ws-close", id: frame.id, code: event?.code, reason: event?.reason });
+  });
+  local.addEventListener("error", () => {
+    // `error` is always followed by `close`; ack a failed OPEN so the relay
+    // stops waiting, but don't double-send a close.
+    if (local.readyState === WebSocket.CONNECTING) {
+      tunnels.delete(frame.id);
+      send({ type: "ws-ack", id: frame.id, ok: false, error: "local websocket failed" });
+    }
+  });
+}
+
+/** Routes a ws-msg/ws-close frame from the relay onto the matching local socket. */
+export function applyWsTunnelFrame(
+  frame: { type: string; id: string; [k: string]: unknown },
+  tunnels: WsTunnels,
+): void {
+  const local = tunnels.get(frame.id);
+  if (!local) return;
+  if (frame.type === "ws-close") {
+    tunnels.delete(frame.id);
+    try {
+      local.close();
+    } catch {
+      /* already closing */
+    }
+    return;
+  }
+  const dataB64 = typeof frame.dataB64 === "string" ? frame.dataB64 : "";
+  const buf = Buffer.from(dataB64, "base64");
+  try {
+    local.send(frame.binary ? buf : buf.toString("utf8"));
+  } catch {
+    /* socket raced closed — the close frame will clean up */
+  }
+}
+
+// ---- Streaming-HTTP tunnel (SSE: /api/live/stream, /api/live/status) ----
+//
+// EventSource can't ride the buffered http/http-response pair (that reads the
+// whole body before answering, so an infinite SSE stream just times out). This
+// is the one-way streaming sibling of the ws tunnel: the box does a streaming
+// fetch to local serve and pipes each chunk back as it arrives. Frames:
+//
+//   relay → box   {type:"stream-open",  id, path}
+//   box  → relay  {type:"stream-head",  id, status, headers}
+//   box  → relay  {type:"stream-data",  id, dataB64}
+//   both          {type:"stream-close", id, error?}     (relay→box aborts the fetch)
+
+export type StreamOpenFrame = { type: "stream-open"; id: string; path: string };
+
+export function isStreamOpenFrame(value: unknown): value is StreamOpenFrame {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "stream-open" &&
+    typeof (value as { id?: unknown }).id === "string" &&
+    typeof (value as { path?: unknown }).path === "string"
+  );
+}
+
+export function isStreamCloseFrame(value: unknown): value is { type: string; id: string } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    (value as { type?: unknown }).type === "stream-close" &&
+    typeof (value as { id?: unknown }).id === "string"
+  );
+}
+
+/** Streaming tunnels keyed by id, so a relay-side stream-close can abort them. */
+export type StreamTunnels = Map<string, AbortController>;
+
+/**
+ * Opens a STREAMING fetch onto local serve and pipes the response body back
+ * chunk-by-chunk. Dependency-injected fetch for testability. One-way: the box
+ * only ever sends head/data/close upward; the only downward frame is a
+ * stream-close to abort (browser disconnected).
+ */
+export function openLocalStreamTunnel(
+  frame: StreamOpenFrame,
+  tunnels: StreamTunnels,
+  send: (payload: unknown) => void,
+  fetchImpl: typeof fetch = fetch,
+): void {
+  const controller = new AbortController();
+  tunnels.set(frame.id, controller);
+  void (async () => {
+    try {
+      const response = await fetchImpl(`http://${LOCAL_HOST}:${LOCAL_PORT}${frame.path}`, {
+        headers: { accept: "text/event-stream" },
+        signal: controller.signal,
+      });
+      send({
+        type: "stream-head",
+        id: frame.id,
+        status: response.status,
+        headers: Object.fromEntries(response.headers.entries()),
+      });
+      const body = response.body;
+      if (!body) {
+        tunnels.delete(frame.id);
+        send({ type: "stream-close", id: frame.id });
+        return;
+      }
+      const reader = body.getReader();
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value && value.length) {
+          send({ type: "stream-data", id: frame.id, dataB64: Buffer.from(value).toString("base64") });
+        }
+      }
+      tunnels.delete(frame.id);
+      send({ type: "stream-close", id: frame.id });
+    } catch (error) {
+      tunnels.delete(frame.id);
+      // An abort (browser disconnected) is expected teardown, not an error.
+      const aborted = (error as { name?: string })?.name === "AbortError";
+      send({ type: "stream-close", id: frame.id, ...(aborted ? {} : { error: String(error) }) });
+    }
+  })();
+}
+
+/** Aborts a streaming tunnel on a relay-side stream-close. */
+export function applyStreamCloseFrame(frame: { id: string }, tunnels: StreamTunnels): void {
+  const controller = tunnels.get(frame.id);
+  if (!controller) return;
+  tunnels.delete(frame.id);
+  try {
+    controller.abort();
+  } catch {
+    /* already aborted */
+  }
+}
 
 /** Proxies one relayed HTTP request onto this box's own `lfg serve`. */
 export async function forwardToLocalServe(frame: HttpFrame): Promise<{
@@ -879,6 +1098,17 @@ async function runConnectLoop(explicitComputerUrl?: string): Promise<void> {
       console.log(`lfg connect: connected — proxying to local serve on ${LOCAL_HOST}:${LOCAL_PORT}`);
 
       let authRejected: string | null = null;
+      // Live WS tunnels for this relay connection. Dropped wholesale when the
+      // relay socket closes, so a reconnect never resurrects a stale tunnel.
+      const wsTunnels: WsTunnels = new Map();
+      const streamTunnels: StreamTunnels = new Map();
+      const sendFrame = (payload: unknown) => {
+        try {
+          ws.send(JSON.stringify(payload));
+        } catch {
+          /* relay socket closing — the close handler tears the tunnels down */
+        }
+      };
       await new Promise<void>((resolveClosed) => {
         ws.addEventListener("message", (event) => {
           void (async () => {
@@ -898,12 +1128,46 @@ async function runConnectLoop(explicitComputerUrl?: string): Promise<void> {
               ws.close();
               return;
             }
+            if (isWsOpenFrame(frame)) {
+              openLocalWsTunnel(frame, wsTunnels, sendFrame);
+              return;
+            }
+            if (isWsTunnelFrame(frame)) {
+              applyWsTunnelFrame(frame, wsTunnels);
+              return;
+            }
+            if (isStreamOpenFrame(frame)) {
+              openLocalStreamTunnel(frame, streamTunnels, sendFrame);
+              return;
+            }
+            if (isStreamCloseFrame(frame)) {
+              applyStreamCloseFrame(frame, streamTunnels);
+              return;
+            }
             if (isHttpFrame(frame)) ws.send(JSON.stringify(await forwardToLocalServe(frame)));
           })();
         });
         ws.addEventListener("close", () => resolveClosed());
         ws.addEventListener("error", () => resolveClosed());
       });
+      // Tear down every tunnel with the relay socket — a half-open local
+      // socket would otherwise leak and send into a dead relay connection.
+      for (const local of wsTunnels.values()) {
+        try {
+          local.close();
+        } catch {
+          /* already closing */
+        }
+      }
+      wsTunnels.clear();
+      for (const controller of streamTunnels.values()) {
+        try {
+          controller.abort();
+        } catch {
+          /* already aborted */
+        }
+      }
+      streamTunnels.clear();
       currentWs = null;
       if (authRejected) throw new RelayAuthError(authRejected);
       console.log("lfg connect: relay connection closed — reconnecting");

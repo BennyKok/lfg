@@ -3385,6 +3385,17 @@ export function App() {
   // A "jump to this session" request for the Live view (from Shipped posts).
   // The nonce lets the same session be requested twice in a row.
   const [liveFocus, setLiveFocus] = useState<{ sid: string; n: number } | null>(null);
+  // Deep link: `/?session=<id>` (the URL the server hands out as
+  // `publicSessionUrl`) focuses that session on load. Read once, at the top of
+  // the component, because several filter effects below have to know a link is
+  // still pending — see the default-profile effect and the resolver near
+  // `liveSessions`. Set to null the moment it's consumed (or given up on) so
+  // later list refreshes never re-steal focus.
+  const deepLinkSearch = useSearch({ strict: false });
+  const sessionDeepLinkRef = useRef<string | null | undefined>(undefined);
+  if (sessionDeepLinkRef.current === undefined) {
+    sessionDeepLinkRef.current = deepLinkSearch.session ?? null;
+  }
   const isMobile = useIsMobile();
   const isWide = useIsWide();
   const [keyboardOpen, setKeyboardOpen] = useState(false);
@@ -3870,6 +3881,10 @@ export function App() {
   useEffect(() => {
     if (didDefaultFilter.current || !users.length) return;
     didDefaultFilter.current = true;
+    // A pending `?session=` link outranks the saved profile: narrowing to a
+    // profile here would hide a session owned by someone else and the link
+    // would silently never resolve.
+    if (sessionDeepLinkRef.current) return;
     const isUser = users.some((u) => u.email === userFilter);
     if (userFilter === "__unassigned" || isUser) return;
     const profile = localStorage.getItem("lfg_user");
@@ -3968,6 +3983,48 @@ export function App() {
     if (projectFilter === "__all") return userScopedSessions;
     return userScopedSessions.filter((session) => session.project === projectFilter);
   }, [userScopedSessions, projectFilter]);
+
+  // Resolve a pending `/?session=<id>` deep link. This lives at the app level
+  // (it used to be buried in the wide rail, so mobile ignored deep links
+  // entirely) and it clears any saved user/project filter that would hide the
+  // target — otherwise a link to another person's or another repo's session
+  // resolved to "nothing happened".
+  // The first-run "who are you?" gate (see the `!identity && users.length`
+  // early return) covers the whole app, so a deep link arriving on a fresh
+  // browser has to survive until the gate closes rather than being resolved or
+  // timed out behind it.
+  const identityGateOpen = !identity && users.length > 0;
+
+  useEffect(() => {
+    const sid = sessionDeepLinkRef.current;
+    if (!sid || loading || identityGateOpen) return;
+    const target = allLiveSessions.find((session) => session.sessionId === sid);
+    if (!target) return; // not in the list yet — the giving-up timer below handles it
+    sessionDeepLinkRef.current = null;
+    if (
+      userFilter !== "__all" &&
+      !(userFilter === "__unassigned" ? !target.assignedUser : target.assignedUser === userFilter)
+    ) {
+      setUserFilter("__all");
+    }
+    if (projectFilter !== "__all" && target.project !== projectFilter) {
+      setProjectFilter("__all");
+    }
+    setTab("live");
+    setLiveFocus({ sid, n: Date.now() });
+  }, [allLiveSessions, loading, userFilter, projectFilter, identityGateOpen]);
+
+  // ...and stop waiting if it never shows up (ended, removed, or another box's
+  // id), so the link reports itself instead of hanging silently forever.
+  useEffect(() => {
+    if (!sessionDeepLinkRef.current || loading || identityGateOpen) return;
+    const timer = window.setTimeout(() => {
+      if (!sessionDeepLinkRef.current) return;
+      sessionDeepLinkRef.current = null;
+      toast.error("That session is no longer running");
+    }, 10000);
+    return () => window.clearTimeout(timer);
+  }, [loading, identityGateOpen]);
 
   const projectScopedAutoAgents = useMemo(() => {
     if (projectFilter === "__all") return autoAgents;
@@ -4703,7 +4760,12 @@ export function App() {
         users={users}
         onPick={(email) => {
           setIdentity(email);
-          changeUserFilter(email);
+          localStorage.setItem("lfg_user", email);
+          // Picking a profile normally narrows the filter to that person. A
+          // pending `?session=` link overrides that — the linked session is
+          // often someone else's, and narrowing here would hide it right after
+          // the gate closes.
+          changeUserFilter(sessionDeepLinkRef.current ? "__all" : email);
         }}
       />
     );
@@ -6662,6 +6724,24 @@ function sessionStableId(session: Session): string {
   return session.sessionId || session.nativeSessionId || session.tmuxName || "";
 }
 
+const PINNED_SESSIONS_KEY = "lfg_pinned_sessions";
+const LEGACY_MOBILE_PINNED_SESSIONS_KEY = "lfg_mobile_pinned_sessions";
+
+function readPinnedSessions(): string[] {
+  try {
+    const parsed = JSON.parse(
+      localStorage.getItem(PINNED_SESSIONS_KEY) ??
+        localStorage.getItem(LEGACY_MOBILE_PINNED_SESSIONS_KEY) ??
+        "[]",
+    );
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 function buildSessionTree(
   sessions: Session[],
   busyOrFresh: (session: Session) => boolean,
@@ -6778,6 +6858,42 @@ function LiveView({
   // so it can switch which session it shows without unmounting. `origin` anchors
   // the open/close morph to the title the user tapped.
   const [sheet, setSheet] = useState<{ sid: string; origin: DOMRect } | null>(null);
+  const [topPinned, setTopPinned] = useState<string[]>(readPinnedSessions);
+  const topPinnedRef = useRef(topPinned);
+  topPinnedRef.current = topPinned;
+
+  // Top pins are browser-local workspace preferences shared by mobile and
+  // desktop. Sync other tabs without requiring server state.
+  useEffect(() => {
+    const sync = (event: StorageEvent) => {
+      if (
+        event.key === PINNED_SESSIONS_KEY ||
+        event.key === LEGACY_MOBILE_PINNED_SESSIONS_KEY
+      ) {
+        setTopPinned(readPinnedSessions());
+      }
+    };
+    window.addEventListener("storage", sync);
+    return () => window.removeEventListener("storage", sync);
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PINNED_SESSIONS_KEY, JSON.stringify(topPinned));
+    } catch {
+      /* private mode / quota — non-fatal */
+    }
+  }, [topPinned]);
+
+  const toggleTopPin = useCallback((sid: string) => {
+    const current = topPinnedRef.current;
+    const pinned = current.includes(sid);
+    const next = pinned ? current.filter((id) => id !== sid) : [...current, sid];
+    topPinnedRef.current = next;
+    setTopPinned(next);
+    haptic("selection");
+    toast.success(pinned ? "Session unpinned" : "Session pinned to top");
+  }, []);
 
   // Narrow layout: a focus request opens the full-height chat sheet directly.
   useEffect(() => {
@@ -6823,11 +6939,21 @@ function LiveView({
     );
   }
 
-  // Reorder into two categories — working roots on top, idle roots below — while
-  // preserving parent/child nesting. A parent is considered working if any child
-  // is working, keeping delegated sub-agents visually attached to their master.
-  const workingNodes = tree.roots.filter(tree.effectiveBusy);
-  const idleNodes = tree.roots.filter((node) => !tree.effectiveBusy(node));
+  // Pinned session families always lead the narrow/mobile layout. A pin on a
+  // delegated child lifts its whole family so parent/child nesting stays intact.
+  const pinnedSet = new Set(topPinned);
+  const nodeContainsPin = (node: SessionTreeNode): boolean =>
+    pinnedSet.has(sessionStableId(node.session)) || node.children.some(nodeContainsPin);
+  const pinnedNodes = tree.roots.filter(nodeContainsPin);
+  // Remaining roots keep the familiar working → idle grouping. A parent is
+  // considered working if any child is working.
+  const workingNodes = tree.roots.filter(
+    (node) => !nodeContainsPin(node) && tree.effectiveBusy(node),
+  );
+  const idleNodes = tree.roots.filter(
+    (node) => !nodeContainsPin(node) && !tree.effectiveBusy(node),
+  );
+  const pinned = tree.flatten(pinnedNodes);
   const working = tree.flatten(workingNodes);
   const idle = tree.flatten(idleNodes);
   const nameFor = (id: string) => autoAgents.find((a) => a.id === id)?.name ?? id;
@@ -6861,6 +6987,8 @@ function LiveView({
           onRemove={onRemove}
           onOpenSheet={(sid, origin) => setSheet({ sid, origin })}
           entering={recentlyCreatedSids.has(session.sessionId ?? "")}
+          pinned={!!session.sessionId && pinnedSet.has(session.sessionId)}
+          onTogglePin={toggleTopPin}
         />
       </ErrorBoundary>
     </div>
@@ -6946,12 +7074,18 @@ function LiveView({
         onOpenAsk={onOpenAsk}
         onOpenShipped={onOpenShipped}
         focus={focus}
+        topPinned={topPinned}
+        onToggleTopPin={toggleTopPin}
       />
     );
   }
 
-  // Sheet navigation follows the on-screen order: working cards first, then idle.
-  const sheetOrder = [...tree.flatten(workingNodes), ...tree.flatten(idleNodes)]
+  // Sheet navigation follows the on-screen order: pinned, working, then idle.
+  const sheetOrder = [
+    ...tree.flatten(pinnedNodes),
+    ...tree.flatten(workingNodes),
+    ...tree.flatten(idleNodes),
+  ]
     .map((s) => s.sessionId)
     .filter((id): id is string => !!id);
   const sheetSession = sheet ? sessions.find((s) => s.sessionId === sheet.sid) : null;
@@ -6959,6 +7093,14 @@ function LiveView({
   return (
     <>
     <div className="flex flex-col gap-5">
+      {pinned.length ? (
+        <section>
+          <CategoryHeader label="Pinned" count={pinned.length} dotClass="bg-primary" />
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-2">
+            {pinnedNodes.flatMap((node) => renderNode(node))}
+          </div>
+        </section>
+      ) : null}
       {working.length ? (
         <section>
           <CategoryHeader
@@ -7020,6 +7162,8 @@ function LiveView({
         onSubscribeTranscript={onSubscribeTranscript}
         onRefresh={onRefresh}
         onRemove={onRemove}
+        pinned={pinnedSet.has(sheet.sid)}
+        onTogglePin={toggleTopPin}
         onClose={() => setSheet(null)}
       />
     ) : null}
@@ -7055,6 +7199,8 @@ function RailStage({
   onOpenAsk,
   onOpenShipped,
   focus,
+  topPinned,
+  onToggleTopPin,
 }: {
   sessions: Session[];
   users: User[];
@@ -7067,6 +7213,8 @@ function RailStage({
   onOpenAsk?: () => void;
   onOpenShipped?: () => void;
   focus?: { sid: string; n: number } | null;
+  topPinned: string[];
+  onToggleTopPin: (sid: string) => void;
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
@@ -7343,31 +7491,16 @@ function RailStage({
     window.dispatchEvent(new Event("lfg-collapse-change"));
   }, [columnIds]);
 
-  // Deep link: /?session=<id> focuses that session once it appears in the
-  // list (session-link cards from external surfaces, e.g. a relay operator's
-  // messaging bridge, land here). Consumed once — later list refreshes never
-  // re-steal focus.
-  const deepLinkSearch = useSearch({ strict: false });
-  const sessionDeepLinkRef = useRef<string | null | undefined>(undefined);
-  if (sessionDeepLinkRef.current === undefined) {
-    sessionDeepLinkRef.current = deepLinkSearch.session ?? null;
-  }
-  useEffect(() => {
-    const sid = sessionDeepLinkRef.current;
-    if (!sid || !sessions.some((s) => s.sessionId === sid)) return;
-    sessionDeepLinkRef.current = null;
-    setPreview(sid);
-  }, [sessions]);
-
   // Never leave the stage empty when there's something to show: preview the
-  // first working session (or the first session) on load. (The pending deep
-  // link wins — don't race it with the default pick.)
+  // first working session (or the first session) on load. (A pending focus
+  // request wins — don't race it with the default pick; the `focus` effect
+  // above sets the preview itself once its session lands.)
   useEffect(() => {
-    if (sessionDeepLinkRef.current) return;
+    if (focus) return;
     if (columnIds.length || !sessions.length) return;
     const first = sessions.find((s) => busyBySid[s.sessionId ?? ""]) ?? sessions[0];
     if (first?.sessionId) setPreview(first.sessionId);
-  }, [columnIds.length, sessions, busyBySid]);
+  }, [columnIds.length, sessions, busyBySid, focus]);
 
   const openSession = useCallback(
     (sid: string) => {
@@ -7400,15 +7533,25 @@ function RailStage({
     () => buildSessionTree(sessions, (s) => !!busyBySid[s.sessionId ?? ""]),
     [sessions, busyBySid],
   );
-  const workingNodes = railTree.roots.filter(railTree.effectiveBusy);
-  const idleNodes = railTree.roots.filter((node) => !railTree.effectiveBusy(node));
+  const topPinnedSet = new Set(topPinned);
+  const railNodeContainsTopPin = (node: SessionTreeNode): boolean =>
+    topPinnedSet.has(sessionStableId(node.session)) ||
+    node.children.some(railNodeContainsTopPin);
+  const topPinnedNodes = railTree.roots.filter(railNodeContainsTopPin);
+  const workingNodes = railTree.roots.filter(
+    (node) => !railNodeContainsTopPin(node) && railTree.effectiveBusy(node),
+  );
+  const idleNodes = railTree.roots.filter(
+    (node) => !railNodeContainsTopPin(node) && !railTree.effectiveBusy(node),
+  );
+  const topPinnedSessions = railTree.flatten(topPinnedNodes);
   const working = railTree.flatten(workingNodes);
   const idle = railTree.flatten(idleNodes);
 
   const projectRailGroups = useMemo(() => {
     if (projectFilter !== "__all") return [];
     const groups = new Map<string, { label: string; nodes: SessionTreeNode[]; count: number }>();
-    for (const node of railTree.roots) {
+    for (const node of railTree.roots.filter((item) => !railNodeContainsTopPin(item))) {
       const project = node.session.project || "";
       const key = project || "__no_project";
       const label = project ? shortProject(project) : "No project";
@@ -7424,12 +7567,15 @@ function RailStage({
     return Array.from(groups.entries())
       .map(([key, group]) => ({ key, ...group }))
       .sort((a, b) => a.label.localeCompare(b.label));
-  }, [projectFilter, railTree]);
+  }, [projectFilter, railTree, topPinned]);
 
   const railOrderedSessions =
     projectFilter === "__all"
-      ? projectRailGroups.flatMap((group) => railTree.flatten(group.nodes))
-      : [...working, ...idle];
+      ? [
+          ...topPinnedSessions,
+          ...projectRailGroups.flatMap((group) => railTree.flatten(group.nodes)),
+        ]
+      : [...topPinnedSessions, ...working, ...idle];
 
   // Flat rail order the keyboard cursor walks (matching the visible rail;
   // findings are not navigable). Keep the cursor pointing at a live session.
@@ -7527,7 +7673,9 @@ function RailStage({
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "Couldn't end session");
       } finally {
-        await onRefresh();
+        // Outside the try — an onRefresh rejection here would escape the
+        // handler entirely rather than being reported by the catch above.
+        await onRefresh().catch(() => {});
       }
     },
     [appDialog, bySid, closeColumn, onRemove, onRefresh],
@@ -7695,6 +7843,7 @@ function RailStage({
         active={columnIds.includes(sid)}
         cursored={cursor === sid}
         pinned={validPinned.includes(sid)}
+        topPinned={topPinnedSet.has(sid)}
         collapsed={railCollapsed}
         onActivate={(shift) => activate(sid, shift)}
         onTogglePin={() => togglePin(sid)}
@@ -7814,6 +7963,8 @@ function RailStage({
             variant="stage"
             onClose={onCloseColumn}
             entering={recentlyCreatedSids.has(sid)}
+            pinned={topPinnedSet.has(sid)}
+            onTogglePin={onToggleTopPin}
           />
         </ErrorBoundary>
       </div>
@@ -7953,6 +8104,15 @@ function RailStage({
           </div>
         )}
         <div className="min-h-0 flex-1 overflow-y-auto px-1.5 py-2">
+          {topPinnedSessions.length ? (
+            <RailGroup
+              label="Pinned"
+              count={topPinnedSessions.length}
+              collapsed={railCollapsed}
+            >
+              {topPinnedNodes.map((node) => renderRailNode(node))}
+            </RailGroup>
+          ) : null}
           {projectFilter === "__all" ? (
             <>
               {projectRailGroups.map((group) => (
@@ -8126,6 +8286,7 @@ const RailItem = memo(function RailItem({
   active,
   cursored,
   pinned,
+  topPinned,
   collapsed,
   onActivate,
   onTogglePin,
@@ -8136,6 +8297,7 @@ const RailItem = memo(function RailItem({
   active: boolean;
   cursored: boolean;
   pinned: boolean;
+  topPinned: boolean;
   collapsed: boolean;
   onActivate: (shiftKey: boolean) => void;
   onTogglePin: () => void;
@@ -8262,6 +8424,13 @@ const RailItem = memo(function RailItem({
               busy ? "animate-pulse bg-warning" : "bg-success",
             )}
           />
+          {topPinned && collapsed ? (
+            <Pin
+              aria-label="Pinned to top"
+              className="absolute -left-1 -top-1 size-3 text-primary"
+              fill="currentColor"
+            />
+          ) : null}
         </span>
         {!collapsed ? (
           <>
@@ -8270,6 +8439,13 @@ const RailItem = memo(function RailItem({
                 <span className="min-w-0 flex-1 truncate text-[13px] font-medium leading-tight">
                   {titleForSession(session)}
                 </span>
+                {topPinned ? (
+                  <Pin
+                    aria-label="Pinned to top"
+                    className="size-3 shrink-0 text-primary"
+                    fill="currentColor"
+                  />
+                ) : null}
                 {session.lastActivityAt || session.startedAt ? (
                   <span className="shrink-0 text-[10px] leading-tight tabular-nums text-muted-foreground/70">
                     {relTime(session.lastActivityAt ?? session.startedAt ?? 0)}
@@ -9386,6 +9562,8 @@ function SessionActionsMenu({
   onRemove,
   onError,
   triggerClassName,
+  pinned,
+  onTogglePin,
 }: {
   session: Session;
   users: User[];
@@ -9393,6 +9571,8 @@ function SessionActionsMenu({
   onRemove: (sid: string) => void;
   onError: (error: string | null) => void;
   triggerClassName?: string;
+  pinned?: boolean;
+  onTogglePin?: (sid: string) => void;
 }) {
   const appDialog = useAppDialog();
   const [forkOpen, setForkOpen] = useState(false);
@@ -9535,6 +9715,12 @@ function SessionActionsMenu({
               </DropdownMenuRadioGroup>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
+          {onTogglePin ? (
+            <DropdownMenuItem disabled={!sid} onClick={() => sid && onTogglePin(sid)}>
+              <Pin className="size-4" fill={pinned ? "currentColor" : "none"} />
+              {pinned ? "Unpin from top" : "Pin to top"}
+            </DropdownMenuItem>
+          ) : null}
           <DropdownMenuItem disabled={!sid} onClick={() => void copyReference()}>
             <Copy className="size-4" />
             Copy reference
@@ -9574,6 +9760,8 @@ function SessionTitleSheet({
   onSubscribeTranscript,
   onRefresh,
   onRemove,
+  pinned,
+  onTogglePin,
   onClose,
 }: {
   // The active session id. The sheet is a top-level modal (lifted out of any one
@@ -9591,6 +9779,8 @@ function SessionTitleSheet({
   onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
+  pinned: boolean;
+  onTogglePin: (sid: string) => void;
   onClose: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -10054,6 +10244,8 @@ function SessionTitleSheet({
             onRemove={onRemove}
             onError={setError}
             triggerClassName="size-9"
+            pinned={pinned}
+            onTogglePin={onTogglePin}
           />
         </div>
         <div
@@ -10259,6 +10451,8 @@ const SessionCard = memo(function SessionCard({
   variant = "grid",
   onClose,
   entering = false,
+  pinned = false,
+  onTogglePin,
 }: {
   session: Session;
   users: User[];
@@ -10281,6 +10475,9 @@ const SessionCard = memo(function SessionCard({
   // True only on the first render after this session was created in-tab — plays
   // the one-shot entrance animation on the card root.
   entering?: boolean;
+  // Narrow/mobile list preference. Desktop stage pinning is owned by RailStage.
+  pinned?: boolean;
+  onTogglePin?: (sid: string) => void;
 }) {
   const appDialog = useAppDialog();
   const catalog = useAgentModelCatalog();
@@ -10467,10 +10664,17 @@ const SessionCard = memo(function SessionCard({
   async function deleteSession() {
     if (!sid) return;
     onRemove(sid); // drop the card now; the tombstone survives the next poll
+    // Fire-and-forget (see the setTimeout in commitDelete), so nothing is left
+    // to catch a rejection: swallow here. Racing the card away against a
+    // session that already ended 404s with "session not found", which used to
+    // surface as an unhandledrejection even though the swipe did what the user
+    // wanted — the card is gone and the refresh below reconciles the truth.
     try {
       await closeSessionRequest(sid, "mobile_swipe_delete");
+    } catch {
+      /* already gone — the refresh below is the source of truth */
     } finally {
-      await onRefresh();
+      await onRefresh().catch(() => {});
     }
   }
 
@@ -10739,6 +10943,15 @@ const onTouchStart = (e: ReactTouchEvent) => {
             ⏸ paused
           </span>
         ) : null}
+        {pinned ? (
+          <span
+            aria-label="Pinned to top"
+            title="Pinned to top"
+            className="flex size-5 shrink-0 items-center justify-center text-primary"
+          >
+            <Pin className="size-3.5" fill="currentColor" />
+          </span>
+        ) : null}
         {!collapsedView && (
           (session.agent === "claude" || session.agent === "opencode" || session.agent === "hermes") &&
           (session.tmuxTarget || session.agent === "opencode") &&
@@ -10792,6 +11005,8 @@ const onTouchStart = (e: ReactTouchEvent) => {
             onRefresh={onRefresh}
             onRemove={onRemove}
             onError={setError}
+            pinned={pinned}
+            onTogglePin={onTogglePin}
           />
         )}
         {variant === "stage" && onClose ? (
@@ -10895,6 +11110,10 @@ const ChatStream = memo(function ChatStream({
   useEffect(() => {
     const el = ref.current;
     if (!el || !stick) return;
+    // Only write when we're not already pinned: a redundant assignment still
+    // emits a scroll event, which flips `stick` and re-runs this effect — an
+    // self-sustaining loop that React kills with "maximum update depth".
+    if (el.scrollTop === el.scrollHeight - el.clientHeight) return;
     el.scrollTop = el.scrollHeight;
   }, [visibleMessages, busy, stick]);
 
@@ -10910,6 +11129,10 @@ const ChatStream = memo(function ChatStream({
     const el = ref.current;
     if (!sid || !el || loadingOlder || !hasOlder) return;
     if (el.scrollTop > 80) return;
+    // A transcript that doesn't overflow sits at scrollTop 0 *and* at the
+    // bottom, so backfilling it would clear `stick` on every scroll event
+    // while the pin-to-bottom effect keeps setting it. Wait for real overflow.
+    if (el.scrollHeight <= el.clientHeight + 80) return;
     preserveScrollRef.current = { height: el.scrollHeight, top: el.scrollTop };
     setStick(false);
     setLoadingOlder(true);
