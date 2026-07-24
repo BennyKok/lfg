@@ -5,7 +5,9 @@ import { createRoot } from "react-dom/client";
 import * as ReactDOM from "react-dom";
 import "./index.css";
 import { toast } from "sonner";
-import { App, RootErrorBoundary } from "./App";
+import { RouterProvider } from "@tanstack/react-router";
+import { RootErrorBoundary } from "./App";
+import { router } from "./router";
 import { registerExtension } from "./lib/extensions";
 import { installErrorReporting } from "./lib/report-error";
 import { AppDialogProvider } from "@/components/ui/app-dialog";
@@ -55,7 +57,7 @@ createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <RootErrorBoundary>
       <AppDialogProvider>
-        <App />
+        <RouterProvider router={router} />
       </AppDialogProvider>
     </RootErrorBoundary>
   </StrictMode>,
