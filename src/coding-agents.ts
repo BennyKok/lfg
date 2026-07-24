@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { PATHS } from "./config.ts";
 import { lfgCapabilityAccess } from "./lfg-capabilities.ts";
+import { claudeOauthToken } from "./claude-creds.ts";
 
 export type CodingAgentKind =
   | "claude"
@@ -300,8 +301,8 @@ function copilotPath(): string | null {
 }
 
 function hasClaudeAuth(): boolean {
-  const home = userHome();
-  return !!process.env.ANTHROPIC_API_KEY || existsSync(`${home}/.claude/.credentials.json`);
+  // claudeOauthToken covers both the Linux credentials file and macOS Keychain.
+  return !!process.env.ANTHROPIC_API_KEY || claudeOauthToken() !== null;
 }
 
 function hasCodexAuth(): boolean {
