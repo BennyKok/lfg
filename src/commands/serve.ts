@@ -77,6 +77,7 @@ import {
   sessionIdForPid,
   pendingToolPrompt,
   listResumable,
+  findSessions,
   queryResumable,
   refreshResumableCache,
   cwdForTranscript,
@@ -741,22 +742,40 @@ function persistManagedResume(session: Session): void {
         : session.agent === "pi"
           ? "pi"
           : null;
-  if (!backend) return;
+  if (!backend && !session.transcriptPath) return;
+  const fileBackedId =
+    session.nativeSessionId ??
+    session.transcriptPath?.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/)?.[0] ??
+    session.sessionId;
+  const sessionId = backend ? session.sessionId : fileBackedId;
+  const agent =
+    backend === "codex-aisdk" || session.agent === "codex"
+      ? "codex"
+      : backend === "opencode"
+        ? "opencode"
+        : backend === "pi"
+          ? "pi"
+          : session.agent === "grok"
+            ? "grok"
+            : session.agent === "cursor"
+              ? "cursor"
+              : "claude";
   upsertResumableRows([{
-    sessionId: session.sessionId,
+    sessionId,
     cwd: session.cwd,
     project: session.project,
     title: session.title,
     lastActivityAt: session.lastActivityAt ?? Date.now(),
     lastUserText: session.lastUserText,
-    agent: backend === "codex-aisdk" ? "codex" : backend === "opencode" ? "opencode" : backend === "pi" ? "pi" : "claude",
-    path: sessionIndexKey(session.sessionId),
+    agent,
+    path: backend ? sessionIndexKey(session.sessionId) : session.transcriptPath,
     mtimeMs: session.lastActivityAt ?? Date.now(),
-    backend,
-    resumeHandle: session.nativeSessionId || session.sessionId,
+    backend: backend ?? undefined,
+    resumeHandle: backend ? session.nativeSessionId || session.sessionId : undefined,
     model: session.model,
     assignedUser: session.assignedUser,
-    managed: true,
+    managed: !!backend,
+    resumable: agent !== "grok" && agent !== "cursor",
   }]);
 }
 
@@ -3583,6 +3602,45 @@ export async function cmdServe() {
         return json({ sessions, total, facets });
       }
 
+      if (path === "/api/sessions/find" && req.method === "POST") {
+        const body = (await req.json().catch(() => null)) as {
+          sessionId?: unknown;
+          user?: unknown;
+          project?: unknown;
+          text?: unknown;
+          activeAfter?: unknown;
+          activeBefore?: unknown;
+          limit?: unknown;
+          scanLimit?: unknown;
+        } | null;
+        const parseTime = (value: unknown, field: string): number | undefined => {
+          if (value === undefined || value === null || value === "") return undefined;
+          const parsed =
+            typeof value === "number"
+              ? value
+              : typeof value === "string"
+                ? Date.parse(value)
+                : Number.NaN;
+          if (!Number.isFinite(parsed)) throw new Error(`${field} must be an ISO 8601 timestamp`);
+          return parsed;
+        };
+        try {
+          const live = await listSessionsCached();
+          return json(await findSessions({
+            sessionId: typeof body?.sessionId === "string" ? body.sessionId.trim() || undefined : undefined,
+            user: typeof body?.user === "string" ? body.user.trim() || undefined : undefined,
+            project: typeof body?.project === "string" ? body.project.trim() || undefined : undefined,
+            text: typeof body?.text === "string" ? body.text.trim() || undefined : undefined,
+            activeAfter: parseTime(body?.activeAfter, "activeAfter"),
+            activeBefore: parseTime(body?.activeBefore, "activeBefore"),
+            limit: typeof body?.limit === "number" ? body.limit : undefined,
+            scanLimit: typeof body?.scanLimit === "number" ? body.scanLimit : undefined,
+          }, live));
+        } catch (error) {
+          return err(400, error instanceof Error ? error.message : String(error));
+        }
+      }
+
       // Resume a closed session in its original cwd as a fresh managed session,
       // preserving the full conversation. Two engines:
       //  - claude: relaunch `claude --resume <id>`; it continues into a NEW
@@ -5262,8 +5320,8 @@ export async function cmdServe() {
             managed: sess?.managed,
           });
           if (!sess) return err(404, "session not found");
+          persistManagedResume(sess);
           if (isCommandFileAgent(sess.agent)) {
-            persistManagedResume(sess);
             // Ask the harness to shut down, then tear down its supervisor pane and
             // control-plane files. markClosed tombstones the harness pid so the
             // session drops out of the list immediately. For codex-aisdk the

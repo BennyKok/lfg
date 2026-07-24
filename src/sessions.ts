@@ -24,13 +24,17 @@ import {
   cachedFingerprints,
   upsertResumableRows,
   pruneResumableExcept,
+  queryHistoricalCache,
   queryResumableCache,
+  updateCachedSessionTitle,
+  type HistoricalSession,
   type ResumableCacheRow,
   type ResumableQuery,
   type ResumableQueryResult,
 } from "./resume-cache";
 import {
   indexedRecentMessages,
+  searchTranscriptIndex,
   sessionHasIndexedMessages,
   sessionIndexKey,
   isSessionIndexKey,
@@ -611,6 +615,7 @@ export async function setSessionTitle(
   if (t) all[sessionId] = t.slice(0, 200);
   else delete all[sessionId]; // empty title clears the override
   await Bun.write(PATHS.sessionTitles, JSON.stringify(all, null, 2));
+  if (t) updateCachedSessionTitle(sessionId, all[sessionId]);
 }
 
 // Claude's /resume picker titles a session by its first real user prompt; mirror
@@ -627,15 +632,11 @@ async function firstPromptTitle(path: string): Promise<string | null> {
       } catch {
         continue;
       }
-      const cm = normalizeCodexLine(line);
-      if (cm?.role === "user" && cm.kind === "text") {
-        const t = stripConversationPrefix(cm.text).trim().replace(/\s+/g, " ");
-        if (t && !t.startsWith("<"))
-          return t.length > TITLE_MAX ? t.slice(0, TITLE_MAX - 1) + "…" : t;
-      }
-      const gm = normalizeGrokLineMessages(line).find((msg) => msg.role === "user" && msg.kind === "text");
-      if (gm) {
-        const t = gm.text.trim().replace(/\s+/g, " ");
+      const normalized = normalizeLineMessages(line).find(
+        (msg) => msg.role === "user" && msg.kind === "text",
+      );
+      if (normalized) {
+        const t = stripConversationPrefix(normalized.text).trim().replace(/\s+/g, " ");
         if (t && !t.startsWith("<"))
           return t.length > TITLE_MAX ? t.slice(0, TITLE_MAX - 1) + "…" : t;
       }
@@ -831,8 +832,11 @@ async function findGrokTranscriptById(id: string): Promise<string | null> {
 
 async function grokSummaryById(id: string): Promise<{
   generated_title?: string;
+  session_summary?: string;
   current_model_id?: string;
   updated_at?: string;
+  last_active_at?: string;
+  info?: { cwd?: string };
 } | null> {
   if (!UUID.test(id)) return null;
   let dirs: string[];
@@ -847,12 +851,25 @@ async function grokSummaryById(id: string): Promise<{
       const f = Bun.file(p);
       if (await f.exists()) return (await f.json()) as {
         generated_title?: string;
+        session_summary?: string;
         current_model_id?: string;
         updated_at?: string;
+        last_active_at?: string;
+        info?: { cwd?: string };
       };
     } catch {}
   }
   return null;
+}
+
+async function cwdForCursorTranscript(path: string): Promise<string | null> {
+  try {
+    const text = await Bun.file(path).slice(0, 256 * 1024).text();
+    const match = text.match(/Workspace Path:\s*([^\n<]+)/);
+    return match?.[1]?.trim() || null;
+  } catch {
+    return null;
+  }
 }
 
 // Encode an absolute cwd the way cursor-agent names its project dir: drop the
@@ -1507,9 +1524,11 @@ async function lastUserText(path: string): Promise<string | null> {
       } catch {
         continue;
       }
-      const cm = normalizeCodexLine(lines[i]);
-      if (cm?.role === "user" && cm.kind === "text") {
-        const t = stripConversationPrefix(cm.text).trim().replace(/\s+/g, " ");
+      const normalized = normalizeLineMessages(lines[i]).find(
+        (msg) => msg.role === "user" && msg.kind === "text",
+      );
+      if (normalized) {
+        const t = stripConversationPrefix(normalized.text).trim().replace(/\s+/g, " ");
         if (t && !t.startsWith("<")) return t.length > 140 ? t.slice(0, 139) + "…" : t;
       }
       if (x.type !== "user" || x.isMeta) continue;
@@ -2441,7 +2460,7 @@ export type ResumableSession = {
   // Which engine the session was recorded with. "claude" resumes via the claude
   // CLI (`claude --resume`); "codex" resumes via a codex-aisdk harness keyed to
   // the rollout's threadId. The serve /resume endpoint branches on this.
-  agent: "claude" | "codex" | "opencode" | "pi";
+  agent: "claude" | "codex" | "opencode" | "pi" | "grok" | "cursor";
   backend?: "aisdk" | "codex-aisdk" | "opencode" | "pi";
   resumeHandle?: string | null;
   model?: string | null;
@@ -2479,11 +2498,16 @@ const RESUMABLE_REFRESH_THROTTLE_MS = 1500;
 // a usable (newest-first) page fast; the tail backfills over later refreshes.
 const RESUMABLE_ENRICH_BUDGET = 600;
 
-async function refreshResumableCacheOnce(): Promise<void> {
+async function refreshResumableCacheOnce(focusSessionId?: string): Promise<void> {
   const fingerprints = cachedFingerprints();
   const overrides = await readTitleOverrides();
   const managedSessions = listManaged();
   const managedByCwd = new Map(managedSessions.map((m) => [m.cwd, m]));
+  const managedById = new Map<string, ManagedSession>();
+  for (const managed of managedSessions) {
+    if (managed.sessionId) managedById.set(managed.sessionId, managed);
+    if (managed.nativeSessionId) managedById.set(managed.nativeSessionId, managed);
+  }
   const sdkEntries = new Map(listAisdkEntries().map((entry) => [entry.sessionId, entry]));
   const assignments = userAssignments();
   const seen = new Set<string>();
@@ -2518,15 +2542,27 @@ async function refreshResumableCacheOnce(): Promise<void> {
       candidates.push({ id, path, mtime });
     }
   }
-  candidates.sort((a, b) => b.mtime - a.mtime);
+  const focus = focusSessionId?.trim().toLowerCase() || null;
+  const byFocusThenMtime = (
+    a: { id: string; mtime: number },
+    b: { id: string; mtime: number },
+  ) => {
+    if (focus) {
+      const aFocused = a.id.toLowerCase().startsWith(focus);
+      const bFocused = b.id.toLowerCase().startsWith(focus);
+      if (aFocused !== bFocused) return aFocused ? -1 : 1;
+    }
+    return b.mtime - a.mtime;
+  };
+  candidates.sort(byFocusThenMtime);
   let budget = RESUMABLE_ENRICH_BUDGET;
   for (const c of candidates) {
     const prev = fingerprints.get(c.id);
     if (prev && prev.mtimeMs === c.mtime) continue; // unchanged -> keep cached row
     if (budget-- <= 0) break; // remainder backfills on the next refresh
     const cwd = await cwdForTranscript(c.path).catch(() => null);
-    const managedRec = cwd ? managedByCwd.get(cwd) : undefined;
-    let title = overrides[c.id] || null;
+    const managedRec = managedById.get(c.id) ?? (cwd ? managedByCwd.get(cwd) : undefined);
+    let title = managedTitle(managedRec, c.id, managedRec?.nativeSessionId, overrides);
     if (!title) title = await firstPromptTitle(c.path).catch(() => null);
     if (!title) title = cwd ? basename(cwd) : "—";
     changed.push({
@@ -2539,6 +2575,7 @@ async function refreshResumableCacheOnce(): Promise<void> {
       agent: "claude",
       path: c.path,
       mtimeMs: c.mtime,
+      assignedUser: managedRec ? assignments[managedRec.tmuxName] ?? null : null,
     });
   }
 
@@ -2549,17 +2586,147 @@ async function refreshResumableCacheOnce(): Promise<void> {
     const mtime = t.updatedAt ?? t.createdAt ?? 0;
     const prev = fingerprints.get(t.id);
     if (prev && prev.mtimeMs === mtime) continue;
-    const managedRec = t.cwd ? managedByCwd.get(t.cwd) : undefined;
+    const managedRec = managedById.get(t.id) ?? (t.cwd ? managedByCwd.get(t.cwd) : undefined);
     changed.push({
       sessionId: t.id,
       cwd: t.cwd,
       project: managedRec?.project || projectName(t.cwd, { repoRoot: managedRec?.repoRoot }),
-      title: overrides[t.id] || t.firstUserText || (t.cwd ? basename(t.cwd) : "—"),
+      title:
+        managedTitle(managedRec, t.id, managedRec?.nativeSessionId, overrides) ||
+        t.firstUserText ||
+        (t.cwd ? basename(t.cwd) : "—"),
       lastActivityAt: t.updatedAt ?? t.createdAt,
       lastUserText: t.firstUserText,
       agent: "codex",
       path: t.path,
       mtimeMs: mtime,
+      assignedUser: managedRec ? assignments[managedRec.tmuxName] ?? null : null,
+    });
+  }
+
+  // Grok sessions: each cwd-keyed directory contains one directory per native
+  // session id with chat_history.jsonl + summary.json. They are searchable and
+  // inspectable after exit, but LFG does not currently resume them.
+  let grokProjects: string[] = [];
+  try {
+    grokProjects = await readdir(GROK_SESSIONS_DIR);
+  } catch {}
+  const grokCandidates: Array<{ id: string; path: string; mtime: number }> = [];
+  for (const projectDir of grokProjects) {
+    const base = join(GROK_SESSIONS_DIR, projectDir);
+    let ids: string[] = [];
+    try {
+      ids = await readdir(base);
+    } catch {
+      continue;
+    }
+    for (const id of ids) {
+      if (!UUID.test(id)) continue;
+      const path = join(base, id, "chat_history.jsonl");
+      let mtime = 0;
+      try {
+        mtime = statSync(path).mtimeMs;
+      } catch {
+        continue;
+      }
+      seen.add(id);
+      grokCandidates.push({ id, path, mtime });
+    }
+  }
+  grokCandidates.sort(byFocusThenMtime);
+  let grokBudget = 200;
+  for (const { id, path, mtime } of grokCandidates) {
+    const prev = fingerprints.get(id);
+    if (prev && prev.mtimeMs === mtime) continue;
+    if (grokBudget-- <= 0) break;
+    const summary = await grokSummaryById(id).catch(() => null);
+    const cwd = summary?.info?.cwd ?? null;
+    const managedRec = managedById.get(id) ?? (cwd ? managedByCwd.get(cwd) : undefined);
+    const summaryActivity = Date.parse(summary?.last_active_at ?? summary?.updated_at ?? "");
+    const lastActivityAt = Number.isFinite(summaryActivity) ? summaryActivity : mtime;
+    changed.push({
+      sessionId: id,
+      cwd,
+      project: managedRec?.project || projectName(cwd, { repoRoot: managedRec?.repoRoot }),
+      title:
+        overrides[id] ||
+        summary?.generated_title ||
+        summary?.session_summary ||
+        (await firstPromptTitle(path).catch(() => null)) ||
+        (cwd ? basename(cwd) : "—"),
+      lastActivityAt,
+      lastUserText: await lastUserText(path).catch(() => null),
+      agent: "grok",
+      path,
+      mtimeMs: mtime,
+      model: summary?.current_model_id ?? null,
+      assignedUser: managedRec ? assignments[managedRec.tmuxName] ?? null : null,
+      resumable: false,
+    });
+  }
+
+  // Cursor sessions: one transcript directory per native chat id. The encoded
+  // project directory is not reversible when path segments contain dashes, so
+  // recover cwd from Cursor's persisted <user_info> header when no managed
+  // record remains.
+  let cursorProjects: string[] = [];
+  try {
+    cursorProjects = await readdir(CURSOR_PROJECTS_DIR);
+  } catch {}
+  const cursorCandidates: Array<{
+    id: string;
+    path: string;
+    mtime: number;
+    encodedProject: string;
+  }> = [];
+  for (const projectDir of cursorProjects) {
+    const base = join(CURSOR_PROJECTS_DIR, projectDir, "agent-transcripts");
+    let ids: string[] = [];
+    try {
+      ids = await readdir(base);
+    } catch {
+      continue;
+    }
+    for (const id of ids) {
+      if (!UUID.test(id)) continue;
+      const path = join(base, id, `${id}.jsonl`);
+      let mtime = 0;
+      try {
+        mtime = statSync(path).mtimeMs;
+      } catch {
+        continue;
+      }
+      seen.add(id);
+      cursorCandidates.push({ id, path, mtime, encodedProject: projectDir });
+    }
+  }
+  cursorCandidates.sort(byFocusThenMtime);
+  let cursorBudget = 200;
+  for (const { id, path, mtime, encodedProject } of cursorCandidates) {
+    const prev = fingerprints.get(id);
+    if (prev && prev.mtimeMs === mtime) continue;
+    if (cursorBudget-- <= 0) break;
+    const managedRec = managedById.get(id);
+    const cwd = managedRec?.cwd || (await cwdForCursorTranscript(path).catch(() => null));
+    const byCwd = !managedRec && cwd ? managedByCwd.get(cwd) : undefined;
+    const owner = managedRec ?? byCwd;
+    changed.push({
+      sessionId: id,
+      cwd,
+      project:
+        owner?.project ||
+        (cwd ? projectName(cwd, { repoRoot: owner?.repoRoot }) : encodedProject),
+      title:
+        overrides[id] ||
+        (await firstPromptTitle(path).catch(() => null)) ||
+        (cwd ? basename(cwd) : "—"),
+      lastActivityAt: mtime,
+      lastUserText: await lastUserText(path).catch(() => null),
+      agent: "cursor",
+      path,
+      mtimeMs: mtime,
+      assignedUser: owner ? assignments[owner.tmuxName] ?? null : null,
+      resumable: false,
     });
   }
 
@@ -2626,11 +2793,13 @@ async function refreshResumableCacheOnce(): Promise<void> {
 // Refresh at most once per throttle window (unless forced); concurrent callers
 // share the in-flight scan. Awaited by queryResumable so the first-ever request
 // still populates the cache before it reads.
-export async function refreshResumableCache(opts: { force?: boolean } = {}): Promise<void> {
+export async function refreshResumableCache(
+  opts: { force?: boolean; focusSessionId?: string } = {},
+): Promise<void> {
   const now = Date.now();
   if (resumableRefreshing) return resumableRefreshing;
   if (!opts.force && now - resumableRefreshAt < RESUMABLE_REFRESH_THROTTLE_MS) return;
-  resumableRefreshing = refreshResumableCacheOnce()
+  resumableRefreshing = refreshResumableCacheOnce(opts.focusSessionId)
     .catch((err) => {
       console.warn(
         `[resume-cache] refresh failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -2671,6 +2840,102 @@ export async function listResumable(
 ): Promise<ResumableSession[]> {
   const { sessions } = await queryResumable(opts);
   return sessions;
+}
+
+export type FindSessionsQuery = {
+  sessionId?: string;
+  user?: string;
+  project?: string;
+  text?: string;
+  activeAfter?: number;
+  activeBefore?: number;
+  limit?: number;
+  scanLimit?: number;
+};
+
+export type FoundSession = HistoricalSession & {
+  live: boolean;
+  textMatch: string | null;
+};
+
+function titleMatches(title: string, query: string): boolean {
+  const folded = title.toLowerCase();
+  return query
+    .toLowerCase()
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .every((term) => folded.includes(term));
+}
+
+// Find durable sessions independently of process/tmux lifetime. Metadata
+// filtering happens in the derived SQLite catalog; full-text matching uses the
+// existing streaming transcript index and is bounded to the newest scanLimit
+// candidates so a broad search cannot parse an unbounded history in one call.
+export async function findSessions(
+  opts: FindSessionsQuery = {},
+  liveSessions?: Session[],
+): Promise<{
+  sessions: FoundSession[];
+  candidateTotal: number;
+  scanned: number;
+  truncated: boolean;
+}> {
+  await refreshResumableCache({
+    force: !!opts.sessionId?.trim(),
+    focusSessionId: opts.sessionId,
+  });
+  const live = liveSessions ?? (await listSessions());
+  const limit = Math.max(1, Math.min(100, opts.limit ?? 30));
+  const scanLimit = Math.max(limit, Math.min(500, opts.scanLimit ?? 200));
+  const candidates = queryHistoricalCache({
+    sessionId: opts.sessionId,
+    user: opts.user,
+    project: opts.project,
+    activeAfter: opts.activeAfter,
+    activeBefore: opts.activeBefore,
+    limit: opts.text?.trim() ? scanLimit : limit,
+  });
+  const liveIds = new Set<string>();
+  for (const session of live) {
+    if (session.sessionId) liveIds.add(session.sessionId);
+    if (session.nativeSessionId) liveIds.add(session.nativeSessionId);
+  }
+  const found: FoundSession[] = [];
+  const text = opts.text?.trim() || null;
+  let scanned = 0;
+
+  for (const candidate of candidates.sessions) {
+    scanned++;
+    let textMatch: string | null = null;
+    if (text) {
+      if (titleMatches(candidate.title, text)) {
+        textMatch = candidate.title;
+      } else if (candidate.transcriptPath) {
+        const match = await searchTranscriptIndex(
+          candidate.transcriptPath,
+          candidate.sessionId,
+          text,
+          { limit: 1 },
+        ).catch(() => null);
+        textMatch = match?.results[0]?.snippet ?? null;
+      }
+      if (!textMatch) continue;
+    }
+    found.push({
+      ...candidate,
+      live: liveIds.has(candidate.sessionId),
+      textMatch,
+    });
+    if (found.length >= limit) break;
+  }
+
+  return {
+    sessions: found,
+    candidateTotal: candidates.total,
+    scanned,
+    truncated: candidates.truncated || scanned < candidates.total,
+  };
 }
 
 // A prompt read straight from the transcript's structured AskUserQuestion
