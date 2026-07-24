@@ -38,11 +38,21 @@ import { PATHS } from "../config.ts";
 //                     questionId/question/options — so a relay that forwards
 //                     `event` frames verbatim needs no change to carry a new
 //                     kind.)
+//   relay  → client   {type:"ws-open",  id, path}               (open a tunnel onto local serve's WebSocket)
+//   client → relay    {type:"ws-ack",   id, ok, error?}
+//   either → other    {type:"ws-msg",   id, dataB64, binary}
+//   either → other    {type:"ws-close", id, code?, reason?}
 //   either → other    {type:"ping"} / {type:"pong"}
 //
 // This is intentionally the smallest surface that lets a relay reverse-proxy
-// HTTP semantics (incl. serve.ts's SSE/WS endpoints, tunneled as ordinary
-// request/response framing) onto a box with no inbound port open. An `error`
+// HTTP semantics onto a box with no inbound port open. Ordinary requests use
+// the buffered http/http-response pair; the ws-* frames add a real duplex
+// tunnel, because a live channel (serve.ts's /api/live/ws) genuinely cannot be
+// expressed as one request/response. That tunnel is what lets a PUBLIC origin
+// render a session hosted on this box at all: a tailnet box resolves to a
+// private 100.x address, and a browser on a public origin is forbidden from
+// loading it (Chrome Private Network Access), so the bytes have to come back
+// over this outbound socket rather than a direct connection. An `error`
 // frame during `hello` means the saved token is no longer valid (expired,
 // revoked, or unknown to the relay) — that will never resolve by retrying,
 // so the reconnect loop below treats it as fatal rather than backing off
