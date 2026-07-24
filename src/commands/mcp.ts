@@ -135,6 +135,25 @@ export async function closeLfgSession(sessionIdInput: string) {
   return { closed: data.ok !== false, sessionId };
 }
 
+export type FindLfgSessionsInput = {
+  sessionId?: string;
+  user?: string;
+  project?: string;
+  text?: string;
+  activeAfter?: string;
+  activeBefore?: string;
+  limit?: number;
+  scanLimit?: number;
+};
+
+export async function findLfgSessions(input: FindLfgSessionsInput) {
+  return api("/api/sessions/find", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
 function ownedSessionId(input?: string): string {
   const sessionId = activeSessionId(input);
   const caller = process.env.LFG_SESSION_ID?.trim();
@@ -331,6 +350,56 @@ export async function cmdMcp() {
       });
       return result({ sessions: filtered });
     },
+  );
+
+  server.registerTool(
+    "lfg_find_sessions",
+    {
+      title: "Find Historical LFG Sessions",
+      description:
+        "Find durable LFG sessions, including ended sessions no longer present in tmux or the process table. Filters compose, results are newest-first, and text searches titles plus normalized transcript content.",
+      inputSchema: {
+        sessionId: z
+          .string()
+          .optional()
+          .describe("Exact session id or id prefix."),
+        user: z
+          .string()
+          .optional()
+          .describe("Exact assigned user email."),
+        project: z
+          .string()
+          .optional()
+          .describe("Case-insensitive substring of the project label or cwd."),
+        text: z
+          .string()
+          .optional()
+          .describe("All-term text match against the title or normalized transcript content."),
+        activeAfter: z
+          .string()
+          .optional()
+          .describe("Only sessions active at or after this ISO 8601 timestamp."),
+        activeBefore: z
+          .string()
+          .optional()
+          .describe("Only sessions active at or before this ISO 8601 timestamp."),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(100)
+          .optional()
+          .describe("Maximum results (default 30, maximum 100)."),
+        scanLimit: z
+          .number()
+          .int()
+          .min(1)
+          .max(500)
+          .optional()
+          .describe("Maximum newest metadata candidates to transcript-search (default 200, maximum 500)."),
+      },
+    },
+    async (input) => result(await findLfgSessions(input)),
   );
 
   server.registerTool(

@@ -3,13 +3,18 @@ import type { CodingAgentKind } from "./coding-agents.ts";
 // Bump whenever an agent-facing LFG capability or its operating guidance
 // changes. Managed sessions persist the value they launched with, which lets
 // the UI identify long-lived sessions whose MCP/tool catalog predates a ship.
-export const LFG_CAPABILITY_VERSION = "2026-07-23.1";
+export const LFG_CAPABILITY_VERSION = "2026-07-24.1";
 
 export const LFG_CAPABILITIES = [
   {
     tool: "lfg_send_to_origin",
     useWhen: "The agent should intentionally deliver text or visual evidence back to the channel that launched this session.",
     guidance: "Send only user-facing results. The origin adapter owns transport and identity; never request phone numbers or channel credentials.",
+  },
+  {
+    tool: "lfg_find_sessions",
+    useWhen: "An ended or historical LFG session must be located after its tmux pane or process disappeared.",
+    guidance: "Filter by id/prefix, user, project/cwd, title/transcript text, or last-activity range; use lfg_list_sessions for the current live fleet.",
   },
   {
     tool: "lfg_close_session",
@@ -56,6 +61,7 @@ export function lfgRuntimeContract(): string {
     "- You are running as an LFG-managed coding agent. LFG features are part of the product workflow, not optional implementation trivia.",
     "- After visual or interaction work, capture verification media and show the best evidence with `lfg_display_image` or `lfg_display_video`.",
     "- Use `lfg_send_to_origin` when the user wants a result intentionally delivered back to the channel that launched this session. The origin adapter owns transport identity and credentials.",
+    "- Use `lfg_find_sessions` to locate ended or historical sessions by id, owner, project, text, or last-activity range; use `lfg_list_sessions` for the live fleet.",
     "- When a report, data view, or live dashboard is materially clearer as interactive HTML than prose, publish it with `lfg_publish_artifact`; use a stable id for updates.",
     "- When material user-visible work is complete and verified, call `lfg_ship` with a concise showcase and the strongest media. Do not ship diagnosis, planning, partial, invisible, or trivial work.",
     "- Use `lfg_ask_user` only for a risky, irreversible, or genuinely ambiguous decision. It is fire-and-forget: do not poll or block waiting for the answer.",
