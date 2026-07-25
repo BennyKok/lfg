@@ -46,8 +46,10 @@ import { setThemePreference, THEME_CHANGE_EVENT } from "./lib/theme";
 import { startsInBottomSystemGestureZone } from "./lib/touch-gestures";
 import { ConnectionStatusToasts } from "./ConnectionStatus";
 import type {
+  ClipboardEvent,
   CSSProperties,
   Dispatch,
+  DragEvent,
   ErrorInfo,
   FormEvent,
   KeyboardEvent as ReactKeyboardEvent,
@@ -1157,6 +1159,331 @@ function useEagerUploads(options: {
   }, []);
 
   return { prefetchUpload, resolveUpload, forgetUpload, forgetAllUploads };
+}
+
+// The agent icon strip shared by the new-session composer and the fork dialog.
+// `flat` drops the pill background for the inline composer's popover card.
+function AgentIconStrip({
+  options,
+  value,
+  onSelect,
+  flat = false,
+  className,
+}: {
+  options: readonly { key: AgentKind; label: string }[];
+  value: AgentKind;
+  onSelect: (key: AgentKind) => void;
+  flat?: boolean;
+  className?: string;
+}) {
+  if (!options.length) return null;
+  return (
+    <div
+      className={cn(
+        "inline-flex h-8 items-center text-xs font-semibold",
+        flat ? "gap-0.5" : "rounded-full bg-muted p-0.5",
+        className,
+      )}
+    >
+      {options.map(({ key, label }) => (
+        <button
+          key={key}
+          type="button"
+          title={label}
+          aria-label={label}
+          onClick={() => onSelect(key)}
+          className={cn(
+            "flex h-7 w-9 items-center justify-center rounded-full transition",
+            value === key
+              ? flat
+                ? "bg-muted text-foreground"
+                : "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground",
+          )}
+        >
+          <img src={agentIconSrc(key)} alt="" className="size-5" />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// The attachment chip row shared by every composer (chat, new session, fork):
+// thumbnail / file icon, name, upload progress, annotate + remove. `locked`
+// chips (already handed to an in-flight send) render but can't be edited.
+function ComposerAttachmentChips({
+  items,
+  className,
+  disabled = false,
+  onAnnotate,
+  onRemove,
+}: {
+  items: { att: ComposerAttachment; locked?: boolean }[];
+  className?: string;
+  disabled?: boolean;
+  onAnnotate: (id: string) => void;
+  onRemove: (id: string) => void;
+}) {
+  if (!items.length) return null;
+  return (
+    <div className={cn("flex gap-1.5 overflow-x-auto pb-0.5", className)}>
+      {items.map(({ att, locked }) => (
+        <div
+          key={att.id}
+          className={cn(
+            "group relative flex h-12 max-w-52 shrink-0 items-center gap-2 overflow-hidden rounded-lg border bg-muted/55 pl-1.5 pr-1.5 text-xs",
+            att.status === "failed" ? "border-destructive/40 bg-destructive/10" : "border-border/70",
+          )}
+          title={att.error || att.name}
+        >
+          {att.previewUrl ? (
+            <img src={att.previewUrl} alt="" className="size-9 shrink-0 rounded-md object-cover" />
+          ) : (
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-background/80 text-muted-foreground">
+              <Paperclip className="size-4" />
+            </div>
+          )}
+          <div className="min-w-0">
+            <div className="truncate font-medium text-foreground">{att.name}</div>
+            <div className="text-[11px] text-muted-foreground">
+              {att.status === "uploading"
+                ? `Uploading ${att.progress ?? 0}%`
+                : att.status === "failed"
+                  ? "Failed"
+                  : formatBytes(att.size)}
+            </div>
+          </div>
+          {att.status === "uploading" ? (
+            <div
+              className="absolute inset-x-0 bottom-0 h-0.5 bg-primary/15"
+              role="progressbar"
+              aria-label={`Uploading ${att.name}`}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={att.progress ?? 0}
+            >
+              <div
+                className="h-full bg-primary transition-[width] duration-150"
+                style={{ width: `${att.progress ?? 0}%` }}
+              />
+            </div>
+          ) : null}
+          {att.previewUrl ? (
+            <button
+              type="button"
+              className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-background hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+              onClick={() => onAnnotate(att.id)}
+              aria-label={`Annotate ${att.name}`}
+              title="Annotate"
+              disabled={disabled || locked}
+            >
+              <Pencil className="size-3.5" />
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="ml-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-background hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+            onClick={() => onRemove(att.id)}
+            aria-label={`Remove ${att.name}`}
+            title="Remove"
+            disabled={disabled || locked}
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Everything a composer needs to accept files: attachment state, eager uploads,
+// drag & drop, paste, the hidden file input and the annotator sheet. Shared by
+// the chat composer, the new-session composer and the fork dialog so all three
+// behave identically.
+function useComposerAttachments({
+  endpoint,
+  max = 8,
+  disabled = false,
+  onPatchExtra,
+}: {
+  endpoint: (att: ComposerAttachment) => string | null;
+  max?: number;
+  // Chips already handed off to an in-flight send can't be edited.
+  disabled?: boolean;
+  // Mirror upload patches into a second list (the new-session composer keeps
+  // handed-off uploads in `pendingUploads` so their progress keeps ticking).
+  onPatchExtra?: (id: string, patch: Partial<ComposerAttachment>) => void;
+}) {
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [draggingFiles, setDraggingFiles] = useState(false);
+  const [annotatingId, setAnnotatingId] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const previewUrls = useRef<string[]>([]);
+  const extraRef = useRef(onPatchExtra);
+  extraRef.current = onPatchExtra;
+  const { prefetchUpload, resolveUpload, forgetUpload, forgetAllUploads } = useEagerUploads({
+    endpoint,
+    onPatch: (id, patch) => {
+      setAttachments((current) =>
+        current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
+      );
+      extraRef.current?.(id, patch);
+    },
+  });
+
+  useEffect(() => {
+    return () => {
+      for (const url of previewUrls.current) URL.revokeObjectURL(url);
+      previewUrls.current = [];
+    };
+  }, []);
+
+  // Read the live list from a ref rather than the state updater: creating
+  // preview URLs and kicking off uploads are side effects, so they must not run
+  // inside setAttachments (which React may call twice).
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
+
+  const addFiles = useCallback(
+    (files: FileList | File[]) => {
+      const incoming = Array.from(files).filter((file) => file.size > 0);
+      if (!incoming.length) return;
+      const room = Math.max(0, max - attachmentsRef.current.length);
+      if (!room) {
+        toast.error("Remove an attachment before adding another.");
+        return;
+      }
+      if (incoming.length > room) toast.error(`Added ${room} of ${incoming.length} files.`);
+      const next: ComposerAttachment[] = incoming.slice(0, room).map((file) => {
+        const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined;
+        if (previewUrl) previewUrls.current.push(previewUrl);
+        return {
+          id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
+          file,
+          name: file.name || "upload",
+          size: file.size,
+          type: file.type,
+          previewUrl,
+          status: "ready" as const,
+        };
+      });
+      attachmentsRef.current = [...attachmentsRef.current, ...next];
+      setAttachments(attachmentsRef.current);
+      // Push the bytes now instead of waiting for send, so the upload is
+      // normally already finished by the time the user submits.
+      next.forEach(prefetchUpload);
+    },
+    [max, prefetchUpload],
+  );
+
+  const removeAttachment = useCallback(
+    (id: string) => {
+      forgetUpload(id);
+      setAttachments((current) => {
+        const item = current.find((att) => att.id === id);
+        if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl);
+        return current.filter((att) => att.id !== id);
+      });
+    },
+    [forgetUpload],
+  );
+
+  // Spread onto the form / drop target that should accept dragged files.
+  const dropZoneProps = {
+    onDragEnter: (event: DragEvent<HTMLElement>) => {
+      if (Array.from(event.dataTransfer.types).includes("Files")) setDraggingFiles(true);
+    },
+    onDragOver: (event: DragEvent<HTMLElement>) => {
+      if (!Array.from(event.dataTransfer.types).includes("Files")) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+      setDraggingFiles(true);
+    },
+    onDragLeave: (event: DragEvent<HTMLElement>) => {
+      const nextTarget = event.relatedTarget;
+      if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
+        setDraggingFiles(false);
+      }
+    },
+    onDrop: (event: DragEvent<HTMLElement>) => {
+      if (!event.dataTransfer.files.length) return;
+      event.preventDefault();
+      setDraggingFiles(false);
+      addFiles(event.dataTransfer.files);
+    },
+  };
+
+  // Pasting files (screenshots straight from the clipboard) attaches them.
+  const onPasteFiles = (event: ClipboardEvent<HTMLElement>) => {
+    const files = event.clipboardData?.files;
+    if (!files?.length) return false;
+    event.preventDefault();
+    addFiles(files);
+    return true;
+  };
+
+  const openFilePicker = useCallback(() => fileInputRef.current?.click(), []);
+
+  const fileInput = (
+    <input
+      ref={fileInputRef}
+      type="file"
+      aria-label="Attach files"
+      multiple
+      className="hidden"
+      onChange={(event) => {
+        if (event.target.files) addFiles(event.target.files);
+        event.currentTarget.value = "";
+      }}
+    />
+  );
+
+  const annotator = (
+    <ImageAnnotator
+      open={!!annotatingId}
+      file={attachments.find((att) => att.id === annotatingId)?.file ?? null}
+      onOpenChange={(next) => {
+        if (!next) setAnnotatingId(null);
+      }}
+      onSave={(file) => {
+        if (annotatingId) {
+          applyAnnotatedAttachment(setAttachments, previewUrls, annotatingId, file, prefetchUpload);
+        }
+        setAnnotatingId(null);
+      }}
+    />
+  );
+
+  const chips = (
+    <ComposerAttachmentChips
+      items={attachments.map((att) => ({ att }))}
+      disabled={disabled}
+      onAnnotate={setAnnotatingId}
+      onRemove={removeAttachment}
+    />
+  );
+
+  return {
+    attachments,
+    setAttachments,
+    draggingFiles,
+    addFiles,
+    removeAttachment,
+    setAnnotatingId,
+    fileInputRef,
+    previewUrls,
+    prefetchUpload,
+    resolveUpload,
+    forgetUpload,
+    forgetAllUploads,
+    dropZoneProps,
+    onPasteFiles,
+    openFilePicker,
+    // Ready-to-render pieces: drop these into the composer markup.
+    fileInput,
+    chips,
+    annotator,
+  };
 }
 
 // Fire-and-forget instrumentation: record which CTA a finding graduated
@@ -5602,7 +5929,9 @@ function UsageRingsButton({
             aria-label={`${provider.label} usage`}
             title={`${provider.label} usage`}
             className={cn(
-              "flex shrink-0 items-center justify-center rounded-full p-1 pl-4 transition active:scale-90",
+              // The wider left pad keeps the rings clear of the screen edge on
+              // the mobile inline composer; on desktop it just reads as a gap.
+              "flex shrink-0 items-center justify-center rounded-full p-1 pl-4 transition active:scale-90 md:pl-1",
               className,
             )}
           >
@@ -9004,22 +9333,28 @@ function SessionChat({
   const sid = session.sessionId;
   const [messageText, setMessageText] = useState("");
   const [sending, setSending] = useState(false);
-  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
-  const [draggingFiles, setDraggingFiles] = useState(false);
-  const [annotatingId, setAnnotatingId] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [nextBefore, setNextBefore] = useState<number | null>(null);
   // Brief one-shot "launch" pulse on the composer as a message is sent, so the
   // send reads as the turn springing out of the input into the transcript.
   const [launching, setLaunching] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const previewUrls = useRef<string[]>([]);
-  const { prefetchUpload, resolveUpload, forgetUpload, forgetAllUploads } = useEagerUploads({
+  // Shared composer file plumbing (same hook the new-session and fork composers
+  // use): eager uploads, drag & drop, paste, annotate.
+  const files = useComposerAttachments({
     endpoint: (att) =>
       sid ? `/api/sessions/${sid}/upload?filename=${encodeURIComponent(att.name)}` : null,
-    onPatch: (id, patch) =>
-      setAttachments((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item))),
+    disabled: sending,
   });
+  const {
+    attachments,
+    setAttachments,
+    draggingFiles,
+    addFiles,
+    removeAttachment,
+    previewUrls,
+    resolveUpload,
+    forgetAllUploads,
+  } = files;
   const chatStatusRef = useRef<ReturnType<typeof useChat<LfgChatMessage>>["status"]>("ready");
   const chatTransport = useMemo(
     () =>
@@ -9121,50 +9456,6 @@ function SessionChat({
     return (page.nextBefore ?? null) !== null;
   }, [nextBefore, setMessages, sid]);
 
-  useEffect(() => {
-    return () => {
-      for (const url of previewUrls.current) URL.revokeObjectURL(url);
-      previewUrls.current = [];
-    };
-  }, []);
-
-  function addFiles(files: FileList | File[]) {
-    const incoming = Array.from(files).filter((file) => file.size > 0);
-    if (!incoming.length) return;
-    const room = Math.max(0, 8 - attachments.length);
-    if (!room) {
-      toast.error("Remove an attachment before adding another.");
-      return;
-    }
-    if (incoming.length > room) toast.error(`Added ${room} of ${incoming.length} files.`);
-    const next: ComposerAttachment[] = incoming.slice(0, room).map((file) => {
-      const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined;
-      if (previewUrl) previewUrls.current.push(previewUrl);
-      return {
-        id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
-        file,
-        name: file.name || "upload",
-        size: file.size,
-        type: file.type,
-        previewUrl,
-        status: "ready" as const,
-      };
-    });
-    setAttachments((current) => [...current, ...next]);
-    // Push the bytes now instead of waiting for send, so the upload is normally
-    // already finished by the time the user submits.
-    next.forEach(prefetchUpload);
-  }
-
-  function removeAttachment(id: string) {
-    forgetUpload(id);
-    setAttachments((current) => {
-      const item = current.find((att) => att.id === id);
-      if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl);
-      return current.filter((att) => att.id !== id);
-    });
-  }
-
   async function sendMessage(
     e?: FormEvent,
     overrideText?: string,
@@ -9264,27 +9555,7 @@ function SessionChat({
       {canDriveSession(session) ? (
         <form
           onSubmit={sendMessage}
-          onDragEnter={(event) => {
-            if (Array.from(event.dataTransfer.types).includes("Files")) setDraggingFiles(true);
-          }}
-          onDragOver={(event) => {
-            if (!Array.from(event.dataTransfer.types).includes("Files")) return;
-            event.preventDefault();
-            event.dataTransfer.dropEffect = "copy";
-            setDraggingFiles(true);
-          }}
-          onDragLeave={(event) => {
-            const nextTarget = event.relatedTarget;
-            if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
-              setDraggingFiles(false);
-            }
-          }}
-          onDrop={(event) => {
-            if (!event.dataTransfer.files.length) return;
-            event.preventDefault();
-            setDraggingFiles(false);
-            addFiles(event.dataTransfer.files);
-          }}
+          {...files.dropZoneProps}
           className={cn(
             // Sit on the same surface as the chat (no card/border seam) and let
             // the transcript melt into the bar via a soft gradient fade so the
@@ -9295,90 +9566,21 @@ function SessionChat({
             launching && "lfg-composer-launching",
           )}
         >
-          <input
-            ref={fileInputRef}
-            type="file"
-            aria-label="Attach files"
-            multiple
-            className="hidden"
-            onChange={(event) => {
-              if (event.target.files) addFiles(event.target.files);
-              event.currentTarget.value = "";
-            }}
+          {files.fileInput}
+          <ComposerAttachmentChips
+            className="mb-2"
+            items={attachments.map((att) => ({ att }))}
+            disabled={sending}
+            onAnnotate={files.setAnnotatingId}
+            onRemove={removeAttachment}
           />
-          {attachments.length ? (
-            <div className="mb-2 flex gap-1.5 overflow-x-auto pb-0.5">
-              {attachments.map((att) => (
-                <div
-                  key={att.id}
-                  className={cn(
-                    "group relative flex h-12 max-w-52 shrink-0 items-center gap-2 overflow-hidden rounded-lg border bg-muted/55 pl-1.5 pr-1.5 text-xs",
-                    att.status === "failed" ? "border-destructive/40 bg-destructive/10" : "border-border/70",
-                  )}
-                  title={att.error || att.name}
-                >
-                  {att.previewUrl ? (
-                    <img
-                      src={att.previewUrl}
-                      alt=""
-                      className="size-9 shrink-0 rounded-md object-cover"
-                    />
-                  ) : (
-                    <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-background/80 text-muted-foreground">
-                      <Paperclip className="size-4" />
-                    </div>
-                  )}
-                  <div className="min-w-0">
-                    <div className="truncate font-medium text-foreground">{att.name}</div>
-                    <div className="text-[11px] text-muted-foreground">
-                      {att.status === "uploading" ? `Uploading ${att.progress ?? 0}%` : att.status === "failed" ? "Failed" : formatBytes(att.size)}
-                    </div>
-                  </div>
-                  {att.status === "uploading" ? (
-                    <div
-                      className="absolute inset-x-0 bottom-0 h-0.5 bg-primary/15"
-                      role="progressbar"
-                      aria-label={`Uploading ${att.name}`}
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={att.progress ?? 0}
-                    >
-                      <div className="h-full bg-primary transition-[width] duration-150" style={{ width: `${att.progress ?? 0}%` }} />
-                    </div>
-                  ) : null}
-                  {att.previewUrl ? (
-                    <button
-                      type="button"
-                      className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-background hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-                      onClick={() => setAnnotatingId(att.id)}
-                      aria-label={`Annotate ${att.name}`}
-                      title="Annotate"
-                      disabled={sending}
-                    >
-                      <Pencil className="size-3.5" />
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="ml-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-background hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-                    onClick={() => removeAttachment(att.id)}
-                    aria-label={`Remove ${att.name}`}
-                    title="Remove"
-                    disabled={sending}
-                  >
-                    <X className="size-3.5" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : null}
           <div className="flex items-end gap-2">
             <Button
               size="icon"
               type="button"
               variant={draggingFiles ? "brand-soft" : "tint"}
               className="size-11 md:size-9"
-              onClick={() => fileInputRef.current?.click()}
+              onClick={files.openFilePicker}
               aria-label="Attach files"
               title="Attach files"
               disabled={sending}
@@ -9392,13 +9594,7 @@ function SessionChat({
                 onValueChange={setMessageText}
                 showSkillButton
                 insetEnd
-                onPaste={(event) => {
-                  const files = event.clipboardData?.files;
-                  if (files?.length) {
-                    event.preventDefault();
-                    addFiles(files);
-                  }
-                }}
+                onPaste={files.onPasteFiles}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
@@ -9467,19 +9663,7 @@ function SessionChat({
           </div>
         </form>
       ) : null}
-      <ImageAnnotator
-        open={!!annotatingId}
-        file={attachments.find((att) => att.id === annotatingId)?.file ?? null}
-        onOpenChange={(next) => {
-          if (!next) setAnnotatingId(null);
-        }}
-        onSave={(file) => {
-          if (annotatingId) {
-            applyAnnotatedAttachment(setAttachments, previewUrls, annotatingId, file, prefetchUpload);
-          }
-          setAnnotatingId(null);
-        }}
-      />
+      {files.annotator}
     </div>
   );
 }
@@ -10294,6 +10478,11 @@ function ForkSessionDialog({
   const sid = session.sessionId;
   const models = catalog.models[agent] ?? AGENT_MODELS[agent];
   const thinkingLevels = useAgentThinkingLevels(agent);
+  // Same composer plumbing as the new-session composer: eager uploads, drag &
+  // drop, paste, annotate.
+  const files = useComposerAttachments({
+    endpoint: (att) => `/api/uploads?filename=${encodeURIComponent(att.name)}`,
+  });
 
   useEffect(() => {
     if (!models.includes(model)) setModel(models[0]);
@@ -10311,7 +10500,7 @@ function ForkSessionDialog({
     }
   }, [thinkingLevel, thinkingLevels]);
 
-  function submit(e?: FormEvent) {
+  function submit(e?: FormEvent, overrideText?: string) {
     e?.preventDefault();
     if (!sid) return;
     if (!availableAgentOptions.some((option) => option.key === agent)) {
@@ -10321,19 +10510,28 @@ function ForkSessionDialog({
     localStorage.setItem("lfg_fork_agent", agent);
     localStorage.setItem(`lfg_fork_model_${agent}`, model);
     if (agentSupportsThinking(agent)) localStorage.setItem("lfg_thinking_level", thinkingLevel);
+    const text = (overrideText ?? prompt).trim();
+    const attached = files.attachments;
     onClose();
     toast.promise(
-      api(`/api/sessions/${sid}/fork`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt: prompt.trim() || undefined,
-          user: session.assignedUser || undefined,
-          agent,
-          model,
-          thinkingLevel: agentSupportsThinking(agent) ? thinkingLevel : undefined,
-        }),
-      }).then(() => onCreated()),
+      (async () => {
+        // Started at attach time, so these are usually already resolved.
+        const uploaded = attached.length
+          ? await Promise.all(attached.map(files.resolveUpload))
+          : [];
+        const composedPrompt = composeAttachmentMessage(text, uploaded);
+        return api(`/api/sessions/${sid}/fork`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt: composedPrompt || undefined,
+            user: session.assignedUser || undefined,
+            agent,
+            model,
+            thinkingLevel: agentSupportsThinking(agent) ? thinkingLevel : undefined,
+          }),
+        });
+      })().then(() => onCreated()),
       {
         loading: "Forking session...",
         success: "Session forked",
@@ -10344,7 +10542,14 @@ function ForkSessionDialog({
 
   return (
     <BottomSheet onClose={onClose} title="Fork session">
-      <form onSubmit={submit} className="px-4 pb-5 pt-3">
+      <form
+        onSubmit={submit}
+        {...files.dropZoneProps}
+        className={cn(
+          "px-4 pb-5 pt-3 transition-colors",
+          files.draggingFiles && "bg-primary/8",
+        )}
+      >
         <div className="mb-3 flex items-center gap-2">
           <GitFork className="size-4 text-muted-foreground" />
           <div className="min-w-0">
@@ -10355,37 +10560,55 @@ function ForkSessionDialog({
           </div>
         </div>
 
-        <SkillTextarea
-          value={prompt}
-          onValueChange={setPrompt}
-          placeholder="Extra prompt for the new agent..."
-          rows={5}
-          className="min-h-32 resize-none rounded-xl"
-        />
+        {files.fileInput}
+
+        <div className="lfg-gfield relative rounded-2xl px-2 py-1">
+          <SkillTextarea
+            value={prompt}
+            onValueChange={setPrompt}
+            onPaste={files.onPasteFiles}
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                e.preventDefault();
+                e.currentTarget.form?.requestSubmit();
+              }
+            }}
+            placeholder={
+              files.attachments.length
+                ? "Add a note for the files…"
+                : "Extra prompt for the new agent…"
+            }
+            className="min-h-32 max-h-[42dvh] resize-none overflow-y-auto border-0 bg-transparent px-1 py-1 pr-10 text-base leading-relaxed shadow-none focus-visible:border-0 focus-visible:ring-0"
+          />
+          <MicButton
+            minimal
+            className="absolute bottom-1 right-1 size-9 shrink-0"
+            silenceMs={2500}
+            baseText={prompt}
+            onText={(text, base) => setPrompt(base.trim() ? `${base.trimEnd()} ${text}` : text)}
+            onInterim={(text, base) => setPrompt(base.trim() ? `${base.trimEnd()} ${text}` : text)}
+            onAutoSubmit={(text, base) => {
+              const combined = base.trim() ? `${base.trimEnd()} ${text}` : text;
+              setPrompt(combined);
+              submit(undefined, combined);
+            }}
+            onCancel={(base) => setPrompt(base)}
+          />
+        </div>
+
+        {files.attachments.length ? <div className="mt-2">{files.chips}</div> : null}
 
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          <div className="inline-flex h-8 items-center rounded-full bg-muted p-0.5 text-xs font-semibold">
-            {availableAgentOptions.map(({ key, label }) => (
-              <button
-                key={key}
-                type="button"
-                title={label}
-                aria-label={label}
-                onClick={() => {
-                  setAgent(key);
-                  setModel(localStorage.getItem(`lfg_fork_model_${key}`) || defaultModelFor(key));
-                }}
-                className={cn(
-                  "flex h-7 w-9 items-center justify-center rounded-full transition",
-                  agent === key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground",
-                )}
-              >
-                <img src={agentIconSrc(key)} alt="" className="size-5" />
-              </button>
-            ))}
-          </div>
+          <AgentIconStrip
+            options={availableAgentOptions}
+            value={agent}
+            onSelect={(key) => {
+              setAgent(key);
+              setModel(localStorage.getItem(`lfg_fork_model_${key}`) || defaultModelFor(key));
+            }}
+          />
 
-          <ModelPicker value={model} models={models} onChange={setModel} />
+          <ModelPicker value={model} models={models} onChange={setModel} width="max-w-28" />
 
           {agentSupportsThinking(agent) ? (
             <FieldPill>
@@ -10405,16 +10628,30 @@ function ForkSessionDialog({
           ) : null}
         </div>
 
-        <div className="mt-4 flex items-center justify-end gap-2">
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Cancel
+        <div className="mt-4 flex items-center gap-2">
+          <Button
+            size="icon-sm"
+            type="button"
+            variant={files.draggingFiles ? "brand-soft" : "outline"}
+            className="size-8 rounded-full shadow-sm"
+            onClick={files.openFilePicker}
+            aria-label="Attach files"
+            title="Attach files"
+          >
+            <Paperclip className="size-4" />
           </Button>
-          <Button type="submit" variant="brand" disabled={!sid}>
-            <GitFork className="size-4" />
-            Open
-          </Button>
+          <div className="ml-auto flex items-center gap-2">
+            <Button type="button" variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="brand" disabled={!sid}>
+              <GitFork className="size-4" />
+              Open
+            </Button>
+          </div>
         </div>
       </form>
+      {files.annotator}
     </BottomSheet>
   );
 }
@@ -12430,28 +12667,33 @@ function NewSessionDialog({
     () => defaultUser || localStorage.getItem("lfg_user") || users[0]?.email || "",
   );
   const [prompt, setPrompt] = useState("");
-  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [pendingUploads, setPendingUploads] = useState<ComposerAttachment[]>([]);
-  const [draggingFiles, setDraggingFiles] = useState(false);
-  const [annotatingId, setAnnotatingId] = useState<string | null>(null);
   const [usage, setUsage] = useState<ProviderUsage | null>(null);
   const [pendingCreates, setPendingCreates] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const previewUrls = useRef<string[]>([]);
+  // Shared composer file plumbing (same hook the chat and fork composers use).
   // An attachment can be mid-upload in either list: submit() moves it from
   // `attachments` to `pendingUploads` so the composer clears immediately, and
-  // the chip row renders both. Patch both so its progress keeps ticking across
-  // the handoff.
-  const { prefetchUpload, resolveUpload, forgetUpload } = useEagerUploads({
+  // the chip row renders both — so patch both via onPatchExtra and its progress
+  // keeps ticking across the handoff.
+  const files = useComposerAttachments({
     endpoint: (att) => `/api/uploads?filename=${encodeURIComponent(att.name)}`,
-    onPatch: (id, patch) => {
-      const apply = (current: ComposerAttachment[]) =>
-        current.map((item) => (item.id === id ? { ...item, ...patch } : item));
-      setAttachments(apply);
-      setPendingUploads(apply);
-    },
+    onPatchExtra: (id, patch) =>
+      setPendingUploads((current) =>
+        current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
+      ),
   });
+  const {
+    attachments,
+    setAttachments,
+    draggingFiles,
+    addFiles,
+    removeAttachment,
+    setAnnotatingId,
+    previewUrls,
+    resolveUpload,
+    forgetUpload,
+  } = files;
   // Resumable (closed / rebooted-away) sessions. Fetched lazily when the user
   // expands the section so opening the dialog stays instant; reset on close.
   const [resumeOpen, setResumeOpen] = useState(false);
@@ -12931,43 +13173,6 @@ function NewSessionDialog({
   // trap sit above the full-screen picker and dismissing the dialog unmounts it.
   if (!open && !resumeOpen) return null;
 
-  function addFiles(files: FileList | File[]) {
-    const incoming = Array.from(files).filter((file) => file.size > 0);
-    if (!incoming.length) return;
-    const room = Math.max(0, 8 - attachments.length);
-    if (!room) {
-      toast.error("Remove an attachment before adding another.");
-      return;
-    }
-    if (incoming.length > room) toast.error(`Added ${room} of ${incoming.length} files.`);
-    const next: ComposerAttachment[] = incoming.slice(0, room).map((file) => {
-      const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined;
-      if (previewUrl) previewUrls.current.push(previewUrl);
-      return {
-        id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
-        file,
-        name: file.name || "upload",
-        size: file.size,
-        type: file.type,
-        previewUrl,
-        status: "ready" as const,
-      };
-    });
-    setAttachments((current) => [...current, ...next]);
-    // Push the bytes now instead of waiting for send, so the upload is normally
-    // already finished by the time the user submits.
-    next.forEach(prefetchUpload);
-  }
-
-  function removeAttachment(id: string) {
-    forgetUpload(id);
-    setAttachments((current) => {
-      const item = current.find((att) => att.id === id);
-      if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl);
-      return current.filter((att) => att.id !== id);
-    });
-  }
-
   function submit(e?: FormEvent, overrideText?: string) {
     e?.preventDefault();
     const taskPrompt = (overrideText ?? prompt).trim();
@@ -13089,44 +13294,22 @@ function NewSessionDialog({
   };
   cycleAgentRef.current = cycleAgent;
 
-  const agentSelector = agentButtons.length ? (
-    <div
-      className={cn(
-        "inline-flex h-8 items-center text-xs font-semibold",
-        variant === "inline" ? "gap-0.5" : "rounded-full bg-muted p-0.5",
-      )}
-    >
-      {agentButtons.map(({ key, label }) => (
-        <button
-          key={key}
-          type="button"
-          title={label}
-          aria-label={label}
-          onClick={() => {
-            // Re-tapping the already-selected agent collapses the row.
-            if (variant === "inline" && expanded && agent === key) {
-              onExpandedChange?.(false);
-              return;
-            }
-            setAgent(key);
-            setModel(
-              localStorage.getItem(`lfg_model_${key}`) || defaultModelFor(key),
-            );
-          }}
-          className={cn(
-            "flex h-7 w-9 items-center justify-center rounded-full transition",
-            agent === key
-              ? variant === "inline"
-                ? "bg-muted text-foreground"
-                : "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground",
-          )}
-        >
-          <img src={agentIconSrc(key)} alt="" className="size-5" />
-        </button>
-      ))}
-    </div>
-  ) : null;
+  const agentSelector = (
+    <AgentIconStrip
+      options={agentButtons}
+      value={agent}
+      flat={variant === "inline"}
+      onSelect={(key) => {
+        // Re-tapping the already-selected agent collapses the row.
+        if (variant === "inline" && expanded && agent === key) {
+          onExpandedChange?.(false);
+          return;
+        }
+        setAgent(key);
+        setModel(localStorage.getItem(`lfg_model_${key}`) || defaultModelFor(key));
+      }}
+    />
+  );
 
   const modelControls = (
     <>
@@ -13273,44 +13456,14 @@ function NewSessionDialog({
     <>
     <form
       onSubmit={submit}
-      onDragEnter={(event) => {
-        if (Array.from(event.dataTransfer.types).includes("Files")) setDraggingFiles(true);
-      }}
-      onDragOver={(event) => {
-        if (!Array.from(event.dataTransfer.types).includes("Files")) return;
-        event.preventDefault();
-        event.dataTransfer.dropEffect = "copy";
-        setDraggingFiles(true);
-      }}
-      onDragLeave={(event) => {
-        const nextTarget = event.relatedTarget;
-        if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
-          setDraggingFiles(false);
-        }
-      }}
-      onDrop={(event) => {
-        if (!event.dataTransfer.files.length) return;
-        event.preventDefault();
-        setDraggingFiles(false);
-        addFiles(event.dataTransfer.files);
-      }}
+      {...files.dropZoneProps}
       className={cn(
         "max-h-[70dvh] overscroll-contain px-2 pb-[max(env(safe-area-inset-bottom),0.5rem)] transition-colors",
         variant === "inline" ? "overflow-visible pt-1.5" : "overflow-y-auto pt-1",
         draggingFiles && "bg-primary/8",
       )}
     >
-      <input
-        ref={fileInputRef}
-        type="file"
-        aria-label="Attach files"
-        multiple
-        className="hidden"
-        onChange={(event) => {
-          if (event.target.files) addFiles(event.target.files);
-          event.currentTarget.value = "";
-        }}
-      />
+      {files.fileInput}
       <div
         className={cn(
           "lfg-gfield relative rounded-2xl",
@@ -13326,13 +13479,7 @@ function NewSessionDialog({
         <SkillTextarea
           value={prompt}
           onValueChange={setPrompt}
-          onPaste={(event) => {
-            const files = event.clipboardData?.files;
-            if (files?.length) {
-              event.preventDefault();
-              addFiles(files);
-            }
-          }}
+          onPaste={files.onPasteFiles}
           onKeyDown={(e) => {
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
               e.preventDefault();
@@ -13366,78 +13513,18 @@ function NewSessionDialog({
         />
       </div>
 
-      {pendingUploads.length || attachments.length ? (
-        <div className="mt-2 flex gap-1.5 overflow-x-auto pb-0.5">
-          {[
-            // Chips already handed off to an in-flight session creation can no
-            // longer be edited or removed; live composer attachments always can,
-            // even while their upload is still running.
-            ...pendingUploads.map((att) => ({ att, locked: true })),
-            ...attachments.map((att) => ({ att, locked: false })),
-          ].map(({ att, locked }) => (
-            <div
-              key={att.id}
-              className={cn(
-                "group relative flex h-12 max-w-52 shrink-0 items-center gap-2 overflow-hidden rounded-lg border bg-muted/55 pl-1.5 pr-1.5 text-xs",
-                att.status === "failed" ? "border-destructive/40 bg-destructive/10" : "border-border/70",
-              )}
-              title={att.error || att.name}
-            >
-              {att.previewUrl ? (
-                <img
-                  src={att.previewUrl}
-                  alt=""
-                  className="size-9 shrink-0 rounded-md object-cover"
-                />
-              ) : (
-                <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-background/80 text-muted-foreground">
-                  <Paperclip className="size-4" />
-                </div>
-              )}
-              <div className="min-w-0">
-                <div className="truncate font-medium text-foreground">{att.name}</div>
-                <div className="text-[11px] text-muted-foreground">
-                  {att.status === "uploading" ? `Uploading ${att.progress ?? 0}%` : att.status === "failed" ? "Failed" : formatBytes(att.size)}
-                </div>
-              </div>
-              {att.status === "uploading" ? (
-                <div
-                  className="absolute inset-x-0 bottom-0 h-0.5 bg-primary/15"
-                  role="progressbar"
-                  aria-label={`Uploading ${att.name}`}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={att.progress ?? 0}
-                >
-                  <div className="h-full bg-primary transition-[width] duration-150" style={{ width: `${att.progress ?? 0}%` }} />
-                </div>
-              ) : null}
-              {att.previewUrl ? (
-                <button
-                  type="button"
-                  className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-background hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-                  onClick={() => setAnnotatingId(att.id)}
-                  aria-label={`Annotate ${att.name}`}
-                  title="Annotate"
-                  disabled={locked}
-                >
-                  <Pencil className="size-3.5" />
-                </button>
-              ) : null}
-              <button
-                type="button"
-                className="ml-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-background hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-                onClick={() => removeAttachment(att.id)}
-                aria-label={`Remove ${att.name}`}
-                title="Remove"
-                disabled={locked}
-              >
-                <X className="size-3.5" />
-              </button>
-            </div>
-          ))}
-        </div>
-      ) : null}
+      <ComposerAttachmentChips
+        className="mt-2"
+        items={[
+          // Chips already handed off to an in-flight session creation can no
+          // longer be edited or removed; live composer attachments always can,
+          // even while their upload is still running.
+          ...pendingUploads.map((att) => ({ att, locked: true })),
+          ...attachments.map((att) => ({ att, locked: false })),
+        ]}
+        onAnnotate={setAnnotatingId}
+        onRemove={removeAttachment}
+      />
 
       {/* The drawer variant keeps its always-open controls row; the inline
           composer carries these inside the agent popover instead. */}
@@ -13486,7 +13573,7 @@ function NewSessionDialog({
             type="button"
             variant={draggingFiles ? "brand-soft" : "outline"}
             className="size-8 rounded-full shadow-sm"
-            onClick={() => fileInputRef.current?.click()}
+            onClick={files.openFilePicker}
             aria-label="Attach files"
             title="Attach files"
           >
@@ -13530,19 +13617,7 @@ function NewSessionDialog({
         onCreate={() => openFolderBrowser(true)}
       />
     </form>
-    <ImageAnnotator
-      open={!!annotatingId}
-      file={attachments.find((att) => att.id === annotatingId)?.file ?? null}
-      onOpenChange={(next) => {
-        if (!next) setAnnotatingId(null);
-      }}
-      onSave={(file) => {
-        if (annotatingId) {
-          applyAnnotatedAttachment(setAttachments, previewUrls, annotatingId, file, prefetchUpload);
-        }
-        setAnnotatingId(null);
-      }}
-    />
+    {files.annotator}
     </>
   );
 
