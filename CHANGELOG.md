@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+- The Usage Campfire's "next restore" now counts down to the second, with each
+  unit rolling on its own instead of the whole line swapping once a second.
+- Agent marks in the campfire are larger again.
+- On touch, tapping an agent now highlights it and retargets the readout; a
+  second tap on the same agent starts the session. Previously a single tap fired
+  straight into the composer, before you could read anything.
+
 ## July 25, 2026 - Start a session from the campfire (v0.1.58)
 
 - Clicking an agent in the Usage Campfire now picks that agent in the composer
