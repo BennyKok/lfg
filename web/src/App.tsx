@@ -950,6 +950,23 @@ function closeSessionRequest(sid: string, source: string) {
   });
 }
 
+type CloseAllResult = {
+  closed?: string[];
+  failed?: { sessionId: string; reason: string }[];
+  skipped?: number;
+};
+
+// Bulk close, straight to the server — no agent, no model in the loop. The
+// explicit id list scopes the sweep to exactly the cards visible under the
+// current project/user filters.
+function closeAllSessionsRequest(sessionIds: string[], source: string) {
+  return api<CloseAllResult>("/api/sessions/close-all", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source, scope: "idle", sessionIds }),
+  });
+}
+
 let skillCatalogPromise: Promise<SkillCatalogItem[]> | null = null;
 let skillCatalogLoadedAt = 0;
 let skillCatalogSnapshot: SkillCatalogItem[] = [];
@@ -3342,6 +3359,7 @@ function PushBell({ user }: { user?: string | null }) {
 }
 
 export function App() {
+  const appDialog = useAppDialog();
   const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
   useEffect(() => {
     const syncTheme = () => {
@@ -4537,6 +4555,42 @@ export function App() {
     }
   }
 
+  // Direct bulk clear: ends every idle in-scope session in one request. The
+  // Manage Sessions templates below spawn an agent to exercise judgement; this
+  // is the plumbing version for "just clear them" — no LLM involved.
+  async function clearIdleSessions() {
+    const targets = liveSessions.filter((s) => s.sessionId && !s.busy);
+    const busyCount = liveSessions.length - targets.length;
+    if (!targets.length) {
+      toast.info(busyCount ? "Every session in scope is still working" : "No sessions to clear");
+      return;
+    }
+    const confirmed = await appDialog.confirm({
+      title: `End ${targets.length} idle session${targets.length === 1 ? "" : "s"}?`,
+      description: busyCount
+        ? `${busyCount} session${busyCount === 1 ? " is" : "s are"} still working and will be left running.`
+        : "They stop immediately and disappear from the live view.",
+      confirmLabel: "End sessions",
+      destructive: true,
+    });
+    if (!confirmed) return;
+    const ids = targets.map((s) => s.sessionId as string);
+    // Drop the cards now; the server tombstones the pids so the next poll
+    // agrees (same optimistic path as a single close).
+    ids.forEach((sid) => removeSession(sid));
+    try {
+      const res = await closeAllSessionsRequest(ids, "live_clear_idle");
+      const closed = res.closed?.length ?? 0;
+      const failed = res.failed?.length ?? 0;
+      if (failed) toast.warning(`Ended ${closed}, ${failed} could not be closed`);
+      else toast.success(`Ended ${closed} session${closed === 1 ? "" : "s"}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not clear sessions");
+    } finally {
+      await refreshSessions().catch(() => {});
+    }
+  }
+
   async function launchManageSessions(template: ManageSessionPromptTemplate) {
     const scopedRepo =
       projectFilter !== "__all"
@@ -4843,6 +4897,7 @@ export function App() {
                   <ManageSessionsMenu
                     projectFilter={projectFilter}
                     onSelect={(template) => void launchManageSessions(template)}
+                    onClearIdle={() => void clearIdleSessions()}
                   />
                 ) : null}
                 <UserFilterMenu
@@ -4902,6 +4957,7 @@ export function App() {
               isMobile ? setComposerFocusNonce((n) => n + 1) : setNewOpen(true)
             }
             onManageSessions={(template) => void launchManageSessions(template)}
+            onClearIdle={() => void clearIdleSessions()}
             findings={projectScopedFindings}
             autoAgents={projectScopedAutoAgents}
             onOpenFinding={setOpenFinding}
@@ -5663,10 +5719,12 @@ function UsageRingsButton({
 function ManageSessionsMenu({
   projectFilter,
   onSelect,
+  onClearIdle,
   compact = false,
 }: {
   projectFilter: string;
   onSelect: (template: ManageSessionPromptTemplate) => void;
+  onClearIdle?: () => void;
   compact?: boolean;
 }) {
   const scopeLabel = projectFilter === "__all" ? "All projects" : shortProject(projectFilter);
@@ -5703,6 +5761,24 @@ function ManageSessionsMenu({
           </DropdownMenuLabel>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
+        {onClearIdle ? (
+          <>
+            {/* Direct action — runs against the API, no agent spawned. Kept
+                above the agent-driven templates because it's the one people
+                reach for most: "just clear the finished ones". */}
+            <DropdownMenuItem
+              variant="destructive"
+              className="flex cursor-pointer flex-col items-start gap-0.5 py-2"
+              onClick={onClearIdle}
+            >
+              <span className="text-sm font-medium text-destructive">Clear idle sessions</span>
+              <span className="text-xs text-muted-foreground">
+                Ends every non-working session now. No agent.
+              </span>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        ) : null}
         {MANAGE_SESSION_PROMPTS.map((template) => (
           <DropdownMenuItem
             key={template.id}
@@ -6823,6 +6899,7 @@ function LiveView({
   onOpenAsk,
   onOpenShipped,
   onManageSessions,
+  onClearIdle,
   focus,
 }: {
   sessions: Session[];
@@ -6836,6 +6913,7 @@ function LiveView({
   onOpenAsk?: () => void;
   onOpenShipped?: () => void;
   onManageSessions: (template: ManageSessionPromptTemplate) => void;
+  onClearIdle: () => void;
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
@@ -7059,6 +7137,8 @@ function LiveView({
         onOpenSettings={onOpenSettings}
         onOpenAsk={onOpenAsk}
         onOpenShipped={onOpenShipped}
+        onManageSessions={onManageSessions}
+        onClearIdle={onClearIdle}
         focus={focus}
         topPinned={topPinned}
         onToggleTopPin={toggleTopPin}
@@ -7126,6 +7206,7 @@ function LiveView({
                 compact
                 projectFilter={projectFilter}
                 onSelect={onManageSessions}
+                onClearIdle={onClearIdle}
               />
             }
           />
@@ -7184,6 +7265,8 @@ function RailStage({
   onOpenSettings,
   onOpenAsk,
   onOpenShipped,
+  onManageSessions,
+  onClearIdle,
   focus,
   topPinned,
   onToggleTopPin,
@@ -7198,6 +7281,8 @@ function RailStage({
   onOpenSettings?: () => void;
   onOpenAsk?: () => void;
   onOpenShipped?: () => void;
+  onManageSessions?: (template: ManageSessionPromptTemplate) => void;
+  onClearIdle?: () => void;
   focus?: { sid: string; n: number } | null;
   topPinned: string[];
   onToggleTopPin: (sid: string) => void;
@@ -7669,27 +7754,74 @@ function RailStage({
 
   // Latest values for the global key handler, so it binds once but never reads
   // stale state.
-  const kb = useRef({ orderedSids, cursor, preview, columnIds, activate, selectTo, togglePin, closeColumn, closeSession, setCursor, setPreview, setRailCollapsed, setShowHelp, showHelp, busyBySid, interruptSid, onNew });
-  kb.current = { orderedSids, cursor, preview, columnIds, activate, selectTo, togglePin, closeColumn, closeSession, setCursor, setPreview, setRailCollapsed, setShowHelp, showHelp, busyBySid, interruptSid, onNew };
+  const kb = useRef({
+    orderedSids,
+    cursor,
+    preview,
+    columnIds,
+    activate,
+    selectTo,
+    togglePin,
+    closeColumn,
+    closeSession,
+    setCursor,
+    setPreview,
+    setRailCollapsed,
+    setShowHelp,
+    showHelp,
+    busyBySid,
+    interruptSid,
+    onNew,
+    onOpenSettings,
+  });
+  kb.current = {
+    orderedSids,
+    cursor,
+    preview,
+    columnIds,
+    activate,
+    selectTo,
+    togglePin,
+    closeColumn,
+    closeSession,
+    setCursor,
+    setPreview,
+    setRailCollapsed,
+    setShowHelp,
+    showHelp,
+    busyBySid,
+    interruptSid,
+    onNew,
+    onOpenSettings,
+  };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const s = kb.current;
       const order = s.orderedSids;
       const cur = s.cursor && order.includes(s.cursor) ? s.cursor : order[0] ?? null;
       const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      const mod = e.metaKey || e.ctrlKey;
 
       // Quick-interrupt: Cmd/Ctrl+. cancels the active run from anywhere — even
       // while typing in the composer — targeting the focused session if it's
       // busy, else the first running session.
-      if ((e.metaKey || e.ctrlKey) && e.key === ".") {
+      if (mod && e.key === ".") {
         e.preventDefault();
         const target = cur && s.busyBySid[cur] ? cur : order.find((id) => s.busyBySid[id]) ?? cur;
         void s.interruptSid(target);
         return;
       }
 
+      // Cmd/Ctrl+B toggles the session rail (VS Code / IDE convention). Works
+      // even while a composer is focused so the layout is always one chord away.
+      if (mod && key === "b") {
+        e.preventDefault();
+        s.setRailCollapsed((v) => !v);
+        return;
+      }
+
       // Never hijack browser combos or typing in a composer/input.
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (mod || e.altKey) return;
       const el = document.activeElement as HTMLElement | null;
       const tag = el?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || el?.isContentEditable) return;
@@ -7753,6 +7885,13 @@ function RailStage({
         case "c":
           e.preventDefault();
           s.onNew();
+          return;
+        case ",":
+          // Comma opens Settings (same muscle memory as many apps' Cmd+,).
+          if (s.onOpenSettings) {
+            e.preventDefault();
+            s.onOpenSettings();
+          }
           return;
         case "ArrowDown":
           e.preventDefault();
@@ -7993,6 +8132,7 @@ function RailStage({
               type="button"
               onClick={() => setRailCollapsed((v) => !v)}
               aria-label="Expand sidebar"
+              title="Expand sidebar (⌘B)"
               className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
             >
               <PanelLeftOpen className="size-4" />
@@ -8011,7 +8151,7 @@ function RailStage({
                 type="button"
                 onClick={onOpenSettings}
                 aria-label="Settings"
-                title="Settings"
+                title="Settings (,)"
                 className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
               >
                 <Settings className="size-4" />
@@ -8063,6 +8203,13 @@ function RailStage({
                     onChange={onUserChange}
                   />
                 ) : null}
+                {onManageSessions ? (
+                  <ManageSessionsMenu
+                    projectFilter={projectFilter}
+                    onSelect={onManageSessions}
+                    onClearIdle={onClearIdle}
+                  />
+                ) : null}
               </div>
             </div>
             <div className="flex items-center gap-1.5">
@@ -8081,7 +8228,7 @@ function RailStage({
                 type="button"
                 onClick={() => setRailCollapsed((v) => !v)}
                 aria-label="Collapse sidebar"
-                title="Collapse sidebar"
+                title="Collapse sidebar (⌘B)"
                 className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"
               >
                 <PanelLeftClose className="size-4" />
@@ -8196,11 +8343,12 @@ function ShortcutsHelp({ onClose }: { onClose: () => void }) {
     ["Enter", "Focus into current session"],
     ["o", "Open cursored session"],
     ["c", "New session"],
+    [",", "Open Settings"],
     ["p", "Pin / unpin cursored session"],
     ["x", "Close cursored column"],
     ["Shift+E", "End cursored session"],
     ["1 – 9", "Open the Nth session"],
-    ["\\", "Collapse / expand the rail"],
+    ["⌘B / \\", "Collapse / expand the rail"],
     ["?", "Toggle this help"],
     ["Esc", "Close help / preview"],
   ];

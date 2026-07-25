@@ -219,25 +219,79 @@ function latestOpencodeError(opencodeSessionId: string): string | null {
   return null;
 }
 
-function toolPartMessage(part: OcPart, fallbackId: string): ReturnType<typeof normalizeLineMessages>[number] {
-  const status = part.state?.status ? ` [${part.state.status}]` : "";
-  const input = part.state?.input == null
-    ? ""
-    : (() => {
-        try {
-          return JSON.stringify(part.state.input, null, 2);
-        } catch {
-          return String(part.state.input);
-        }
-      })();
+const TOOL_TEXT_MAX = 4_000;
+
+function stringifyToolValue(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function clipToolText(text: string): string {
+  return text.length > TOOL_TEXT_MAX ? `${text.slice(0, TOOL_TEXT_MAX)}\n… [truncated]` : text;
+}
+
+// OpenCode streams ONE part per tool call and mutates it in place:
+//   pending {}  →  running {input}  →  completed {input, output}
+// The transcript index is append-only (`INSERT OR IGNORE` on the message id), so
+// re-indexing the same part id only ever stores the FIRST snapshot — which is
+// the empty `pending` one. That is what froze every opencode row at
+// `read [pending]: {}`. Instead of re-publishing one mutating row, emit at most
+// two immutable rows per part, each with its own stable id:
+//   - `<partId>`         the tool_use, published once the input is actually known
+//   - `<partId>:result`  the tool_result, published when the call settles
+// Both are append-only and land in the live stream exactly like every other
+// agent's tool rows.
+/** @internal exported for unit tests */
+export function toolPartMessages(
+  part: OcPart,
+  fallbackId: string,
+  emitted: Set<string>,
+): ReturnType<typeof normalizeLineMessages> {
+  const id = part.id || fallbackId;
   const name = part.tool ?? "tool";
-  return {
-    id: part.id || fallbackId,
-    role: "assistant",
-    kind: "tool_use",
-    text: input ? `${name}${status}: ${input}` : `${name}${status}`,
-    ts: Date.now(),
-  };
+  const status = part.state?.status ?? "";
+  const input = stringifyToolValue(part.state?.input);
+  const out: ReturnType<typeof normalizeLineMessages> = [];
+
+  // Nothing to show until the arguments exist — a bare `pending` row is noise
+  // and, worse, would permanently occupy the id that the real call needs.
+  const hasInput = !!input && input !== "{}";
+  const settled = status === "completed" || status === "error";
+  if ((hasInput || settled) && !emitted.has(id)) {
+    emitted.add(id);
+    out.push({
+      id,
+      role: "assistant",
+      kind: "tool_use",
+      text: clipToolText(input ? `${name}: ${input}` : name),
+      ts: Date.now(),
+    });
+  }
+
+  if (settled) {
+    const resultId = `${id}:result`;
+    if (!emitted.has(resultId)) {
+      const body = status === "error"
+        ? stringifyToolValue(part.state?.error) || "tool call failed"
+        : stringifyToolValue(part.state?.output);
+      if (body) {
+        emitted.add(resultId);
+        out.push({
+          id: resultId,
+          role: "user",
+          kind: "tool_result",
+          text: clipToolText(status === "error" ? `${name} failed: ${body}` : body),
+          ts: Date.now(),
+        });
+      }
+    }
+  }
+  return out;
 }
 
 // Auto runner has no human — reject any OpenCode question so the turn can't hang.
@@ -263,7 +317,7 @@ export async function pipeToOpencodeAiSdk(
   const { createOpencodeServer, createOpencodeClient } = await import("@opencode-ai/sdk");
 
   log(`[runner] piping ${prompt.length} chars to opencode via opencode-sdk (${model})`);
-  const server = await createOpencodeServer({});
+  const server = await createOpencodeServer({ port: 0 });
   try {
     const client = createOpencodeClient({ baseUrl: server.url });
     const created = await client.session.create({ body: {}, query: { directory: cwd } });
@@ -327,7 +381,28 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
   const { createOpencodeServer, createOpencodeClient } = await import("@opencode-ai/sdk");
 
   // One server + client per harness, reused across every turn.
-  const server = await createOpencodeServer({});
+  // `port: 0` is load-bearing: the SDK otherwise hardcodes 4096, so a SECOND
+  // opencode session on the same box died at boot with a bare `ServeError`
+  // (address in use) and never produced a single transcript row. The SDK parses
+  // the actually-bound port back out of `opencode serve`'s banner, so ephemeral
+  // ports work transparently.
+  let server: Awaited<ReturnType<typeof createOpencodeServer>>;
+  try {
+    server = await createOpencodeServer({ port: 0 });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`opencode-aisdk-session: failed to start opencode server: ${msg}`);
+    indexSessionMessagesDirect(key, [
+      {
+        id: `${key}:server-start-failed`,
+        role: "assistant",
+        kind: "text",
+        text: `OpenCode failed to start its local server: ${msg}`,
+        ts: Date.now(),
+      },
+    ]);
+    throw e;
+  }
   const serverUrl = server.url;
   const client = createOpencodeClient({ baseUrl: serverUrl });
 
@@ -550,9 +625,10 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
         (sub as { data?: AsyncIterable<unknown> }).data;
       if (!stream) return;
       let draft = "";
-      // Track last published snapshot per tool part so status transitions
-      // (running → completed) re-index without spamming identical rows.
-      const toolPartSnapshots = new Map<string, string>();
+      // Ids already published for tool parts (`<partId>` and `<partId>:result`).
+      // OpenCode re-sends the whole part on every mutation, so this is what keeps
+      // a call from being re-emitted on each tick.
+      const emittedToolIds = new Set<string>();
       for await (const raw of stream) {
         if (closing) break;
         const ev = raw as {
@@ -610,12 +686,8 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
             }
           } else if (part.type === "tool") {
             const fallbackId = `${ocSessionId}:tool:${part.id ?? part.tool ?? "tool"}`;
-            const id = part.id || fallbackId;
-            const snap = `${part.tool ?? "tool"}|${part.state?.status ?? ""}|${JSON.stringify(part.state?.input ?? {})}`;
-            if (toolPartSnapshots.get(id) !== snap) {
-              toolPartSnapshots.set(id, snap);
-              indexSessionMessagesDirect(key, [toolPartMessage(part, fallbackId)]);
-            }
+            const rows = toolPartMessages(part, fallbackId, emittedToolIds);
+            if (rows.length) indexSessionMessagesDirect(key, rows);
             // If a question tool starts, reconcile from /question (events can
             // lag behind the tool part).
             if (part.tool === "question" && part.state?.status === "running") {

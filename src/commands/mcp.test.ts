@@ -42,6 +42,80 @@ describe("closeLfgSession", () => {
   });
 });
 
+describe("short session ids", () => {
+  const FULL = "abcd1234-1111-4111-8111-111111111111";
+
+  test("resolves an 8-char short id to the full uuid before calling the API", async () => {
+    process.env.LFG_BASE = "http://127.0.0.1:9876";
+    process.env.LFG_SESSION_ID = "caller-session";
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      urls.push(String(url));
+      if (String(url).endsWith("/api/sessions")) {
+        return Response.json({ sessions: [{ sessionId: FULL }, { sessionId: "99999999-2222-4222-8222-222222222222" }] });
+      }
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+
+    await expect(closeLfgSession("abcd1234")).resolves.toEqual({
+      closed: true,
+      sessionId: "abcd1234",
+    });
+    // The wire always carries the full uuid.
+    expect(urls).toContain(`http://127.0.0.1:9876/api/sessions/${FULL}/close`);
+  });
+
+  test("a full uuid needs no lookup round-trip", async () => {
+    process.env.LFG_BASE = "http://127.0.0.1:9876";
+    process.env.LFG_SESSION_ID = "caller-session";
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      urls.push(String(url));
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+
+    await closeLfgSession(FULL);
+    expect(urls).toEqual([`http://127.0.0.1:9876/api/sessions/${FULL}/close`]);
+  });
+
+  test("rejects an ambiguous prefix instead of guessing a session", async () => {
+    process.env.LFG_BASE = "http://127.0.0.1:9876";
+    process.env.LFG_SESSION_ID = "caller-session";
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      if (String(url).endsWith("/api/sessions")) {
+        return Response.json({
+          sessions: [
+            { sessionId: "beefbeef-1111-4111-8111-111111111111" },
+            { sessionId: "beefbeef-2222-4222-8222-222222222222" },
+          ],
+        });
+      }
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+
+    await expect(closeLfgSession("beefbeef")).rejects.toThrow("ambiguous");
+  });
+
+  test("falls back to historical sessions when nothing live matches", async () => {
+    process.env.LFG_BASE = "http://127.0.0.1:9876";
+    process.env.LFG_SESSION_ID = "caller-session";
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      urls.push(String(url));
+      if (String(url).endsWith("/api/sessions")) return Response.json({ sessions: [] });
+      if (String(url).endsWith("/api/sessions/find")) {
+        return Response.json({ sessions: [{ sessionId: "dead1234-1111-4111-8111-111111111111" }] });
+      }
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+
+    await expect(closeLfgSession("dead1234")).resolves.toMatchObject({ closed: true });
+    expect(urls).toContain(
+      "http://127.0.0.1:9876/api/sessions/dead1234-1111-4111-8111-111111111111/close",
+    );
+  });
+});
+
 describe("findLfgSessions", () => {
   test("queries the historical session API with composable filters", async () => {
     process.env.LFG_BASE = "http://127.0.0.1:9876";
@@ -94,7 +168,10 @@ describe("sendToOrigin", () => {
       artifactIds: ["shot-1"],
     })).resolves.toMatchObject({
       delivered: true,
-      sessionId: "11111111-1111-4111-8111-111111111111",
+      // Agent-facing ids are the 8-char short form; the full uuid is still what
+      // goes over the wire (asserted on the request below).
+      sessionId: "11111111",
+      deliveryId: "delivery-1",
     });
     expect(request?.url).toEndWith(
       "/api/sessions/11111111-1111-4111-8111-111111111111/origin-deliveries",

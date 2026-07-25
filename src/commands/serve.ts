@@ -13,6 +13,7 @@ import {
   sourceUpdateStatus,
 } from "../self-update.ts";
 import { compressedAssetResponse, maybeCompressResponse } from "../http-compress.ts";
+import { shortSessionId } from "../lfg-capabilities.ts";
 import {
   getCachedResumableSession,
   updateResumableUser,
@@ -1081,6 +1082,97 @@ function err(status: number, message: string) {
   return json({ error: message }, { status });
 }
 
+type CloseOutcome = { ok: true; mode: string } | { ok: false; status: number; reason: string };
+
+// Tear down one live session. Shared by the single-session /close route and the
+// bulk /api/sessions/close-all sweep so both take the exact same path (harness
+// shutdown command, tmux teardown, pid tombstone, registry cleanup).
+async function closeLiveSession(
+  sess: Session,
+  id: string,
+  closeLog: Record<string, unknown>,
+): Promise<CloseOutcome> {
+  persistManagedResume(sess);
+  if (isCommandFileAgent(sess.agent)) {
+    // Ask the harness to shut down, then tear down its supervisor pane and
+    // control-plane files. markClosed tombstones the harness pid so the
+    // session drops out of the list immediately. For codex-aisdk the
+    // live-view id is the threadId — map it back to the key the command
+    // file and registry entry are named by.
+    const key = findAisdkEntryByAnyId(id)?.sessionId ?? id;
+    appendAisdkCmd(key, { type: "close" });
+    if (sess.tmuxName) tmuxKillSession(sess.tmuxName);
+    markClosed(sess.pid);
+    removeAisdkEntry(key);
+    if (sess.tmuxName) {
+      removeManaged(sess.tmuxName);
+      assignUser(sess.tmuxName, null);
+    }
+    clearResolved(id);
+    invalidateListSessionsCache();
+    evlog("session_close_done", {
+      ...closeLog,
+      agent: sess.agent,
+      tmuxName: sess.tmuxName,
+      managed: sess.managed,
+      mode: "harness",
+    });
+    return { ok: true, mode: "harness" };
+  }
+  if (!sess.tmuxTarget) {
+    evlog("session_close_rejected", {
+      ...closeLog,
+      agent: sess.agent,
+      tmuxName: sess.tmuxName,
+      managed: sess.managed,
+      reason: "no_tmux_target",
+    });
+    return { ok: false, status: 409, reason: "session is not in a tmux pane — cannot close" };
+  }
+  // A session lfg started owns its whole tmux session (one managed
+  // claude, no sibling panes) — kill the session and deregister it.
+  // Attached sessions might share a tmux session with the user's other
+  // panes, so only kill the one pane.
+  const killed =
+    sess.managed && sess.tmuxName ? tmuxKillSession(sess.tmuxName) : tmuxKillPane(sess.tmuxTarget);
+  if (!killed) {
+    evlog("session_close_failed", {
+      ...closeLog,
+      agent: sess.agent,
+      tmuxName: sess.tmuxName,
+      managed: sess.managed,
+    });
+    return { ok: false, status: 502, reason: "close failed" };
+  }
+  // Tombstone the pid so the session drops out of listSessions() at once
+  // — the process lingers briefly after the SIGHUP and would otherwise
+  // flicker back for a poll or two before pgrep stops seeing it.
+  markClosed(sess.pid);
+  if (sess.managed && sess.tmuxName) {
+    if (sess.agent === "codex") {
+      const tp = await resolveTranscript(id).catch(() => null);
+      const nativeSessionId =
+        sess.nativeSessionId ??
+        tp?.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/)?.[0];
+      patchManaged(sess.tmuxName, { launchState: "running", nativeSessionId });
+    } else {
+      removeManaged(sess.tmuxName);
+    }
+    assignUser(sess.tmuxName, null); // a managed name is unique + now gone
+  }
+  clearResolved(id);
+  invalidateListSessionsCache();
+  const mode = sess.managed && sess.tmuxName ? "tmux_session" : "tmux_pane";
+  evlog("session_close_done", {
+    ...closeLog,
+    agent: sess.agent,
+    tmuxName: sess.tmuxName,
+    managed: sess.managed,
+    mode,
+  });
+  return { ok: true, mode };
+}
+
 type ParentableSession = {
   sessionId?: string | null;
   nativeSessionId?: string | null;
@@ -1115,8 +1207,10 @@ function withLfgSubagentContract(
   opts: { parentSessionId?: string; depth?: number | null },
 ): string {
   const depthText = opts.depth ? ` Current child depth: ${opts.depth}/${MAX_LFG_SUBAGENT_DEPTH}.` : "";
+  // Short (8-char) id: LFG's MCP layer resolves any unambiguous id prefix back
+  // to the full session id, so the child never needs the whole uuid.
   const parentLine = opts.parentSessionId
-    ? `- Parent session id: ${opts.parentSessionId}. Send progress and terminal-state updates there with MCP tool \`lfg_send_session_message\`.`
+    ? `- Parent session id: ${shortSessionId(opts.parentSessionId)}. Send progress and terminal-state updates there with MCP tool \`lfg_send_session_message\`.`
     : "- No parent session id was supplied. If one becomes available, send progress and terminal-state updates there.";
   const reportLines = opts.parentSessionId
     ? [
@@ -5341,90 +5435,85 @@ export async function cmdServe() {
             managed: sess?.managed,
           });
           if (!sess) return err(404, "session not found");
-          persistManagedResume(sess);
-          if (isCommandFileAgent(sess.agent)) {
-            // Ask the harness to shut down, then tear down its supervisor pane and
-            // control-plane files. markClosed tombstones the harness pid so the
-            // session drops out of the list immediately. For codex-aisdk the
-            // live-view id is the threadId — map it back to the key the command
-            // file and registry entry are named by.
-            const key = findAisdkEntryByAnyId(m[1])?.sessionId ?? m[1];
-            appendAisdkCmd(key, { type: "close" });
-            if (sess.tmuxName) tmuxKillSession(sess.tmuxName);
-            markClosed(sess.pid);
-            removeAisdkEntry(key);
-            if (sess.tmuxName) {
-              removeManaged(sess.tmuxName);
-              assignUser(sess.tmuxName, null);
-            }
-            clearResolved(m[1]);
-            invalidateListSessionsCache();
-            evlog("session_close_done", {
-              ...closeLog,
-              agent: sess.agent,
-              tmuxName: sess.tmuxName,
-              managed: sess.managed,
-              mode: "harness",
-            });
-            return json({ ok: true });
-          }
-          if (!sess.tmuxTarget) {
-            evlog("session_close_rejected", {
-              ...closeLog,
-              agent: sess.agent,
-              tmuxName: sess.tmuxName,
-              managed: sess.managed,
-              reason: "no_tmux_target",
-            });
-            return err(409, "session is not in a tmux pane — cannot close");
-          }
-          // A session lfg started owns its whole tmux session (one managed
-          // claude, no sibling panes) — kill the session and deregister it.
-          // Attached sessions might share a tmux session with the user's other
-          // panes, so only kill the one pane.
-          const ok =
-            sess.managed && sess.tmuxName
-              ? tmuxKillSession(sess.tmuxName)
-              : tmuxKillPane(sess.tmuxTarget);
-          if (!ok) {
-            evlog("session_close_failed", {
-              ...closeLog,
-              agent: sess.agent,
-              tmuxName: sess.tmuxName,
-              managed: sess.managed,
-            });
-            return err(502, "close failed");
-          }
-          // Tombstone the pid so the session drops out of listSessions() at once
-          // — the process lingers briefly after the SIGHUP and would otherwise
-          // flicker back for a poll or two before pgrep stops seeing it.
-          markClosed(sess.pid);
-          if (sess.managed && sess.tmuxName) {
-            if (sess.agent === "codex") {
-              const tp = await resolveTranscript(m[1]).catch(() => null);
-              const nativeSessionId =
-                sess.nativeSessionId ??
-                tp?.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/)?.[0];
-              patchManaged(sess.tmuxName, {
-                launchState: "running",
-                nativeSessionId,
-              });
-            } else {
-              removeManaged(sess.tmuxName);
-            }
-            assignUser(sess.tmuxName, null); // a managed name is unique + now gone
-          }
-          clearResolved(m[1]);
-          invalidateListSessionsCache();
-          evlog("session_close_done", {
-            ...closeLog,
-            agent: sess.agent,
-            tmuxName: sess.tmuxName,
-            managed: sess.managed,
-            mode: sess.managed && sess.tmuxName ? "tmux_session" : "tmux_pane",
-          });
+          const outcome = await closeLiveSession(sess, m[1], closeLog);
+          if (!outcome.ok) return err(outcome.status, outcome.reason);
           return json({ ok: true });
         }
+      }
+
+      // Bulk teardown: end every session that isn't mid-turn, in one request.
+      // Deliberately plumbing-only (no agent, no model) — the fleet view calls
+      // this directly so cleaning up a pile of finished sessions is one click.
+      if (path === "/api/sessions/close-all" && req.method === "POST") {
+        const body = (await req.json().catch(() => null)) as {
+          source?: unknown;
+          scope?: unknown;
+          exclude?: unknown;
+          sessionIds?: unknown;
+        } | null;
+        const rawSource = typeof body?.source === "string" ? body.source.trim() : "";
+        const source = rawSource ? rawSource.slice(0, 80) : "unknown";
+        // "idle" (default) spares sessions that are currently running a turn;
+        // "all" ends those too.
+        const scope = body?.scope === "all" ? "all" : "idle";
+        const exclude = new Set(
+          (Array.isArray(body?.exclude) ? body.exclude : [])
+            .filter((v): v is string => typeof v === "string")
+            .slice(0, 200),
+        );
+        // Optional allowlist: the caller (the fleet view) passes exactly the
+        // sessions currently in scope for its project/user filters, so the
+        // sweep never reaches past what the user can see.
+        const only = Array.isArray(body?.sessionIds)
+          ? new Set(body.sessionIds.filter((v): v is string => typeof v === "string").slice(0, 500))
+          : null;
+        const href = req.headers.get("referer") ?? undefined;
+        const all = await listSessions();
+        const inScope = only ? all.filter((s) => s.sessionId && only.has(s.sessionId)) : all;
+        const targets = inScope.filter(
+          (s) => s.sessionId && !exclude.has(s.sessionId) && (scope === "all" || !s.busy),
+        );
+        evlog("sessions_close_all_request", {
+          source,
+          href,
+          scope,
+          total: all.length,
+          inScope: inScope.length,
+          targets: targets.length,
+          skippedBusy: inScope.length - targets.length,
+        });
+        const closed: string[] = [];
+        const failed: { sessionId: string; reason: string }[] = [];
+        // Sequential: each close kills tmux panes and rewrites registry files,
+        // and the list is small (tens at most).
+        for (const sess of targets) {
+          const sid = sess.sessionId as string;
+          const outcome = await closeLiveSession(sess, sid, {
+            sessionId: sid,
+            source,
+            href,
+          }).catch((e) => ({
+            ok: false as const,
+            status: 500,
+            reason: e instanceof Error ? e.message : String(e),
+          }));
+          if (outcome.ok) closed.push(sid);
+          else failed.push({ sessionId: sid, reason: outcome.reason });
+        }
+        invalidateListSessionsCache();
+        evlog("sessions_close_all_done", {
+          source,
+          scope,
+          closed: closed.length,
+          failed: failed.length,
+        });
+        return json({
+          ok: true,
+          scope,
+          closed,
+          failed,
+          skipped: inScope.length - targets.length,
+        });
       }
 
       if (path === "/api/live/status") {
