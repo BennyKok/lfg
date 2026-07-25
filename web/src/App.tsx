@@ -950,6 +950,23 @@ function closeSessionRequest(sid: string, source: string) {
   });
 }
 
+type CloseAllResult = {
+  closed?: string[];
+  failed?: { sessionId: string; reason: string }[];
+  skipped?: number;
+};
+
+// Bulk close, straight to the server — no agent, no model in the loop. The
+// explicit id list scopes the sweep to exactly the cards visible under the
+// current project/user filters.
+function closeAllSessionsRequest(sessionIds: string[], source: string) {
+  return api<CloseAllResult>("/api/sessions/close-all", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ source, scope: "idle", sessionIds }),
+  });
+}
+
 let skillCatalogPromise: Promise<SkillCatalogItem[]> | null = null;
 let skillCatalogLoadedAt = 0;
 let skillCatalogSnapshot: SkillCatalogItem[] = [];
@@ -3344,6 +3361,7 @@ function PushBell({ user }: { user?: string | null }) {
 }
 
 export function App() {
+  const appDialog = useAppDialog();
   const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
   useEffect(() => {
     const syncTheme = () => {
@@ -4539,6 +4557,42 @@ export function App() {
     }
   }
 
+  // Direct bulk clear: ends every idle in-scope session in one request. The
+  // Manage Sessions templates below spawn an agent to exercise judgement; this
+  // is the plumbing version for "just clear them" — no LLM involved.
+  async function clearIdleSessions() {
+    const targets = liveSessions.filter((s) => s.sessionId && !s.busy);
+    const busyCount = liveSessions.length - targets.length;
+    if (!targets.length) {
+      toast.info(busyCount ? "Every session in scope is still working" : "No sessions to clear");
+      return;
+    }
+    const confirmed = await appDialog.confirm({
+      title: `End ${targets.length} idle session${targets.length === 1 ? "" : "s"}?`,
+      description: busyCount
+        ? `${busyCount} session${busyCount === 1 ? " is" : "s are"} still working and will be left running.`
+        : "They stop immediately and disappear from the live view.",
+      confirmLabel: "End sessions",
+      destructive: true,
+    });
+    if (!confirmed) return;
+    const ids = targets.map((s) => s.sessionId as string);
+    // Drop the cards now; the server tombstones the pids so the next poll
+    // agrees (same optimistic path as a single close).
+    ids.forEach((sid) => removeSession(sid));
+    try {
+      const res = await closeAllSessionsRequest(ids, "live_clear_idle");
+      const closed = res.closed?.length ?? 0;
+      const failed = res.failed?.length ?? 0;
+      if (failed) toast.warning(`Ended ${closed}, ${failed} could not be closed`);
+      else toast.success(`Ended ${closed} session${closed === 1 ? "" : "s"}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not clear sessions");
+    } finally {
+      await refreshSessions().catch(() => {});
+    }
+  }
+
   async function launchManageSessions(template: ManageSessionPromptTemplate) {
     const scopedRepo =
       projectFilter !== "__all"
@@ -4845,6 +4899,7 @@ export function App() {
                   <ManageSessionsMenu
                     projectFilter={projectFilter}
                     onSelect={(template) => void launchManageSessions(template)}
+                    onClearIdle={() => void clearIdleSessions()}
                   />
                 ) : null}
                 <UserFilterMenu
@@ -4904,6 +4959,7 @@ export function App() {
               isMobile ? setComposerFocusNonce((n) => n + 1) : setNewOpen(true)
             }
             onManageSessions={(template) => void launchManageSessions(template)}
+            onClearIdle={() => void clearIdleSessions()}
             findings={projectScopedFindings}
             autoAgents={projectScopedAutoAgents}
             onOpenFinding={setOpenFinding}
@@ -5665,10 +5721,12 @@ function UsageRingsButton({
 function ManageSessionsMenu({
   projectFilter,
   onSelect,
+  onClearIdle,
   compact = false,
 }: {
   projectFilter: string;
   onSelect: (template: ManageSessionPromptTemplate) => void;
+  onClearIdle?: () => void;
   compact?: boolean;
 }) {
   const scopeLabel = projectFilter === "__all" ? "All projects" : shortProject(projectFilter);
@@ -5705,6 +5763,24 @@ function ManageSessionsMenu({
           </DropdownMenuLabel>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
+        {onClearIdle ? (
+          <>
+            {/* Direct action — runs against the API, no agent spawned. Kept
+                above the agent-driven templates because it's the one people
+                reach for most: "just clear the finished ones". */}
+            <DropdownMenuItem
+              variant="destructive"
+              className="flex cursor-pointer flex-col items-start gap-0.5 py-2"
+              onClick={onClearIdle}
+            >
+              <span className="text-sm font-medium text-destructive">Clear idle sessions</span>
+              <span className="text-xs text-muted-foreground">
+                Ends every non-working session now. No agent.
+              </span>
+            </DropdownMenuItem>
+            <DropdownMenuSeparator />
+          </>
+        ) : null}
         {MANAGE_SESSION_PROMPTS.map((template) => (
           <DropdownMenuItem
             key={template.id}
@@ -6825,6 +6901,7 @@ function LiveView({
   onOpenAsk,
   onOpenShipped,
   onManageSessions,
+  onClearIdle,
   focus,
 }: {
   sessions: Session[];
@@ -6838,6 +6915,7 @@ function LiveView({
   onOpenAsk?: () => void;
   onOpenShipped?: () => void;
   onManageSessions: (template: ManageSessionPromptTemplate) => void;
+  onClearIdle: () => void;
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
@@ -7073,6 +7151,8 @@ function LiveView({
         onOpenSettings={onOpenSettings}
         onOpenAsk={onOpenAsk}
         onOpenShipped={onOpenShipped}
+        onManageSessions={onManageSessions}
+        onClearIdle={onClearIdle}
         focus={focus}
         topPinned={topPinned}
         onToggleTopPin={toggleTopPin}
@@ -7140,6 +7220,7 @@ function LiveView({
                 compact
                 projectFilter={projectFilter}
                 onSelect={onManageSessions}
+                onClearIdle={onClearIdle}
               />
             }
           />
@@ -7198,6 +7279,8 @@ function RailStage({
   onOpenSettings,
   onOpenAsk,
   onOpenShipped,
+  onManageSessions,
+  onClearIdle,
   focus,
   topPinned,
   onToggleTopPin,
@@ -7212,6 +7295,8 @@ function RailStage({
   onOpenSettings?: () => void;
   onOpenAsk?: () => void;
   onOpenShipped?: () => void;
+  onManageSessions?: (template: ManageSessionPromptTemplate) => void;
+  onClearIdle?: () => void;
   focus?: { sid: string; n: number } | null;
   topPinned: string[];
   onToggleTopPin: (sid: string) => void;
@@ -8075,6 +8160,13 @@ function RailStage({
                     value={userFilter}
                     users={users}
                     onChange={onUserChange}
+                  />
+                ) : null}
+                {onManageSessions ? (
+                  <ManageSessionsMenu
+                    projectFilter={projectFilter}
+                    onSelect={onManageSessions}
+                    onClearIdle={onClearIdle}
                   />
                 ) : null}
               </div>
