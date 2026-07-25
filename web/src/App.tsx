@@ -2607,10 +2607,8 @@ const APP_SHELL_CLASS = "flex h-dvh flex-col overflow-hidden bg-background text-
 function AppShellSkeleton() {
   return (
     <div className={cn(APP_SHELL_CLASS, "items-center justify-center text-muted-foreground")}>
-      <div className="flex items-center gap-2 text-sm">
-        <Loader2 className="size-4 animate-spin" />
-        Loading lfg v2
-      </div>
+      <Loader2 className="size-4 animate-spin" aria-hidden />
+      <span className="sr-only">Loading</span>
     </div>
   );
 }
@@ -7026,30 +7024,18 @@ function LiveView({
     prefetchTranscripts(prefetchKey.split(","), loadTranscriptPage);
   }, [prefetchKey]);
 
-  // Empty state. Placed AFTER all hooks (useIsWide/useState/useMemo above) so the
-  // hook order stays identical whether or not sessions/findings are present —
-  // returning earlier made `useMemo` conditional and tripped React error #310
-  // ("rendered fewer hooks than expected") when the live list emptied out.
+  // On mobile keep the empty state quiet and unboxed. The persistent composer
+  // is already the action, so duplicating it with a card/button only sends focus
+  // back to the same input.
+  // Keep this return AFTER all hooks so the hook order remains stable as the
+  // live list empties and refills.
   if (!isWide && !sessions.length && !findings.length) {
     return (
-      <div className="flex min-h-[60dvh] flex-col items-center justify-center">
-        <div className="lfg-gborder flex flex-col items-center gap-3 rounded-3xl border border-transparent bg-card px-8 py-10 text-center shadow-[0_12px_40px_-24px_rgba(0,0,0,0.5)]">
-          <div className="lfg-gborder flex size-14 items-center justify-center rounded-2xl border border-transparent bg-muted">
-            <MessageSquare className="size-6 text-muted-foreground" />
-          </div>
-          <div>
-            <div className="font-semibold">No running sessions</div>
-            <div className="mt-1 text-sm text-muted-foreground">
-              {userFilter === "__all"
-                ? "Start Claude or Codex from v2."
-                : "No sessions match this user filter."}
-            </div>
-          </div>
-          <Button variant="brand" className="lfg-gborder lfg-gborder--brand" onClick={onNew}>
-            <Plus className="size-4" />
-            New session
-          </Button>
-        </div>
+      <div className="flex min-h-[60dvh] flex-col items-center justify-center gap-3 text-center">
+        <MessageSquare className="size-8 text-muted-foreground/45" aria-hidden />
+        <span className="text-sm font-medium text-muted-foreground">
+          No running sessions
+        </span>
       </div>
     );
   }
@@ -8567,7 +8553,7 @@ const RailItem = memo(function RailItem({
                 ) : null}
               </span>
               {latest ? (
-                <span className="truncate text-[11px] leading-tight text-muted-foreground">
+                <span className="line-clamp-2 text-[11px] leading-tight text-muted-foreground">
                   {latest}
                 </span>
               ) : null}

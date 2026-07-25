@@ -69,6 +69,7 @@ import {
   answerQuestion,
   markHandled,
   waitForAnswer,
+  sweepExpiredQuestions,
 } from "../ask/store.ts";
 import {
   listSessions,
@@ -1705,6 +1706,7 @@ async function voiceStatusSnapshot(user?: string | null): Promise<string> {
   // Pending agent questions for the human — the voice agent should read these
   // out and, when the user replies, answer them via POST /api/ask/<id>/answer.
   try {
+    await sweepExpiredQuestions();
     const open = await listQuestions("open");
     if (open.length) {
       lines.push("");
@@ -3092,6 +3094,7 @@ export async function cmdServe() {
       if (path === "/api/push/pending" && req.method === "GET") {
         const endpoint = url.searchParams.get("endpoint");
         const me = endpoint ? await subscriptionUser(endpoint) : null;
+        await sweepExpiredQuestions();
         const openQs = await listQuestions("open");
         const questions = me ? openQs.filter((q) => q.user === me) : openQs;
         // Findings are global (not user-private), so they pass through as-is.
@@ -3109,6 +3112,10 @@ export async function cmdServe() {
           | "expired"
           | null;
         const user = url.searchParams.get("user");
+        // Stale asks must not be handed to a consumer that will act on them:
+        // `lfg connect` turns every open row here into an `auto.question`
+        // channel event, and the omg brain can route a reply into it.
+        if (status === "open" || !status) await sweepExpiredQuestions();
         let rows = await listQuestions(status ?? undefined);
         if (user) rows = rows.filter((q) => !q.user || q.user === user);
         return json({ questions: rows });
@@ -3188,11 +3195,25 @@ export async function cmdServe() {
               const c = t.replace(/\s+/g, " ").trim();
               return c.length > n ? c.slice(0, n - 1).trimEnd() + "…" : c;
             };
+            // The text is delivered verbatim, but it is NOT guaranteed to be an
+            // answer. Channels that answer on the user's behalf can bind an
+            // unrelated message to an open ask (the omg imsg brain used to hand
+            // the next inbound message to whatever question was parked), and a
+            // user typing in the web composer can simply change the subject. So
+            // the envelope states what we actually know — the user replied while
+            // this question was open — and gives the agent an explicit branch
+            // for a reply that doesn't answer it. Asserting "act on this answer
+            // now" unconditionally is what turned a pivot into a forced merge
+            // decision in a live incident (2026-07-25).
             const text =
-              `[ask-user answer ${q.id}] The user answered the question you asked earlier.\n` +
+              `[ask-user answer ${q.id}] The user replied while this question was open.\n` +
               `Question: ${clip(q.question, 300)}\n` +
-              `Answer: ${q.answer ?? ""}\n` +
-              `Act on this answer now; it is the user's decision.`;
+              `Their reply: ${q.answer ?? ""}\n` +
+              `If it answers the question, act on it now — it is the user's decision, ` +
+              `and do not ask again. If it does not answer the question (they raised ` +
+              `something else, or changed the subject), treat it as a NEW instruction ` +
+              `and take it up instead; say in one line that you are parking the ` +
+              `original question, and re-ask it only if you still need it answered.`;
             try {
               const r = await fetch(
                 `http://127.0.0.1:${PORT}/api/sessions/${q.sessionId}/send`,
