@@ -10,6 +10,7 @@ import {
   LFG_CAPABILITIES,
   LFG_CAPABILITY_VERSION,
   LFG_MCP_INSTRUCTIONS,
+  SHORT_SESSION_ID_LENGTH,
 } from "../lfg-capabilities.ts";
 
 type Repo = { name: string; cwd: string; project?: string };
@@ -26,6 +27,10 @@ type SessionRow = {
   spawnedBy?: string | null;
   busy?: boolean;
   tmuxTarget?: string | null;
+  cwd?: string;
+  status?: string | null;
+  assignedUser?: string | null;
+  lastActivityAt?: number | null;
 };
 type SessionCreateResponse = {
   ok?: boolean;
@@ -99,9 +104,118 @@ function result(data: unknown) {
     content: [
       {
         type: "text" as const,
-        text: JSON.stringify(data, null, 2),
+        // Compact, not pretty-printed: indentation is pure context tax on a
+        // payload only a model reads.
+        text: JSON.stringify(data),
       },
     ],
+  };
+}
+
+// ---- Short session ids ----------------------------------------------------
+// Session ids are 36-char UUIDs minted by the underlying harnesses (claude,
+// codex, ...) and are load-bearing on disk: transcript filenames, tmux command
+// lines, aisdk registry files, sqlite keys, and ~27 HTTP route regexes that
+// hard-code the 36-char shape. So we do NOT re-mint them. Instead we do what
+// git does with commit shas: agents see and pass an 8-char PREFIX, and we
+// resolve it back to the full id here, at the single boundary every
+// agent-facing session id crosses.
+//
+// Because a short id is a genuine prefix of the real UUID, it stays compatible
+// with the backend's existing prefix search and remains greppable against
+// transcripts and process lines.
+const FULL_UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+const SHORT_SID = /^[0-9a-fA-F]{6,32}$/;
+const SHORT_SID_LEN = SHORT_SESSION_ID_LENGTH;
+
+function shortSid(id: string | null | undefined): string | null {
+  if (!id) return null;
+  return FULL_UUID.test(id) ? id.slice(0, SHORT_SID_LEN) : id;
+}
+
+// Short id -> full id. Only ever grows for ids we resolved from the server, so
+// a stale entry is impossible: session ids are immutable.
+const sidCache = new Map<string, string>();
+
+function rememberSid(full: string | null | undefined): void {
+  if (!full || !FULL_UUID.test(full)) return;
+  sidCache.set(full.slice(0, SHORT_SID_LEN).toLowerCase(), full);
+}
+
+/**
+ * Accept a full UUID, an 8-char short id (or any unambiguous hex prefix), or a
+ * harness-native id of some other shape. Returns the id the HTTP API expects.
+ * Ambiguous prefixes throw rather than silently picking a session.
+ */
+async function resolveSid(input: string): Promise<string> {
+  const id = input.trim();
+  if (!id) throw new Error("sessionId required");
+  // Already full length, or not hex-prefix shaped (native codex/opencode ids):
+  // pass through untouched, no network round-trip.
+  if (FULL_UUID.test(id) || !SHORT_SID.test(id)) return id;
+
+  const lower = id.toLowerCase();
+  const cached = sidCache.get(lower);
+  if (cached) return cached;
+
+  const matches = new Set<string>();
+  // 1. Live fleet: cheap and covers the overwhelmingly common case.
+  const { sessions } = await api<{ sessions: SessionRow[] }>("/api/sessions");
+  for (const session of sessions) {
+    for (const candidate of [session.sessionId, session.nativeSessionId]) {
+      if (candidate?.toLowerCase().startsWith(lower)) {
+        matches.add(session.sessionId ?? candidate);
+      }
+    }
+  }
+  // 2. Nothing live — fall back to durable/historical sessions.
+  if (matches.size === 0) {
+    const found = await api<{ sessions: Array<{ sessionId?: string | null }> }>(
+      "/api/sessions/find",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: id, limit: 5 }),
+      },
+    );
+    for (const session of found.sessions ?? []) {
+      if (session.sessionId?.toLowerCase().startsWith(lower)) matches.add(session.sessionId);
+    }
+  }
+
+  if (matches.size === 1) {
+    const full = [...matches][0];
+    rememberSid(full);
+    return full;
+  }
+  if (matches.size > 1) {
+    throw new Error(
+      `session id "${id}" is ambiguous (matches ${matches.size} sessions); pass more characters`,
+    );
+  }
+  throw new Error(`no session matches id "${id}"`);
+}
+
+// Agent-facing session row. The raw row carries `last` and `cmd`, which on a
+// 21-session fleet are 78% of a 108KB response — full transcript tails and
+// entire spawn command lines the model never acts on.
+function slimSession(session: SessionRow) {
+  const parent = sessionParent(session);
+  rememberSid(session.sessionId);
+  rememberSid(session.nativeSessionId);
+  return {
+    id: shortSid(session.sessionId),
+    title: session.title ?? undefined,
+    agent: session.agent,
+    model: session.model ?? undefined,
+    project: session.project,
+    cwd: session.cwd,
+    busy: session.busy,
+    status: session.status ?? undefined,
+    assignedUser: session.assignedUser ?? undefined,
+    lastActivityAt: session.lastActivityAt ?? undefined,
+    parent: parent ? shortSid(parent) : undefined,
+    tmuxTarget: session.tmuxTarget ?? undefined,
   };
 }
 
@@ -122,17 +236,18 @@ function mediaKind(path: string): "image" | "video" {
   );
 }
 
-function activeSessionId(input?: string): string {
+async function activeSessionId(input?: string): Promise<string> {
   const sessionId = input?.trim() || process.env.LFG_SESSION_ID?.trim();
   if (!sessionId) {
     throw new Error("sessionId required; pass it explicitly or run inside an LFG-managed session");
   }
-  return sessionId;
+  return await resolveSid(sessionId);
 }
 
 export async function closeLfgSession(sessionIdInput: string) {
-  const sessionId = sessionIdInput.trim();
-  if (!sessionId) throw new Error("sessionId required");
+  if (!sessionIdInput.trim()) throw new Error("sessionId required");
+  // Resolve before the self-close check so a short id can't slip past it.
+  const sessionId = await resolveSid(sessionIdInput);
   const caller = process.env.LFG_SESSION_ID?.trim();
   if (caller && caller === sessionId) {
     throw new Error("lfg_close_session cannot close the calling session");
@@ -145,7 +260,7 @@ export async function closeLfgSession(sessionIdInput: string) {
       body: JSON.stringify({ source: "mcp_lfg_close_session" }),
     },
   );
-  return { closed: data.ok !== false, sessionId };
+  return { closed: data.ok !== false, sessionId: shortSid(sessionId) };
 }
 
 export type FindLfgSessionsInput = {
@@ -167,8 +282,8 @@ export async function findLfgSessions(input: FindLfgSessionsInput) {
   });
 }
 
-function ownedSessionId(input?: string): string {
-  const sessionId = activeSessionId(input);
+async function ownedSessionId(input?: string): Promise<string> {
+  const sessionId = await activeSessionId(input);
   const caller = process.env.LFG_SESSION_ID?.trim();
   if (caller && caller !== sessionId) {
     throw new Error("session-owned actions can only target their owning LFG session");
@@ -182,7 +297,7 @@ export async function sendToOrigin(input: {
   artifactIds?: string[];
   sessionId?: string;
 }) {
-  const sessionId = ownedSessionId(input.sessionId);
+  const sessionId = await ownedSessionId(input.sessionId);
   const data = await api<OriginDeliveryResponse>(
     `/api/sessions/${encodeURIComponent(sessionId)}/origin-deliveries`,
     {
@@ -195,7 +310,13 @@ export async function sendToOrigin(input: {
       }),
     },
   );
-  return { delivered: data.ok !== false, sessionId, delivery: data.delivery };
+  // Deliberately does not echo the delivery body back: it repeats the text and
+  // media the caller just passed in, and lfg_output is called continuously.
+  return {
+    delivered: data.ok !== false,
+    sessionId: shortSid(sessionId),
+    deliveryId: data.delivery?.id ?? null,
+  };
 }
 
 const SUBAGENT_INPUT_SCHEMA = {
@@ -288,7 +409,8 @@ async function createSubagent({
     }
   }
   const model = rawModel?.trim() || MODEL_OPTIONS[agent as keyof typeof MODEL_OPTIONS].defaultModel;
-  const parent = parentSessionId?.trim() || process.env.LFG_SESSION_ID?.trim() || undefined;
+  const parentInput = parentSessionId?.trim() || process.env.LFG_SESSION_ID?.trim() || undefined;
+  const parent = parentInput ? await resolveSid(parentInput) : undefined;
   // Tag the child to the same user as the calling session. LFG_USER is injected
   // at spawn (see tmux.ts addSessionEnv); without this, subagents created from
   // sessions whose parent chain has no live assigned ancestor (headless/cron
@@ -310,7 +432,11 @@ async function createSubagent({
       worktree,
     }),
   });
-  return { subagent: created, parentSessionId: parent ?? null };
+  rememberSid(created.sessionId);
+  return {
+    subagent: { ...created, sessionId: shortSid(created.sessionId) },
+    parentSessionId: parent ? shortSid(parent) : null,
+  };
 }
 
 export async function cmdMcp() {
@@ -352,16 +478,21 @@ export async function cmdMcp() {
       inputSchema: {
         parentSessionId: z.string().optional().describe("Only return children of this parent session id."),
         driveableOnly: z.boolean().optional().describe("When true, only return sessions with sessionId and tmuxTarget."),
+        verbose: z
+          .boolean()
+          .optional()
+          .describe("Return full raw session rows (transcript tail, spawn command line) instead of the compact summary. Large; only use when the summary is genuinely insufficient."),
       },
     },
-    async ({ parentSessionId, driveableOnly }) => {
+    async ({ parentSessionId, driveableOnly, verbose }) => {
+      const parent = parentSessionId ? await resolveSid(parentSessionId) : undefined;
       const { sessions } = await api<{ sessions: SessionRow[] }>("/api/sessions");
       const filtered = sessions.filter((session) => {
         if (driveableOnly && (!session.sessionId || !session.tmuxTarget)) return false;
-        if (!parentSessionId) return true;
-        return session.parentSessionId === parentSessionId || session.parentNativeSessionId === parentSessionId;
+        if (!parent) return true;
+        return session.parentSessionId === parent || session.parentNativeSessionId === parent;
       });
-      return result({ sessions: filtered });
+      return result({ sessions: verbose ? filtered : filtered.map(slimSession) });
     },
   );
 
@@ -412,7 +543,21 @@ export async function cmdMcp() {
           .describe("Maximum newest metadata candidates to transcript-search (default 200, maximum 500)."),
       },
     },
-    async (input) => result(await findLfgSessions(input)),
+    async (input) => {
+      const found = (await findLfgSessions(input)) as {
+        sessions?: Array<Record<string, unknown> & { sessionId?: string | null }>;
+      };
+      return result({
+        ...found,
+        sessions: (found.sessions ?? []).map((session) => {
+          rememberSid(session.sessionId);
+          // transcriptPath is always "lfg://session/<sessionId>" — a second
+          // copy of the id we just returned.
+          const { transcriptPath: _drop, ...rest } = session;
+          return { ...rest, sessionId: shortSid(session.sessionId) };
+        }),
+      });
+    },
   );
 
   server.registerTool(
@@ -435,10 +580,10 @@ export async function cmdMcp() {
         childrenByParent.set(parent, [...(childrenByParent.get(parent) ?? []), session]);
       }
       return result({
-        roots,
+        roots: roots.map(slimSession),
         relationships: [...childrenByParent.entries()].map(([parentSessionId, children]) => ({
-          parentSessionId,
-          children,
+          parentSessionId: shortSid(parentSessionId),
+          children: children.map(slimSession),
         })),
       });
     },
@@ -456,9 +601,15 @@ export async function cmdMcp() {
       },
     },
     async ({ sessionId, limit, full }) => {
+      const sid = await resolveSid(sessionId);
       const params = full ? "full=1" : `limit=${limit ?? 30}`;
-      const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}/messages?${params}`);
-      return result(data);
+      const data = await api<{ messages?: Array<Record<string, unknown>> }>(
+        `/api/sessions/${encodeURIComponent(sid)}/messages?${params}`,
+      );
+      // Each message carries both `text` and a rendered-markdown `html` copy of
+      // the same content for the web UI; the model only needs the text.
+      const messages = (data.messages ?? []).map(({ html: _drop, ...rest }) => rest);
+      return result({ ...data, messages });
     },
   );
 
@@ -474,7 +625,8 @@ export async function cmdMcp() {
       },
     },
     async ({ sessionId, text, mode }) => {
-      const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}/send`, {
+      const sid = await resolveSid(sessionId);
+      const data = await api(`/api/sessions/${encodeURIComponent(sid)}/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -529,7 +681,7 @@ export async function cmdMcp() {
       },
     },
     async ({ question, options, sessionId, user }) => {
-      const sid = activeSessionId(sessionId);
+      const sid = await activeSessionId(sessionId);
       const who = user?.trim() || process.env.LFG_USER?.trim() || null;
       const data = await api<{ id: string; status: string }>("/api/ask", {
         method: "POST",
@@ -624,7 +776,7 @@ export async function cmdMcp() {
       },
     },
     async ({ path, caption, alt, sessionId }) => {
-      const sid = activeSessionId(sessionId);
+      const sid = await activeSessionId(sessionId);
       const data = await api<ImageArtifactResponse>(
         `/api/sessions/${encodeURIComponent(sid)}/artifacts/images`,
         {
@@ -635,7 +787,7 @@ export async function cmdMcp() {
       );
       return result({
         displayed: true,
-        sessionId: sid,
+        sessionId: shortSid(sid),
         artifact: data.artifact,
       });
     },
@@ -655,7 +807,7 @@ export async function cmdMcp() {
       },
     },
     async ({ path, caption, alt, sessionId }) => {
-      const sid = activeSessionId(sessionId);
+      const sid = await activeSessionId(sessionId);
       const data = await api<ImageArtifactResponse>(
         `/api/sessions/${encodeURIComponent(sid)}/artifacts/videos`,
         {
@@ -666,7 +818,7 @@ export async function cmdMcp() {
       );
       return result({
         displayed: true,
-        sessionId: sid,
+        sessionId: shortSid(sid),
         artifact: data.artifact,
       });
     },
@@ -694,7 +846,7 @@ export async function cmdMcp() {
     async ({ html, id, title, caption, sessionId, refreshScriptPath, refreshArgv, refreshIntervalSeconds, refreshTimeoutSeconds, refreshEnabled }) => {
       const hasRefreshChanges = refreshScriptPath !== undefined || refreshArgv !== undefined ||
         refreshIntervalSeconds !== undefined || refreshTimeoutSeconds !== undefined || refreshEnabled !== undefined;
-      const sid = hasRefreshChanges ? ownedSessionId(sessionId) : activeSessionId(sessionId);
+      const sid = hasRefreshChanges ? await ownedSessionId(sessionId) : await activeSessionId(sessionId);
       const data = await api<ImageArtifactResponse>(
         `/api/sessions/${encodeURIComponent(sid)}/artifacts/html`,
         {
@@ -718,7 +870,7 @@ export async function cmdMcp() {
       );
       return result({
         published: true,
-        sessionId: sid,
+        sessionId: shortSid(sid),
         artifact: data.artifact,
       });
     },
@@ -737,7 +889,7 @@ export async function cmdMcp() {
       },
     },
     async ({ id, action, sessionId }) => {
-      const sid = ownedSessionId(sessionId);
+      const sid = await ownedSessionId(sessionId);
       const method = action === "status" ? "GET" : "POST";
       const data = await api<ImageArtifactResponse & { started?: boolean; error?: string; refresh?: unknown }>(
         `/api/sessions/${encodeURIComponent(sid)}/artifacts/html/${encodeURIComponent(id)}/refresh`,
@@ -745,7 +897,7 @@ export async function cmdMcp() {
       );
       return result({
         refreshed: method === "POST" ? data.ok === true : undefined,
-        sessionId: sid,
+        sessionId: shortSid(sid),
         artifact: data.artifact,
         refresh: data.refresh ?? data.artifact?.refresh ?? null,
         error: data.error,
@@ -765,12 +917,12 @@ export async function cmdMcp() {
       },
     },
     async ({ id, sessionId }) => {
-      const sid = ownedSessionId(sessionId);
+      const sid = await ownedSessionId(sessionId);
       const data = await api<ImageArtifactResponse>(
         `/api/sessions/${encodeURIComponent(sid)}/artifacts/${encodeURIComponent(id)}`,
         { method: "DELETE", headers: { "X-LFG-Session-ID": sid } },
       );
-      return result({ deleted: data.ok === true, sessionId: sid, artifact: data.artifact });
+      return result({ deleted: data.ok === true, sessionId: shortSid(sid), artifact: data.artifact });
     },
   );
 
@@ -799,7 +951,7 @@ export async function cmdMcp() {
       },
     },
     async ({ title, id, summary, mediaPaths, artifactIds, project, sessionId }) => {
-      const sid = activeSessionId(sessionId);
+      const sid = await activeSessionId(sessionId);
       const data = await api<{ ok: boolean; post: unknown }>("/api/shipped", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -916,7 +1068,10 @@ export async function cmdMcp() {
       const data = await api("/api/sessions/reparent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, parentSessionId: parentSessionId ?? null }),
+        body: JSON.stringify({
+          sessionId: await resolveSid(sessionId),
+          parentSessionId: parentSessionId ? await resolveSid(parentSessionId) : null,
+        }),
       });
       return result(data);
     },
@@ -932,13 +1087,17 @@ export async function cmdMcp() {
       },
     },
     async ({ parentSessionId }) => {
+      const parent = parentSessionId ? await resolveSid(parentSessionId) : undefined;
       const { sessions } = await api<{ sessions: SessionRow[] }>("/api/sessions");
       const subagents = sessions.filter((session) => {
         if (!session.parentSessionId && !session.parentNativeSessionId) return false;
-        if (!parentSessionId) return true;
-        return session.parentSessionId === parentSessionId || session.parentNativeSessionId === parentSessionId;
+        if (!parent) return true;
+        return session.parentSessionId === parent || session.parentNativeSessionId === parent;
       });
-      return result({ parentSessionId: parentSessionId ?? null, subagents });
+      return result({
+        parentSessionId: parent ? shortSid(parent) : null,
+        subagents: subagents.map(slimSession),
+      });
     },
   );
 
@@ -988,7 +1147,7 @@ export async function cmdMcp() {
         return result(await sendToOrigin({ text, mediaPaths, artifactIds, sessionId }));
       }
       if (to === "shipped") {
-        const sid = activeSessionId(sessionId);
+        const sid = await activeSessionId(sessionId);
         const data = await api<{ ok: boolean; post: unknown }>("/api/shipped", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -998,7 +1157,7 @@ export async function cmdMcp() {
       }
       // to === "session"
       if (html !== undefined) {
-        const sid = activeSessionId(sessionId);
+        const sid = await activeSessionId(sessionId);
         const data = await api<ImageArtifactResponse>(
           `/api/sessions/${encodeURIComponent(sid)}/artifacts/html`,
           {
@@ -1007,10 +1166,10 @@ export async function cmdMcp() {
             body: JSON.stringify({ html, id, title, caption }),
           },
         );
-        return result({ output: "session", sessionId: sid, artifact: data.artifact });
+        return result({ output: "session", sessionId: shortSid(sid), artifact: data.artifact });
       }
       if (mediaPaths?.length) {
-        const sid = activeSessionId(sessionId);
+        const sid = await activeSessionId(sessionId);
         const artifacts = [];
         for (const m of media ?? []) {
           const endpoint = mediaKind(m.path) === "video" ? "videos" : "images";
@@ -1024,7 +1183,7 @@ export async function cmdMcp() {
           );
           artifacts.push(data.artifact);
         }
-        return result({ output: "session", sessionId: sid, artifacts });
+        return result({ output: "session", sessionId: shortSid(sid), artifacts });
       }
       throw new Error("lfg_output to 'session' requires either `html` or `media`");
     },
@@ -1061,7 +1220,7 @@ export async function cmdMcp() {
         });
         return result({ answer: data.answer });
       }
-      const sid = activeSessionId(sessionId);
+      const sid = await activeSessionId(sessionId);
       const who = user?.trim() || process.env.LFG_USER?.trim() || null;
       const data = await api<{ id: string; status: string }>("/api/ask", {
         method: "POST",

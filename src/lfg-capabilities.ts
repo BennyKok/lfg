@@ -35,11 +35,23 @@ export const LFG_CAPABILITIES = [
   },
 ] as const;
 
+// Session ids are 36-char uuids minted by the underlying harness and are
+// load-bearing on disk, so they are never re-minted. Agent-facing surfaces show
+// this 8-char prefix instead; LFG's MCP layer resolves any unambiguous prefix
+// back to the full id, git-short-sha style.
+const SESSION_UUID = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+export const SHORT_SESSION_ID_LENGTH = 8;
+
+export function shortSessionId(id: string): string {
+  return SESSION_UUID.test(id) ? id.slice(0, SHORT_SESSION_ID_LENGTH) : id;
+}
+
 export const LFG_MCP_INSTRUCTIONS = [
   `This is LFG's agent capability server (capability version ${LFG_CAPABILITY_VERSION}).`,
   "The agent<->human channel is two verbs: lfg_output (tell) and lfg_input (ask).",
   "Narrate your decisions and progress continuously through lfg_output so the session never goes dark; show verification media and verified completions the same way.",
   "Decide autonomously and keep moving — use lfg_input only for a genuinely irreversible decision (non-blocking) or to consult the advisor. Use lfg_capabilities to detect a stale long-lived session, and LFG-managed delegation when delegation is explicitly requested.",
+  `Session ids are returned in short form (${SHORT_SESSION_ID_LENGTH}-char prefix, like a git short sha). Pass them back exactly as given — any unambiguous prefix resolves to the full id.`,
 ].join(" ");
 
 export function lfgRuntimeContract(): string {
@@ -55,6 +67,7 @@ export function lfgRuntimeContract(): string {
     "- Use `lfg_find_sessions` to locate ended or historical sessions by id, owner, project, text, or last-activity range; use `lfg_list_sessions` for the live fleet.",
     "- When the user or governing instructions explicitly request delegation, prefer `lfg_create_subagent` or `lfg_delegate_*` so children remain visible and linked in LFG.",
     "- Use `lfg_close_session` only after resolving another session's exact id with `lfg_list_sessions`; never close your own session.",
+    `- Session ids are shown in short form (${SHORT_SESSION_ID_LENGTH}-char prefix, like a git short sha). Pass them back exactly as given; any unambiguous prefix resolves to the full id, and an ambiguous one is rejected rather than guessed.`,
     "- If an exact LFG tool is unavailable, call `lfg_capabilities`. Report that the session needs a capability refresh only when it returns `stale: true`; otherwise report that the capability is unsupported. Do not reverse-engineer or call LFG's private HTTP endpoints as a substitute.",
     "=== END LFG RUNTIME CONTRACT ===",
   ].join("\n");

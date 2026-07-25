@@ -13,6 +13,7 @@ import {
   sourceUpdateStatus,
 } from "../self-update.ts";
 import { compressedAssetResponse, maybeCompressResponse } from "../http-compress.ts";
+import { shortSessionId } from "../lfg-capabilities.ts";
 import {
   getCachedResumableSession,
   updateResumableUser,
@@ -1205,8 +1206,10 @@ function withLfgSubagentContract(
   opts: { parentSessionId?: string; depth?: number | null },
 ): string {
   const depthText = opts.depth ? ` Current child depth: ${opts.depth}/${MAX_LFG_SUBAGENT_DEPTH}.` : "";
+  // Short (8-char) id: LFG's MCP layer resolves any unambiguous id prefix back
+  // to the full session id, so the child never needs the whole uuid.
   const parentLine = opts.parentSessionId
-    ? `- Parent session id: ${opts.parentSessionId}. Send progress and terminal-state updates there with MCP tool \`lfg_send_session_message\`.`
+    ? `- Parent session id: ${shortSessionId(opts.parentSessionId)}. Send progress and terminal-state updates there with MCP tool \`lfg_send_session_message\`.`
     : "- No parent session id was supplied. If one becomes available, send progress and terminal-state updates there.";
   const reportLines = opts.parentSessionId
     ? [
