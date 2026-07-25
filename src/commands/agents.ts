@@ -1,14 +1,10 @@
 import { listAgents, loadAgent } from "../agents/registry.ts";
 import { runAgent, runAllAgents } from "../agents/runner.ts";
-import { listAutoAgents, saveAutoAgent } from "../auto/store.ts";
+import { listAutoAgents } from "../auto/store.ts";
+import { autoCreate, cmdAutoAgents, hasFlag } from "./agents-auto.ts";
 import {
-  AUTO_AGENT_BACKENDS,
-  MODEL_OPTIONS,
   buildAgentBrowserTree,
   listModelCatalog,
-  modelsForAgent,
-  thinkingLevelsForAgent,
-  type AutoAgentBackend,
 } from "../agent-catalog.ts";
 import { listCodingAgents } from "../coding-agents.ts";
 import { readModelDiscoveryCacheSync, refreshModelCatalog } from "../model-discovery.ts";
@@ -22,15 +18,18 @@ Usage:
   lfg agents models --refresh     Refresh provider model catalogs now
   lfg agents browser [--json]     Browse providers, skills, insight agents, auto agents
   lfg agents catalog [--json]     Alias for browser
-  lfg agents create-auto          Create a scheduled auto agent
+  lfg agents auto <cmd>           Create + manage auto agents (see 'agents auto help')
   lfg agents run --all            Run every enabled agent (cron path)
   lfg agents run <name>           Run a single agent
   lfg agents run <name> --dry     Build the prompt only, don't call claude
   lfg agents show <name>          Print agent frontmatter + body
 
-Create auto agent:
-  lfg agents create-auto --name NAME --prompt-file prompt.md --schedule "0 9 * * *"
-  lfg agents create-auto --name NAME --prompt "..." --schedule "*/30 * * * *" --backend codex-aisdk --model gpt-5.5
+Auto agents (scheduled watchers → findings):
+  lfg agents auto new "watch our deps for CVEs"   Compose a whole agent from one line
+  lfg agents auto list                            Schedule, last run, next run
+  lfg agents auto run <id>                        Run one now
+  lfg agents auto findings --status open          What they surfaced
+  lfg agents auto help                            Full lifecycle reference
 `;
 
 export async function cmdAgents(args: string[]) {
@@ -43,8 +42,12 @@ export async function cmdAgents(args: string[]) {
     case "browser":
     case "catalog":
       return cmdBrowser(rest);
+    case "auto":
+      return cmdAutoAgents(rest);
+    // Back-compat alias for the original explicit-flags creator, which now
+    // lives at `lfg agents auto create`.
     case "create-auto":
-      return cmdCreateAuto(rest);
+      return autoCreate(rest);
     case "run":
       return cmdRun(rest);
     case "show":
@@ -60,30 +63,6 @@ export async function cmdAgents(args: string[]) {
       console.log(HELP);
       process.exit(1);
   }
-}
-
-function hasFlag(args: string[], flag: string): boolean {
-  return args.includes(flag);
-}
-
-function option(args: string[], name: string): string | undefined {
-  const prefix = `${name}=`;
-  const inline = args.find((arg) => arg.startsWith(prefix));
-  if (inline) return inline.slice(prefix.length);
-  const idx = args.indexOf(name);
-  if (idx >= 0) return args[idx + 1];
-  return undefined;
-}
-
-function options(args: string[], name: string): string[] {
-  const values: string[] = [];
-  const prefix = `${name}=`;
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg.startsWith(prefix)) values.push(arg.slice(prefix.length));
-    else if (arg === name && args[i + 1]) values.push(args[++i]);
-  }
-  return values;
 }
 
 async function cmdList() {
@@ -166,94 +145,6 @@ async function cmdBrowser(args: string[]) {
       ].join(", ")}`,
     );
   }
-}
-
-async function cmdCreateAuto(args: string[]) {
-  if (hasFlag(args, "--help") || hasFlag(args, "-h")) {
-    console.log(`lfg agents create-auto — create a scheduled auto agent
-
-Usage:
-  lfg agents create-auto --name NAME --prompt-file prompt.md --schedule "0 9 * * *"
-  lfg agents create-auto --name NAME --prompt "..." --schedule "*/30 * * * *" --backend codex-aisdk --model gpt-5.5
-
-Options:
-  --backend aisdk|codex-aisdk|grok|cursor|opencode
-  --model MODEL
-  --thinking-level LEVEL
-  --cwd PATH
-  --tool NAME[,NAME]
-  --disabled
-  --json`);
-    return;
-  }
-  const name = option(args, "--name")?.trim();
-  const schedule = option(args, "--schedule")?.trim();
-  const promptInline = option(args, "--prompt");
-  const promptFile = option(args, "--prompt-file");
-  if (!name || !schedule || (!promptInline && !promptFile)) {
-    console.error("Usage: lfg agents create-auto --name NAME --prompt|--prompt-file TEXT --schedule CRON");
-    process.exit(1);
-  }
-  const prompt = (promptFile ? await Bun.file(promptFile).text() : promptInline ?? "").trim();
-  if (!prompt) {
-    console.error("auto agent prompt is empty");
-    process.exit(1);
-  }
-  const backend = (option(args, "--backend") ?? option(args, "--agent") ?? "aisdk").trim();
-  if (!(AUTO_AGENT_BACKENDS as readonly string[]).includes(backend)) {
-    console.error(`unknown backend "${backend}" (expected one of ${AUTO_AGENT_BACKENDS.join(", ")})`);
-    process.exit(1);
-  }
-  const model = option(args, "--model")?.trim();
-  if (backend === "aisdk" && model) {
-    const allowed = modelsForAgent("aisdk");
-    if (!allowed.includes(model)) {
-      console.error(`unknown aisdk model "${model}" (expected one of ${allowed.join(", ")})`);
-      process.exit(1);
-    }
-  }
-  if (backend === "grok" && model) {
-    const allowed = modelsForAgent("grok");
-    if (!allowed.includes(model)) {
-      console.error(`unknown grok model "${model}" (expected one of ${allowed.join(", ")})`);
-      process.exit(1);
-    }
-  }
-  if (
-    (backend === "codex-aisdk" || backend === "opencode" || backend === "cursor") &&
-    model &&
-    !/^[A-Za-z0-9_.:\/-]{1,120}$/.test(model)
-  ) {
-    console.error(`invalid ${backend} model name`);
-    process.exit(1);
-  }
-  const thinkingLevel = option(args, "--thinking-level")?.trim();
-  if (thinkingLevel) {
-    const allowed = thinkingLevelsForAgent(backend);
-    if (!allowed || !allowed.includes(thinkingLevel)) {
-      console.error(`unknown thinking level "${thinkingLevel}" for ${backend}`);
-      process.exit(1);
-    }
-  }
-  const tools = options(args, "--tool").flatMap((value) =>
-    value.split(",").map((tool) => tool.trim()).filter(Boolean),
-  );
-  const agent = await saveAutoAgent({
-    name,
-    prompt,
-    schedule,
-    enabled: !hasFlag(args, "--disabled"),
-    cwd: option(args, "--cwd"),
-    agent: backend as AutoAgentBackend,
-    model: model || MODEL_OPTIONS[backend as keyof typeof MODEL_OPTIONS]?.defaultModel,
-    thinkingLevel,
-    tools: tools.length ? tools : undefined,
-  });
-  if (hasFlag(args, "--json")) {
-    console.log(JSON.stringify({ agent }, null, 2));
-    return;
-  }
-  console.log(`created auto agent ${agent.id} (${agent.agent ?? "aisdk"}${agent.model ? `/${agent.model}` : ""})`);
 }
 
 async function cmdRun(args: string[]) {

@@ -4,17 +4,66 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
-- Usage Campfire: hold `U` on desktop (release to hide) or long-press the
-  composer activity rings on mobile to see every agent's rate limits in an arc
-  around a center "campfire" that shows time until the next restore. Tap a ring
-  still opens the single-provider breakdown.
-- Voice advisor moved to Claude Opus 5 (falling back to Sonnet 5), and fixed
-  for how the new models think. The advisor previously shared the voice brain's
-  small reply budget; because these models reason before answering and that
-  reasoning counts against the same budget, hard questions would have come back
-  truncated or silent. The advisor now gets its own, much larger budget while
-  the brain keeps its fast one. Consults that use a fleet tool also no longer
-  fail partway through.
+## July 25, 2026 - Instant transcripts and a calmer workspace (v0.1.55)
+
+- Opening a session is now instant. The transcript pane used to clear itself
+  and refetch every time you opened a session — even one you had open seconds
+  earlier — so it always waited on a full network round trip. Transcripts are
+  now cached and repainted immediately, and the sessions you are most likely to
+  open next are warmed in the background. On a slow connection this took
+  session opens from roughly 1.7s to under 0.3s.
+- The Shipped and Artifacts galleries load much faster. The artifact index is
+  cached instead of rebuilt per request, and gallery tiles no longer boot a
+  live iframe apiece just to render a thumbnail.
+- The composer is now one shared component everywhere it appears, so the
+  session view, the new-session bar, and mobile all behave identically —
+  along with a single consistent status dot.
+- The chat input grows with what you type, the focused stage column is easier
+  to pick out at a glance, and the desktop rail has a right-click context menu.
+  Long session subtitles in the rail are clamped to two lines.
+- New keyboard shortcuts for opening Settings and toggling the sidebar.
+- Idle sessions can be cleared in bulk directly from the sessions list.
+- Agent-facing MCP payloads are slimmer and use short session ids, so agents
+  spend less of their context on session bookkeeping.
+- Fixed: the OpenCode backend now streams real tool arguments and results
+  instead of placeholders, and no longer collides on port 4096.
+- Usage Campfire: press bare **Shift** to toggle a full-screen arc of every
+  agent's rate limits around a live "next restore" countdown (press Shift again,
+  Esc, or click outside to close). On mobile, long-press the composer activity
+  rings.
+- `lfg agents auto` can now create and manage auto agents over their full
+  lifecycle from the CLI.
+- Fixed: the image annotator now renders above the composer dialog instead of
+  behind it.
+
+## July 25, 2026 - Quieter mobile starts and reliable ask replies (v0.1.54)
+
+- The empty mobile live view is now a quiet, unboxed status marker instead of
+  a large card that duplicated the persistent new-session composer. The
+  redundant button, obsolete v2 instructions, and visible versioned startup
+  copy are gone.
+- Ask prompts now expire cleanly when their session is no longer waiting, and
+  pivoting to a different task no longer gets mistaken for answering the old
+  question.
+
+## July 24, 2026 - Opus 5 voice advisor and a two-verb agent channel (v0.1.53)
+
+- The voice advisor now runs on Claude Opus 5, falling back to Sonnet 5, and
+  is fixed for how those models think. It used to share the voice brain's small
+  reply budget; because the new models reason before answering and that
+  reasoning draws on the same budget, hard questions would have come back
+  truncated or silent. The advisor now has its own, much larger budget while
+  the brain keeps its fast one. Consults that act on the fleet mid-answer also
+  no longer fail partway through.
+- Agents talk to you through two verbs instead of a scattered set of tools:
+  one for telling you things (running narration in the thread, evidence and
+  reports inside the session, finished work on the Shipped feed) and one for
+  asking (a question for you, or a consult with the advisor). Agents are now
+  expected to narrate as they work rather than going quiet for long stretches,
+  and to make the reasonable call themselves instead of stopping to check in.
+  Existing tools keep working.
+- Ended and historical sessions are searchable again — find past sessions by
+  id, owner, project, text, or when they were last active.
 
 ## July 24, 2026 - Real page URLs and relayed live views (v0.1.52)
 

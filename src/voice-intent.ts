@@ -13,9 +13,7 @@
 // confirmation, so the orb never fails to create a session because the brain hiccuped.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
+import { claudeOauthToken } from "./claude-creds.ts";
 
 const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 // Latency-critical voice path: reuse the same fast Haiku brain the rest of the
@@ -23,18 +21,7 @@ const ANTHROPIC_URL = "https://api.anthropic.com/v1/messages";
 const INTENT_MODEL = process.env.LFG_VOICE_MODEL || "claude-haiku-4-5";
 
 function oauthToken(): string | null {
-  try {
-    const raw = readFileSync(
-      join(homedir(), ".claude", ".credentials.json"),
-      "utf8",
-    );
-    const creds = JSON.parse(raw) as {
-      claudeAiOauth?: { accessToken?: string };
-    };
-    return creds?.claudeAiOauth?.accessToken ?? null;
-  } catch {
-    return null;
-  }
+  return claudeOauthToken();
 }
 
 export type VoiceIntentBase = {

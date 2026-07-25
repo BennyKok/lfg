@@ -182,6 +182,19 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 import changelogMarkdown from "../../CHANGELOG.md?raw";
 import { useExtensionNavTabs } from "./lib/extensions";
@@ -5559,7 +5572,7 @@ export function App() {
         <ConnectionStatusToasts connection={wsLiveStream.connection} onRetry={wsLiveStream.reconnectNow} />
       ) : null}
       <VoiceSetupDialog />
-      {/* Hold U (desktop) or long-press activity rings (mobile) → all-agent usage arc. */}
+      {/* Shift toggles the all-agent usage campfire; long-press rings on mobile. */}
       <UsageCampfireHost />
       <Toaster position="bottom-center" />
     </div>
@@ -6027,6 +6040,7 @@ function UsageRings({
 // popover breaking down each limit window (label, %, reset time). Works for any
 // provider that reports windows; falls back to the provider note otherwise.
 // Long-press opens the full-screen Usage Campfire (all agents on an arc).
+// Desktop: bare Shift also toggles the campfire.
 function UsageRingsButton({
   provider,
   className,
@@ -6043,7 +6057,7 @@ function UsageRingsButton({
           <button
             type="button"
             aria-label={`${provider.label} usage. Long-press for all agents.`}
-            title={`${provider.label} usage · long-press for all agents · hold U`}
+            title={`${provider.label} usage · long-press for all agents · Shift`}
             className={cn(
               // The wider left pad keeps the rings clear of the screen edge on
               // the mobile inline composer; on desktop it just reads as a gap.
@@ -6055,8 +6069,6 @@ function UsageRingsButton({
             onPointerCancel={longPress.onPointerCancel}
             onPointerLeave={longPress.onPointerLeave}
             onClickCapture={(e) => {
-              // After a long-press opened the campfire, ignore the synthetic click
-              // so the per-provider dropdown doesn't also open underneath it.
               if (longPress.shouldSuppressClick()) {
                 e.preventDefault();
                 e.stopPropagation();
@@ -6113,7 +6125,8 @@ function UsageRingsButton({
           </p>
         ) : null}
         <p className="mt-2 border-t border-border/60 pt-2 text-[11px] text-muted-foreground/70">
-          Long-press rings for all agents · hold <kbd className="rounded bg-muted px-1 font-mono text-[10px]">U</kbd>
+          Long-press rings for all agents ·{" "}
+          <kbd className="rounded bg-muted px-1 font-mono text-[10px]">Shift</kbd> to toggle
         </p>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -7437,6 +7450,7 @@ function LiveView({
       </div>
     );
   }
+
   const nameFor = (id: string) => autoAgents.find((a) => a.id === id)?.name ?? id;
 
   const renderCard = (session: Session, depth = 0) => (
@@ -8401,19 +8415,36 @@ function RailStage({
   const renderRailItem = (session: Session) => {
     const sid = session.sessionId ?? "";
     return (
-      <RailItem
+      <RailSessionContextMenu
         key={sid}
         session={session}
-        busy={!!busyBySid[sid]}
-        latest={latestLine(messagesBySid[sid] ?? EMPTY_MESSAGES)}
-        active={columnIds.includes(sid)}
-        cursored={cursor === sid}
-        pinned={validPinned.includes(sid)}
+        users={users}
+        onRefresh={onRefresh}
+        onRemove={onRemove}
         topPinned={topPinnedSet.has(sid)}
-        collapsed={railCollapsed}
-        onActivate={(shift) => activate(sid, shift)}
-        onTogglePin={() => togglePin(sid)}
-      />
+        onToggleTopPin={onToggleTopPin}
+        stagePinned={validPinned.includes(sid)}
+        onToggleStagePin={() => togglePin(sid)}
+        onOpen={() => activate(sid, false)}
+        onCloseColumn={
+          columnIds.includes(sid) && columnIds.length > 1
+            ? () => closeColumn(sid)
+            : undefined
+        }
+      >
+        <RailItem
+          session={session}
+          busy={!!busyBySid[sid]}
+          latest={latestLine(messagesBySid[sid] ?? EMPTY_MESSAGES)}
+          active={columnIds.includes(sid)}
+          cursored={cursor === sid}
+          pinned={validPinned.includes(sid)}
+          topPinned={topPinnedSet.has(sid)}
+          collapsed={railCollapsed}
+          onActivate={(shift) => activate(sid, shift)}
+          onTogglePin={() => togglePin(sid)}
+        />
+      </RailSessionContextMenu>
     );
   };
   // Nest children in the DOM (same model as the mobile session tree) so
@@ -10232,26 +10263,18 @@ function SessionTitleLine({ title }: { title: string }) {
   );
 }
 
-function SessionActionsMenu({
+function useSessionActions({
   session,
   users,
   onRefresh,
   onRemove,
   onError,
-  onRename,
-  triggerClassName,
-  pinned,
-  onTogglePin,
 }: {
   session: Session;
   users: User[];
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
   onError: (error: string | null) => void;
-  onRename?: () => void;
-  triggerClassName?: string;
-  pinned?: boolean;
-  onTogglePin?: (sid: string) => void;
 }) {
   const appDialog = useAppDialog();
   const [forkOpen, setForkOpen] = useState(false);
@@ -10315,6 +10338,50 @@ function SessionActionsMenu({
       );
     }
   }
+
+  return {
+    sid,
+    assignee,
+    forkOpen,
+    setForkOpen,
+    assign,
+    interrupt,
+    copyReference,
+    close,
+  };
+}
+
+function SessionActionsMenu({
+  session,
+  users,
+  onRefresh,
+  onRemove,
+  onError,
+  onRename,
+  triggerClassName,
+  pinned,
+  onTogglePin,
+}: {
+  session: Session;
+  users: User[];
+  onRefresh: () => Promise<void>;
+  onRemove: (sid: string) => void;
+  onError: (error: string | null) => void;
+  onRename?: () => void;
+  triggerClassName?: string;
+  pinned?: boolean;
+  onTogglePin?: (sid: string) => void;
+}) {
+  const {
+    sid,
+    assignee,
+    forkOpen,
+    setForkOpen,
+    assign,
+    interrupt,
+    copyReference,
+    close,
+  } = useSessionActions({ session, users, onRefresh, onRemove, onError });
 
   return (
     <>
@@ -10429,6 +10496,168 @@ function SessionActionsMenu({
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
+    </>
+  );
+}
+
+// Desktop rail: right-click opens the same session actions without needing the
+// ⋯ control on the row.
+function RailSessionContextMenu({
+  session,
+  users,
+  onRefresh,
+  onRemove,
+  topPinned,
+  onToggleTopPin,
+  stagePinned,
+  onToggleStagePin,
+  onOpen,
+  onCloseColumn,
+  children,
+}: {
+  session: Session;
+  users: User[];
+  onRefresh: () => Promise<void>;
+  onRemove: (sid: string) => void;
+  topPinned: boolean;
+  onToggleTopPin: (sid: string) => void;
+  stagePinned: boolean;
+  onToggleStagePin: () => void;
+  onOpen: () => void;
+  onCloseColumn?: () => void;
+  children: ReactNode;
+}) {
+  const {
+    sid,
+    assignee,
+    forkOpen,
+    setForkOpen,
+    assign,
+    interrupt,
+    copyReference,
+    close,
+  } = useSessionActions({
+    session,
+    users,
+    onRefresh,
+    onRemove,
+    onError: (error) => {
+      if (error) toast.error(error);
+    },
+  });
+
+  return (
+    <>
+      {forkOpen ? (
+        <ForkSessionDialog
+          session={session}
+          onClose={() => setForkOpen(false)}
+          onCreated={onRefresh}
+        />
+      ) : null}
+      <ContextMenu>
+        <ContextMenuTrigger className="block min-w-0 rounded-xl">
+          {children}
+        </ContextMenuTrigger>
+        <ContextMenuContent className="min-w-48">
+          <ContextMenuItem disabled={!sid} onClick={onOpen}>
+            <MessageSquare className="size-4" />
+            Open
+          </ContextMenuItem>
+          <ContextMenuItem disabled={!sid} onClick={onToggleStagePin}>
+            <Pin className="size-4" fill={stagePinned ? "currentColor" : "none"} />
+            {stagePinned ? "Unpin column" : "Pin as column"}
+          </ContextMenuItem>
+          <ContextMenuItem
+            disabled={!sid}
+            onClick={() => sid && onToggleTopPin(sid)}
+          >
+            <Pin className="size-4" fill={topPinned ? "currentColor" : "none"} />
+            {topPinned ? "Unpin from top" : "Pin to top"}
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuSub>
+            <ContextMenuSubTrigger disabled={!sid}>
+              <UserRound className="size-4" />
+              <span className="flex-1">Assign to</span>
+              {session.assignedUser ? (
+                assignee?.avatar ? (
+                  <img
+                    src={assignee.avatar}
+                    alt=""
+                    className="size-5 shrink-0 rounded-full object-cover"
+                  />
+                ) : (
+                  <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted">
+                    <UserRound className="size-3" />
+                  </span>
+                )
+              ) : null}
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent className="min-w-48">
+              <ContextMenuRadioGroup
+                value={session.assignedUser ?? ""}
+                onValueChange={(value) =>
+                  void assign(typeof value === "string" ? value : "")
+                }
+              >
+                <ContextMenuLabel>Assign to</ContextMenuLabel>
+                <ContextMenuRadioItem value="">
+                  <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted">
+                    <UserRound className="size-3" />
+                  </span>
+                  Unassigned
+                </ContextMenuRadioItem>
+                {users.map((user) => (
+                  <ContextMenuRadioItem key={user.email} value={user.email}>
+                    {user.avatar ? (
+                      <img
+                        src={user.avatar}
+                        alt=""
+                        className="size-5 shrink-0 rounded-full object-cover"
+                      />
+                    ) : (
+                      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted">
+                        <UserRound className="size-3" />
+                      </span>
+                    )}
+                    <span className="truncate capitalize">
+                      {user.name ?? shortUser(user.email)}
+                    </span>
+                  </ContextMenuRadioItem>
+                ))}
+              </ContextMenuRadioGroup>
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+          <ContextMenuItem disabled={!sid} onClick={() => void copyReference()}>
+            <Copy className="size-4" />
+            Copy reference
+          </ContextMenuItem>
+          <ContextMenuItem disabled={!sid} onClick={() => setForkOpen(true)}>
+            <GitFork className="size-4" />
+            Fork
+          </ContextMenuItem>
+          {onCloseColumn ? (
+            <ContextMenuItem onClick={onCloseColumn}>
+              <X className="size-4" />
+              Close column
+            </ContextMenuItem>
+          ) : null}
+          {canDriveSession(session) ? (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuItem onClick={() => void interrupt()}>
+                <Pause className="size-4" />
+                Stop
+              </ContextMenuItem>
+              <ContextMenuItem variant="destructive" onClick={() => void close()}>
+                <X className="size-4" />
+                End session
+              </ContextMenuItem>
+            </>
+          ) : null}
+        </ContextMenuContent>
+      </ContextMenu>
     </>
   );
 }
@@ -16768,8 +16997,8 @@ function UsageLimitsSection() {
       <p className="px-4 text-xs text-muted-foreground">
         Claude reads the live subscription usage endpoint; Codex reflects the latest rate-limit
         snapshot from its most recent session; Grok pulls monthly and weekly credits from the
-        cli-chat-proxy billing API. Hold{" "}
-        <kbd className="rounded bg-muted px-1 font-mono text-[10px]">U</kbd> anywhere (or
+        cli-chat-proxy billing API. Press{" "}
+        <kbd className="rounded bg-muted px-1 font-mono text-[10px]">Shift</kbd> anywhere (or
         long-press the composer activity rings) for the campfire view of every agent.
       </p>
     </section>
