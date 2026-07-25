@@ -4,7 +4,7 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
-## July 25, 2026 - Start a session from the campfire (v0.1.57)
+## July 25, 2026 - Start a session from the campfire (v0.1.58)
 
 - Clicking an agent in the Usage Campfire now picks that agent in the composer
   and opens it, so the campfire is a launcher as well as a readout. It resolves
