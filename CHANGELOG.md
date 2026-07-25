@@ -4,6 +4,16 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 25, 2026 - Quieter mobile starts and reliable ask replies (v0.1.54)
+
+- The empty mobile live view is now a quiet, unboxed status marker instead of
+  a large card that duplicated the persistent new-session composer. The
+  redundant button, obsolete v2 instructions, and visible versioned startup
+  copy are gone.
+- Ask prompts now expire cleanly when their session is no longer waiting, and
+  pivoting to a different task no longer gets mistaken for answering the old
+  question.
+
 ## July 24, 2026 - Opus 5 voice advisor and a two-verb agent channel (v0.1.53)
 
 - The voice advisor now runs on Claude Opus 5, falling back to Sonnet 5, and
