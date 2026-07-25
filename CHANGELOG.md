@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 25, 2026 - Clean session pins (v0.1.57)
+
+- Deleted sessions are now removed from browser-local pinned state instead of
+  lingering in the frontend and resurfacing as stale UI.
+- Closing a pinned session also dismisses its open mobile detail sheet, while
+  pins in other project or owner filters remain intact.
+
 ## July 25, 2026 - Campfire, cleaned up (v0.1.56)
 
 - The Usage Campfire now only shows agents that actually report usage —

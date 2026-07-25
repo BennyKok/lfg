@@ -50,6 +50,7 @@ import {
 } from "./lib/transcript-cache";
 import { setThemePreference, THEME_CHANGE_EVENT } from "./lib/theme";
 import { startsInBottomSystemGestureZone } from "./lib/touch-gestures";
+import { retainLivePinnedSessions } from "./lib/pinned-sessions";
 import { ConnectionStatusToasts } from "./ConnectionStatus";
 import type {
   ClipboardEvent,
@@ -5333,6 +5334,7 @@ export function App() {
         {tab === "live" ? (
           <LiveView
             sessions={liveSessions}
+            liveSessionIds={liveStatusIds}
             users={users}
             userFilter={userFilter}
             projectFilter={projectFilter}
@@ -7294,6 +7296,7 @@ function LiveView({
   // layer already guards these to [], but default here too so any future caller
   // passing `undefined` degrades to an empty render instead of crashing the view.
   sessions = [],
+  liveSessionIds,
   users,
   userFilter,
   projectFilter,
@@ -7320,6 +7323,7 @@ function LiveView({
   focus,
 }: {
   sessions: Session[];
+  liveSessionIds: string[];
   users: User[];
   userFilter: string;
   projectFilter: string;
@@ -7377,6 +7381,22 @@ function LiveView({
       /* private mode / quota — non-fatal */
     }
   }, [topPinned]);
+
+  // Pins are browser-local, so deleting a session on the server does not clean
+  // them up automatically. Reconcile against the unfiltered live-session list:
+  // using the currently filtered `sessions` here would erase valid pins merely
+  // because the user switched project or owner.
+  useEffect(() => {
+    setTopPinned((current) => {
+      const next = retainLivePinnedSessions(current, liveSessionIds);
+      if (next.length === current.length) return current;
+      topPinnedRef.current = next;
+      return next;
+    });
+    setSheet((current) =>
+      current && !liveSessionIds.includes(current.sid) ? null : current,
+    );
+  }, [liveSessionIds]);
 
   const toggleTopPin = useCallback((sid: string) => {
     const current = topPinnedRef.current;
