@@ -18,6 +18,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { Flame } from "lucide-react";
+import NumberFlow, { NumberFlowGroup } from "@number-flow/react";
 import { cn } from "@/lib/utils";
 import { haptic } from "@/lib/haptics";
 
@@ -117,6 +118,80 @@ function formatCountdown(ms: number | null, now: number): string {
   const days = Math.floor(hrs / 24);
   const remH = hrs % 24;
   return remH > 0 ? `${days}d ${remH}h` : `${days}d`;
+}
+
+/** Remaining time split into clock parts, for the animated hero countdown. */
+function countdownParts(ms: number, now: number) {
+  const totalSec = Math.max(0, Math.round((ms - now) / 1000));
+  return {
+    days: Math.floor(totalSec / 86400),
+    hours: Math.floor((totalSec % 86400) / 3600),
+    minutes: Math.floor((totalSec % 3600) / 60),
+    seconds: totalSec % 60,
+  };
+}
+
+/**
+ * Hero countdown, ticking to the second. Each unit is its own animated number so
+ * only the digits that actually change move — a whole-string swap once a second
+ * reads as flicker. Grouped so a rollover (59→00) animates with the unit above
+ * it rather than a frame apart.
+ */
+function HeroCountdown({ resetsAt, now }: { resetsAt: number; now: number }) {
+  const { days, hours, minutes, seconds } = countdownParts(resetsAt, now);
+  const pad = { minimumIntegerDigits: 2 } as const;
+  // A day-scale countdown is a much longer string; step the type down so it
+  // still fits a narrow phone.
+  const fontSize = days
+    ? "clamp(1.9rem, 6vw, 3.1rem)"
+    : hours
+      ? "clamp(2.3rem, 7.4vw, 3.9rem)"
+      : "clamp(2.75rem, 9vw, 4.5rem)";
+  return (
+    <NumberFlowGroup>
+      <span
+        className="inline-flex items-baseline tabular-nums"
+        style={{
+          fontSize,
+          // Roomier than the static type was: the digits animate vertically, so
+          // a 0.95 line box let them escape the line entirely.
+          lineHeight: 1.08,
+          // Fade the in/out digits over a taller band, otherwise the hero's glow
+          // keeps them legible well outside the line and they read as ghosts.
+          ["--number-flow-mask-height" as string]: "0.42em",
+        } as React.CSSProperties}
+        // The ticking digits would otherwise be announced every second.
+        aria-label={formatCountdown(resetsAt, now)}
+      >
+        {days ? (
+          <>
+            <NumberFlow value={days} trend={-1} aria-hidden />
+            <span style={{ opacity: 0.55 }}>d</span>
+            <span className="w-[0.22em]" />
+          </>
+        ) : null}
+        {days || hours ? (
+          <>
+            <NumberFlow
+              value={hours}
+              trend={-1}
+              format={days ? pad : undefined}
+              aria-hidden
+            />
+            <span style={{ opacity: 0.55 }}>:</span>
+          </>
+        ) : null}
+        <NumberFlow
+          value={minutes}
+          trend={-1}
+          format={days || hours ? pad : undefined}
+          aria-hidden
+        />
+        <span style={{ opacity: 0.55 }}>:</span>
+        <NumberFlow value={seconds} trend={-1} format={pad} aria-hidden />
+      </span>
+    </NumberFlowGroup>
+  );
 }
 
 function formatResetShort(ms: number | null, now: number): string {
@@ -503,6 +578,21 @@ function CampfireOverlay({
 
   // Hovering (or tapping) an agent retargets the centre readout to that agent.
   const [focusKind, setFocusKind] = useState<string | null>(null);
+  // Whether this device can hover at all. Checked as a capability rather than
+  // inferred from pointer events, which don't reliably report a usable
+  // pointerType under touch emulation and on some mobile browsers.
+  const [canHover, setCanHover] = useState(
+    () => typeof window === "undefined" || window.matchMedia("(hover: hover)").matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(hover: hover)");
+    const sync = () => setCanHover(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+  // Which agent a touch has armed for launch (see the click handler).
+  const armedRef = useRef<string | null>(null);
   const focused = useMemo(
     () => ordered.find((p) => p.kind === focusKind) ?? null,
     [ordered, focusKind],
@@ -529,9 +619,9 @@ function CampfireOverlay({
     focused != null && heroReset == null && focusHeadline?.pct != null;
 
   const stageCenterY = mobile ? "60%" : "55%";
-  const logoSize = mobile ? 34 : 46;
+  const logoSize = mobile ? 46 : 64;
   const ringSize = mobile ? 15 : 18;
-  const skeletonSize = mobile ? 34 : 46;
+  const skeletonSize = mobile ? 46 : 64;
 
   return (
     <div
@@ -605,9 +695,12 @@ function CampfireOverlay({
             style={{
               fontSize: "clamp(2.75rem, 9vw, 4.5rem)",
               lineHeight: 0.95,
+              minHeight: "1em",
               color: "#fff8f0",
+              // Softer than before: the countdown now animates, and a heavy glow
+              // made every mid-roll digit smear.
               textShadow:
-                "0 0 40px rgba(255,140,50,0.45), 0 0 80px rgba(255,100,20,0.22), 0 2px 12px rgba(0,0,0,0.4)",
+                "0 0 28px rgba(255,140,50,0.32), 0 0 64px rgba(255,100,20,0.16), 0 2px 10px rgba(0,0,0,0.4)",
             }}
           >
             {loading ? (
@@ -623,7 +716,7 @@ function CampfireOverlay({
             ) : showUsed && focusHeadline?.pct != null ? (
               `${Math.round(focusHeadline.pct)}%`
             ) : heroReset ? (
-              formatCountdown(heroReset, now)
+              <HeroCountdown resetsAt={heroReset} now={now} />
             ) : (
               "—"
             )}
@@ -645,7 +738,13 @@ function CampfireOverlay({
                       : "No agents reporting usage"}
           </p>
           <p className="mt-0.5 text-[10px]" style={{ color: TONE.faint }}>
-            {mobile ? "Tap outside to close · Esc" : "Shift to close · Esc"}
+            {canHover
+              ? onSelectAgent
+                ? "Click an agent to start a session · Shift or Esc to close"
+                : "Shift to close · Esc"
+              : focused && onSelectAgent
+                ? `Tap ${focused.label} again to start a session`
+                : "Tap outside to close"}
           </p>
         </div>
 
@@ -699,13 +798,24 @@ function CampfireOverlay({
                   setFocusKind((c) => (c === p.kind ? null : c));
                 }
               }}
-              onPointerDown={(e) => {
-                // Touch can't hover — focus on press so the centre readout
-                // updates under the finger before the click lands.
-                if (e.pointerType !== "mouse") setFocusKind(p.kind);
-              }}
               onClick={() => {
                 if (!onSelectAgent) return;
+                // Without hover, a single tap would launch a session before you
+                // ever got to read the agent's numbers. So on touch the first tap
+                // highlights and retargets the centre readout, and a second tap
+                // on the same agent starts the session. Pointer devices keep
+                // one-click, because hovering already showed you everything.
+                //
+                // Armed state is tracked separately from `focusKind`: tapping
+                // also focuses the button, so onFocus would have already marked
+                // it focused by the time this runs, and the first tap would look
+                // like the second.
+                if (!canHover && armedRef.current !== p.kind) {
+                  armedRef.current = p.kind;
+                  setFocusKind(p.kind);
+                  return;
+                }
+                armedRef.current = null;
                 onSelectAgent(p.kind);
                 onClose();
               }}
