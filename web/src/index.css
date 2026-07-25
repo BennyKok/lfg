@@ -1301,6 +1301,28 @@ html.lfg-keyboard-open {
       lfg-card-in 440ms cubic-bezier(0.32, 0.72, 0, 1) both,
       lfg-card-flash 1500ms ease-out 140ms both;
   }
+  /* Rail selection: a slow primary glow so the chosen stage pane is obvious
+     when several columns are tiled. Separate from lfg-card-in (no scale/rise). */
+  @keyframes lfg-card-focus-glow {
+    0% {
+      box-shadow:
+        0 0 0 1px color-mix(in srgb, var(--primary) 55%, transparent),
+        0 0 0 0 color-mix(in srgb, var(--primary) 0%, transparent);
+    }
+    22% {
+      box-shadow:
+        0 0 0 2px color-mix(in srgb, var(--primary) 85%, transparent),
+        0 0 32px 8px color-mix(in srgb, var(--primary) 42%, transparent);
+    }
+    100% {
+      box-shadow:
+        0 0 0 0 transparent,
+        0 0 0 0 transparent;
+    }
+  }
+  .lfg-card-focus-glow {
+    animation: lfg-card-focus-glow 1.85s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
   /* "Send" pulse: the composer dips and springs back to rest in one motion
      rather than holding a dimmed end-state for the whole (slow) spawn. The
      just-launched session is now represented by the pending card in the list,
@@ -1359,6 +1381,7 @@ html.lfg-keyboard-open {
   }
   @media (prefers-reduced-motion: reduce) {
     .lfg-card-in { animation: none; }
+    .lfg-card-focus-glow { animation: none; }
     .lfg-rail-in { animation: none; }
     .lfg-composer-launching { animation: none; }
     .lfg-pending-card { animation: none; }
