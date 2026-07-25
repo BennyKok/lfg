@@ -4350,6 +4350,8 @@ export function App() {
             onUserChange={changeUserFilter}
             onOpenSettings={() => setTab("settings")}
             onOpenAsk={() => setTab("ask")}
+            repos={repos}
+            onReposChanged={loadCore}
             messagesBySid={liveStream.messagesBySid}
             busyBySid={liveStream.busyBySid}
             promptsBySid={liveStream.promptsBySid}
@@ -6210,6 +6212,8 @@ function LiveView({
   onOpenSettings,
   onOpenAsk,
   onSmartClear,
+  repos = [],
+  onReposChanged,
 }: {
   sessions: Session[];
   users: User[];
@@ -6221,6 +6225,8 @@ function LiveView({
   onOpenSettings?: () => void;
   onOpenAsk?: () => void;
   onSmartClear: () => Promise<void>;
+  repos?: Repo[];
+  onReposChanged?: () => Promise<void>;
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
@@ -6390,6 +6396,8 @@ function LiveView({
         onUserChange={onUserChange}
         onOpenSettings={onOpenSettings}
         onOpenAsk={onOpenAsk}
+        repos={repos}
+        onReposChanged={onReposChanged}
       />
     );
   }
@@ -6500,6 +6508,8 @@ function RailStage({
   onUserChange,
   onOpenSettings,
   onOpenAsk,
+  repos = [],
+  onReposChanged,
 }: {
   sessions: Session[];
   users: User[];
@@ -6510,6 +6520,8 @@ function RailStage({
   onUserChange?: (v: string) => void;
   onOpenSettings?: () => void;
   onOpenAsk?: () => void;
+  repos?: Repo[];
+  onReposChanged?: () => Promise<void>;
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
@@ -6556,6 +6568,18 @@ function RailStage({
   // Keyboard cursor (highlighted rail row) + the shortcuts cheatsheet overlay.
   const [cursor, setCursor] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  // Folder chip → the same project sheet + folder browser mobile's composer
+  // uses, so desktop can browse/create folders instead of a bare filter select.
+  const [projectSheetOpen, setProjectSheetOpen] = useState(false);
+  const [folderBrowserOpen, setFolderBrowserOpen] = useState(false);
+  const [folderBrowserCreate, setFolderBrowserCreate] = useState(false);
+  const canUseProjectSheet = repos.length > 0 && !!onProjectChange;
+  const filterRepo = repos.find((r) => repoProject(r) === projectFilter);
+  const openFolderBrowserFromSheet = (create: boolean) => {
+    setProjectSheetOpen(false);
+    setFolderBrowserCreate(create);
+    window.setTimeout(() => setFolderBrowserOpen(true), 180);
+  };
   // Range-select anchor for shift-click / shift-arrow.
   const anchorRef = useRef<string | null>(null);
 
@@ -7099,7 +7123,25 @@ function RailStage({
                 the list below speaks for itself. */}
             <div className="flex items-center gap-1.5">
               <img src="/icon.svg" alt="lfg" className="size-6 shrink-0 rounded-md" />
-              {onProjectChange ? (
+              {canUseProjectSheet ? (
+                <button
+                  type="button"
+                  onClick={() => setProjectSheetOpen(true)}
+                  aria-label="Choose project"
+                  title={projectFilter !== "__all" ? shortProject(projectFilter) : "All projects"}
+                  className={cn(
+                    "inline-flex h-8 min-w-0 shrink items-center justify-center gap-1 rounded-full border transition",
+                    projectFilter !== "__all"
+                      ? "max-w-[9rem] border-primary/30 bg-primary/10 px-2.5 text-primary"
+                      : "size-8 border-border bg-muted/70 text-muted-foreground",
+                  )}
+                >
+                  <Folder className="size-3.5 shrink-0" />
+                  {projectFilter !== "__all" ? (
+                    <span className="truncate text-xs font-medium">{shortProject(projectFilter)}</span>
+                  ) : null}
+                </button>
+              ) : onProjectChange ? (
                 <ProjectFilterMenu
                   value={projectFilter}
                   projects={projectOptions}
@@ -7237,6 +7279,38 @@ function RailStage({
       </div>
 
       {showHelp ? <ShortcutsHelp onClose={() => setShowHelp(false)} /> : null}
+
+      {canUseProjectSheet ? (
+        <>
+          <ComposerProjectSheet
+            open={projectSheetOpen}
+            repos={repos}
+            selected={filterRepo?.cwd ?? ""}
+            onOpenChange={setProjectSheetOpen}
+            onSelect={(repo) => {
+              onProjectChange?.(repoProject(repo));
+              setProjectSheetOpen(false);
+            }}
+            onBrowse={() => openFolderBrowserFromSheet(false)}
+            onCreate={() => openFolderBrowserFromSheet(true)}
+            allSelected={projectFilter === "__all"}
+            onSelectAll={() => {
+              onProjectChange?.("__all");
+              setProjectSheetOpen(false);
+            }}
+          />
+          <ProjectFolderBrowser
+            open={folderBrowserOpen}
+            initialPath={filterRepo?.cwd || undefined}
+            startCreating={folderBrowserCreate}
+            onOpenChange={setFolderBrowserOpen}
+            onSelected={async (repo) => {
+              onProjectChange?.(repoProject(repo));
+              await onReposChanged?.();
+            }}
+          />
+        </>
+      ) : null}
     </div>
   );
 }
@@ -10990,6 +11064,10 @@ function ComposerProjectSheet({
   onSelect,
   onBrowse,
   onCreate,
+  // Optional "All projects" row: the desktop rail reuses this sheet as the
+  // project FILTER, where clearing the scope is a valid pick (composer hides it).
+  allSelected = false,
+  onSelectAll,
 }: {
   open: boolean;
   repos: Repo[];
@@ -10998,6 +11076,8 @@ function ComposerProjectSheet({
   onSelect: (repo: Repo) => void;
   onBrowse: () => void;
   onCreate: () => void;
+  allSelected?: boolean;
+  onSelectAll?: () => void;
 }) {
   return (
     <Drawer open={open} onOpenChange={onOpenChange} shouldScaleBackground={false}>
@@ -11014,6 +11094,20 @@ function ComposerProjectSheet({
             </button>
           </div>
           <div className="max-h-[20dvh] min-h-0 overflow-y-auto rounded-2xl border border-border bg-muted/25">
+            {onSelectAll ? (
+              <button
+                type="button"
+                onClick={onSelectAll}
+                className="flex w-full items-center gap-3 border-b border-border px-3 py-3 text-left active:bg-muted"
+              >
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground"><Folder className="size-4" /></span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">All projects</span>
+                  <span className="block truncate text-xs text-muted-foreground">Show every session</span>
+                </span>
+                {allSelected ? <Check className="size-4 text-emerald-500" /> : <ChevronRight className="size-4 text-muted-foreground" />}
+              </button>
+            ) : null}
             {repos.map((repo) => (
               <button
                 key={repo.cwd}
