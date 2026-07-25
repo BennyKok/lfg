@@ -207,6 +207,7 @@ import {
 } from "./lib/push";
 import { AskNavButton, AskPage, AskProvider } from "./components/ask-center";
 import { PwaInstallCallout, PwaInstallSettingsSection } from "./components/pwa-install";
+import { UsageCampfireHost, useUsageRingLongPress } from "./components/UsageCampfire";
 import { configuredAgentOptions } from "./lib/coding-agent-options";
 import {
   Conversation,
@@ -5558,6 +5559,8 @@ export function App() {
         <ConnectionStatusToasts connection={wsLiveStream.connection} onRetry={wsLiveStream.reconnectNow} />
       ) : null}
       <VoiceSetupDialog />
+      {/* Shift toggles the all-agent usage campfire; long-press rings on mobile. */}
+      <UsageCampfireHost />
       <Toaster position="bottom-center" />
     </div>
     </ArtifactViewerContext.Provider>
@@ -6023,6 +6026,8 @@ function UsageRings({
 // The composer's usage indicator: compact rings that expand into an animated
 // popover breaking down each limit window (label, %, reset time). Works for any
 // provider that reports windows; falls back to the provider note otherwise.
+// Long-press opens the full-screen Usage Campfire (all agents on an arc).
+// Desktop: bare Shift also toggles the campfire.
 function UsageRingsButton({
   provider,
   className,
@@ -6031,20 +6036,31 @@ function UsageRingsButton({
   className?: string;
 }) {
   const windows = activityRingOrder(provider.windows ?? []);
+  const longPress = useUsageRingLongPress();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
         render={
           <button
             type="button"
-            aria-label={`${provider.label} usage`}
-            title={`${provider.label} usage`}
+            aria-label={`${provider.label} usage. Long-press for all agents.`}
+            title={`${provider.label} usage · long-press for all agents · Shift`}
             className={cn(
               // The wider left pad keeps the rings clear of the screen edge on
               // the mobile inline composer; on desktop it just reads as a gap.
               "flex shrink-0 items-center justify-center rounded-full p-1 pl-4 transition active:scale-90 md:pl-1",
               className,
             )}
+            onPointerDown={longPress.onPointerDown}
+            onPointerUp={longPress.onPointerUp}
+            onPointerCancel={longPress.onPointerCancel}
+            onPointerLeave={longPress.onPointerLeave}
+            onClickCapture={(e) => {
+              if (longPress.shouldSuppressClick()) {
+                e.preventDefault();
+                e.stopPropagation();
+              }
+            }}
           >
             {windows.length ? (
               <UsageRings windows={windows} />
@@ -6095,6 +6111,10 @@ function UsageRingsButton({
             {windows.find((w) => w.resetsAt) ? fmtReset(windows.find((w) => w.resetsAt)!.resetsAt) : ""}
           </p>
         ) : null}
+        <p className="mt-2 border-t border-border/60 pt-2 text-[11px] text-muted-foreground/70">
+          Long-press rings for all agents ·{" "}
+          <kbd className="rounded bg-muted px-1 font-mono text-[10px]">Shift</kbd> to toggle
+        </p>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -16630,7 +16650,9 @@ function UsageLimitsSection() {
       <p className="px-4 text-xs text-muted-foreground">
         Claude reads the live subscription usage endpoint; Codex reflects the latest rate-limit
         snapshot from its most recent session; Grok pulls monthly and weekly credits from the
-        cli-chat-proxy billing API.
+        cli-chat-proxy billing API. Press{" "}
+        <kbd className="rounded bg-muted px-1 font-mono text-[10px]">Shift</kbd> anywhere (or
+        long-press the composer activity rings) for the campfire view of every agent.
       </p>
     </section>
   );

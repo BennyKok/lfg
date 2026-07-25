@@ -27,6 +27,14 @@ Recent product updates and deployment notes.
   spend less of their context on session bookkeeping.
 - Fixed: the OpenCode backend now streams real tool arguments and results
   instead of placeholders, and no longer collides on port 4096.
+- Usage Campfire: press bare **Shift** to toggle a full-screen arc of every
+  agent's rate limits around a live "next restore" countdown (press Shift again,
+  Esc, or click outside to close). On mobile, long-press the composer activity
+  rings.
+- `lfg agents auto` can now create and manage auto agents over their full
+  lifecycle from the CLI.
+- Fixed: the image annotator now renders above the composer dialog instead of
+  behind it.
 
 ## July 25, 2026 - Quieter mobile starts and reliable ask replies (v0.1.54)
 
