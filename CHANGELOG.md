@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+- Usage Campfire: press bare **Shift** to toggle a full-screen arc of every
+  agent’s rate limits around a live “next restore” countdown (press Shift again,
+  Esc, or click outside to close). On mobile, long-press the composer activity
+  rings. Warm glass cards, ember scrim, and elliptical layout.
+
 ## July 25, 2026 - Quieter mobile starts and reliable ask replies (v0.1.54)
 
 - The empty mobile live view is now a quiet, unboxed status marker instead of
