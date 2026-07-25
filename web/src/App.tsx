@@ -8439,7 +8439,7 @@ const RailItem = memo(function RailItem({
                 ) : null}
               </span>
               {latest ? (
-                <span className="truncate text-[11px] leading-tight text-muted-foreground">
+                <span className="line-clamp-2 text-[11px] leading-tight text-muted-foreground">
                   {latest}
                 </span>
               ) : null}
