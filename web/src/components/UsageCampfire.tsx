@@ -14,7 +14,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { createPortal } from "react-dom";
@@ -65,13 +64,13 @@ export function toggleUsageCampfire() {
 
 // ── constants / helpers ─────────────────────────────────────────────────────
 
-const RING_COLORS = ["#fb923c", "#38bdf8", "#a78bfa", "#34d399"];
+const MAX_RINGS = 4;
 const AGENT_ICON_VERSION = "20260718";
 
 // Warm palette (hardcoded — theme tokens go near-black on black in light mode)
 const TONE = {
-  ok: "#86efac",
-  warn: "#fdba74",
+  ok: "#6ee7b7",
+  warn: "#fbbf24",
   hot: "#fb7185",
   muted: "rgba(255, 245, 230, 0.45)",
   label: "rgba(255, 245, 230, 0.88)",
@@ -165,6 +164,11 @@ function maxUsagePct(p: ProviderUsage): number | null {
  * Elliptical arc above the campfire (CSS: +x right, +y down).
  * Wider than tall so side cards clear the center countdown.
  */
+const ARC_X_SCALE_MOBILE = 1.02;
+const ARC_X_SCALE_DESKTOP = 1.18;
+/** Half the width of an agent node plus breathing room, in px. */
+const ARC_NODE_HALF_W = { mobile: 40, desktop: 58 } as const;
+
 function arcLayout(
   count: number,
   radius: number,
@@ -175,7 +179,7 @@ function arcLayout(
   const endDeg = mobile ? 332 : 342;
   const start = (startDeg * Math.PI) / 180;
   const end = (endDeg * Math.PI) / 180;
-  const xScale = mobile ? 1.12 : 1.18;
+  const xScale = mobile ? ARC_X_SCALE_MOBILE : ARC_X_SCALE_DESKTOP;
   const yScale = mobile ? 0.78 : 0.82;
   const yLift = mobile ? -radius * 0.18 : -radius * 0.04;
   return Array.from({ length: count }, (_, i) => {
@@ -208,7 +212,7 @@ function MiniRings({
   const sw = size >= 40 ? 3.5 : 2.75;
   const gap = sw + 1.25;
   const outer = c - sw / 2 - 0.5;
-  const shown = windows.slice(0, RING_COLORS.length);
+  const shown = windows.slice(0, MAX_RINGS);
   return (
     <svg
       width={size}
@@ -222,7 +226,7 @@ function MiniRings({
         if (r <= 0) return null;
         const circ = 2 * Math.PI * r;
         const clamped = Math.max(0, Math.min(100, w.pct ?? 0));
-        const color = RING_COLORS[i % RING_COLORS.length];
+        const color = pctColor(w.pct);
         return (
           <g key={w.label}>
             <circle
@@ -251,18 +255,6 @@ function MiniRings({
     </svg>
   );
 }
-
-// Glass card surface — warm glass, not pure black chrome.
-const glassCard: CSSProperties = {
-  background:
-    "linear-gradient(165deg, rgba(255,248,240,0.09) 0%, rgba(255,236,210,0.045) 48%, rgba(20,12,6,0.55) 100%)",
-  border: "1px solid rgba(255, 220, 180, 0.12)",
-  boxShadow:
-    "inset 0 1px 0 rgba(255,245,230,0.14), 0 10px 28px rgba(0,0,0,0.45), 0 0 0 0.5px rgba(0,0,0,0.35)",
-  borderRadius: 20,
-  backdropFilter: "blur(22px) saturate(1.15)",
-  WebkitBackdropFilter: "blur(22px) saturate(1.15)",
-};
 
 // ── host (mount once near App root) ─────────────────────────────────────────
 
@@ -419,8 +411,12 @@ export function UsageCampfireHost() {
       const w = window.innerWidth;
       const h = window.innerHeight;
       const mobile = w < 768;
-      const base = mobile ? Math.min(w * 0.42, h * 0.28) : Math.min(w, h) * 0.3;
-      setRadius(Math.round(Math.max(mobile ? 150 : 155, Math.min(245, base))));
+      const halfNode = mobile ? ARC_NODE_HALF_W.mobile : ARC_NODE_HALF_W.desktop;
+      const xScale = mobile ? ARC_X_SCALE_MOBILE : ARC_X_SCALE_DESKTOP;
+      // Widest the arc may be before the end nodes collide with the edge.
+      const maxByWidth = (w / 2 - halfNode - 8) / xScale;
+      const base = Math.min(maxByWidth, mobile ? h * 0.26 : Math.min(w, h) * 0.3);
+      setRadius(Math.round(Math.max(mobile ? 118 : 155, Math.min(245, base))));
     };
     measure();
     window.addEventListener("resize", measure);
@@ -468,12 +464,14 @@ function CampfireOverlay({
   radius: number;
   onClose: () => void;
 }) {
+  // Only agents that actually report usage. An unconfigured provider has nothing
+  // to plot, and a row of greyed-out placeholders was the noisiest thing on the
+  // arc — it read as "broken" rather than "not set up".
   const ordered = useMemo(() => {
     if (!providers) return [];
-    return [...providers].sort((a, b) => {
-      if (a.available !== b.available) return a.available ? -1 : 1;
-      return a.label.localeCompare(b.label);
-    });
+    return providers
+      .filter((p) => p.available && (p.windows?.length ?? 0) > 0)
+      .sort((a, b) => a.label.localeCompare(b.label));
   }, [providers]);
 
   const [mobile, setMobile] = useState(
@@ -487,22 +485,43 @@ function CampfireOverlay({
     return () => mq.removeEventListener("change", sync);
   }, []);
 
+  const loading = providers == null && !error;
+  // Lay the skeleton out on the same arc so the real agents don't jump on arrival.
+  const nodeCount = loading ? 4 : ordered.length;
   const positions = useMemo(
-    () => arcLayout(ordered.length, radius, mobile),
-    [ordered.length, radius, mobile],
+    () => arcLayout(nodeCount, radius, mobile),
+    [nodeCount, radius, mobile],
   );
-  const nextReset = useMemo(() => soonestReset(ordered, now), [ordered, now]);
-  const nextLabel = useMemo(() => {
-    if (nextReset == null) return null;
-    for (const p of ordered) {
+
+  // Hovering (or tapping) an agent retargets the centre readout to that agent.
+  const [focusKind, setFocusKind] = useState<string | null>(null);
+  const focused = useMemo(
+    () => ordered.find((p) => p.kind === focusKind) ?? null,
+    [ordered, focusKind],
+  );
+  const heroReset = useMemo(
+    () => soonestReset(focused ? [focused] : ordered, now),
+    [focused, ordered, now],
+  );
+  const heroLabel = useMemo(() => {
+    if (heroReset == null) return null;
+    for (const p of focused ? [focused] : ordered) {
       for (const w of p.windows ?? []) {
-        if (w.resetsAt === nextReset) return `${p.label} · ${w.label}`;
+        if (w.resetsAt === heroReset) return `${p.label} · ${w.label}`;
       }
     }
     return null;
-  }, [ordered, nextReset]);
+  }, [focused, ordered, heroReset]);
+
+  // Not every provider reports a reset time. Rather than answer a hover with
+  // "No upcoming resets reported", fall back to what that agent DOES know —
+  // how much of its window is spent — and relabel the eyebrow to match.
+  const focusHeadline = focused ? headlineWindow(focused) : null;
+  const showUsed =
+    focused != null && heroReset == null && focusHeadline?.pct != null;
 
   const stageCenterY = mobile ? "60%" : "55%";
+  const ringSize = mobile ? 38 : 56;
 
   return (
     <div
@@ -554,9 +573,9 @@ function CampfireOverlay({
           />
         </div>
 
-        {/* Center copy */}
+        {/* Centre readout — follows whatever is hovered, else the fleet-wide soonest */}
         <div
-          className="absolute left-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-1.5 text-center"
+          className="pointer-events-none absolute left-1/2 z-10 flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-1.5 text-center"
           style={{ top: stageCenterY }}
         >
           <div
@@ -568,7 +587,7 @@ function CampfireOverlay({
               className="text-[10px] font-semibold uppercase tracking-[0.18em] sm:text-[11px]"
               style={{ letterSpacing: "0.18em" }}
             >
-              Next restore
+              {showUsed ? "Used" : "Next restore"}
             </span>
           </div>
           <div
@@ -581,213 +600,153 @@ function CampfireOverlay({
                 "0 0 40px rgba(255,140,50,0.45), 0 0 80px rgba(255,100,20,0.22), 0 2px 12px rgba(0,0,0,0.4)",
             }}
           >
-            {providers == null && !error
-              ? "…"
-              : nextReset
-                ? formatCountdown(nextReset, now)
-                : "—"}
+            {loading ? (
+              <span
+                className="inline-block h-[0.72em] w-[3.2em] rounded-full align-middle"
+                style={{
+                  background:
+                    "linear-gradient(90deg, rgba(255,220,180,0.10) 25%, rgba(255,220,180,0.26) 50%, rgba(255,220,180,0.10) 75%)",
+                  backgroundSize: "200% 100%",
+                  animation: "lfg-ember-shimmer 1.4s ease-in-out infinite",
+                }}
+              />
+            ) : showUsed && focusHeadline?.pct != null ? (
+              `${Math.round(focusHeadline.pct)}%`
+            ) : heroReset ? (
+              formatCountdown(heroReset, now)
+            ) : (
+              "—"
+            )}
           </div>
           <p
-            className="max-w-[16rem] text-[12px] sm:text-[13px]"
-            style={{ color: TONE.soft }}
+            className="min-h-[1.15rem] max-w-[16rem] text-[12px] sm:text-[13px]"
+            style={{ color: focused ? TONE.label : TONE.soft }}
           >
             {error
               ? error
-              : nextLabel
-                ? nextLabel
-                : providers == null
-                  ? "Loading usage…"
-                  : "No upcoming resets reported"}
+              : loading
+                ? "Reading agent limits…"
+                : showUsed && focused && focusHeadline
+                  ? `${focused.label} · ${focusHeadline.label}`
+                  : heroLabel
+                    ? heroLabel
+                    : ordered.length
+                      ? "No upcoming resets reported"
+                      : "No agents reporting usage"}
           </p>
           <p className="mt-0.5 text-[10px]" style={{ color: TONE.faint }}>
             {mobile ? "Tap outside to close · Esc" : "Shift to close · Esc"}
           </p>
         </div>
 
-        {/* Agents on the elliptical arc */}
+        {/* Loading skeleton on the arc */}
+        {loading
+          ? positions.map((pos, i) => (
+              <div
+                key={`skeleton-${i}`}
+                className="absolute z-20 flex flex-col items-center gap-1.5"
+                style={{
+                  left: `calc(50% + ${pos.x}px)`,
+                  top: `calc(${stageCenterY} + ${pos.y}px)`,
+                  transform: "translate(-50%, -50%)",
+                }}
+              >
+                <SpinnerRing size={ringSize} delayMs={i * 120} />
+                <span
+                  className="block h-2 w-10 rounded-full sm:w-12"
+                  style={{
+                    background: "rgba(255,220,180,0.14)",
+                    animation: "lfg-ember-shimmer 1.4s ease-in-out infinite",
+                    animationDelay: `${i * 120}ms`,
+                    backgroundSize: "200% 100%",
+                  }}
+                />
+              </div>
+            ))
+          : null}
+
+        {/* Agents on the arc — no card chrome, just the meter and its numbers */}
         {ordered.map((p, i) => {
           const pos = positions[i] ?? { x: 0, y: 0 };
           const headline = headlineWindow(p);
           const maxPct = headline?.pct ?? maxUsagePct(p);
           const windows = p.windows ?? [];
-          const style: CSSProperties = {
-            left: `calc(50% + ${pos.x}px)`,
-            top: `calc(${stageCenterY} + ${pos.y}px)`,
-            transform: "translate(-50%, -50%)",
-            animationDelay: `${i * 35}ms`,
-          };
+          const isFocused = focusKind === p.kind;
+          const dimmed = focusKind != null && !isFocused;
           return (
-            <div
+            <button
               key={p.kind}
+              type="button"
+              aria-label={`${p.label} usage${maxPct == null ? "" : `, ${Math.round(maxPct)} percent`}`}
+              // Mouse drives focus by hover. Touch can't hover — and a tap emits
+              // its own enter/leave pair that would immediately undo the focus —
+              // so touch/pen toggle on pointerdown instead.
+              onPointerEnter={(e) => {
+                if (e.pointerType === "mouse") setFocusKind(p.kind);
+              }}
+              onPointerLeave={(e) => {
+                if (e.pointerType === "mouse") {
+                  setFocusKind((c) => (c === p.kind ? null : c));
+                }
+              }}
+              onPointerDown={(e) => {
+                if (e.pointerType === "mouse") return;
+                setFocusKind((c) => (c === p.kind ? null : p.kind));
+              }}
+              onFocus={() => setFocusKind(p.kind)}
+              onBlur={() => setFocusKind((c) => (c === p.kind ? null : c))}
               className={cn(
-                "absolute z-20 w-[4.4rem] select-none sm:w-[7.1rem]",
-                "animate-in fade-in-0 zoom-in-95 duration-200",
-                !p.available && "opacity-40",
+                "absolute z-20 flex w-[4.6rem] cursor-default select-none flex-col items-center gap-1 rounded-2xl px-1 py-1.5 sm:w-[6.6rem]",
+                "outline-none transition-[opacity,transform] duration-200 ease-out",
+                "focus-visible:ring-2 focus-visible:ring-orange-300/50",
+                "animate-in fade-in-0 zoom-in-95",
               )}
-              style={style}
+              style={{
+                left: `calc(50% + ${pos.x}px)`,
+                top: `calc(${stageCenterY} + ${pos.y}px)`,
+                transform: `translate(-50%, -50%) scale(${isFocused ? 1.07 : 1})`,
+                // Emphasis: the hovered agent stays lit, the rest recede.
+                opacity: dimmed ? 0.42 : 1,
+                animationDelay: `${i * 35}ms`,
+              }}
             >
-              {/* Mobile chip */}
+              <div className="relative">
+                <MiniRings windows={windows} size={ringSize} />
+                <span className="absolute inset-0 flex items-center justify-center">
+                  <img
+                    src={agentIconSrc(p.kind)}
+                    alt=""
+                    className="size-3.5 rounded-[3px] sm:size-5"
+                  />
+                </span>
+              </div>
               <div
-                className="flex flex-col items-center gap-0.5 px-1 py-1.5 sm:hidden"
-                style={glassCard}
+                className="w-full truncate text-center text-[10px] font-medium sm:text-[11px]"
+                style={{ color: TONE.label }}
               >
-                <div className="relative">
-                  {windows.length ? (
-                    <MiniRings windows={windows} size={28} />
-                  ) : (
-                    <div
-                      className="flex size-7 items-center justify-center rounded-full"
-                      style={{
-                        background: "rgba(255,245,230,0.05)",
-                        boxShadow: "inset 0 0 0 1px rgba(255,220,180,0.12)",
-                      }}
-                    />
-                  )}
-                  <span className="absolute inset-0 flex items-center justify-center">
-                    <img
-                      src={agentIconSrc(p.kind)}
-                      alt=""
-                      className="size-3 rounded-[2px]"
-                    />
-                  </span>
-                </div>
+                {p.label}
+              </div>
+              <div
+                className="font-semibold leading-none tabular-nums"
+                style={{
+                  fontSize: mobile ? 15 : 20,
+                  color: pctColor(maxPct),
+                }}
+              >
+                {maxPct == null ? "—" : `${Math.round(maxPct)}%`}
+              </div>
+              {/* The window name is the non-colour half of the status cue. */}
+              {headline ? (
                 <div
-                  className="w-full truncate text-center text-[9px] font-medium"
-                  style={{ color: TONE.label }}
+                  className="w-full truncate text-center text-[9px] leading-tight sm:text-[10px]"
+                  style={{ color: TONE.muted }}
                 >
-                  {p.label}
+                  {headline.label}
                 </div>
-                {p.available && maxPct != null ? (
-                  <div
-                    className="text-[13px] font-semibold tabular-nums"
-                    style={{ color: pctColor(maxPct) }}
-                  >
-                    {Math.round(maxPct)}%
-                  </div>
-                ) : (
-                  <div className="text-[9px]" style={{ color: TONE.faint }}>
-                    —
-                  </div>
-                )}
-              </div>
-
-              {/* Desktop card */}
-              <div
-                className="hidden flex-col items-center gap-1 px-2.5 py-2.5 sm:flex"
-                style={glassCard}
-              >
-                <div className="relative">
-                  {windows.length ? (
-                    <MiniRings windows={windows} size={42} />
-                  ) : (
-                    <div
-                      className="flex size-10 items-center justify-center rounded-full"
-                      style={{
-                        background: "rgba(255,245,230,0.05)",
-                        boxShadow: "inset 0 0 0 1px rgba(255,220,180,0.12)",
-                      }}
-                    />
-                  )}
-                  <span className="absolute inset-0 flex items-center justify-center">
-                    <img
-                      src={agentIconSrc(p.kind)}
-                      alt=""
-                      className="size-4 rounded-[3px]"
-                    />
-                  </span>
-                </div>
-                <div className="w-full min-w-0 text-center">
-                  <div
-                    className="truncate text-[11px] font-medium"
-                    style={{ color: TONE.label }}
-                  >
-                    {p.label}
-                  </div>
-                  {p.plan ? (
-                    <div
-                      className="truncate text-[9px] uppercase tracking-wide"
-                      style={{ color: TONE.faint }}
-                    >
-                      {p.plan}
-                    </div>
-                  ) : null}
-                </div>
-                {p.available && headline ? (
-                  <div className="w-full space-y-0.5 text-center">
-                    <div
-                      className="font-semibold tabular-nums"
-                      style={{
-                        fontSize: 22,
-                        lineHeight: 1.1,
-                        color: pctColor(maxPct),
-                      }}
-                    >
-                      {maxPct == null ? "—" : `${Math.round(maxPct)}%`}
-                    </div>
-                    <div
-                      className="text-[10px] leading-tight"
-                      style={{ color: TONE.muted }}
-                    >
-                      {headline.label}
-                      {headline.resetsAt ? (
-                        <>
-                          <br />
-                          {formatResetShort(headline.resetsAt, now)}
-                        </>
-                      ) : null}
-                    </div>
-                  </div>
-                ) : (
-                  <div
-                    className="line-clamp-2 px-0.5 text-center text-[10px] leading-snug"
-                    style={{ color: TONE.muted }}
-                  >
-                    {p.note ?? "No data"}
-                  </div>
-                )}
-                {p.available && windows.length > 1 ? (
-                  <div
-                    className="w-full space-y-0.5 pt-1.5"
-                    style={{ borderTop: "1px solid rgba(255,220,180,0.1)" }}
-                  >
-                    {windows.slice(0, 3).map((w, wi) => (
-                      <div
-                        key={w.label}
-                        className="flex items-center justify-between gap-1 text-[9px]"
-                        style={{ color: TONE.muted }}
-                      >
-                        <span className="flex min-w-0 items-center gap-1 truncate">
-                          <span
-                            className="size-1.5 shrink-0 rounded-full"
-                            style={{
-                              backgroundColor: RING_COLORS[wi % RING_COLORS.length],
-                            }}
-                          />
-                          <span className="truncate">{w.label}</span>
-                        </span>
-                        <span
-                          className="shrink-0 tabular-nums"
-                          style={{ color: TONE.soft }}
-                        >
-                          {w.pct == null ? "—" : `${Math.round(w.pct)}%`}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            </div>
+              ) : null}
+            </button>
           );
         })}
-
-        {providers != null && ordered.length === 0 && !error ? (
-          <p
-            className="absolute bottom-8 left-1/2 z-20 -translate-x-1/2 text-sm"
-            style={{ color: TONE.muted }}
-          >
-            No usage providers reported
-          </p>
-        ) : null}
       </div>
 
       <style>{`
@@ -796,8 +755,48 @@ function CampfireOverlay({
           40% { opacity: 1; }
           70% { opacity: 0.86; }
         }
+        @keyframes lfg-ember-spin { to { transform: rotate(360deg); } }
+        @keyframes lfg-ember-shimmer {
+          0% { background-position: 200% 0; }
+          100% { background-position: -200% 0; }
+        }
       `}</style>
     </div>
+  );
+}
+
+/** Indeterminate ember arc — the "we're still reading limits" state. */
+function SpinnerRing({ size, delayMs = 0 }: { size: number; delayMs?: number }) {
+  const c = size / 2;
+  const sw = size >= 44 ? 3.5 : 2.75;
+  const r = c - sw / 2 - 0.5;
+  const circ = 2 * Math.PI * r;
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} aria-hidden>
+      <circle
+        cx={c}
+        cy={c}
+        r={r}
+        fill="none"
+        stroke="rgba(255,220,180,0.12)"
+        strokeWidth={sw}
+      />
+      <circle
+        cx={c}
+        cy={c}
+        r={r}
+        fill="none"
+        stroke="rgba(253,186,116,0.85)"
+        strokeWidth={sw}
+        strokeLinecap="round"
+        strokeDasharray={`${circ * 0.24} ${circ}`}
+        style={{
+          transformOrigin: "50% 50%",
+          animation: "lfg-ember-spin 1.15s linear infinite",
+          animationDelay: `${delayMs}ms`,
+        }}
+      />
+    </svg>
   );
 }
 

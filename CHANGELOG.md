@@ -4,6 +4,27 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 25, 2026 - Campfire, cleaned up (v0.1.56)
+
+- The Usage Campfire now only shows agents that actually report usage —
+  unconfigured providers no longer sit on the arc as greyed-out placeholders
+  that read as broken.
+- Hovering (or tapping) an agent retargets the centre readout to that agent's
+  own next restore. If an agent doesn't report a reset time, the centre shows
+  how much of its window is spent instead, so a hover always answers something.
+- Loading is a real state now: ember arcs spin in place on the arc while limits
+  are read, instead of an ellipsis and a static dash.
+- Dropped the glass cards. Each agent is just its meter, name and percentage on
+  the ember background, and the hovered one lifts while the rest recede.
+- Ring colour now tracks each window's own utilization on a shared scale, so a
+  ring means the same thing as the number beneath it. The previous colours were
+  assigned by position and encoded nothing.
+- The green/amber/red utilization scale was re-picked for colour-vision
+  deficiency — the old green and amber were nearly indistinguishable to deutan
+  viewers (ΔE 6.6, well under the safe floor).
+- Fixed: on narrow phones the outermost agents were clipped off both edges. The
+  arc is now sized from the space actually available.
+
 ## July 25, 2026 - Instant transcripts and a calmer workspace (v0.1.55)
 
 - Opening a session is now instant. The transcript pane used to clear itself
