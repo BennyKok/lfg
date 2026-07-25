@@ -16071,6 +16071,66 @@ type ShipPost = {
   mediaItems: ShipMediaItem[];
 };
 
+// An artifacts-gallery tile is a live sandboxed document, not a picture:
+// mounting the whole page's worth at once boots dozens of independent documents
+// — each with its own scripts, timers, and layout — for tiles that are mostly
+// off screen. `loading="lazy"` is only a hint and browsers largely ignore it for
+// iframes already inside the scroll container, so gate the mount ourselves.
+//
+// Once a tile has been shown it stays mounted: scrolling back should not re-run
+// a dashboard's scripts (and re-fetch it, since HTML artifacts are `no-store`).
+function GalleryTilePreview({
+  src,
+  title,
+  children,
+}: {
+  src: string;
+  title: string;
+  children?: React.ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    if (mounted) return;
+    const el = ref.current;
+    if (!el) return;
+    // Without IntersectionObserver, fall back to the old always-on behavior
+    // rather than showing a permanently blank tile.
+    if (typeof IntersectionObserver === "undefined") {
+      setMounted(true);
+      return;
+    }
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) setMounted(true);
+      },
+      // Start loading a little before the tile scrolls in so it is usually
+      // painted by the time it lands on screen.
+      { rootMargin: "300px" },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [mounted]);
+
+  return (
+    <div ref={ref} className="relative h-32 w-full overflow-hidden bg-background">
+      {mounted ? (
+        <iframe
+          src={src}
+          title={title}
+          sandbox="allow-scripts"
+          loading="lazy"
+          tabIndex={-1}
+          scrolling="no"
+          className="pointer-events-none h-[200%] w-[200%] origin-top-left scale-50 select-none border-0"
+        />
+      ) : null}
+      {children}
+    </div>
+  );
+}
+
 function ShipMedia({
   item,
   onExpand,
@@ -16508,23 +16568,17 @@ function ShippedPage({
                     }
                     className="block w-full text-left active:scale-[0.99]"
                   >
-                    <div className="relative h-32 w-full overflow-hidden bg-background">
-                      <iframe
-                        src={`${a.url}?v=${a.ts}`}
-                        title={a.title || a.caption || a.name}
-                        sandbox="allow-scripts"
-                        loading="lazy"
-                        tabIndex={-1}
-                        scrolling="no"
-                        className="pointer-events-none h-[200%] w-[200%] origin-top-left scale-50 select-none border-0"
-                      />
+                    <GalleryTilePreview
+                      src={`${a.url}?v=${a.ts}&thumb=1`}
+                      title={a.title || a.caption || a.name}
+                    >
                       {(a.version ?? 1) > 1 ? (
                         <span className="absolute left-1.5 top-1.5 flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 backdrop-blur dark:text-emerald-400">
                           <span className="size-1.5 rounded-full bg-emerald-500" />
                           live · v{a.version}
                         </span>
                       ) : null}
-                    </div>
+                    </GalleryTilePreview>
                     <div className="px-2.5 py-2 pr-9">
                       <div className="truncate text-xs font-medium">{a.title || a.caption || a.name}</div>
                       <div className="mt-0.5 truncate text-[10px] text-muted-foreground">

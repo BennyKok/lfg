@@ -4501,10 +4501,17 @@ export async function cmdServe() {
             // (the sandboxed frame is cross-origin; postMessage is the only channel).
             const reporter =
               '<script>(function(){var last=0;var send=function(){var b=document.body;var h=Math.max(document.documentElement.scrollHeight,b?b.scrollHeight:0);if(Math.abs(h-last)>2){last=h;try{parent.postMessage({type:"lfg-artifact-height",height:h},"*")}catch(e){}}};addEventListener("load",send);setTimeout(send,60);setInterval(send,1000);try{new ResizeObserver(send).observe(document.documentElement)}catch(e){}})();</scr' + "ipt>";
+            // `?thumb=1` opts out: the Artifacts gallery renders a wall of these
+            // in fixed-height tiles that never resize to content, so the
+            // reporter there is pure overhead — one polling timer plus a forced
+            // layout every second, per tile, for as long as the page is open.
+            const wantsHeightReporter = url.searchParams.get("thumb") !== "1";
             let doc = await file.text();
-            doc = doc.includes("</body>")
-              ? doc.replace("</body>", reporter + "</body>")
-              : doc + reporter;
+            if (wantsHeightReporter) {
+              doc = doc.includes("</body>")
+                ? doc.replace("</body>", reporter + "</body>")
+                : doc + reporter;
+            }
             return new Response(doc, {
               headers: {
                 "Content-Type": "text/html; charset=utf-8",
