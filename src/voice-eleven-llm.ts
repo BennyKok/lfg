@@ -23,7 +23,7 @@
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { claudeOauthToken } from "./claude-creds.ts";
 
 const PORT = Number(process.env.LFG_PORT ?? 8766);
 const LFG = `http://127.0.0.1:${PORT}`;
@@ -33,18 +33,7 @@ const MAX_TOOL_HOPS = 6;
 
 // ── Claude subscription OAuth, same source the rest of serve.ts uses ─────────
 function oauthToken(): string | null {
-  try {
-    const raw = readFileSync(
-      join(homedir(), ".claude", ".credentials.json"),
-      "utf8",
-    );
-    const creds = JSON.parse(raw) as {
-      claudeAiOauth?: { accessToken?: string };
-    };
-    return creds?.claudeAiOauth?.accessToken ?? null;
-  } catch {
-    return null;
-  }
+  return claudeOauthToken();
 }
 
 // ── system prompt — ported verbatim from agent.py VOICE_PROMPT so spoken
