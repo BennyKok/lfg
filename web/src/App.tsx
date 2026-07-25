@@ -42,6 +42,12 @@ import {
   type LfgChatMessage,
   type LfgTranscriptSubscribe,
 } from "./lib/lfg-chat-transport";
+import {
+  prefetchTranscripts,
+  readTranscriptCache,
+  updateTranscriptCacheMessages,
+  writeTranscriptCache,
+} from "./lib/transcript-cache";
 import { setThemePreference, THEME_CHANGE_EVENT } from "./lib/theme";
 import { startsInBottomSystemGestureZone } from "./lib/touch-gestures";
 import { ConnectionStatusToasts } from "./ConnectionStatus";
@@ -6989,6 +6995,37 @@ function LiveView({
     [sessions, busyBySid],
   );
 
+  // Pinned session families always lead the narrow/mobile layout. A pin on a
+  // delegated child lifts its whole family so parent/child nesting stays intact.
+  // Computed above the empty-state return so the render order is also available
+  // to the prefetch hook below (hooks must not sit behind a conditional return).
+  const pinnedSet = new Set(topPinned);
+  const nodeContainsPin = (node: SessionTreeNode): boolean =>
+    pinnedSet.has(sessionStableId(node.session)) || node.children.some(nodeContainsPin);
+  const pinnedNodes = tree.roots.filter(nodeContainsPin);
+  // Remaining roots keep the familiar working → idle grouping. A parent is
+  // considered working if any child is working.
+  const workingNodes = tree.roots.filter(
+    (node) => !nodeContainsPin(node) && tree.effectiveBusy(node),
+  );
+  const idleNodes = tree.roots.filter(
+    (node) => !nodeContainsPin(node) && !tree.effectiveBusy(node),
+  );
+  const pinned = tree.flatten(pinnedNodes);
+  const working = tree.flatten(workingNodes);
+  const idle = tree.flatten(idleNodes);
+
+  // On-screen order: pinned, then working, then idle. Drives both sheet
+  // navigation and which transcripts we warm ahead of the user opening them.
+  const screenOrder = [...pinned, ...working, ...idle]
+    .map((s) => s.sessionId)
+    .filter((id): id is string => !!id);
+  const prefetchKey = screenOrder.slice(0, 8).join(",");
+  useEffect(() => {
+    if (!prefetchKey) return;
+    prefetchTranscripts(prefetchKey.split(","), loadTranscriptPage);
+  }, [prefetchKey]);
+
   // Empty state. Placed AFTER all hooks (useIsWide/useState/useMemo above) so the
   // hook order stays identical whether or not sessions/findings are present —
   // returning earlier made `useMemo` conditional and tripped React error #310
@@ -7017,23 +7054,6 @@ function LiveView({
     );
   }
 
-  // Pinned session families always lead the narrow/mobile layout. A pin on a
-  // delegated child lifts its whole family so parent/child nesting stays intact.
-  const pinnedSet = new Set(topPinned);
-  const nodeContainsPin = (node: SessionTreeNode): boolean =>
-    pinnedSet.has(sessionStableId(node.session)) || node.children.some(nodeContainsPin);
-  const pinnedNodes = tree.roots.filter(nodeContainsPin);
-  // Remaining roots keep the familiar working → idle grouping. A parent is
-  // considered working if any child is working.
-  const workingNodes = tree.roots.filter(
-    (node) => !nodeContainsPin(node) && tree.effectiveBusy(node),
-  );
-  const idleNodes = tree.roots.filter(
-    (node) => !nodeContainsPin(node) && !tree.effectiveBusy(node),
-  );
-  const pinned = tree.flatten(pinnedNodes);
-  const working = tree.flatten(workingNodes);
-  const idle = tree.flatten(idleNodes);
   const nameFor = (id: string) => autoAgents.find((a) => a.id === id)?.name ?? id;
 
   const renderCard = (session: Session, depth = 0) => (
@@ -7160,14 +7180,8 @@ function LiveView({
     );
   }
 
-  // Sheet navigation follows the on-screen order: pinned, working, then idle.
-  const sheetOrder = [
-    ...tree.flatten(pinnedNodes),
-    ...tree.flatten(workingNodes),
-    ...tree.flatten(idleNodes),
-  ]
-    .map((s) => s.sessionId)
-    .filter((id): id is string => !!id);
+  // Sheet navigation follows the same on-screen order.
+  const sheetOrder = screenOrder;
   const sheetSession = sheet ? sessions.find((s) => s.sessionId === sheet.sid) : null;
 
   return (
@@ -7674,6 +7688,14 @@ function RailStage({
   useEffect(() => {
     setCursor((c) => (c && orderedSids.includes(c) ? c : orderedSids[0] ?? null));
   }, [orderedSids]);
+  // Warm the transcripts at the top of the rail so opening one paints instantly
+  // instead of waiting on its first `/messages` round trip. The narrow layout
+  // does the same from its own order; the prefetcher dedupes across both.
+  const railPrefetchKey = orderedSids.slice(0, 8).join(",");
+  useEffect(() => {
+    if (!railPrefetchKey) return;
+    prefetchTranscripts(railPrefetchKey.split(","), loadTranscriptPage);
+  }, [railPrefetchKey]);
   // Scroll the cursored row into view as it moves.
   useEffect(() => {
     if (!cursor) return;
@@ -9088,6 +9110,17 @@ function SkillTextarea({
   );
 }
 
+// Shared transcript page loader used to warm the cache ahead of a session open.
+async function loadTranscriptPage(sid: string) {
+  const page = await api<{ messages: Message[]; nextBefore?: number | null }>(
+    `/api/sessions/${encodeURIComponent(sid)}/messages?limit=80`,
+  );
+  return {
+    messages: lfgMessagesToUIMessages(Array.isArray(page.messages) ? page.messages : []),
+    nextBefore: page.nextBefore ?? null,
+  };
+}
+
 function SessionChat({
   session,
   busy,
@@ -9163,9 +9196,20 @@ function SessionChat({
       return;
     }
     let cancelled = false;
-    setHistoryLoading(true);
-    setNextBefore(null);
-    setMessages([]);
+    // Paint the last-known page for this session synchronously so re-opening a
+    // session is instant instead of a blank pane + spinner while the network
+    // round trip lands. We still refetch below and reconcile — the cached paint
+    // just removes the wait from the critical path.
+    const cached = readTranscriptCache(sid);
+    if (cached) {
+      setMessages(cached.messages);
+      setNextBefore(cached.nextBefore);
+      setHistoryLoading(false);
+    } else {
+      setHistoryLoading(true);
+      setNextBefore(null);
+      setMessages([]);
+    }
     void api<{ messages: Message[]; nextBefore?: number | null }>(
       `/api/sessions/${encodeURIComponent(sid)}/messages?limit=80`,
       { cache: "no-store" },
@@ -9173,13 +9217,33 @@ function SessionChat({
       .then((page) => {
         if (cancelled) return;
         const history = lfgMessagesToUIMessages(Array.isArray(page.messages) ? page.messages : []);
+        const historyIds = new Set(history.map((message) => message.id));
+        // Anything the user had already paged in above this window stays put, in
+        // its original order — the fresh page only replaces the tail it covers.
+        const olderKept = cached
+          ? cached.messages.slice(
+              0,
+              Math.max(0, cached.messages.findIndex((message) => historyIds.has(message.id))),
+            )
+          : [];
+        const keptIds = new Set(olderKept.map((message) => message.id));
+        let settled: LfgChatMessage[] = history;
         setMessages((current) => {
-          if (!current.length) return history;
-          const historyIds = new Set(history.map((message) => message.id));
-          const liveOnly = current.filter((message) => !historyIds.has(message.id));
-          return liveOnly.length ? [...history, ...liveOnly] : history;
+          // Messages that landed live while this fetch was in flight and aren't
+          // in the page yet — they're newest, so they belong at the end.
+          const liveOnly = current.filter(
+            (message) => !historyIds.has(message.id) && !keptIds.has(message.id),
+          );
+          const cachedIds = new Set(cached?.messages.map((message) => message.id) ?? []);
+          const trailing = liveOnly.filter((message) => !cachedIds.has(message.id));
+          return (settled = [...olderKept, ...history, ...trailing]);
         });
-        setNextBefore(page.nextBefore ?? null);
+        // Keep the deeper cursor when we preserved paged-in history above.
+        const settledBefore = olderKept.length
+          ? (cached?.nextBefore ?? null)
+          : (page.nextBefore ?? null);
+        setNextBefore(settledBefore);
+        writeTranscriptCache(sid, settled, settledBefore);
       })
       .catch((err) => {
         if (!cancelled) onError(err instanceof Error ? err.message : String(err));
@@ -9201,11 +9265,15 @@ function SessionChat({
         return;
       }
       if (event.type === "busy") setLiveBusy(event.busy);
-      setMessages((current) =>
-        appendLfgTranscriptEvent(current, event, {
+      setMessages((current) => {
+        const next = appendLfgTranscriptEvent(current, event, {
           streamActive: chatStatusRef.current === "submitted" || chatStatusRef.current === "streaming",
-        }),
-      );
+        });
+        // Keep the cached page current so the next re-open paints the newest
+        // state rather than a stale snapshot.
+        if (next !== current) updateTranscriptCacheMessages(sid, next);
+        return next;
+      });
     });
   }, [onError, onSubscribeTranscript, setMessages, sid]);
 
@@ -9219,11 +9287,15 @@ function SessionChat({
     const older = lfgMessagesToUIMessages(Array.isArray(page.messages) ? page.messages : []);
     setNextBefore(page.nextBefore ?? null);
     if (!older.length) return (page.nextBefore ?? null) !== null;
+    let settled: LfgChatMessage[] = older;
     setMessages((current) => {
       const existing = new Set(current.map((message) => message.id));
       const prepend = older.filter((message) => !existing.has(message.id));
-      return prepend.length ? [...prepend, ...current] : current;
+      return (settled = prepend.length ? [...prepend, ...current] : current);
     });
+    // Cache the deeper window too, so scrolling back then leaving and returning
+    // doesn't lose the pages the user already waited for.
+    writeTranscriptCache(sid, settled, page.nextBefore ?? null);
     return (page.nextBefore ?? null) !== null;
   }, [nextBefore, setMessages, sid]);
 
