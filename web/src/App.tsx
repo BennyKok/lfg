@@ -181,6 +181,19 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuRadioGroup,
+  ContextMenuRadioItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
 import changelogMarkdown from "../../CHANGELOG.md?raw";
 import { useExtensionNavTabs } from "./lib/extensions";
@@ -7711,6 +7724,9 @@ function RailStage({
   // Keyboard cursor (highlighted rail row) + the shortcuts cheatsheet overlay.
   const [cursor, setCursor] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  // One-shot glow token for the stage pane just chosen from the rail. `n`
+  // increments so re-selecting the same sid restarts the animation.
+  const [focusGlow, setFocusGlow] = useState<{ sid: string; n: number } | null>(null);
   // Range-select anchor for shift-click / shift-arrow.
   const anchorRef = useRef<string | null>(null);
 
@@ -7720,18 +7736,31 @@ function RailStage({
     return m;
   }, [sessions]);
 
+  // Soft primary glow on the stage column for the given sid so multi-pane
+  // layouts make the just-selected window obvious.
+  const pulseStage = useCallback((sid: string) => {
+    if (!sid) return;
+    setFocusGlow((prev) => ({ sid, n: (prev?.n ?? 0) + 1 }));
+    requestAnimationFrame(() => {
+      document
+        .querySelector(`[data-stage-sid="${sid}"]`)
+        ?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+    });
+  }, []);
+
   // External focus request (Shipped post tap): put the session on stage as the
-  // preview column, cursor it, and scroll its rail row into view.
+  // preview column, cursor it, glow it, and scroll its rail row into view.
   useEffect(() => {
     if (!focus) return;
     const sid = focus.sid;
     if (!bySid.has(sid)) return;
     setPreview(sid);
     setCursor(sid);
+    pulseStage(sid);
     requestAnimationFrame(() => {
       document.querySelector(`[data-rail-sid="${sid}"]`)?.scrollIntoView({ block: "center" });
     });
-  }, [focus, bySid]);
+  }, [focus, bySid, pulseStage]);
 
   // Drop pinned/preview ids the server has stopped returning (session ended),
   // so columns vanish cleanly instead of rendering blanks.
@@ -8082,18 +8111,21 @@ function RailStage({
   );
 
   // A plain click/Enter: set the anchor here and preview it. Shift extends the
-  // range from the anchor and tiles the selection.
+  // range from the anchor and tiles the selection. Always pulse the stage pane
+  // so re-clicking an already-open column still points at which window it is.
   const activate = useCallback(
     (sid: string, shift: boolean) => {
       if (shift && anchorRef.current) {
         selectTo(sid);
+        pulseStage(sid);
         return;
       }
       anchorRef.current = sid;
       setCursor(sid);
       openSession(sid);
+      pulseStage(sid);
     },
-    [selectTo, openSession],
+    [selectTo, openSession, pulseStage],
   );
 
   // Quick-interrupt a session by id. Interrupting an idle session is a harmless
@@ -8147,6 +8179,7 @@ function RailStage({
     preview,
     columnIds,
     activate,
+    pulseStage,
     selectTo,
     togglePin,
     closeColumn,
@@ -8167,6 +8200,7 @@ function RailStage({
     preview,
     columnIds,
     activate,
+    pulseStage,
     selectTo,
     togglePin,
     closeColumn,
@@ -8237,6 +8271,7 @@ function RailStage({
       // stage, then move keyboard focus into its message composer.
       const focusInto = (sid: string) => {
         if (!s.columnIds.includes(sid)) s.activate(sid, false);
+        else s.pulseStage(sid);
         // Let the column mount/render before grabbing its input.
         window.setTimeout(() => {
           const el = document.querySelector(
@@ -8347,19 +8382,36 @@ function RailStage({
   const renderRailItem = (session: Session) => {
     const sid = session.sessionId ?? "";
     return (
-      <RailItem
+      <RailSessionContextMenu
         key={sid}
         session={session}
-        busy={!!busyBySid[sid]}
-        latest={latestLine(messagesBySid[sid] ?? EMPTY_MESSAGES)}
-        active={columnIds.includes(sid)}
-        cursored={cursor === sid}
-        pinned={validPinned.includes(sid)}
+        users={users}
+        onRefresh={onRefresh}
+        onRemove={onRemove}
         topPinned={topPinnedSet.has(sid)}
-        collapsed={railCollapsed}
-        onActivate={(shift) => activate(sid, shift)}
-        onTogglePin={() => togglePin(sid)}
-      />
+        onToggleTopPin={onToggleTopPin}
+        stagePinned={validPinned.includes(sid)}
+        onToggleStagePin={() => togglePin(sid)}
+        onOpen={() => activate(sid, false)}
+        onCloseColumn={
+          columnIds.includes(sid) && columnIds.length > 1
+            ? () => closeColumn(sid)
+            : undefined
+        }
+      >
+        <RailItem
+          session={session}
+          busy={!!busyBySid[sid]}
+          latest={latestLine(messagesBySid[sid] ?? EMPTY_MESSAGES)}
+          active={columnIds.includes(sid)}
+          cursored={cursor === sid}
+          pinned={validPinned.includes(sid)}
+          topPinned={topPinnedSet.has(sid)}
+          collapsed={railCollapsed}
+          onActivate={(shift) => activate(sid, shift)}
+          onTogglePin={() => togglePin(sid)}
+        />
+      </RailSessionContextMenu>
     );
   };
   // Nest children in the DOM (same model as the mobile session tree) so
@@ -8475,6 +8527,7 @@ function RailStage({
             variant="stage"
             onClose={onCloseColumn}
             entering={recentlyCreatedSids.has(sid)}
+            focusGlow={focusGlow?.sid === sid ? focusGlow.n : 0}
             pinned={topPinnedSet.has(sid)}
             onTogglePin={onToggleTopPin}
           />
@@ -9429,7 +9482,33 @@ function SkillTextarea({
   ...props
 }: SkillTextareaProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
+  const fieldRef = useRef<HTMLTextAreaElement | null>(null);
   const [skillSuggest, setSkillSuggest] = useState<SlashSkillState | null>(null);
+
+  // CSS `field-sizing: content` is still flaky across browsers (and loses to
+  // rows/min-height combos), so grow from scrollHeight. max-height in className
+  // clamps the box; overflow-y-auto scrolls past the cap.
+  const resizeField = useCallback((el: HTMLTextAreaElement | null = fieldRef.current) => {
+    if (!el) return;
+    el.style.height = "0px";
+    el.style.height = `${el.scrollHeight}px`;
+  }, []);
+
+  const setFieldRef = useCallback(
+    (node: HTMLTextAreaElement | null) => {
+      fieldRef.current = node;
+      if (typeof textareaRef === "function") textareaRef(node);
+      else if (textareaRef) {
+        (textareaRef as React.MutableRefObject<HTMLTextAreaElement | null>).current = node;
+      }
+      resizeField(node);
+    },
+    [textareaRef, resizeField],
+  );
+
+  useLayoutEffect(() => {
+    resizeField();
+  }, [value, resizeField]);
 
   function sync(target: HTMLTextAreaElement) {
     setSkillSuggest(slashSkillAt(target.value, target.selectionStart));
@@ -9437,7 +9516,7 @@ function SkillTextarea({
 
   function pickSkill(skill: SkillCatalogItem) {
     if (!skillSuggest) return;
-    const textarea = wrapRef.current?.querySelector("textarea");
+    const textarea = fieldRef.current;
     const replacement = `$${skill.trigger} `;
     const next =
       value.slice(0, skillSuggest.start) +
@@ -9449,11 +9528,12 @@ function SkillTextarea({
     requestAnimationFrame(() => {
       textarea?.focus();
       textarea?.setSelectionRange(cursor, cursor);
+      resizeField(textarea);
     });
   }
 
   function openSkillPicker() {
-    const textarea = wrapRef.current?.querySelector("textarea");
+    const textarea = fieldRef.current;
     const cursor = textarea?.selectionStart ?? value.length;
     setSkillSuggest({ start: cursor, end: cursor, query: "" });
     requestAnimationFrame(() => {
@@ -9467,7 +9547,7 @@ function SkillTextarea({
       <SkillSlashSuggest active={skillSuggest} onPick={pickSkill} />
       <Textarea
         {...props}
-        ref={textareaRef}
+        ref={setFieldRef}
         value={value}
         className={cn(
           "relative z-0",
@@ -9478,6 +9558,8 @@ function SkillTextarea({
         onChange={(event) => {
           onValueChange(event.target.value);
           sync(event.target);
+          // Resize before paint so Enter/newline doesn't flash a one-line frame.
+          resizeField(event.target);
         }}
         onClick={(event) => sync(event.currentTarget)}
         onKeyUp={(event) => sync(event.currentTarget)}
@@ -9502,7 +9584,7 @@ function SkillTextarea({
           onClick={openSkillPicker}
           aria-label="Insert skill"
           title="Insert skill command"
-          className="absolute left-1.5 top-1/2 z-20 flex size-8 -translate-y-1/2 touch-manipulation items-center justify-center rounded-full bg-muted/50 font-mono text-sm font-medium leading-none text-muted-foreground ring-1 ring-inset ring-border/40 transition active:scale-95 hover:bg-muted hover:text-foreground hover:ring-border/70"
+          className="absolute left-1.5 top-1.5 z-20 flex size-8 touch-manipulation items-center justify-center rounded-full bg-muted/50 font-mono text-sm font-medium leading-none text-muted-foreground ring-1 ring-inset ring-border/40 transition active:scale-95 hover:bg-muted hover:text-foreground hover:ring-border/70 md:top-1"
         >
           /
         </button>
@@ -9855,12 +9937,15 @@ function SessionChat({
                 disabled={sending}
                 rows={1}
                 className={cn(
-                  "lfg-gfield h-11 min-h-11 max-h-11 min-w-0 resize-none overflow-y-auto rounded-2xl border-transparent px-4 py-3 text-base leading-5 shadow-sm transition-[background-color,border-color,box-shadow] duration-300 ease-ios placeholder:text-muted-foreground [field-sizing:fixed] md:h-9 md:min-h-9 md:max-h-9 md:rounded-[1.125rem] md:px-3.5 md:py-2 md:text-sm",
+                  // Height is driven by SkillTextarea's scrollHeight resize
+                  // (field-sizing:fixed so CSS content-sizing doesn't fight it).
+                  // Rest at one line; max-h caps growth before the transcript.
+                  "lfg-gfield min-h-11 max-h-40 min-w-0 resize-none overflow-y-auto rounded-2xl border-transparent px-4 py-3 text-base leading-5 shadow-sm transition-[background-color,border-color,box-shadow] duration-300 ease-ios placeholder:text-muted-foreground [field-sizing:fixed] md:min-h-9 md:max-h-36 md:rounded-[1.125rem] md:px-3.5 md:py-2 md:text-sm",
                 )}
               />
               <MicButton
                 minimal
-                className="absolute right-1.5 top-1/2 z-10 size-8 -translate-y-1/2"
+                className="absolute bottom-1.5 right-1.5 z-10 size-8 md:bottom-1"
                 baseText={messageText}
                 onRecordingChange={onDictatingChange}
                 onText={(text, base) =>
@@ -9975,24 +10060,18 @@ function SessionTitleLine({ title }: { title: string }) {
   );
 }
 
-function SessionActionsMenu({
+function useSessionActions({
   session,
   users,
   onRefresh,
   onRemove,
   onError,
-  triggerClassName,
-  pinned,
-  onTogglePin,
 }: {
   session: Session;
   users: User[];
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
   onError: (error: string | null) => void;
-  triggerClassName?: string;
-  pinned?: boolean;
-  onTogglePin?: (sid: string) => void;
 }) {
   const appDialog = useAppDialog();
   const [forkOpen, setForkOpen] = useState(false);
@@ -10056,6 +10135,48 @@ function SessionActionsMenu({
       );
     }
   }
+
+  return {
+    sid,
+    assignee,
+    forkOpen,
+    setForkOpen,
+    assign,
+    interrupt,
+    copyReference,
+    close,
+  };
+}
+
+function SessionActionsMenu({
+  session,
+  users,
+  onRefresh,
+  onRemove,
+  onError,
+  triggerClassName,
+  pinned,
+  onTogglePin,
+}: {
+  session: Session;
+  users: User[];
+  onRefresh: () => Promise<void>;
+  onRemove: (sid: string) => void;
+  onError: (error: string | null) => void;
+  triggerClassName?: string;
+  pinned?: boolean;
+  onTogglePin?: (sid: string) => void;
+}) {
+  const {
+    sid,
+    assignee,
+    forkOpen,
+    setForkOpen,
+    assign,
+    interrupt,
+    copyReference,
+    close,
+  } = useSessionActions({ session, users, onRefresh, onRemove, onError });
 
   return (
     <>
@@ -10164,6 +10285,168 @@ function SessionActionsMenu({
           ) : null}
         </DropdownMenuContent>
       </DropdownMenu>
+    </>
+  );
+}
+
+// Desktop rail: right-click opens the same session actions without needing the
+// ⋯ control on the row.
+function RailSessionContextMenu({
+  session,
+  users,
+  onRefresh,
+  onRemove,
+  topPinned,
+  onToggleTopPin,
+  stagePinned,
+  onToggleStagePin,
+  onOpen,
+  onCloseColumn,
+  children,
+}: {
+  session: Session;
+  users: User[];
+  onRefresh: () => Promise<void>;
+  onRemove: (sid: string) => void;
+  topPinned: boolean;
+  onToggleTopPin: (sid: string) => void;
+  stagePinned: boolean;
+  onToggleStagePin: () => void;
+  onOpen: () => void;
+  onCloseColumn?: () => void;
+  children: ReactNode;
+}) {
+  const {
+    sid,
+    assignee,
+    forkOpen,
+    setForkOpen,
+    assign,
+    interrupt,
+    copyReference,
+    close,
+  } = useSessionActions({
+    session,
+    users,
+    onRefresh,
+    onRemove,
+    onError: (error) => {
+      if (error) toast.error(error);
+    },
+  });
+
+  return (
+    <>
+      {forkOpen ? (
+        <ForkSessionDialog
+          session={session}
+          onClose={() => setForkOpen(false)}
+          onCreated={onRefresh}
+        />
+      ) : null}
+      <ContextMenu>
+        <ContextMenuTrigger className="block min-w-0 rounded-xl">
+          {children}
+        </ContextMenuTrigger>
+        <ContextMenuContent className="min-w-48">
+          <ContextMenuItem disabled={!sid} onClick={onOpen}>
+            <MessageSquare className="size-4" />
+            Open
+          </ContextMenuItem>
+          <ContextMenuItem disabled={!sid} onClick={onToggleStagePin}>
+            <Pin className="size-4" fill={stagePinned ? "currentColor" : "none"} />
+            {stagePinned ? "Unpin column" : "Pin as column"}
+          </ContextMenuItem>
+          <ContextMenuItem
+            disabled={!sid}
+            onClick={() => sid && onToggleTopPin(sid)}
+          >
+            <Pin className="size-4" fill={topPinned ? "currentColor" : "none"} />
+            {topPinned ? "Unpin from top" : "Pin to top"}
+          </ContextMenuItem>
+          <ContextMenuSeparator />
+          <ContextMenuSub>
+            <ContextMenuSubTrigger disabled={!sid}>
+              <UserRound className="size-4" />
+              <span className="flex-1">Assign to</span>
+              {session.assignedUser ? (
+                assignee?.avatar ? (
+                  <img
+                    src={assignee.avatar}
+                    alt=""
+                    className="size-5 shrink-0 rounded-full object-cover"
+                  />
+                ) : (
+                  <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted">
+                    <UserRound className="size-3" />
+                  </span>
+                )
+              ) : null}
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent className="min-w-48">
+              <ContextMenuRadioGroup
+                value={session.assignedUser ?? ""}
+                onValueChange={(value) =>
+                  void assign(typeof value === "string" ? value : "")
+                }
+              >
+                <ContextMenuLabel>Assign to</ContextMenuLabel>
+                <ContextMenuRadioItem value="">
+                  <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted">
+                    <UserRound className="size-3" />
+                  </span>
+                  Unassigned
+                </ContextMenuRadioItem>
+                {users.map((user) => (
+                  <ContextMenuRadioItem key={user.email} value={user.email}>
+                    {user.avatar ? (
+                      <img
+                        src={user.avatar}
+                        alt=""
+                        className="size-5 shrink-0 rounded-full object-cover"
+                      />
+                    ) : (
+                      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted">
+                        <UserRound className="size-3" />
+                      </span>
+                    )}
+                    <span className="truncate capitalize">
+                      {user.name ?? shortUser(user.email)}
+                    </span>
+                  </ContextMenuRadioItem>
+                ))}
+              </ContextMenuRadioGroup>
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+          <ContextMenuItem disabled={!sid} onClick={() => void copyReference()}>
+            <Copy className="size-4" />
+            Copy reference
+          </ContextMenuItem>
+          <ContextMenuItem disabled={!sid} onClick={() => setForkOpen(true)}>
+            <GitFork className="size-4" />
+            Fork
+          </ContextMenuItem>
+          {onCloseColumn ? (
+            <ContextMenuItem onClick={onCloseColumn}>
+              <X className="size-4" />
+              Close column
+            </ContextMenuItem>
+          ) : null}
+          {canDriveSession(session) ? (
+            <>
+              <ContextMenuSeparator />
+              <ContextMenuItem onClick={() => void interrupt()}>
+                <Pause className="size-4" />
+                Stop
+              </ContextMenuItem>
+              <ContextMenuItem variant="destructive" onClick={() => void close()}>
+                <X className="size-4" />
+                End session
+              </ContextMenuItem>
+            </>
+          ) : null}
+        </ContextMenuContent>
+      </ContextMenu>
     </>
   );
 }
@@ -10924,6 +11207,7 @@ const SessionCard = memo(function SessionCard({
   variant = "grid",
   onClose,
   entering = false,
+  focusGlow = 0,
   pinned = false,
   onTogglePin,
 }: {
@@ -10948,6 +11232,9 @@ const SessionCard = memo(function SessionCard({
   // True only on the first render after this session was created in-tab — plays
   // the one-shot entrance animation on the card root.
   entering?: boolean;
+  // Incrementing token from RailStage: non-zero + change restarts the slow
+  // primary glow so a rail click points at this pane among several columns.
+  focusGlow?: number;
   // Narrow/mobile list preference. Desktop stage pinning is owned by RailStage.
   pinned?: boolean;
   onTogglePin?: (sid: string) => void;
@@ -11063,6 +11350,18 @@ const SessionCard = memo(function SessionCard({
   // card (collapsed) so the collapsed preview line still shows something.
   const latest = latestLine(messages) || plainPreviewText(session.last?.text ?? "");
   const sectionRef = useRef<HTMLElement>(null);
+  // Rail selection glow: restart the CSS animation whenever the token bumps.
+  useLayoutEffect(() => {
+    if (!focusGlow) return;
+    const el = sectionRef.current;
+    if (!el) return;
+    el.classList.remove("lfg-card-focus-glow");
+    // Force reflow so re-selecting the same pane restarts the animation.
+    void el.offsetWidth;
+    el.classList.add("lfg-card-focus-glow");
+    const clear = window.setTimeout(() => el.classList.remove("lfg-card-focus-glow"), 2000);
+    return () => window.clearTimeout(clear);
+  }, [focusGlow]);
   // True while voice dictation is recording in this card's composer — glows the
   // card border so it's clear which session is listening.
   const [dictating, setDictating] = useState(false);
