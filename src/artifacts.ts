@@ -108,12 +108,51 @@ export type ImageArtifactMessage = SessionMsg & {
   refreshStatus?: ArtifactRefreshStatus;
 };
 
+// The index is a single ~500 KB JSON blob that every artifact lookup needs, and
+// hot paths (the Shipped feed hydrating one media id at a time, each gallery
+// iframe fetching its bytes) hit it dozens of times per request. Parsing it
+// each time dominated those endpoints, so keep the parsed object and re-use it
+// while the file on disk is unchanged.
+//
+// The cache key is the file's mtime+size rather than a process-local dirty flag
+// because other processes (the MCP server, refresh jobs) write this file too —
+// a stat is ~microseconds against a multi-millisecond parse, and it means we
+// pick up their writes immediately instead of serving a stale index.
+let indexCache: { mtimeMs: number; size: number; index: Record<string, ImageArtifact> } | null = null;
+
 function readIndex(): Record<string, ImageArtifact> {
+  const path = indexPath();
+  let stat: { mtimeMs: number; size: number };
   try {
-    return JSON.parse(readFileSync(indexPath(), "utf8")) as Record<string, ImageArtifact>;
+    stat = statSync(path);
   } catch {
+    // No index yet (or it vanished): drop any cached copy and report empty.
+    indexCache = null;
     return {};
   }
+  const cached = indexCache;
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    return cached.index;
+  }
+  try {
+    const index = JSON.parse(readFileSync(path, "utf8")) as Record<string, ImageArtifact>;
+    indexCache = { mtimeMs: stat.mtimeMs, size: stat.size, index };
+    return index;
+  } catch {
+    // A torn/corrupt read must not poison the cache — fall back to empty and
+    // retry the parse on the next call.
+    indexCache = null;
+    return {};
+  }
+}
+
+// Mutators edit the index in place (`index[id] = ...`, `delete index[id]`, and
+// nested `artifact.refresh = ...`) and only persist it afterwards — and
+// `deleteArtifact` can roll its edit back if the write fails. Handing them the
+// shared cached object would publish those uncommitted edits to every reader,
+// so give writers a private copy to work on.
+function readIndexForUpdate(): Record<string, ImageArtifact> {
+  return structuredClone(readIndex());
 }
 
 function writeIndex(index: Record<string, ImageArtifact>): void {
@@ -122,6 +161,9 @@ function writeIndex(index: Record<string, ImageArtifact>): void {
   const temp = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   writeFileSync(temp, JSON.stringify(index, null, 2));
   renameSync(temp, path);
+  // The caller still holds a mutable reference to `index`, so don't cache it
+  // here — just drop the stale entry and let the next read re-parse once.
+  indexCache = null;
 }
 
 function atomicWrite(path: string, content: string): void {
@@ -214,7 +256,7 @@ function createMediaArtifact(
     caption,
     alt,
   };
-  const index = readIndex();
+  const index = readIndexForUpdate();
   index[id] = artifact;
   writeIndex(index);
   return artifact;
@@ -266,7 +308,7 @@ export function publishHtmlArtifact(input: {
     throw new Error("artifact id must be 3-64 chars: lowercase letters, digits, dashes");
   }
 
-  const index = readIndex();
+  const index = readIndexForUpdate();
   const existing = requestedId ? index[requestedId] : null;
   // Explicit HTML ids are project-level: a later session may intentionally
   // take over the stable card. Preserve the record below so its file, creation
@@ -319,7 +361,7 @@ export function updateHtmlArtifactRefresh(input: {
   sessionId: string;
   refresh: ArtifactRefreshConfig | null;
 }): ImageArtifact {
-  const index = readIndex();
+  const index = readIndexForUpdate();
   const artifact = index[input.id];
   if (!artifact || artifact.media !== "html") throw new Error("html artifact not found");
   if (artifact.sessionId !== input.sessionId) throw new Error("artifact belongs to a different session");
@@ -333,7 +375,7 @@ export function updateHtmlArtifactRefreshStatus(input: {
   id: string;
   patch: Partial<Pick<ArtifactRefreshConfig, "status" | "lastStartedAt" | "lastSuccessAt" | "lastError">>;
 }): ImageArtifact | null {
-  const index = readIndex();
+  const index = readIndexForUpdate();
   const artifact = index[input.id];
   if (!artifact || artifact.media !== "html" || !artifact.refresh) return null;
   const refresh = { ...artifact.refresh, ...input.patch };
@@ -349,7 +391,7 @@ export function updateHtmlArtifactRefreshStatus(input: {
 // if the index write fails, the move is rolled back so a listed artifact can
 // never point at a missing file.
 export function deleteArtifact(input: { id: string; sessionId: string }): ImageArtifact {
-  const index = readIndex();
+  const index = readIndexForUpdate();
   const artifact = index[input.id];
   if (!artifact) throw new Error("artifact not found");
   if (artifact.sessionId !== input.sessionId) {

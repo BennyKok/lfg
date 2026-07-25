@@ -4,6 +4,7 @@ const HELP = `lfg — run and manage your AI coding agents on your own box
 Usage:
   lfg serve                        Run the web UI + control server (default :8766)
   lfg agents [list|run|show]       Run / inspect insight agents (see 'agents help')
+  lfg agents auto [new|list|run]   Create + manage auto agents (see 'agents auto help')
   lfg subagent [create|models]      Spawn a managed worker session on any harness
   lfg mcp                          Run the LFG MCP stdio server
   lfg whatsapp [run|sessions]      Run the optional WhatsApp control sidecar
