@@ -7768,27 +7768,74 @@ function RailStage({
 
   // Latest values for the global key handler, so it binds once but never reads
   // stale state.
-  const kb = useRef({ orderedSids, cursor, preview, columnIds, activate, selectTo, togglePin, closeColumn, closeSession, setCursor, setPreview, setRailCollapsed, setShowHelp, showHelp, busyBySid, interruptSid, onNew });
-  kb.current = { orderedSids, cursor, preview, columnIds, activate, selectTo, togglePin, closeColumn, closeSession, setCursor, setPreview, setRailCollapsed, setShowHelp, showHelp, busyBySid, interruptSid, onNew };
+  const kb = useRef({
+    orderedSids,
+    cursor,
+    preview,
+    columnIds,
+    activate,
+    selectTo,
+    togglePin,
+    closeColumn,
+    closeSession,
+    setCursor,
+    setPreview,
+    setRailCollapsed,
+    setShowHelp,
+    showHelp,
+    busyBySid,
+    interruptSid,
+    onNew,
+    onOpenSettings,
+  });
+  kb.current = {
+    orderedSids,
+    cursor,
+    preview,
+    columnIds,
+    activate,
+    selectTo,
+    togglePin,
+    closeColumn,
+    closeSession,
+    setCursor,
+    setPreview,
+    setRailCollapsed,
+    setShowHelp,
+    showHelp,
+    busyBySid,
+    interruptSid,
+    onNew,
+    onOpenSettings,
+  };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const s = kb.current;
       const order = s.orderedSids;
       const cur = s.cursor && order.includes(s.cursor) ? s.cursor : order[0] ?? null;
       const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      const mod = e.metaKey || e.ctrlKey;
 
       // Quick-interrupt: Cmd/Ctrl+. cancels the active run from anywhere — even
       // while typing in the composer — targeting the focused session if it's
       // busy, else the first running session.
-      if ((e.metaKey || e.ctrlKey) && e.key === ".") {
+      if (mod && e.key === ".") {
         e.preventDefault();
         const target = cur && s.busyBySid[cur] ? cur : order.find((id) => s.busyBySid[id]) ?? cur;
         void s.interruptSid(target);
         return;
       }
 
+      // Cmd/Ctrl+B toggles the session rail (VS Code / IDE convention). Works
+      // even while a composer is focused so the layout is always one chord away.
+      if (mod && key === "b") {
+        e.preventDefault();
+        s.setRailCollapsed((v) => !v);
+        return;
+      }
+
       // Never hijack browser combos or typing in a composer/input.
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (mod || e.altKey) return;
       const el = document.activeElement as HTMLElement | null;
       const tag = el?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || el?.isContentEditable) return;
@@ -7852,6 +7899,13 @@ function RailStage({
         case "c":
           e.preventDefault();
           s.onNew();
+          return;
+        case ",":
+          // Comma opens Settings (same muscle memory as many apps' Cmd+,).
+          if (s.onOpenSettings) {
+            e.preventDefault();
+            s.onOpenSettings();
+          }
           return;
         case "ArrowDown":
           e.preventDefault();
@@ -8092,6 +8146,7 @@ function RailStage({
               type="button"
               onClick={() => setRailCollapsed((v) => !v)}
               aria-label="Expand sidebar"
+              title="Expand sidebar (⌘B)"
               className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
             >
               <PanelLeftOpen className="size-4" />
@@ -8110,7 +8165,7 @@ function RailStage({
                 type="button"
                 onClick={onOpenSettings}
                 aria-label="Settings"
-                title="Settings"
+                title="Settings (,)"
                 className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
               >
                 <Settings className="size-4" />
@@ -8187,7 +8242,7 @@ function RailStage({
                 type="button"
                 onClick={() => setRailCollapsed((v) => !v)}
                 aria-label="Collapse sidebar"
-                title="Collapse sidebar"
+                title="Collapse sidebar (⌘B)"
                 className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted"
               >
                 <PanelLeftClose className="size-4" />
@@ -8302,11 +8357,12 @@ function ShortcutsHelp({ onClose }: { onClose: () => void }) {
     ["Enter", "Focus into current session"],
     ["o", "Open cursored session"],
     ["c", "New session"],
+    [",", "Open Settings"],
     ["p", "Pin / unpin cursored session"],
     ["x", "Close cursored column"],
     ["Shift+E", "End cursored session"],
     ["1 – 9", "Open the Nth session"],
-    ["\\", "Collapse / expand the rail"],
+    ["⌘B / \\", "Collapse / expand the rail"],
     ["?", "Toggle this help"],
     ["Esc", "Close help / preview"],
   ];
