@@ -42,12 +42,20 @@ import {
   type LfgChatMessage,
   type LfgTranscriptSubscribe,
 } from "./lib/lfg-chat-transport";
+import {
+  prefetchTranscripts,
+  readTranscriptCache,
+  updateTranscriptCacheMessages,
+  writeTranscriptCache,
+} from "./lib/transcript-cache";
 import { setThemePreference, THEME_CHANGE_EVENT } from "./lib/theme";
 import { startsInBottomSystemGestureZone } from "./lib/touch-gestures";
 import { ConnectionStatusToasts } from "./ConnectionStatus";
 import type {
+  ClipboardEvent,
   CSSProperties,
   Dispatch,
+  DragEvent,
   ErrorInfo,
   FormEvent,
   KeyboardEvent as ReactKeyboardEvent,
@@ -156,6 +164,7 @@ import { ImageAnnotator } from "@/components/ImageAnnotator";
 import { ZoomableImage } from "@/components/ImageLightbox";
 import { SessionDiffBar } from "@/components/SessionDiffView";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { Drawer, DrawerContent, DrawerTitle } from "@/components/ui/drawer";
 import { Popover } from "@base-ui/react/popover";
 import { Drawer as VaulDrawer } from "vaul";
@@ -186,6 +195,7 @@ import {
 } from "./lib/push";
 import { AskNavButton, AskPage, AskProvider } from "./components/ask-center";
 import { PwaInstallCallout, PwaInstallSettingsSection } from "./components/pwa-install";
+import { UsageCampfireHost, useUsageRingLongPress } from "./components/UsageCampfire";
 import { configuredAgentOptions } from "./lib/coding-agent-options";
 import {
   Conversation,
@@ -860,6 +870,42 @@ function agentIconSrc(agent?: string): string {
   if (agent === "copilot") return `/agent-copilot.svg${v}`;
   return `/agent-claude.svg${v}`;
 }
+// One definition of "is this session working?" as a dot. Busy is a pulsing
+// amber that draws the eye; idle is deliberately quiet. Every surface that shows
+// session activity (rail avatar, card header, live-view group headers) renders
+// this instead of re-deriving the colours, so they can never drift apart.
+const STATUS_DOT_BUSY = "animate-pulse bg-warning";
+const STATUS_DOT_IDLE = "bg-success/30 ring-1 ring-inset ring-success/20";
+// The avatar overlay sits on the card surface, so idle reads as a solid dot
+// against the ring instead of the low-contrast wash used inline.
+const STATUS_DOT_IDLE_SOLID = "bg-success";
+
+function SessionStatusDot({
+  busy,
+  variant = "inline",
+  className,
+}: {
+  busy: boolean;
+  // "inline": a standalone dot in a header row.
+  // "avatar": badge pinned to the bottom-right of an agent avatar.
+  variant?: "inline" | "avatar";
+  className?: string;
+}) {
+  return (
+    <span
+      aria-label={busy ? "working" : "idle"}
+      className={cn(
+        "shrink-0 rounded-full",
+        variant === "avatar"
+          ? "absolute -bottom-0.5 -right-0.5 size-2.5 ring-2 ring-card"
+          : "size-2",
+        busy ? STATUS_DOT_BUSY : variant === "avatar" ? STATUS_DOT_IDLE_SOLID : STATUS_DOT_IDLE,
+        className,
+      )}
+    />
+  );
+}
+
 function agentIconAlt(agent?: string): string {
   if (agent === "codex" || agent === "codex-aisdk") return "Codex";
   if (agent === "grok") return "Grok";
@@ -947,6 +993,16 @@ function closeSessionRequest(sid: string, source: string) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ source }),
+  });
+}
+
+// User-facing title override (data/session-titles.json). Empty string clears it
+// so the list falls back to last-user-text / project / short id.
+function putSessionTitle(sid: string, title: string) {
+  return api<{ ok?: boolean }>(`/api/sessions/${encodeURIComponent(sid)}/title`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
   });
 }
 
@@ -1174,6 +1230,333 @@ function useEagerUploads(options: {
   }, []);
 
   return { prefetchUpload, resolveUpload, forgetUpload, forgetAllUploads };
+}
+
+// The agent icon strip shared by the new-session composer, the fork dialog and
+// the auto-agent/finding sheets. Generic over the agent key so callers with a
+// narrower union (e.g. AutoAgentBackend) keep their type through onSelect.
+// `flat` drops the pill background for the inline composer's popover card.
+function AgentIconStrip<K extends AgentKind>({
+  options,
+  value,
+  onSelect,
+  flat = false,
+  className,
+}: {
+  options: readonly { key: K; label: string }[];
+  value: K;
+  onSelect: (key: K) => void;
+  flat?: boolean;
+  className?: string;
+}) {
+  if (!options.length) return null;
+  return (
+    <div
+      className={cn(
+        "inline-flex h-8 items-center text-xs font-semibold",
+        flat ? "gap-0.5" : "rounded-full bg-muted p-0.5",
+        className,
+      )}
+    >
+      {options.map(({ key, label }) => (
+        <button
+          key={key}
+          type="button"
+          title={label}
+          aria-label={label}
+          onClick={() => onSelect(key)}
+          className={cn(
+            "flex h-7 w-9 items-center justify-center rounded-full transition",
+            value === key
+              ? flat
+                ? "bg-muted text-foreground"
+                : "bg-background text-foreground shadow-sm"
+              : "text-muted-foreground",
+          )}
+        >
+          <img src={agentIconSrc(key)} alt="" className="size-5" />
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// The attachment chip row shared by every composer (chat, new session, fork):
+// thumbnail / file icon, name, upload progress, annotate + remove. `locked`
+// chips (already handed to an in-flight send) render but can't be edited.
+function ComposerAttachmentChips({
+  items,
+  className,
+  disabled = false,
+  onAnnotate,
+  onRemove,
+}: {
+  items: { att: ComposerAttachment; locked?: boolean }[];
+  className?: string;
+  disabled?: boolean;
+  onAnnotate: (id: string) => void;
+  onRemove: (id: string) => void;
+}) {
+  if (!items.length) return null;
+  return (
+    <div className={cn("flex gap-1.5 overflow-x-auto pb-0.5", className)}>
+      {items.map(({ att, locked }) => (
+        <div
+          key={att.id}
+          className={cn(
+            "group relative flex h-12 max-w-52 shrink-0 items-center gap-2 overflow-hidden rounded-lg border bg-muted/55 pl-1.5 pr-1.5 text-xs",
+            att.status === "failed" ? "border-destructive/40 bg-destructive/10" : "border-border/70",
+          )}
+          title={att.error || att.name}
+        >
+          {att.previewUrl ? (
+            <img src={att.previewUrl} alt="" className="size-9 shrink-0 rounded-md object-cover" />
+          ) : (
+            <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-background/80 text-muted-foreground">
+              <Paperclip className="size-4" />
+            </div>
+          )}
+          <div className="min-w-0">
+            <div className="truncate font-medium text-foreground">{att.name}</div>
+            <div className="text-[11px] text-muted-foreground">
+              {att.status === "uploading"
+                ? `Uploading ${att.progress ?? 0}%`
+                : att.status === "failed"
+                  ? "Failed"
+                  : formatBytes(att.size)}
+            </div>
+          </div>
+          {att.status === "uploading" ? (
+            <div
+              className="absolute inset-x-0 bottom-0 h-0.5 bg-primary/15"
+              role="progressbar"
+              aria-label={`Uploading ${att.name}`}
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={att.progress ?? 0}
+            >
+              <div
+                className="h-full bg-primary transition-[width] duration-150"
+                style={{ width: `${att.progress ?? 0}%` }}
+              />
+            </div>
+          ) : null}
+          {att.previewUrl ? (
+            <button
+              type="button"
+              className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-background hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+              onClick={() => onAnnotate(att.id)}
+              aria-label={`Annotate ${att.name}`}
+              title="Annotate"
+              disabled={disabled || locked}
+            >
+              <Pencil className="size-3.5" />
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="ml-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-background hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
+            onClick={() => onRemove(att.id)}
+            aria-label={`Remove ${att.name}`}
+            title="Remove"
+            disabled={disabled || locked}
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Everything a composer needs to accept files: attachment state, eager uploads,
+// drag & drop, paste, the hidden file input and the annotator sheet. Shared by
+// the chat composer, the new-session composer and the fork dialog so all three
+// behave identically.
+function useComposerAttachments({
+  endpoint,
+  max = 8,
+  disabled = false,
+  onPatchExtra,
+}: {
+  endpoint: (att: ComposerAttachment) => string | null;
+  max?: number;
+  // Chips already handed off to an in-flight send can't be edited.
+  disabled?: boolean;
+  // Mirror upload patches into a second list (the new-session composer keeps
+  // handed-off uploads in `pendingUploads` so their progress keeps ticking).
+  onPatchExtra?: (id: string, patch: Partial<ComposerAttachment>) => void;
+}) {
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [draggingFiles, setDraggingFiles] = useState(false);
+  const [annotatingId, setAnnotatingId] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const previewUrls = useRef<string[]>([]);
+  const extraRef = useRef(onPatchExtra);
+  extraRef.current = onPatchExtra;
+  const { prefetchUpload, resolveUpload, forgetUpload, forgetAllUploads } = useEagerUploads({
+    endpoint,
+    onPatch: (id, patch) => {
+      setAttachments((current) =>
+        current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
+      );
+      extraRef.current?.(id, patch);
+    },
+  });
+
+  useEffect(() => {
+    return () => {
+      for (const url of previewUrls.current) URL.revokeObjectURL(url);
+      previewUrls.current = [];
+    };
+  }, []);
+
+  // Read the live list from a ref rather than the state updater: creating
+  // preview URLs and kicking off uploads are side effects, so they must not run
+  // inside setAttachments (which React may call twice).
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
+
+  const addFiles = useCallback(
+    (files: FileList | File[]) => {
+      const incoming = Array.from(files).filter((file) => file.size > 0);
+      if (!incoming.length) return;
+      const room = Math.max(0, max - attachmentsRef.current.length);
+      if (!room) {
+        toast.error("Remove an attachment before adding another.");
+        return;
+      }
+      if (incoming.length > room) toast.error(`Added ${room} of ${incoming.length} files.`);
+      const next: ComposerAttachment[] = incoming.slice(0, room).map((file) => {
+        const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined;
+        if (previewUrl) previewUrls.current.push(previewUrl);
+        return {
+          id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
+          file,
+          name: file.name || "upload",
+          size: file.size,
+          type: file.type,
+          previewUrl,
+          status: "ready" as const,
+        };
+      });
+      attachmentsRef.current = [...attachmentsRef.current, ...next];
+      setAttachments(attachmentsRef.current);
+      // Push the bytes now instead of waiting for send, so the upload is
+      // normally already finished by the time the user submits.
+      next.forEach(prefetchUpload);
+    },
+    [max, prefetchUpload],
+  );
+
+  const removeAttachment = useCallback(
+    (id: string) => {
+      forgetUpload(id);
+      setAttachments((current) => {
+        const item = current.find((att) => att.id === id);
+        if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl);
+        return current.filter((att) => att.id !== id);
+      });
+    },
+    [forgetUpload],
+  );
+
+  // Spread onto the form / drop target that should accept dragged files.
+  const dropZoneProps = {
+    onDragEnter: (event: DragEvent<HTMLElement>) => {
+      if (Array.from(event.dataTransfer.types).includes("Files")) setDraggingFiles(true);
+    },
+    onDragOver: (event: DragEvent<HTMLElement>) => {
+      if (!Array.from(event.dataTransfer.types).includes("Files")) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "copy";
+      setDraggingFiles(true);
+    },
+    onDragLeave: (event: DragEvent<HTMLElement>) => {
+      const nextTarget = event.relatedTarget;
+      if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
+        setDraggingFiles(false);
+      }
+    },
+    onDrop: (event: DragEvent<HTMLElement>) => {
+      if (!event.dataTransfer.files.length) return;
+      event.preventDefault();
+      setDraggingFiles(false);
+      addFiles(event.dataTransfer.files);
+    },
+  };
+
+  // Pasting files (screenshots straight from the clipboard) attaches them.
+  const onPasteFiles = (event: ClipboardEvent<HTMLElement>) => {
+    const files = event.clipboardData?.files;
+    if (!files?.length) return false;
+    event.preventDefault();
+    addFiles(files);
+    return true;
+  };
+
+  const openFilePicker = useCallback(() => fileInputRef.current?.click(), []);
+
+  const fileInput = (
+    <input
+      ref={fileInputRef}
+      type="file"
+      aria-label="Attach files"
+      multiple
+      className="hidden"
+      onChange={(event) => {
+        if (event.target.files) addFiles(event.target.files);
+        event.currentTarget.value = "";
+      }}
+    />
+  );
+
+  const annotator = (
+    <ImageAnnotator
+      open={!!annotatingId}
+      file={attachments.find((att) => att.id === annotatingId)?.file ?? null}
+      onOpenChange={(next) => {
+        if (!next) setAnnotatingId(null);
+      }}
+      onSave={(file) => {
+        if (annotatingId) {
+          applyAnnotatedAttachment(setAttachments, previewUrls, annotatingId, file, prefetchUpload);
+        }
+        setAnnotatingId(null);
+      }}
+    />
+  );
+
+  const chips = (
+    <ComposerAttachmentChips
+      items={attachments.map((att) => ({ att }))}
+      disabled={disabled}
+      onAnnotate={setAnnotatingId}
+      onRemove={removeAttachment}
+    />
+  );
+
+  return {
+    attachments,
+    setAttachments,
+    draggingFiles,
+    addFiles,
+    removeAttachment,
+    setAnnotatingId,
+    fileInputRef,
+    previewUrls,
+    prefetchUpload,
+    resolveUpload,
+    forgetUpload,
+    forgetAllUploads,
+    dropZoneProps,
+    onPasteFiles,
+    openFilePicker,
+    // Ready-to-render pieces: drop these into the composer markup.
+    fileInput,
+    chips,
+    annotator,
+  };
 }
 
 // Fire-and-forget instrumentation: record which CTA a finding graduated
@@ -2601,10 +2984,8 @@ const APP_SHELL_CLASS = "flex h-dvh flex-col overflow-hidden bg-background text-
 function AppShellSkeleton() {
   return (
     <div className={cn(APP_SHELL_CLASS, "items-center justify-center text-muted-foreground")}>
-      <div className="flex items-center gap-2 text-sm">
-        <Loader2 className="size-4 animate-spin" />
-        Loading lfg v2
-      </div>
+      <Loader2 className="size-4 animate-spin" aria-hidden />
+      <span className="sr-only">Loading</span>
     </div>
   );
 }
@@ -5178,6 +5559,8 @@ export function App() {
         <ConnectionStatusToasts connection={wsLiveStream.connection} onRetry={wsLiveStream.reconnectNow} />
       ) : null}
       <VoiceSetupDialog />
+      {/* Hold U (desktop) or long-press activity rings (mobile) → all-agent usage arc. */}
+      <UsageCampfireHost />
       <Toaster position="bottom-center" />
     </div>
     </ArtifactViewerContext.Provider>
@@ -5643,6 +6026,7 @@ function UsageRings({
 // The composer's usage indicator: compact rings that expand into an animated
 // popover breaking down each limit window (label, %, reset time). Works for any
 // provider that reports windows; falls back to the provider note otherwise.
+// Long-press opens the full-screen Usage Campfire (all agents on an arc).
 function UsageRingsButton({
   provider,
   className,
@@ -5651,18 +6035,33 @@ function UsageRingsButton({
   className?: string;
 }) {
   const windows = activityRingOrder(provider.windows ?? []);
+  const longPress = useUsageRingLongPress();
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
         render={
           <button
             type="button"
-            aria-label={`${provider.label} usage`}
-            title={`${provider.label} usage`}
+            aria-label={`${provider.label} usage. Long-press for all agents.`}
+            title={`${provider.label} usage · long-press for all agents · hold U`}
             className={cn(
-              "flex shrink-0 items-center justify-center rounded-full p-1 pl-4 transition active:scale-90",
+              // The wider left pad keeps the rings clear of the screen edge on
+              // the mobile inline composer; on desktop it just reads as a gap.
+              "flex shrink-0 items-center justify-center rounded-full p-1 pl-4 transition active:scale-90 md:pl-1",
               className,
             )}
+            onPointerDown={longPress.onPointerDown}
+            onPointerUp={longPress.onPointerUp}
+            onPointerCancel={longPress.onPointerCancel}
+            onPointerLeave={longPress.onPointerLeave}
+            onClickCapture={(e) => {
+              // After a long-press opened the campfire, ignore the synthetic click
+              // so the per-provider dropdown doesn't also open underneath it.
+              if (longPress.shouldSuppressClick()) {
+                e.preventDefault();
+                e.stopPropagation();
+              }
+            }}
           >
             {windows.length ? (
               <UsageRings windows={windows} />
@@ -5713,6 +6112,9 @@ function UsageRingsButton({
             {windows.find((w) => w.resetsAt) ? fmtReset(windows.find((w) => w.resetsAt)!.resetsAt) : ""}
           </p>
         ) : null}
+        <p className="mt-2 border-t border-border/60 pt-2 text-[11px] text-muted-foreground/70">
+          Long-press rings for all agents · hold <kbd className="rounded bg-muted px-1 font-mono text-[10px]">U</kbd>
+        </p>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -6989,36 +7391,10 @@ function LiveView({
     [sessions, busyBySid],
   );
 
-  // Empty state. Placed AFTER all hooks (useIsWide/useState/useMemo above) so the
-  // hook order stays identical whether or not sessions/findings are present —
-  // returning earlier made `useMemo` conditional and tripped React error #310
-  // ("rendered fewer hooks than expected") when the live list emptied out.
-  if (!isWide && !sessions.length && !findings.length) {
-    return (
-      <div className="flex min-h-[60dvh] flex-col items-center justify-center">
-        <div className="lfg-gborder flex flex-col items-center gap-3 rounded-3xl border border-transparent bg-card px-8 py-10 text-center shadow-[0_12px_40px_-24px_rgba(0,0,0,0.5)]">
-          <div className="lfg-gborder flex size-14 items-center justify-center rounded-2xl border border-transparent bg-muted">
-            <MessageSquare className="size-6 text-muted-foreground" />
-          </div>
-          <div>
-            <div className="font-semibold">No running sessions</div>
-            <div className="mt-1 text-sm text-muted-foreground">
-              {userFilter === "__all"
-                ? "Start Claude or Codex from v2."
-                : "No sessions match this user filter."}
-            </div>
-          </div>
-          <Button variant="brand" className="lfg-gborder lfg-gborder--brand" onClick={onNew}>
-            <Plus className="size-4" />
-            New session
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
   // Pinned session families always lead the narrow/mobile layout. A pin on a
   // delegated child lifts its whole family so parent/child nesting stays intact.
+  // Computed above the empty-state return so the render order is also available
+  // to the prefetch hook below (hooks must not sit behind a conditional return).
   const pinnedSet = new Set(topPinned);
   const nodeContainsPin = (node: SessionTreeNode): boolean =>
     pinnedSet.has(sessionStableId(node.session)) || node.children.some(nodeContainsPin);
@@ -7034,6 +7410,33 @@ function LiveView({
   const pinned = tree.flatten(pinnedNodes);
   const working = tree.flatten(workingNodes);
   const idle = tree.flatten(idleNodes);
+
+  // On-screen order: pinned, then working, then idle. Drives both sheet
+  // navigation and which transcripts we warm ahead of the user opening them.
+  const screenOrder = [...pinned, ...working, ...idle]
+    .map((s) => s.sessionId)
+    .filter((id): id is string => !!id);
+  const prefetchKey = screenOrder.slice(0, 8).join(",");
+  useEffect(() => {
+    if (!prefetchKey) return;
+    prefetchTranscripts(prefetchKey.split(","), loadTranscriptPage);
+  }, [prefetchKey]);
+
+  // On mobile keep the empty state quiet and unboxed. The persistent composer
+  // is already the action, so duplicating it with a card/button only sends focus
+  // back to the same input.
+  // Keep this return AFTER all hooks so the hook order remains stable as the
+  // live list empties and refills.
+  if (!isWide && !sessions.length && !findings.length) {
+    return (
+      <div className="flex min-h-[60dvh] flex-col items-center justify-center gap-3 text-center">
+        <MessageSquare className="size-8 text-muted-foreground/45" aria-hidden />
+        <span className="text-sm font-medium text-muted-foreground">
+          No running sessions
+        </span>
+      </div>
+    );
+  }
   const nameFor = (id: string) => autoAgents.find((a) => a.id === id)?.name ?? id;
 
   const renderCard = (session: Session, depth = 0) => (
@@ -7160,14 +7563,8 @@ function LiveView({
     );
   }
 
-  // Sheet navigation follows the on-screen order: pinned, working, then idle.
-  const sheetOrder = [
-    ...tree.flatten(pinnedNodes),
-    ...tree.flatten(workingNodes),
-    ...tree.flatten(idleNodes),
-  ]
-    .map((s) => s.sessionId)
-    .filter((id): id is string => !!id);
+  // Sheet navigation follows the same on-screen order.
+  const sheetOrder = screenOrder;
   const sheetSession = sheet ? sessions.find((s) => s.sessionId === sheet.sid) : null;
 
   return (
@@ -7186,7 +7583,7 @@ function LiveView({
           <CategoryHeader
             label="Working"
             count={working.length}
-            dotClass="animate-pulse bg-warning"
+            dotClass={STATUS_DOT_BUSY}
           />
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-2">
             {workingNodes.flatMap((node) => renderNode(node))}
@@ -7214,7 +7611,7 @@ function LiveView({
           <CategoryHeader
             label="Idle"
             count={idle.length}
-            dotClass="bg-success/30 ring-1 ring-inset ring-success/20"
+            dotClass={STATUS_DOT_IDLE}
             action={
               <ManageSessionsMenu
                 compact
@@ -7346,6 +7743,9 @@ function RailStage({
   // Keyboard cursor (highlighted rail row) + the shortcuts cheatsheet overlay.
   const [cursor, setCursor] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
+  // One-shot glow token for the stage pane just chosen from the rail. `n`
+  // increments so re-selecting the same sid restarts the animation.
+  const [focusGlow, setFocusGlow] = useState<{ sid: string; n: number } | null>(null);
   // Range-select anchor for shift-click / shift-arrow.
   const anchorRef = useRef<string | null>(null);
 
@@ -7355,18 +7755,31 @@ function RailStage({
     return m;
   }, [sessions]);
 
+  // Soft primary glow on the stage column for the given sid so multi-pane
+  // layouts make the just-selected window obvious.
+  const pulseStage = useCallback((sid: string) => {
+    if (!sid) return;
+    setFocusGlow((prev) => ({ sid, n: (prev?.n ?? 0) + 1 }));
+    requestAnimationFrame(() => {
+      document
+        .querySelector(`[data-stage-sid="${sid}"]`)
+        ?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" });
+    });
+  }, []);
+
   // External focus request (Shipped post tap): put the session on stage as the
-  // preview column, cursor it, and scroll its rail row into view.
+  // preview column, cursor it, glow it, and scroll its rail row into view.
   useEffect(() => {
     if (!focus) return;
     const sid = focus.sid;
     if (!bySid.has(sid)) return;
     setPreview(sid);
     setCursor(sid);
+    pulseStage(sid);
     requestAnimationFrame(() => {
       document.querySelector(`[data-rail-sid="${sid}"]`)?.scrollIntoView({ block: "center" });
     });
-  }, [focus, bySid]);
+  }, [focus, bySid, pulseStage]);
 
   // Drop pinned/preview ids the server has stopped returning (session ended),
   // so columns vanish cleanly instead of rendering blanks.
@@ -7674,6 +8087,14 @@ function RailStage({
   useEffect(() => {
     setCursor((c) => (c && orderedSids.includes(c) ? c : orderedSids[0] ?? null));
   }, [orderedSids]);
+  // Warm the transcripts at the top of the rail so opening one paints instantly
+  // instead of waiting on its first `/messages` round trip. The narrow layout
+  // does the same from its own order; the prefetcher dedupes across both.
+  const railPrefetchKey = orderedSids.slice(0, 8).join(",");
+  useEffect(() => {
+    if (!railPrefetchKey) return;
+    prefetchTranscripts(railPrefetchKey.split(","), loadTranscriptPage);
+  }, [railPrefetchKey]);
   // Scroll the cursored row into view as it moves.
   useEffect(() => {
     if (!cursor) return;
@@ -7709,18 +8130,21 @@ function RailStage({
   );
 
   // A plain click/Enter: set the anchor here and preview it. Shift extends the
-  // range from the anchor and tiles the selection.
+  // range from the anchor and tiles the selection. Always pulse the stage pane
+  // so re-clicking an already-open column still points at which window it is.
   const activate = useCallback(
     (sid: string, shift: boolean) => {
       if (shift && anchorRef.current) {
         selectTo(sid);
+        pulseStage(sid);
         return;
       }
       anchorRef.current = sid;
       setCursor(sid);
       openSession(sid);
+      pulseStage(sid);
     },
-    [selectTo, openSession],
+    [selectTo, openSession, pulseStage],
   );
 
   // Quick-interrupt a session by id. Interrupting an idle session is a harmless
@@ -7774,6 +8198,7 @@ function RailStage({
     preview,
     columnIds,
     activate,
+    pulseStage,
     selectTo,
     togglePin,
     closeColumn,
@@ -7794,6 +8219,7 @@ function RailStage({
     preview,
     columnIds,
     activate,
+    pulseStage,
     selectTo,
     togglePin,
     closeColumn,
@@ -7864,6 +8290,7 @@ function RailStage({
       // stage, then move keyboard focus into its message composer.
       const focusInto = (sid: string) => {
         if (!s.columnIds.includes(sid)) s.activate(sid, false);
+        else s.pulseStage(sid);
         // Let the column mount/render before grabbing its input.
         window.setTimeout(() => {
           const el = document.querySelector(
@@ -8102,6 +8529,7 @@ function RailStage({
             variant="stage"
             onClose={onCloseColumn}
             entering={recentlyCreatedSids.has(sid)}
+            focusGlow={focusGlow?.sid === sid ? focusGlow.n : 0}
             pinned={topPinnedSet.has(sid)}
             onTogglePin={onToggleTopPin}
           />
@@ -8565,13 +8993,7 @@ const RailItem = memo(function RailItem({
             title={session.agentLabel || undefined}
             className="size-6 rounded-md"
           />
-          <span
-            aria-label={busy ? "working" : "idle"}
-            className={cn(
-              "absolute -bottom-0.5 -right-0.5 size-2.5 shrink-0 rounded-full ring-2 ring-card",
-              busy ? "animate-pulse bg-warning" : "bg-success",
-            )}
-          />
+          <SessionStatusDot busy={busy} variant="avatar" />
           {topPinned && collapsed ? (
             <Pin
               aria-label="Pinned to top"
@@ -8601,7 +9023,7 @@ const RailItem = memo(function RailItem({
                 ) : null}
               </span>
               {latest ? (
-                <span className="truncate text-[11px] leading-tight text-muted-foreground">
+                <span className="line-clamp-2 text-[11px] leading-tight text-muted-foreground">
                   {latest}
                 </span>
               ) : null}
@@ -9062,7 +9484,33 @@ function SkillTextarea({
   ...props
 }: SkillTextareaProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
+  const fieldRef = useRef<HTMLTextAreaElement | null>(null);
   const [skillSuggest, setSkillSuggest] = useState<SlashSkillState | null>(null);
+
+  // CSS `field-sizing: content` is still flaky across browsers (and loses to
+  // rows/min-height combos), so grow from scrollHeight. max-height in className
+  // clamps the box; overflow-y-auto scrolls past the cap.
+  const resizeField = useCallback((el: HTMLTextAreaElement | null = fieldRef.current) => {
+    if (!el) return;
+    el.style.height = "0px";
+    el.style.height = `${el.scrollHeight}px`;
+  }, []);
+
+  const setFieldRef = useCallback(
+    (node: HTMLTextAreaElement | null) => {
+      fieldRef.current = node;
+      if (typeof textareaRef === "function") textareaRef(node);
+      else if (textareaRef) {
+        (textareaRef as React.MutableRefObject<HTMLTextAreaElement | null>).current = node;
+      }
+      resizeField(node);
+    },
+    [textareaRef, resizeField],
+  );
+
+  useLayoutEffect(() => {
+    resizeField();
+  }, [value, resizeField]);
 
   function sync(target: HTMLTextAreaElement) {
     setSkillSuggest(slashSkillAt(target.value, target.selectionStart));
@@ -9070,7 +9518,7 @@ function SkillTextarea({
 
   function pickSkill(skill: SkillCatalogItem) {
     if (!skillSuggest) return;
-    const textarea = wrapRef.current?.querySelector("textarea");
+    const textarea = fieldRef.current;
     const replacement = `$${skill.trigger} `;
     const next =
       value.slice(0, skillSuggest.start) +
@@ -9082,11 +9530,12 @@ function SkillTextarea({
     requestAnimationFrame(() => {
       textarea?.focus();
       textarea?.setSelectionRange(cursor, cursor);
+      resizeField(textarea);
     });
   }
 
   function openSkillPicker() {
-    const textarea = wrapRef.current?.querySelector("textarea");
+    const textarea = fieldRef.current;
     const cursor = textarea?.selectionStart ?? value.length;
     setSkillSuggest({ start: cursor, end: cursor, query: "" });
     requestAnimationFrame(() => {
@@ -9100,7 +9549,7 @@ function SkillTextarea({
       <SkillSlashSuggest active={skillSuggest} onPick={pickSkill} />
       <Textarea
         {...props}
-        ref={textareaRef}
+        ref={setFieldRef}
         value={value}
         className={cn(
           "relative z-0",
@@ -9111,6 +9560,8 @@ function SkillTextarea({
         onChange={(event) => {
           onValueChange(event.target.value);
           sync(event.target);
+          // Resize before paint so Enter/newline doesn't flash a one-line frame.
+          resizeField(event.target);
         }}
         onClick={(event) => sync(event.currentTarget)}
         onKeyUp={(event) => sync(event.currentTarget)}
@@ -9135,13 +9586,24 @@ function SkillTextarea({
           onClick={openSkillPicker}
           aria-label="Insert skill"
           title="Insert skill command"
-          className="absolute left-1.5 top-1/2 z-20 flex size-8 -translate-y-1/2 touch-manipulation items-center justify-center rounded-full bg-muted/50 font-mono text-sm font-medium leading-none text-muted-foreground ring-1 ring-inset ring-border/40 transition active:scale-95 hover:bg-muted hover:text-foreground hover:ring-border/70"
+          className="absolute left-1.5 top-1.5 z-20 flex size-8 touch-manipulation items-center justify-center rounded-full bg-muted/50 font-mono text-sm font-medium leading-none text-muted-foreground ring-1 ring-inset ring-border/40 transition active:scale-95 hover:bg-muted hover:text-foreground hover:ring-border/70 md:top-1"
         >
           /
         </button>
       ) : null}
     </div>
   );
+}
+
+// Shared transcript page loader used to warm the cache ahead of a session open.
+async function loadTranscriptPage(sid: string) {
+  const page = await api<{ messages: Message[]; nextBefore?: number | null }>(
+    `/api/sessions/${encodeURIComponent(sid)}/messages?limit=80`,
+  );
+  return {
+    messages: lfgMessagesToUIMessages(Array.isArray(page.messages) ? page.messages : []),
+    nextBefore: page.nextBefore ?? null,
+  };
 }
 
 function SessionChat({
@@ -9166,22 +9628,28 @@ function SessionChat({
   const sid = session.sessionId;
   const [messageText, setMessageText] = useState("");
   const [sending, setSending] = useState(false);
-  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
-  const [draggingFiles, setDraggingFiles] = useState(false);
-  const [annotatingId, setAnnotatingId] = useState<string | null>(null);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [nextBefore, setNextBefore] = useState<number | null>(null);
   // Brief one-shot "launch" pulse on the composer as a message is sent, so the
   // send reads as the turn springing out of the input into the transcript.
   const [launching, setLaunching] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const previewUrls = useRef<string[]>([]);
-  const { prefetchUpload, resolveUpload, forgetUpload, forgetAllUploads } = useEagerUploads({
+  // Shared composer file plumbing (same hook the new-session and fork composers
+  // use): eager uploads, drag & drop, paste, annotate.
+  const files = useComposerAttachments({
     endpoint: (att) =>
       sid ? `/api/sessions/${sid}/upload?filename=${encodeURIComponent(att.name)}` : null,
-    onPatch: (id, patch) =>
-      setAttachments((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item))),
+    disabled: sending,
   });
+  const {
+    attachments,
+    setAttachments,
+    draggingFiles,
+    addFiles,
+    removeAttachment,
+    previewUrls,
+    resolveUpload,
+    forgetAllUploads,
+  } = files;
   const chatStatusRef = useRef<ReturnType<typeof useChat<LfgChatMessage>>["status"]>("ready");
   const chatTransport = useMemo(
     () =>
@@ -9219,9 +9687,20 @@ function SessionChat({
       return;
     }
     let cancelled = false;
-    setHistoryLoading(true);
-    setNextBefore(null);
-    setMessages([]);
+    // Paint the last-known page for this session synchronously so re-opening a
+    // session is instant instead of a blank pane + spinner while the network
+    // round trip lands. We still refetch below and reconcile — the cached paint
+    // just removes the wait from the critical path.
+    const cached = readTranscriptCache(sid);
+    if (cached) {
+      setMessages(cached.messages);
+      setNextBefore(cached.nextBefore);
+      setHistoryLoading(false);
+    } else {
+      setHistoryLoading(true);
+      setNextBefore(null);
+      setMessages([]);
+    }
     void api<{ messages: Message[]; nextBefore?: number | null }>(
       `/api/sessions/${encodeURIComponent(sid)}/messages?limit=80`,
       { cache: "no-store" },
@@ -9229,13 +9708,33 @@ function SessionChat({
       .then((page) => {
         if (cancelled) return;
         const history = lfgMessagesToUIMessages(Array.isArray(page.messages) ? page.messages : []);
+        const historyIds = new Set(history.map((message) => message.id));
+        // Anything the user had already paged in above this window stays put, in
+        // its original order — the fresh page only replaces the tail it covers.
+        const olderKept = cached
+          ? cached.messages.slice(
+              0,
+              Math.max(0, cached.messages.findIndex((message) => historyIds.has(message.id))),
+            )
+          : [];
+        const keptIds = new Set(olderKept.map((message) => message.id));
+        let settled: LfgChatMessage[] = history;
         setMessages((current) => {
-          if (!current.length) return history;
-          const historyIds = new Set(history.map((message) => message.id));
-          const liveOnly = current.filter((message) => !historyIds.has(message.id));
-          return liveOnly.length ? [...history, ...liveOnly] : history;
+          // Messages that landed live while this fetch was in flight and aren't
+          // in the page yet — they're newest, so they belong at the end.
+          const liveOnly = current.filter(
+            (message) => !historyIds.has(message.id) && !keptIds.has(message.id),
+          );
+          const cachedIds = new Set(cached?.messages.map((message) => message.id) ?? []);
+          const trailing = liveOnly.filter((message) => !cachedIds.has(message.id));
+          return (settled = [...olderKept, ...history, ...trailing]);
         });
-        setNextBefore(page.nextBefore ?? null);
+        // Keep the deeper cursor when we preserved paged-in history above.
+        const settledBefore = olderKept.length
+          ? (cached?.nextBefore ?? null)
+          : (page.nextBefore ?? null);
+        setNextBefore(settledBefore);
+        writeTranscriptCache(sid, settled, settledBefore);
       })
       .catch((err) => {
         if (!cancelled) onError(err instanceof Error ? err.message : String(err));
@@ -9257,11 +9756,15 @@ function SessionChat({
         return;
       }
       if (event.type === "busy") setLiveBusy(event.busy);
-      setMessages((current) =>
-        appendLfgTranscriptEvent(current, event, {
+      setMessages((current) => {
+        const next = appendLfgTranscriptEvent(current, event, {
           streamActive: chatStatusRef.current === "submitted" || chatStatusRef.current === "streaming",
-        }),
-      );
+        });
+        // Keep the cached page current so the next re-open paints the newest
+        // state rather than a stale snapshot.
+        if (next !== current) updateTranscriptCacheMessages(sid, next);
+        return next;
+      });
     });
   }, [onError, onSubscribeTranscript, setMessages, sid]);
 
@@ -9275,57 +9778,17 @@ function SessionChat({
     const older = lfgMessagesToUIMessages(Array.isArray(page.messages) ? page.messages : []);
     setNextBefore(page.nextBefore ?? null);
     if (!older.length) return (page.nextBefore ?? null) !== null;
+    let settled: LfgChatMessage[] = older;
     setMessages((current) => {
       const existing = new Set(current.map((message) => message.id));
       const prepend = older.filter((message) => !existing.has(message.id));
-      return prepend.length ? [...prepend, ...current] : current;
+      return (settled = prepend.length ? [...prepend, ...current] : current);
     });
+    // Cache the deeper window too, so scrolling back then leaving and returning
+    // doesn't lose the pages the user already waited for.
+    writeTranscriptCache(sid, settled, page.nextBefore ?? null);
     return (page.nextBefore ?? null) !== null;
   }, [nextBefore, setMessages, sid]);
-
-  useEffect(() => {
-    return () => {
-      for (const url of previewUrls.current) URL.revokeObjectURL(url);
-      previewUrls.current = [];
-    };
-  }, []);
-
-  function addFiles(files: FileList | File[]) {
-    const incoming = Array.from(files).filter((file) => file.size > 0);
-    if (!incoming.length) return;
-    const room = Math.max(0, 8 - attachments.length);
-    if (!room) {
-      toast.error("Remove an attachment before adding another.");
-      return;
-    }
-    if (incoming.length > room) toast.error(`Added ${room} of ${incoming.length} files.`);
-    const next: ComposerAttachment[] = incoming.slice(0, room).map((file) => {
-      const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined;
-      if (previewUrl) previewUrls.current.push(previewUrl);
-      return {
-        id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
-        file,
-        name: file.name || "upload",
-        size: file.size,
-        type: file.type,
-        previewUrl,
-        status: "ready" as const,
-      };
-    });
-    setAttachments((current) => [...current, ...next]);
-    // Push the bytes now instead of waiting for send, so the upload is normally
-    // already finished by the time the user submits.
-    next.forEach(prefetchUpload);
-  }
-
-  function removeAttachment(id: string) {
-    forgetUpload(id);
-    setAttachments((current) => {
-      const item = current.find((att) => att.id === id);
-      if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl);
-      return current.filter((att) => att.id !== id);
-    });
-  }
 
   async function sendMessage(
     e?: FormEvent,
@@ -9426,27 +9889,7 @@ function SessionChat({
       {canDriveSession(session) ? (
         <form
           onSubmit={sendMessage}
-          onDragEnter={(event) => {
-            if (Array.from(event.dataTransfer.types).includes("Files")) setDraggingFiles(true);
-          }}
-          onDragOver={(event) => {
-            if (!Array.from(event.dataTransfer.types).includes("Files")) return;
-            event.preventDefault();
-            event.dataTransfer.dropEffect = "copy";
-            setDraggingFiles(true);
-          }}
-          onDragLeave={(event) => {
-            const nextTarget = event.relatedTarget;
-            if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
-              setDraggingFiles(false);
-            }
-          }}
-          onDrop={(event) => {
-            if (!event.dataTransfer.files.length) return;
-            event.preventDefault();
-            setDraggingFiles(false);
-            addFiles(event.dataTransfer.files);
-          }}
+          {...files.dropZoneProps}
           className={cn(
             // Sit on the same surface as the chat (no card/border seam) and let
             // the transcript melt into the bar via a soft gradient fade so the
@@ -9457,90 +9900,21 @@ function SessionChat({
             launching && "lfg-composer-launching",
           )}
         >
-          <input
-            ref={fileInputRef}
-            type="file"
-            aria-label="Attach files"
-            multiple
-            className="hidden"
-            onChange={(event) => {
-              if (event.target.files) addFiles(event.target.files);
-              event.currentTarget.value = "";
-            }}
+          {files.fileInput}
+          <ComposerAttachmentChips
+            className="mb-2"
+            items={attachments.map((att) => ({ att }))}
+            disabled={sending}
+            onAnnotate={files.setAnnotatingId}
+            onRemove={removeAttachment}
           />
-          {attachments.length ? (
-            <div className="mb-2 flex gap-1.5 overflow-x-auto pb-0.5">
-              {attachments.map((att) => (
-                <div
-                  key={att.id}
-                  className={cn(
-                    "group relative flex h-12 max-w-52 shrink-0 items-center gap-2 overflow-hidden rounded-lg border bg-muted/55 pl-1.5 pr-1.5 text-xs",
-                    att.status === "failed" ? "border-destructive/40 bg-destructive/10" : "border-border/70",
-                  )}
-                  title={att.error || att.name}
-                >
-                  {att.previewUrl ? (
-                    <img
-                      src={att.previewUrl}
-                      alt=""
-                      className="size-9 shrink-0 rounded-md object-cover"
-                    />
-                  ) : (
-                    <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-background/80 text-muted-foreground">
-                      <Paperclip className="size-4" />
-                    </div>
-                  )}
-                  <div className="min-w-0">
-                    <div className="truncate font-medium text-foreground">{att.name}</div>
-                    <div className="text-[11px] text-muted-foreground">
-                      {att.status === "uploading" ? `Uploading ${att.progress ?? 0}%` : att.status === "failed" ? "Failed" : formatBytes(att.size)}
-                    </div>
-                  </div>
-                  {att.status === "uploading" ? (
-                    <div
-                      className="absolute inset-x-0 bottom-0 h-0.5 bg-primary/15"
-                      role="progressbar"
-                      aria-label={`Uploading ${att.name}`}
-                      aria-valuemin={0}
-                      aria-valuemax={100}
-                      aria-valuenow={att.progress ?? 0}
-                    >
-                      <div className="h-full bg-primary transition-[width] duration-150" style={{ width: `${att.progress ?? 0}%` }} />
-                    </div>
-                  ) : null}
-                  {att.previewUrl ? (
-                    <button
-                      type="button"
-                      className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-background hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-                      onClick={() => setAnnotatingId(att.id)}
-                      aria-label={`Annotate ${att.name}`}
-                      title="Annotate"
-                      disabled={sending}
-                    >
-                      <Pencil className="size-3.5" />
-                    </button>
-                  ) : null}
-                  <button
-                    type="button"
-                    className="ml-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-background hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-                    onClick={() => removeAttachment(att.id)}
-                    aria-label={`Remove ${att.name}`}
-                    title="Remove"
-                    disabled={sending}
-                  >
-                    <X className="size-3.5" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : null}
           <div className="flex items-end gap-2">
             <Button
               size="icon"
               type="button"
               variant={draggingFiles ? "brand-soft" : "tint"}
               className="size-11 md:size-9"
-              onClick={() => fileInputRef.current?.click()}
+              onClick={files.openFilePicker}
               aria-label="Attach files"
               title="Attach files"
               disabled={sending}
@@ -9554,13 +9928,7 @@ function SessionChat({
                 onValueChange={setMessageText}
                 showSkillButton
                 insetEnd
-                onPaste={(event) => {
-                  const files = event.clipboardData?.files;
-                  if (files?.length) {
-                    event.preventDefault();
-                    addFiles(files);
-                  }
-                }}
+                onPaste={files.onPasteFiles}
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {
                     e.preventDefault();
@@ -9571,12 +9939,15 @@ function SessionChat({
                 disabled={sending}
                 rows={1}
                 className={cn(
-                  "lfg-gfield h-11 min-h-11 max-h-11 min-w-0 resize-none overflow-y-auto rounded-2xl border-transparent px-4 py-3 text-base leading-5 shadow-sm transition-[background-color,border-color,box-shadow] duration-300 ease-ios placeholder:text-muted-foreground [field-sizing:fixed] md:h-9 md:min-h-9 md:max-h-9 md:rounded-[1.125rem] md:px-3.5 md:py-2 md:text-sm",
+                  // Height is driven by SkillTextarea's scrollHeight resize
+                  // (field-sizing:fixed so CSS content-sizing doesn't fight it).
+                  // Rest at one line; max-h caps growth before the transcript.
+                  "lfg-gfield min-h-11 max-h-40 min-w-0 resize-none overflow-y-auto rounded-2xl border-transparent px-4 py-3 text-base leading-5 shadow-sm transition-[background-color,border-color,box-shadow] duration-300 ease-ios placeholder:text-muted-foreground [field-sizing:fixed] md:min-h-9 md:max-h-36 md:rounded-[1.125rem] md:px-3.5 md:py-2 md:text-sm",
                 )}
               />
               <MicButton
                 minimal
-                className="absolute right-1.5 top-1/2 z-10 size-8 -translate-y-1/2"
+                className="absolute bottom-1.5 right-1.5 z-10 size-8 md:bottom-1"
                 baseText={messageText}
                 onRecordingChange={onDictatingChange}
                 onText={(text, base) =>
@@ -9629,20 +10000,178 @@ function SessionChat({
           </div>
         </form>
       ) : null}
-      <ImageAnnotator
-        open={!!annotatingId}
-        file={attachments.find((att) => att.id === annotatingId)?.file ?? null}
-        onOpenChange={(next) => {
-          if (!next) setAnnotatingId(null);
-        }}
-        onSave={(file) => {
-          if (annotatingId) {
-            applyAnnotatedAttachment(setAttachments, previewUrls, annotatingId, file, prefetchUpload);
-          }
-          setAnnotatingId(null);
-        }}
-      />
+      {files.annotator}
     </div>
+  );
+}
+
+// ── rename session ──────────────────────────────────────────────────────────
+// Desktop: double-click the card title for an inline editor.
+// Mobile: same action opens a bottom-sheet drawer (the title tap already opens
+// the full session sheet, so rename also lives on the ⋮ menu).
+function RenameSessionDrawer({
+  open,
+  session,
+  onOpenChange,
+  onSaved,
+  onError,
+}: {
+  open: boolean;
+  session: Session;
+  onOpenChange: (open: boolean) => void;
+  onSaved: () => Promise<void>;
+  onError: (msg: string | null) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setDraft(session.title?.trim() || titleForSession(session));
+    const id = window.setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }, 50);
+    return () => window.clearTimeout(id);
+  }, [open, session]);
+
+  async function submit(e?: FormEvent) {
+    e?.preventDefault();
+    const sid = session.sessionId;
+    if (!sid || saving) return;
+    setSaving(true);
+    onError(null);
+    try {
+      await putSessionTitle(sid, draft);
+      await onSaved();
+      onOpenChange(false);
+      toast.success("Session renamed");
+    } catch (err) {
+      onError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Drawer
+      open={open}
+      repositionInputs={false}
+      onOpenChange={(next) => {
+        if (!next && saving) return;
+        onOpenChange(next);
+      }}
+    >
+      <DrawerContent
+        // Above the mobile SessionTitleSheet (z-90) and other full-screen
+        // surfaces so rename stays usable from the sheet header / ⋮ menu.
+        overlayClassName="z-[100]"
+        className="z-[100] mx-auto max-w-lg"
+      >
+        <DrawerTitle className="px-1 pb-2">Rename session</DrawerTitle>
+        <form
+          onSubmit={(e) => void submit(e)}
+          className="flex flex-col gap-3 px-1 pb-1"
+        >
+          <Input
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            maxLength={200}
+            placeholder="Session name"
+            aria-label="Session name"
+            disabled={saving}
+            autoComplete="off"
+            autoCorrect="off"
+            spellCheck={false}
+          />
+          <p className="text-[12px] text-muted-foreground">
+            Leave blank to clear the custom name.
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => onOpenChange(false)}
+              disabled={saving}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={saving}>
+              {saving ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        </form>
+      </DrawerContent>
+    </Drawer>
+  );
+}
+
+// Inline title field used on desktop after a double-click. Escape cancels;
+// Enter / blur commits. Empty string clears the override.
+function SessionTitleInlineEditor({
+  initial,
+  onCommit,
+  onCancel,
+}: {
+  initial: string;
+  onCommit: (next: string) => void | Promise<void>;
+  onCancel: () => void;
+}) {
+  const [draft, setDraft] = useState(initial);
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const committed = useRef(false);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, []);
+
+  async function commit() {
+    if (committed.current || saving) return;
+    committed.current = true;
+    setSaving(true);
+    try {
+      await onCommit(draft);
+    } catch {
+      committed.current = false;
+      setSaving(false);
+      inputRef.current?.focus();
+    }
+  }
+
+  return (
+    <form
+      className="min-w-0 flex-1"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void commit();
+      }}
+    >
+      <input
+        ref={inputRef}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={() => void commit()}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            e.stopPropagation();
+            committed.current = true;
+            onCancel();
+          }
+        }}
+        maxLength={200}
+        disabled={saving}
+        aria-label="Session name"
+        autoComplete="off"
+        autoCorrect="off"
+        spellCheck={false}
+        className="h-7 w-full min-w-0 rounded-md border border-ring/40 bg-background px-2 text-[15px] font-semibold leading-tight text-foreground outline-none ring-[3px] ring-ring/30"
+      />
+    </form>
   );
 }
 
@@ -9709,6 +10238,7 @@ function SessionActionsMenu({
   onRefresh,
   onRemove,
   onError,
+  onRename,
   triggerClassName,
   pinned,
   onTogglePin,
@@ -9718,6 +10248,7 @@ function SessionActionsMenu({
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
   onError: (error: string | null) => void;
+  onRename?: () => void;
   triggerClassName?: string;
   pinned?: boolean;
   onTogglePin?: (sid: string) => void;
@@ -9869,6 +10400,12 @@ function SessionActionsMenu({
               {pinned ? "Unpin from top" : "Pin to top"}
             </DropdownMenuItem>
           ) : null}
+          {onRename ? (
+            <DropdownMenuItem disabled={!sid} onClick={() => onRename()}>
+              <Pencil className="size-4" />
+              Rename
+            </DropdownMenuItem>
+          ) : null}
           <DropdownMenuItem disabled={!sid} onClick={() => void copyReference()}>
             <Copy className="size-4" />
             Copy reference
@@ -9932,6 +10469,8 @@ function SessionTitleSheet({
   onClose: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
+  // Mobile rename lives in a drawer stacked above this full-screen sheet.
+  const [renameOpen, setRenameOpen] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const backdropRef = useRef<HTMLButtonElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -9966,7 +10505,10 @@ function SessionTitleSheet({
   );
 
   // A stale composer error from the previous session shouldn't bleed across.
-  useLayoutEffect(() => setError(null), [sid]);
+  useLayoutEffect(() => {
+    setError(null);
+    setRenameOpen(false);
+  }, [sid]);
 
   // Force each session we view into the shared transcript stream so the chat's
   // useChat subscription receives idle-time updates. This uses the in-memory
@@ -10310,12 +10852,15 @@ function SessionTitleSheet({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        // Rename drawer owns Escape while open; don't dismiss the sheet under it.
+        if (renameOpen) return;
         requestClose();
         return;
       }
-      // Don't hijack arrows while the user is typing in the composer.
+      // Don't hijack arrows while the user is typing in the composer / rename field.
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (renameOpen) return;
       if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
         e.preventDefault();
         go(prevSid);
@@ -10331,7 +10876,7 @@ function SessionTitleSheet({
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = prevOverflow;
     };
-  }, [requestClose, go, prevSid, nextSid]);
+  }, [requestClose, go, prevSid, nextSid, renameOpen]);
 
   const title = titleForSession(session);
 
@@ -10377,7 +10922,18 @@ function SessionTitleSheet({
             title={session.agentLabel || undefined}
             className="size-7 shrink-0 rounded-lg"
           />
-          <SessionTitleLine title={title} />
+          <button
+            type="button"
+            className="flex min-w-0 flex-1 items-center text-left outline-none"
+            title="Rename session"
+            aria-label={`Rename ${title}`}
+            onClick={() => {
+              haptic("selection");
+              setRenameOpen(true);
+            }}
+          >
+            <SessionTitleLine title={title} />
+          </button>
           {order.length > 1 ? (
             // Switching is gesture-driven (swipe the input bar) + arrow keys, so
             // the header just shows position — no chevron buttons.
@@ -10391,11 +10947,19 @@ function SessionTitleSheet({
             onRefresh={onRefresh}
             onRemove={onRemove}
             onError={setError}
+            onRename={() => setRenameOpen(true)}
             triggerClassName="size-9"
             pinned={pinned}
             onTogglePin={onTogglePin}
           />
         </div>
+        <RenameSessionDrawer
+          open={renameOpen}
+          session={session}
+          onOpenChange={setRenameOpen}
+          onSaved={onRefresh}
+          onError={setError}
+        />
         <div
           ref={bodyRef}
           className="flex min-h-0 flex-1 flex-col"
@@ -10456,6 +11020,11 @@ function ForkSessionDialog({
   const sid = session.sessionId;
   const models = catalog.models[agent] ?? AGENT_MODELS[agent];
   const thinkingLevels = useAgentThinkingLevels(agent);
+  // Same composer plumbing as the new-session composer: eager uploads, drag &
+  // drop, paste, annotate.
+  const files = useComposerAttachments({
+    endpoint: (att) => `/api/uploads?filename=${encodeURIComponent(att.name)}`,
+  });
 
   useEffect(() => {
     if (!models.includes(model)) setModel(models[0]);
@@ -10473,7 +11042,7 @@ function ForkSessionDialog({
     }
   }, [thinkingLevel, thinkingLevels]);
 
-  function submit(e?: FormEvent) {
+  function submit(e?: FormEvent, overrideText?: string) {
     e?.preventDefault();
     if (!sid) return;
     if (!availableAgentOptions.some((option) => option.key === agent)) {
@@ -10483,19 +11052,28 @@ function ForkSessionDialog({
     localStorage.setItem("lfg_fork_agent", agent);
     localStorage.setItem(`lfg_fork_model_${agent}`, model);
     if (agentSupportsThinking(agent)) localStorage.setItem("lfg_thinking_level", thinkingLevel);
+    const text = (overrideText ?? prompt).trim();
+    const attached = files.attachments;
     onClose();
     toast.promise(
-      api(`/api/sessions/${sid}/fork`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt: prompt.trim() || undefined,
-          user: session.assignedUser || undefined,
-          agent,
-          model,
-          thinkingLevel: agentSupportsThinking(agent) ? thinkingLevel : undefined,
-        }),
-      }).then(() => onCreated()),
+      (async () => {
+        // Started at attach time, so these are usually already resolved.
+        const uploaded = attached.length
+          ? await Promise.all(attached.map(files.resolveUpload))
+          : [];
+        const composedPrompt = composeAttachmentMessage(text, uploaded);
+        return api(`/api/sessions/${sid}/fork`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            prompt: composedPrompt || undefined,
+            user: session.assignedUser || undefined,
+            agent,
+            model,
+            thinkingLevel: agentSupportsThinking(agent) ? thinkingLevel : undefined,
+          }),
+        });
+      })().then(() => onCreated()),
       {
         loading: "Forking session...",
         success: "Session forked",
@@ -10506,7 +11084,14 @@ function ForkSessionDialog({
 
   return (
     <BottomSheet onClose={onClose} title="Fork session">
-      <form onSubmit={submit} className="px-4 pb-5 pt-3">
+      <form
+        onSubmit={submit}
+        {...files.dropZoneProps}
+        className={cn(
+          "px-4 pb-5 pt-3 transition-colors",
+          files.draggingFiles && "bg-primary/8",
+        )}
+      >
         <div className="mb-3 flex items-center gap-2">
           <GitFork className="size-4 text-muted-foreground" />
           <div className="min-w-0">
@@ -10517,37 +11102,55 @@ function ForkSessionDialog({
           </div>
         </div>
 
-        <SkillTextarea
-          value={prompt}
-          onValueChange={setPrompt}
-          placeholder="Extra prompt for the new agent..."
-          rows={5}
-          className="min-h-32 resize-none rounded-xl"
-        />
+        {files.fileInput}
+
+        <div className="lfg-gfield relative rounded-2xl px-2 py-1">
+          <SkillTextarea
+            value={prompt}
+            onValueChange={setPrompt}
+            onPaste={files.onPasteFiles}
+            onKeyDown={(e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                e.preventDefault();
+                e.currentTarget.form?.requestSubmit();
+              }
+            }}
+            placeholder={
+              files.attachments.length
+                ? "Add a note for the files…"
+                : "Extra prompt for the new agent…"
+            }
+            className="min-h-32 max-h-[42dvh] resize-none overflow-y-auto border-0 bg-transparent px-1 py-1 pr-10 text-base leading-relaxed shadow-none focus-visible:border-0 focus-visible:ring-0"
+          />
+          <MicButton
+            minimal
+            className="absolute bottom-1 right-1 size-9 shrink-0"
+            silenceMs={2500}
+            baseText={prompt}
+            onText={(text, base) => setPrompt(base.trim() ? `${base.trimEnd()} ${text}` : text)}
+            onInterim={(text, base) => setPrompt(base.trim() ? `${base.trimEnd()} ${text}` : text)}
+            onAutoSubmit={(text, base) => {
+              const combined = base.trim() ? `${base.trimEnd()} ${text}` : text;
+              setPrompt(combined);
+              submit(undefined, combined);
+            }}
+            onCancel={(base) => setPrompt(base)}
+          />
+        </div>
+
+        {files.attachments.length ? <div className="mt-2">{files.chips}</div> : null}
 
         <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          <div className="inline-flex h-8 items-center rounded-full bg-muted p-0.5 text-xs font-semibold">
-            {availableAgentOptions.map(({ key, label }) => (
-              <button
-                key={key}
-                type="button"
-                title={label}
-                aria-label={label}
-                onClick={() => {
-                  setAgent(key);
-                  setModel(localStorage.getItem(`lfg_fork_model_${key}`) || defaultModelFor(key));
-                }}
-                className={cn(
-                  "flex h-7 w-9 items-center justify-center rounded-full transition",
-                  agent === key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground",
-                )}
-              >
-                <img src={agentIconSrc(key)} alt="" className="size-5" />
-              </button>
-            ))}
-          </div>
+          <AgentIconStrip
+            options={availableAgentOptions}
+            value={agent}
+            onSelect={(key) => {
+              setAgent(key);
+              setModel(localStorage.getItem(`lfg_fork_model_${key}`) || defaultModelFor(key));
+            }}
+          />
 
-          <ModelPicker value={model} models={models} onChange={setModel} />
+          <ModelPicker value={model} models={models} onChange={setModel} width="max-w-28" />
 
           {agentSupportsThinking(agent) ? (
             <FieldPill>
@@ -10567,16 +11170,30 @@ function ForkSessionDialog({
           ) : null}
         </div>
 
-        <div className="mt-4 flex items-center justify-end gap-2">
-          <Button type="button" variant="ghost" onClick={onClose}>
-            Cancel
+        <div className="mt-4 flex items-center gap-2">
+          <Button
+            size="icon-sm"
+            type="button"
+            variant={files.draggingFiles ? "brand-soft" : "outline"}
+            className="size-8 rounded-full shadow-sm"
+            onClick={files.openFilePicker}
+            aria-label="Attach files"
+            title="Attach files"
+          >
+            <Paperclip className="size-4" />
           </Button>
-          <Button type="submit" variant="brand" disabled={!sid}>
-            <GitFork className="size-4" />
-            Open
-          </Button>
+          <div className="ml-auto flex items-center gap-2">
+            <Button type="button" variant="ghost" onClick={onClose}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="brand" disabled={!sid}>
+              <GitFork className="size-4" />
+              Open
+            </Button>
+          </div>
         </div>
       </form>
+      {files.annotator}
     </BottomSheet>
   );
 }
@@ -10599,6 +11216,7 @@ const SessionCard = memo(function SessionCard({
   variant = "grid",
   onClose,
   entering = false,
+  focusGlow = 0,
   pinned = false,
   onTogglePin,
 }: {
@@ -10623,16 +11241,48 @@ const SessionCard = memo(function SessionCard({
   // True only on the first render after this session was created in-tab — plays
   // the one-shot entrance animation on the card root.
   entering?: boolean;
+  // Incrementing token from RailStage: non-zero + change restarts the slow
+  // primary glow so a rail click points at this pane among several columns.
+  focusGlow?: number;
   // Narrow/mobile list preference. Desktop stage pinning is owned by RailStage.
   pinned?: boolean;
   onTogglePin?: (sid: string) => void;
 }) {
   const appDialog = useAppDialog();
   const catalog = useAgentModelCatalog();
+  const isMobile = useIsMobile();
   const [error, setError] = useState<string | null>(null);
   const [summarizing, setSummarizing] = useState(false);
+  // Desktop: double-click title → inline editor. Mobile: menu / sheet → drawer.
+  const [renamingInline, setRenamingInline] = useState(false);
+  const [renameDrawerOpen, setRenameDrawerOpen] = useState(false);
 
   const sid = session.sessionId;
+
+  const startRename = useCallback(() => {
+    if (!sid) return;
+    haptic("selection");
+    if (isMobile) setRenameDrawerOpen(true);
+    else setRenamingInline(true);
+  }, [isMobile, sid]);
+
+  const commitInlineRename = useCallback(
+    async (next: string) => {
+      if (!sid) return;
+      setError(null);
+      try {
+        await putSessionTitle(sid, next);
+        setRenamingInline(false);
+        await onRefresh();
+        toast.success("Session renamed");
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setError(msg);
+        throw e;
+      }
+    },
+    [onRefresh, sid],
+  );
 
   async function changeModel(model: string) {
     if (!sid || !model || model === session.model) return;
@@ -10733,11 +11383,22 @@ const SessionCard = memo(function SessionCard({
   }
 
   // ── mobile gestures: tap-header-to-collapse + iOS swipe-to-delete ─────────
-  const isMobile = useIsMobile();
   // Fall back to the list payload's last message when we aren't streaming this
   // card (collapsed) so the collapsed preview line still shows something.
   const latest = latestLine(messages) || plainPreviewText(session.last?.text ?? "");
   const sectionRef = useRef<HTMLElement>(null);
+  // Rail selection glow: restart the CSS animation whenever the token bumps.
+  useLayoutEffect(() => {
+    if (!focusGlow) return;
+    const el = sectionRef.current;
+    if (!el) return;
+    el.classList.remove("lfg-card-focus-glow");
+    // Force reflow so re-selecting the same pane restarts the animation.
+    void el.offsetWidth;
+    el.classList.add("lfg-card-focus-glow");
+    const clear = window.setTimeout(() => el.classList.remove("lfg-card-focus-glow"), 2000);
+    return () => window.clearTimeout(clear);
+  }, [focusGlow]);
   // True while voice dictation is recording in this card's composer — glows the
   // card border so it's clear which session is listening.
   const [dictating, setDictating] = useState(false);
@@ -11052,37 +11713,49 @@ const onTouchStart = (e: ReactTouchEvent) => {
               )}
             />
           </button>
-          <button
-            type="button"
-            onClick={onHeaderTap}
-            onPointerDown={onTitlePointerDown}
-            onPointerMove={onTitlePointerMove}
-            onPointerUp={clearLongPress}
-            onPointerCancel={clearLongPress}
-            onDragStart={(e) => e.preventDefault()}
-            onSelect={(e) => e.preventDefault()}
-            onContextMenu={(e) => e.preventDefault()}
-            className="flex min-w-0 flex-1 touch-manipulation select-none items-center gap-2 text-left outline-none [-webkit-touch-callout:none] [-webkit-user-drag:none] [-webkit-user-select:none] [user-select:none] md:pointer-events-none"
-          >
-            <div className="flex min-w-0 flex-1 flex-col">
-              <div className="truncate text-[15px] font-semibold leading-tight">
-                {titleForSession(session)}
-              </div>
-              {isMobile && collapsed && latest ? (
-                <div className="truncate text-[11px] leading-tight text-muted-foreground">
-                  {latest}
+          {renamingInline && !isMobile ? (
+            <SessionTitleInlineEditor
+              initial={session.title?.trim() || titleForSession(session)}
+              onCommit={commitInlineRename}
+              onCancel={() => setRenamingInline(false)}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={onHeaderTap}
+              onDoubleClick={(e) => {
+                // Desktop: double-click renames in place. Mobile uses the drawer
+                // (tap still opens the session sheet; rename is in the ⋮ menu).
+                if (isMobile) return;
+                e.preventDefault();
+                e.stopPropagation();
+                startRename();
+              }}
+              onPointerDown={onTitlePointerDown}
+              onPointerMove={onTitlePointerMove}
+              onPointerUp={clearLongPress}
+              onPointerCancel={clearLongPress}
+              onDragStart={(e) => e.preventDefault()}
+              onSelect={(e) => e.preventDefault()}
+              onContextMenu={(e) => e.preventDefault()}
+              title={isMobile ? undefined : "Double-click to rename"}
+              className={cn(
+                "flex min-w-0 flex-1 touch-manipulation select-none items-center gap-2 text-left outline-none [-webkit-touch-callout:none] [-webkit-user-drag:none] [-webkit-user-select:none] [user-select:none]",
+                !isMobile && "cursor-text rounded-md hover:bg-muted/50",
+              )}
+            >
+              <div className="flex min-w-0 flex-1 flex-col">
+                <div className="truncate text-[15px] font-semibold leading-tight">
+                  {titleForSession(session)}
                 </div>
-              ) : null}
-            </div>
-          </button>
-        {entering ? (
-          <span
-            className="shrink-0 rounded-full bg-success/15 px-2 py-0.5 text-[10px] font-semibold text-success ring-1 ring-inset ring-success/30"
-            title="Session just started"
-          >
-            🚀 started
-          </span>
-        ) : null}
+                {isMobile && collapsed && latest ? (
+                  <div className="truncate text-[11px] leading-tight text-muted-foreground">
+                    {latest}
+                  </div>
+                ) : null}
+              </div>
+            </button>
+          )}
         {session.status === "blocked" ? (
           <span
             className="shrink-0 rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-semibold text-warning ring-1 ring-inset ring-warning/30"
@@ -11137,15 +11810,10 @@ const onTouchStart = (e: ReactTouchEvent) => {
             {session.model}
           </span>
         ) : null)}
-        <span
-          aria-label={busy ? "working" : "idle"}
-          className={cn(
-            "size-2 shrink-0 rounded-full",
-            // Idle: blend into the card surface (soft, low-contrast). Busy: a
-            // pulsing amber that actually draws the eye.
-            busy ? "animate-pulse bg-warning" : "bg-success/30 ring-1 ring-inset ring-success/20",
-          )}
-        />
+        {/* Redundant on wide screens: the rail row for this session already
+            carries the same dot on its avatar, so only the narrow (no-rail)
+            grid layout needs it here. */}
+        <SessionStatusDot busy={busy} className="lg:hidden" />
         {!collapsedView && (
           <SessionActionsMenu
             session={session}
@@ -11153,6 +11821,7 @@ const onTouchStart = (e: ReactTouchEvent) => {
             onRefresh={onRefresh}
             onRemove={onRemove}
             onError={setError}
+            onRename={startRename}
             pinned={pinned}
             onTogglePin={onTogglePin}
           />
@@ -11168,6 +11837,14 @@ const onTouchStart = (e: ReactTouchEvent) => {
           </button>
         ) : null}
       </div>
+
+      <RenameSessionDrawer
+        open={renameDrawerOpen}
+        session={session}
+        onOpenChange={setRenameDrawerOpen}
+        onSaved={onRefresh}
+        onError={setError}
+      />
 
       {!collapsedView && (
         <SessionChat
@@ -11374,20 +12051,74 @@ const ChatStream = memo(function ChatStream({
   );
 });
 
+// Desktop: require a deliberate hover before opening command details so a
+// quick mouse pass over tool chips doesn't flash the popover. Click still
+// opens immediately. Close keeps a short grace so pill ↔ popup transit works.
+const TOOL_GROUP_HOVER_OPEN_MS = 450;
+const TOOL_GROUP_HOVER_CLOSE_MS = 120;
+
 function ToolGroup({ items, live }: { items: Message[]; live: boolean }) {
   const label = toolGroupLabel(items);
   const last = items[items.length - 1];
   const animationKey = `${live ? "live" : "done"}-${items.length}-${last?.id ?? last?.ts ?? label}`;
   const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
+  const openRef = useRef(open);
+  openRef.current = open;
+  const hoverOpenTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hoverCloseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const keepHoverOpen = () => {
-    if (hoverCloseTimer.current) clearTimeout(hoverCloseTimer.current);
-    if (!isMobile) setOpen(true);
+
+  const clearHoverTimers = () => {
+    if (hoverOpenTimer.current) {
+      clearTimeout(hoverOpenTimer.current);
+      hoverOpenTimer.current = null;
+    }
+    if (hoverCloseTimer.current) {
+      clearTimeout(hoverCloseTimer.current);
+      hoverCloseTimer.current = null;
+    }
   };
+
+  useEffect(() => () => clearHoverTimers(), []);
+
+  // Pill enter: delay open so skimming the transcript doesn't trigger popovers.
+  const scheduleHoverOpen = () => {
+    if (isMobile) return;
+    if (hoverCloseTimer.current) {
+      clearTimeout(hoverCloseTimer.current);
+      hoverCloseTimer.current = null;
+    }
+    if (openRef.current || hoverOpenTimer.current) return;
+    hoverOpenTimer.current = setTimeout(() => {
+      hoverOpenTimer.current = null;
+      setOpen(true);
+    }, TOOL_GROUP_HOVER_OPEN_MS);
+  };
+
+  // Popup enter (or re-enter while already open): cancel close, stay open.
+  const keepHoverOpen = () => {
+    if (isMobile) return;
+    clearHoverTimers();
+    setOpen(true);
+  };
+
   const scheduleHoverClose = () => {
     if (isMobile) return;
-    hoverCloseTimer.current = setTimeout(() => setOpen(false), 120);
+    if (hoverOpenTimer.current) {
+      clearTimeout(hoverOpenTimer.current);
+      hoverOpenTimer.current = null;
+    }
+    hoverCloseTimer.current = setTimeout(() => setOpen(false), TOOL_GROUP_HOVER_CLOSE_MS);
+  };
+
+  const toggleOpen = () => {
+    clearHoverTimers();
+    setOpen((value) => !value);
+  };
+
+  const handleOpenChange = (next: boolean) => {
+    clearHoverTimers();
+    setOpen(next);
   };
 
   const details = (
@@ -11427,8 +12158,8 @@ function ToolGroup({ items, live }: { items: Message[]; live: boolean }) {
       aria-label={`${live ? "Running" : "Completed"} tool call${items.length === 1 ? "" : "s"}: ${label}. Show details`}
       aria-haspopup="dialog"
       aria-expanded={open}
-      onClick={() => setOpen((value) => !value)}
-      onMouseEnter={keepHoverOpen}
+      onClick={toggleOpen}
+      onMouseEnter={scheduleHoverOpen}
       onMouseLeave={scheduleHoverClose}
     >
       <span
@@ -11446,7 +12177,7 @@ function ToolGroup({ items, live }: { items: Message[]; live: boolean }) {
     return (
       <div key={animationKey} className="w-fit max-w-full">
         {pill}
-        <VaulDrawer.Root open={open} onOpenChange={setOpen} repositionInputs={false} shouldScaleBackground={false}>
+        <VaulDrawer.Root open={open} onOpenChange={handleOpenChange} repositionInputs={false} shouldScaleBackground={false}>
           <VaulDrawer.Portal>
             <VaulDrawer.Overlay className="fixed inset-0 z-[149] bg-black/80" />
             <VaulDrawer.Content className="fixed inset-x-0 bottom-0 z-[150] mx-auto flex max-h-[82dvh] max-w-lg flex-col rounded-t-[2rem] border border-border bg-background p-4 pb-[max(env(safe-area-inset-bottom),1rem)] text-foreground shadow-2xl outline-none">
@@ -11461,7 +12192,7 @@ function ToolGroup({ items, live }: { items: Message[]; live: boolean }) {
   }
 
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
+    <Popover.Root open={open} onOpenChange={handleOpenChange}>
       <Popover.Trigger render={pill} />
       <Popover.Portal>
         <Popover.Positioner side="top" align="start" sideOffset={7} className="isolate z-[170] outline-none">
@@ -12592,28 +13323,33 @@ function NewSessionDialog({
     () => defaultUser || localStorage.getItem("lfg_user") || users[0]?.email || "",
   );
   const [prompt, setPrompt] = useState("");
-  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [pendingUploads, setPendingUploads] = useState<ComposerAttachment[]>([]);
-  const [draggingFiles, setDraggingFiles] = useState(false);
-  const [annotatingId, setAnnotatingId] = useState<string | null>(null);
   const [usage, setUsage] = useState<ProviderUsage | null>(null);
   const [pendingCreates, setPendingCreates] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const previewUrls = useRef<string[]>([]);
+  // Shared composer file plumbing (same hook the chat and fork composers use).
   // An attachment can be mid-upload in either list: submit() moves it from
   // `attachments` to `pendingUploads` so the composer clears immediately, and
-  // the chip row renders both. Patch both so its progress keeps ticking across
-  // the handoff.
-  const { prefetchUpload, resolveUpload, forgetUpload } = useEagerUploads({
+  // the chip row renders both — so patch both via onPatchExtra and its progress
+  // keeps ticking across the handoff.
+  const files = useComposerAttachments({
     endpoint: (att) => `/api/uploads?filename=${encodeURIComponent(att.name)}`,
-    onPatch: (id, patch) => {
-      const apply = (current: ComposerAttachment[]) =>
-        current.map((item) => (item.id === id ? { ...item, ...patch } : item));
-      setAttachments(apply);
-      setPendingUploads(apply);
-    },
+    onPatchExtra: (id, patch) =>
+      setPendingUploads((current) =>
+        current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
+      ),
   });
+  const {
+    attachments,
+    setAttachments,
+    draggingFiles,
+    addFiles,
+    removeAttachment,
+    setAnnotatingId,
+    previewUrls,
+    resolveUpload,
+    forgetUpload,
+  } = files;
   // Resumable (closed / rebooted-away) sessions. Fetched lazily when the user
   // expands the section so opening the dialog stays instant; reset on close.
   const [resumeOpen, setResumeOpen] = useState(false);
@@ -12929,12 +13665,6 @@ function NewSessionDialog({
       }
     };
   }, [variant, !onProjectSwipe]);
-  useEffect(() => {
-    return () => {
-      for (const url of previewUrls.current) URL.revokeObjectURL(url);
-      previewUrls.current = [];
-    };
-  }, []);
   useLayoutEffect(() => {
     const textarea = fieldRef.current?.querySelector("textarea");
     if (!textarea) return;
@@ -13093,43 +13823,6 @@ function NewSessionDialog({
   // trap sit above the full-screen picker and dismissing the dialog unmounts it.
   if (!open && !resumeOpen) return null;
 
-  function addFiles(files: FileList | File[]) {
-    const incoming = Array.from(files).filter((file) => file.size > 0);
-    if (!incoming.length) return;
-    const room = Math.max(0, 8 - attachments.length);
-    if (!room) {
-      toast.error("Remove an attachment before adding another.");
-      return;
-    }
-    if (incoming.length > room) toast.error(`Added ${room} of ${incoming.length} files.`);
-    const next: ComposerAttachment[] = incoming.slice(0, room).map((file) => {
-      const previewUrl = file.type.startsWith("image/") ? URL.createObjectURL(file) : undefined;
-      if (previewUrl) previewUrls.current.push(previewUrl);
-      return {
-        id: `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`,
-        file,
-        name: file.name || "upload",
-        size: file.size,
-        type: file.type,
-        previewUrl,
-        status: "ready" as const,
-      };
-    });
-    setAttachments((current) => [...current, ...next]);
-    // Push the bytes now instead of waiting for send, so the upload is normally
-    // already finished by the time the user submits.
-    next.forEach(prefetchUpload);
-  }
-
-  function removeAttachment(id: string) {
-    forgetUpload(id);
-    setAttachments((current) => {
-      const item = current.find((att) => att.id === id);
-      if (item?.previewUrl) URL.revokeObjectURL(item.previewUrl);
-      return current.filter((att) => att.id !== id);
-    });
-  }
-
   function submit(e?: FormEvent, overrideText?: string) {
     e?.preventDefault();
     const taskPrompt = (overrideText ?? prompt).trim();
@@ -13251,44 +13944,22 @@ function NewSessionDialog({
   };
   cycleAgentRef.current = cycleAgent;
 
-  const agentSelector = agentButtons.length ? (
-    <div
-      className={cn(
-        "inline-flex h-8 items-center text-xs font-semibold",
-        variant === "inline" ? "gap-0.5" : "rounded-full bg-muted p-0.5",
-      )}
-    >
-      {agentButtons.map(({ key, label }) => (
-        <button
-          key={key}
-          type="button"
-          title={label}
-          aria-label={label}
-          onClick={() => {
-            // Re-tapping the already-selected agent collapses the row.
-            if (variant === "inline" && expanded && agent === key) {
-              onExpandedChange?.(false);
-              return;
-            }
-            setAgent(key);
-            setModel(
-              localStorage.getItem(`lfg_model_${key}`) || defaultModelFor(key),
-            );
-          }}
-          className={cn(
-            "flex h-7 w-9 items-center justify-center rounded-full transition",
-            agent === key
-              ? variant === "inline"
-                ? "bg-muted text-foreground"
-                : "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground",
-          )}
-        >
-          <img src={agentIconSrc(key)} alt="" className="size-5" />
-        </button>
-      ))}
-    </div>
-  ) : null;
+  const agentSelector = (
+    <AgentIconStrip
+      options={agentButtons}
+      value={agent}
+      flat={variant === "inline"}
+      onSelect={(key) => {
+        // Re-tapping the already-selected agent collapses the row.
+        if (variant === "inline" && expanded && agent === key) {
+          onExpandedChange?.(false);
+          return;
+        }
+        setAgent(key);
+        setModel(localStorage.getItem(`lfg_model_${key}`) || defaultModelFor(key));
+      }}
+    />
+  );
 
   const modelControls = (
     <>
@@ -13301,22 +13972,14 @@ function NewSessionDialog({
         onMobileLayerOpenChange={variant === "inline" ? handleModelLayerOpenChange : undefined}
       />
 
-      {agentSupportsThinking(agent) && (
-        <FieldPill flat={variant === "inline"}>
-          <select
-            value={thinkingLevel}
-            onChange={(e) => setThinkingLevel(e.target.value as ThinkingLevel)}
-            aria-label="Thinking level"
-            className="max-w-24 appearance-none truncate bg-transparent pr-1 text-xs font-medium outline-none"
-          >
-            {thinkingLevels.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
-        </FieldPill>
-      )}
+      <ThinkingLevelPill
+        agent={agent}
+        value={thinkingLevel}
+        levels={thinkingLevels}
+        onChange={setThinkingLevel}
+        flat={variant === "inline"}
+      />
+
 
       {!projectScoped && (
         <FieldPill flat={variant === "inline"} icon={<Folder className="size-3.5 text-muted-foreground" />}>
@@ -13380,7 +14043,7 @@ function NewSessionDialog({
       }}
       title="Resume a recent session"
       aria-label="Resume a recent session"
-      className="ml-auto flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition hover:text-foreground"
+      className="flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition hover:text-foreground"
     >
       <RotateCcw className="size-4" />
     </button>
@@ -13435,44 +14098,14 @@ function NewSessionDialog({
     <>
     <form
       onSubmit={submit}
-      onDragEnter={(event) => {
-        if (Array.from(event.dataTransfer.types).includes("Files")) setDraggingFiles(true);
-      }}
-      onDragOver={(event) => {
-        if (!Array.from(event.dataTransfer.types).includes("Files")) return;
-        event.preventDefault();
-        event.dataTransfer.dropEffect = "copy";
-        setDraggingFiles(true);
-      }}
-      onDragLeave={(event) => {
-        const nextTarget = event.relatedTarget;
-        if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
-          setDraggingFiles(false);
-        }
-      }}
-      onDrop={(event) => {
-        if (!event.dataTransfer.files.length) return;
-        event.preventDefault();
-        setDraggingFiles(false);
-        addFiles(event.dataTransfer.files);
-      }}
+      {...files.dropZoneProps}
       className={cn(
         "max-h-[70dvh] overscroll-contain px-2 pb-[max(env(safe-area-inset-bottom),0.5rem)] transition-colors",
         variant === "inline" ? "overflow-visible pt-1.5" : "overflow-y-auto pt-1",
         draggingFiles && "bg-primary/8",
       )}
     >
-      <input
-        ref={fileInputRef}
-        type="file"
-        aria-label="Attach files"
-        multiple
-        className="hidden"
-        onChange={(event) => {
-          if (event.target.files) addFiles(event.target.files);
-          event.currentTarget.value = "";
-        }}
-      />
+      {files.fileInput}
       <div
         className={cn(
           "lfg-gfield relative rounded-2xl",
@@ -13488,13 +14121,7 @@ function NewSessionDialog({
         <SkillTextarea
           value={prompt}
           onValueChange={setPrompt}
-          onPaste={(event) => {
-            const files = event.clipboardData?.files;
-            if (files?.length) {
-              event.preventDefault();
-              addFiles(files);
-            }
-          }}
+          onPaste={files.onPasteFiles}
           onKeyDown={(e) => {
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
               e.preventDefault();
@@ -13528,97 +14155,36 @@ function NewSessionDialog({
         />
       </div>
 
-      {pendingUploads.length || attachments.length ? (
-        <div className="mt-2 flex gap-1.5 overflow-x-auto pb-0.5">
-          {[
-            // Chips already handed off to an in-flight session creation can no
-            // longer be edited or removed; live composer attachments always can,
-            // even while their upload is still running.
-            ...pendingUploads.map((att) => ({ att, locked: true })),
-            ...attachments.map((att) => ({ att, locked: false })),
-          ].map(({ att, locked }) => (
-            <div
-              key={att.id}
-              className={cn(
-                "group relative flex h-12 max-w-52 shrink-0 items-center gap-2 overflow-hidden rounded-lg border bg-muted/55 pl-1.5 pr-1.5 text-xs",
-                att.status === "failed" ? "border-destructive/40 bg-destructive/10" : "border-border/70",
-              )}
-              title={att.error || att.name}
-            >
-              {att.previewUrl ? (
-                <img
-                  src={att.previewUrl}
-                  alt=""
-                  className="size-9 shrink-0 rounded-md object-cover"
-                />
-              ) : (
-                <div className="flex size-9 shrink-0 items-center justify-center rounded-md bg-background/80 text-muted-foreground">
-                  <Paperclip className="size-4" />
-                </div>
-              )}
-              <div className="min-w-0">
-                <div className="truncate font-medium text-foreground">{att.name}</div>
-                <div className="text-[11px] text-muted-foreground">
-                  {att.status === "uploading" ? `Uploading ${att.progress ?? 0}%` : att.status === "failed" ? "Failed" : formatBytes(att.size)}
-                </div>
-              </div>
-              {att.status === "uploading" ? (
-                <div
-                  className="absolute inset-x-0 bottom-0 h-0.5 bg-primary/15"
-                  role="progressbar"
-                  aria-label={`Uploading ${att.name}`}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={att.progress ?? 0}
-                >
-                  <div className="h-full bg-primary transition-[width] duration-150" style={{ width: `${att.progress ?? 0}%` }} />
-                </div>
-              ) : null}
-              {att.previewUrl ? (
-                <button
-                  type="button"
-                  className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-background hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-                  onClick={() => setAnnotatingId(att.id)}
-                  aria-label={`Annotate ${att.name}`}
-                  title="Annotate"
-                  disabled={locked}
-                >
-                  <Pencil className="size-3.5" />
-                </button>
-              ) : null}
-              <button
-                type="button"
-                className="ml-0.5 flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-background hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-                onClick={() => removeAttachment(att.id)}
-                aria-label={`Remove ${att.name}`}
-                title="Remove"
-                disabled={locked}
-              >
-                <X className="size-3.5" />
-              </button>
-            </div>
-          ))}
-        </div>
-      ) : null}
+      <ComposerAttachmentChips
+        className="mt-2"
+        items={[
+          // Chips already handed off to an in-flight session creation can no
+          // longer be edited or removed; live composer attachments always can,
+          // even while their upload is still running.
+          ...pendingUploads.map((att) => ({ att, locked: true })),
+          ...attachments.map((att) => ({ att, locked: false })),
+        ]}
+        onAnnotate={setAnnotatingId}
+        onRemove={removeAttachment}
+      />
 
       {/* The drawer variant keeps its always-open controls row; the inline
-          composer carries these inside the agent popover instead. */}
+          composer carries these inside the agent popover instead. This row is
+          ONLY the configuration pills (agent / model / thinking / project) —
+          usage and resume live in the action row below, so both variants read
+          as the same two-row composer instead of a ragged four-row stack. */}
       {variant !== "inline" ? (
-        <div className="mt-2 flex flex-wrap items-start gap-1.5">
-          <div className="min-w-0 max-w-none">{controlsInner}</div>
-          {usage ? <UsageRingsButton provider={usage} className="pl-1" /> : null}
-          {resumeButton}
-        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">{controlsInner}</div>
       ) : null}
 
       <div
         className={cn(
           "flex items-center gap-2",
-          compact ? "mt-2" : "mt-4",
+          compact ? "mt-2" : "mt-3",
         )}
       >
         {/* Left: Apple-Watch-style usage rings; tap to expand the breakdown. */}
-        {variant === "inline" && usage ? <UsageRingsButton provider={usage} /> : null}
+        {usage ? <UsageRingsButton provider={usage} /> : null}
         <span
           className={cn(
             "min-w-0 flex-1 truncate text-xs",
@@ -13627,8 +14193,9 @@ function NewSessionDialog({
         >
           {error || ""}
         </span>
-        {/* Right cluster: folder + photo + send, stacked together. */}
+        {/* Right cluster: resume + folder + photo + send, stacked together. */}
         <div className="flex shrink-0 items-center gap-2">
+          {variant !== "inline" ? resumeButton : null}
           {variant === "inline" && projectOptions && onProjectChange ? (
             <Button
               size="sm"
@@ -13648,7 +14215,7 @@ function NewSessionDialog({
             type="button"
             variant={draggingFiles ? "brand-soft" : "outline"}
             className="size-8 rounded-full shadow-sm"
-            onClick={() => fileInputRef.current?.click()}
+            onClick={files.openFilePicker}
             aria-label="Attach files"
             title="Attach files"
           >
@@ -13692,19 +14259,7 @@ function NewSessionDialog({
         onCreate={() => openFolderBrowser(true)}
       />
     </form>
-    <ImageAnnotator
-      open={!!annotatingId}
-      file={attachments.find((att) => att.id === annotatingId)?.file ?? null}
-      onOpenChange={(next) => {
-        if (!next) setAnnotatingId(null);
-      }}
-      onSave={(file) => {
-        if (annotatingId) {
-          applyAnnotatedAttachment(setAttachments, previewUrls, annotatingId, file, prefetchUpload);
-        }
-        setAnnotatingId(null);
-      }}
-    />
+    {files.annotator}
     </>
   );
 
@@ -13755,8 +14310,18 @@ function NewSessionDialog({
         if (!o) onClose();
       }}
     >
-      <DrawerContent className="mx-auto max-w-lg">
-        <DrawerTitle className="sr-only">New session</DrawerTitle>
+      {/* max-w-xl (not lg): at the old width the agent / model / thinking /
+          project pills wrapped onto a second line, which is what made this
+          dialog read as a ragged stack. 576px fits them on one row. The
+          sm: variant is required — DialogContent's own `sm:max-w-md` wins over
+          an unprefixed utility no matter the class order. */}
+      <DrawerContent className="mx-auto max-w-xl sm:max-w-xl">
+        {/* A real, visible header rather than an sr-only one: this surface is
+            the "new session" dialog, so it names itself. (An earlier pass put
+            a per-session name field in here instead — wrong idea; the title
+            belongs to the dialog, and sessions are renamed from their own
+            header once they exist.) */}
+        <DrawerTitle className="px-3 pt-0.5 pb-1.5">New session</DrawerTitle>
         {formBody}
       </DrawerContent>
     </Drawer>
@@ -14132,6 +14697,41 @@ function FieldPill({ icon, children, flat = false }: { icon?: ReactNode; childre
   );
 }
 
+// The thinking/reasoning-effort select shared by the new-session composer and
+// the auto-agent + finding sheets. Renders nothing when the agent has no
+// reasoning knob, so callers can drop it in unconditionally.
+function ThinkingLevelPill({
+  agent,
+  value,
+  levels,
+  onChange,
+  flat = false,
+}: {
+  agent: AgentKind;
+  value: ThinkingLevel;
+  levels: ThinkingLevel[];
+  onChange: (value: ThinkingLevel) => void;
+  flat?: boolean;
+}) {
+  if (!agentSupportsThinking(agent)) return null;
+  return (
+    <FieldPill flat={flat}>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as ThinkingLevel)}
+        aria-label="Thinking level"
+        className="max-w-24 appearance-none truncate bg-transparent pr-1 text-xs font-medium outline-none"
+      >
+        {levels.map((item) => (
+          <option key={item} value={item}>
+            {item}
+          </option>
+        ))}
+      </select>
+    </FieldPill>
+  );
+}
+
 function ModelPicker({
   value,
   models,
@@ -14381,45 +14981,23 @@ function AutoAgentModelPicker({
       {!visibleOptions.length ? (
         <span className="text-xs text-muted-foreground">No configured coding agents</span>
       ) : null}
-      <div className="inline-flex h-8 items-center rounded-full bg-muted p-0.5 text-xs font-semibold">
-        {visibleOptions.map(({ key, label }) => (
-          <button
-            key={key}
-            type="button"
-            title={label}
-            aria-label={label}
-            onClick={() => {
-              setBackend(key);
-              setModel(defaultModelFor(key));
-            }}
-            className={cn(
-              "flex h-7 w-9 items-center justify-center rounded-full transition",
-              backend === key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground",
-            )}
-          >
-            <img src={agentIconSrc(key)} alt="" className="size-5" />
-          </button>
-        ))}
-      </div>
+      <AgentIconStrip
+        options={visibleOptions}
+        value={backend}
+        onSelect={(key) => {
+          setBackend(key);
+          setModel(defaultModelFor(key));
+        }}
+      />
 
-      <ModelPicker value={model} models={models} onChange={setModel} />
+      <ModelPicker value={model} models={models} onChange={setModel} width="max-w-28" />
 
-      {agentSupportsThinking(backend) ? (
-        <FieldPill>
-          <select
-            value={thinkingLevel}
-            onChange={(e) => setThinkingLevel(e.target.value as ThinkingLevel)}
-            aria-label="Thinking level"
-            className="max-w-24 appearance-none truncate bg-transparent pr-1 text-xs font-medium outline-none"
-          >
-            {thinkingLevels.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
-        </FieldPill>
-      ) : null}
+      <ThinkingLevelPill
+        agent={backend}
+        value={thinkingLevel}
+        levels={thinkingLevels}
+        onChange={setThinkingLevel}
+      />
     </div>
   );
 }
@@ -14519,8 +15097,10 @@ function FindingSheet({
     return () => clearTimeout(t);
   }, []);
 
-  async function send() {
-    const t = text.trim();
+  // `override` carries the freshly dictated text: the mic's auto-submit fires
+  // in the same tick as setText, so the closed-over `text` is still stale.
+  async function send(override?: string) {
+    const t = (override ?? text).trim();
     if (!t || busy) return;
     setBusy(true);
     logFindingAction(finding.id, "reply", true);
@@ -14593,7 +15173,9 @@ function FindingSheet({
           />
         </div>
 
-        <div className="mt-5 flex items-end gap-2 rounded-2xl border border-border bg-background px-3 py-2">
+        {/* Same field treatment as the new-session composer: gradient-edge
+            gfield, mic dictation, ⌘↵ to send. */}
+        <div className="lfg-gfield mt-5 flex items-center gap-1.5 rounded-2xl px-2.5 py-2">
           <SkillTextarea
             textareaRef={inputRef}
             value={text}
@@ -14607,9 +15189,22 @@ function FindingSheet({
             rows={1}
             placeholder="Type to start a session…"
             // text-base (16px) on mobile keeps iOS from auto-zooming the
-            // viewport on focus; drop to text-sm only at md+ where there's no
-            // zoom behaviour to trigger.
-            className="max-h-28 min-h-0 flex-1 resize-none border-0 bg-transparent p-1 text-base shadow-none focus-visible:ring-0 md:text-sm"
+            // viewport on focus.
+            className="max-h-28 min-h-9 flex-1 resize-none overflow-y-auto border-0 bg-transparent px-1 py-1.5 text-base leading-relaxed shadow-none focus-visible:border-0 focus-visible:ring-0"
+          />
+          <MicButton
+            minimal
+            className="size-9 shrink-0"
+            silenceMs={2500}
+            baseText={text}
+            onText={(spoken, base) => setText(base.trim() ? `${base.trimEnd()} ${spoken}` : spoken)}
+            onInterim={(spoken, base) => setText(base.trim() ? `${base.trimEnd()} ${spoken}` : spoken)}
+            onAutoSubmit={(spoken, base) => {
+              const combined = base.trim() ? `${base.trimEnd()} ${spoken}` : spoken;
+              setText(combined);
+              void send(combined);
+            }}
+            onCancel={(base) => setText(base)}
           />
           <Button size="icon-sm" variant="brand" disabled={busy || !text.trim()} onClick={() => void send()}>
             {busy ? <Loader2 className="size-4 animate-spin" /> : <ArrowUp className="size-4" />}
@@ -16173,7 +16768,9 @@ function UsageLimitsSection() {
       <p className="px-4 text-xs text-muted-foreground">
         Claude reads the live subscription usage endpoint; Codex reflects the latest rate-limit
         snapshot from its most recent session; Grok pulls monthly and weekly credits from the
-        cli-chat-proxy billing API.
+        cli-chat-proxy billing API. Hold{" "}
+        <kbd className="rounded bg-muted px-1 font-mono text-[10px]">U</kbd> anywhere (or
+        long-press the composer activity rings) for the campfire view of every agent.
       </p>
     </section>
   );
@@ -16232,6 +16829,66 @@ type ShipPost = {
   project?: string;
   mediaItems: ShipMediaItem[];
 };
+
+// An artifacts-gallery tile is a live sandboxed document, not a picture:
+// mounting the whole page's worth at once boots dozens of independent documents
+// — each with its own scripts, timers, and layout — for tiles that are mostly
+// off screen. `loading="lazy"` is only a hint and browsers largely ignore it for
+// iframes already inside the scroll container, so gate the mount ourselves.
+//
+// Once a tile has been shown it stays mounted: scrolling back should not re-run
+// a dashboard's scripts (and re-fetch it, since HTML artifacts are `no-store`).
+function GalleryTilePreview({
+  src,
+  title,
+  children,
+}: {
+  src: string;
+  title: string;
+  children?: React.ReactNode;
+}) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    if (mounted) return;
+    const el = ref.current;
+    if (!el) return;
+    // Without IntersectionObserver, fall back to the old always-on behavior
+    // rather than showing a permanently blank tile.
+    if (typeof IntersectionObserver === "undefined") {
+      setMounted(true);
+      return;
+    }
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) setMounted(true);
+      },
+      // Start loading a little before the tile scrolls in so it is usually
+      // painted by the time it lands on screen.
+      { rootMargin: "300px" },
+    );
+    obs.observe(el);
+    return () => obs.disconnect();
+  }, [mounted]);
+
+  return (
+    <div ref={ref} className="relative h-32 w-full overflow-hidden bg-background">
+      {mounted ? (
+        <iframe
+          src={src}
+          title={title}
+          sandbox="allow-scripts"
+          loading="lazy"
+          tabIndex={-1}
+          scrolling="no"
+          className="pointer-events-none h-[200%] w-[200%] origin-top-left scale-50 select-none border-0"
+        />
+      ) : null}
+      {children}
+    </div>
+  );
+}
 
 function ShipMedia({
   item,
@@ -16670,23 +17327,17 @@ function ShippedPage({
                     }
                     className="block w-full text-left active:scale-[0.99]"
                   >
-                    <div className="relative h-32 w-full overflow-hidden bg-background">
-                      <iframe
-                        src={`${a.url}?v=${a.ts}`}
-                        title={a.title || a.caption || a.name}
-                        sandbox="allow-scripts"
-                        loading="lazy"
-                        tabIndex={-1}
-                        scrolling="no"
-                        className="pointer-events-none h-[200%] w-[200%] origin-top-left scale-50 select-none border-0"
-                      />
+                    <GalleryTilePreview
+                      src={`${a.url}?v=${a.ts}&thumb=1`}
+                      title={a.title || a.caption || a.name}
+                    >
                       {(a.version ?? 1) > 1 ? (
                         <span className="absolute left-1.5 top-1.5 flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 backdrop-blur dark:text-emerald-400">
                           <span className="size-1.5 rounded-full bg-emerald-500" />
                           live · v{a.version}
                         </span>
                       ) : null}
-                    </div>
+                    </GalleryTilePreview>
                     <div className="px-2.5 py-2 pr-9">
                       <div className="truncate text-xs font-medium">{a.title || a.caption || a.name}</div>
                       <div className="mt-0.5 truncate text-[10px] text-muted-foreground">

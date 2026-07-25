@@ -4,6 +4,10 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+- Usage Campfire: hold `U` on desktop (release to hide) or long-press the
+  composer activity rings on mobile to see every agent's rate limits in an arc
+  around a center "campfire" that shows time until the next restore. Tap a ring
+  still opens the single-provider breakdown.
 - Voice advisor moved to Claude Opus 5 (falling back to Sonnet 5), and fixed
   for how the new models think. The advisor previously shared the voice brain's
   small reply budget; because these models reason before answering and that

@@ -282,9 +282,15 @@ export function ImageAnnotator({
         onOpenChange(next);
       }}
     >
+      {/* z-[190] — the annotator is always opened FROM another surface (the
+          new-session composer, which is a Vaul drawer on mobile but a plain
+          Dialog at z-[160] on desktop, or the chat composer). Anything lower
+          lets that surface paint on top of the canvas. 190 also clears the
+          model-picker layer (z-[180]); nothing in here portals a menu, so it
+          does not need to stay under the z-[170] popover band. */}
       <DialogContent
-        className="z-[130] max-w-[min(94vw,64rem)] sm:max-w-[min(94vw,64rem)]"
-        overlayClassName="z-[130]"
+        className="z-[190] max-h-[92dvh] max-w-[min(94vw,64rem)] sm:max-w-[min(94vw,64rem)]"
+        overlayClassName="z-[190]"
         showCloseButton
       >
         <DialogHeader>
@@ -356,10 +362,13 @@ export function ImageAnnotator({
           </div>
         </div>
 
-        <div className="relative flex max-h-[65vh] items-center justify-center overflow-auto rounded-2xl bg-black/5">
+        {/* The canvas is capped against the dialog's own 92dvh budget (14rem
+            covers the padding, header, toolbar and footer) so the image can
+            never push the footer buttons off-screen on short viewports. */}
+        <div className="relative flex max-h-[calc(92dvh-14rem)] items-center justify-center overflow-auto rounded-2xl bg-black/5">
           <canvas
             ref={canvasRef}
-            className="max-h-[65vh] max-w-full touch-none rounded-2xl"
+            className="max-h-[calc(92dvh-14rem)] max-w-full touch-none rounded-2xl"
             onPointerDown={handlePointerDown}
             onPointerMove={handlePointerMove}
             onPointerUp={commitDraft}

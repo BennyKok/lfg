@@ -11,7 +11,7 @@
 // Image media is optimized on ingest (sharp: ≤1600px wide, webp) before it
 // lands in the durable artifact store, so agents can throw full-size
 // screenshots at lfg_ship without bloating data/artifacts.
-import { appendFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, extname, join } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -79,11 +79,32 @@ async function optimizeImageForStore(path: string): Promise<{ path: string; temp
   }
 }
 
+// Every feed request re-read and re-parsed the whole revision log, and open
+// clients poll this endpoint every 15s. Keep the parsed rows while the file on
+// disk is unchanged; the mtime+size key means writes from any process (agents
+// ship through a separate MCP process) are picked up on the next read.
+//
+// Callers only ever copy rows out (`{ ...latest }`, `filter`, fresh per-id
+// arrays), so handing them the shared array is safe. Treat it as read-only.
+let revisionsCache: { mtimeMs: number; size: number; rows: ShipPostRevision[] } | null = null;
+
 function readRevisions(): ShipPostRevision[] {
+  let stat: { mtimeMs: number; size: number };
+  try {
+    stat = statSync(FILE);
+  } catch {
+    revisionsCache = null;
+    return [];
+  }
+  const cached = revisionsCache;
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    return cached.rows;
+  }
   let raw = "";
   try {
     raw = readFileSync(FILE, "utf8");
   } catch {
+    revisionsCache = null;
     return [];
   }
   const rows: ShipPostRevision[] = [];
@@ -93,6 +114,7 @@ function readRevisions(): ShipPostRevision[] {
       rows.push(JSON.parse(line) as ShipPostRevision);
     } catch {}
   }
+  revisionsCache = { mtimeMs: stat.mtimeMs, size: stat.size, rows };
   return rows;
 }
 
