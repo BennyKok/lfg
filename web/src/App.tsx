@@ -862,6 +862,42 @@ function agentIconSrc(agent?: string): string {
   if (agent === "copilot") return `/agent-copilot.svg${v}`;
   return `/agent-claude.svg${v}`;
 }
+// One definition of "is this session working?" as a dot. Busy is a pulsing
+// amber that draws the eye; idle is deliberately quiet. Every surface that shows
+// session activity (rail avatar, card header, live-view group headers) renders
+// this instead of re-deriving the colours, so they can never drift apart.
+const STATUS_DOT_BUSY = "animate-pulse bg-warning";
+const STATUS_DOT_IDLE = "bg-success/30 ring-1 ring-inset ring-success/20";
+// The avatar overlay sits on the card surface, so idle reads as a solid dot
+// against the ring instead of the low-contrast wash used inline.
+const STATUS_DOT_IDLE_SOLID = "bg-success";
+
+function SessionStatusDot({
+  busy,
+  variant = "inline",
+  className,
+}: {
+  busy: boolean;
+  // "inline": a standalone dot in a header row.
+  // "avatar": badge pinned to the bottom-right of an agent avatar.
+  variant?: "inline" | "avatar";
+  className?: string;
+}) {
+  return (
+    <span
+      aria-label={busy ? "working" : "idle"}
+      className={cn(
+        "shrink-0 rounded-full",
+        variant === "avatar"
+          ? "absolute -bottom-0.5 -right-0.5 size-2.5 ring-2 ring-card"
+          : "size-2",
+        busy ? STATUS_DOT_BUSY : variant === "avatar" ? STATUS_DOT_IDLE_SOLID : STATUS_DOT_IDLE,
+        className,
+      )}
+    />
+  );
+}
+
 function agentIconAlt(agent?: string): string {
   if (agent === "codex" || agent === "codex-aisdk") return "Codex";
   if (agent === "grok") return "Grok";
@@ -7421,7 +7457,7 @@ function LiveView({
           <CategoryHeader
             label="Working"
             count={working.length}
-            dotClass="animate-pulse bg-warning"
+            dotClass={STATUS_DOT_BUSY}
           />
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-2">
             {workingNodes.flatMap((node) => renderNode(node))}
@@ -7449,7 +7485,7 @@ function LiveView({
           <CategoryHeader
             label="Idle"
             count={idle.length}
-            dotClass="bg-success/30 ring-1 ring-inset ring-success/20"
+            dotClass={STATUS_DOT_IDLE}
             action={
               <ManageSessionsMenu
                 compact
@@ -8732,13 +8768,7 @@ const RailItem = memo(function RailItem({
             title={session.agentLabel || undefined}
             className="size-6 rounded-md"
           />
-          <span
-            aria-label={busy ? "working" : "idle"}
-            className={cn(
-              "absolute -bottom-0.5 -right-0.5 size-2.5 shrink-0 rounded-full ring-2 ring-card",
-              busy ? "animate-pulse bg-warning" : "bg-success",
-            )}
-          />
+          <SessionStatusDot busy={busy} variant="avatar" />
           {topPinned && collapsed ? (
             <Pin
               aria-label="Pinned to top"
@@ -11212,15 +11242,10 @@ const onTouchStart = (e: ReactTouchEvent) => {
             {session.model}
           </span>
         ) : null)}
-        <span
-          aria-label={busy ? "working" : "idle"}
-          className={cn(
-            "size-2 shrink-0 rounded-full",
-            // Idle: blend into the card surface (soft, low-contrast). Busy: a
-            // pulsing amber that actually draws the eye.
-            busy ? "animate-pulse bg-warning" : "bg-success/30 ring-1 ring-inset ring-success/20",
-          )}
-        />
+        {/* Redundant on wide screens: the rail row for this session already
+            carries the same dot on its avatar, so only the narrow (no-rail)
+            grid layout needs it here. */}
+        <SessionStatusDot busy={busy} className="lg:hidden" />
         {!collapsedView && (
           <SessionActionsMenu
             session={session}
