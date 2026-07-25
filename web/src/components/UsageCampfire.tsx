@@ -262,7 +262,12 @@ function MiniRings({
  * Mount once in the app shell. Owns Shift-toggle, data fetch, and the portal
  * overlay. Other surfaces call `openUsageCampfire()` / `toggleUsageCampfire()`.
  */
-export function UsageCampfireHost() {
+export function UsageCampfireHost({
+  onSelectAgent,
+}: {
+  /** Clicking an agent picks it in the composer and opens it. */
+  onSelectAgent?: (kind: string) => void;
+} = {}) {
   const [open, setOpen] = useState(false);
   const [providers, setProviders] = useState<ProviderUsage[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -444,6 +449,7 @@ export function UsageCampfireHost() {
       now={now}
       radius={radius}
       onClose={close}
+      onSelectAgent={onSelectAgent}
     />,
     document.body,
   );
@@ -457,12 +463,14 @@ function CampfireOverlay({
   now,
   radius,
   onClose,
+  onSelectAgent,
 }: {
   providers: ProviderUsage[] | null;
   error: string | null;
   now: number;
   radius: number;
   onClose: () => void;
+  onSelectAgent?: (kind: string) => void;
 }) {
   // Only agents that actually report usage. An unconfigured provider has nothing
   // to plot, and a row of greyed-out placeholders was the noisiest thing on the
@@ -521,7 +529,9 @@ function CampfireOverlay({
     focused != null && heroReset == null && focusHeadline?.pct != null;
 
   const stageCenterY = mobile ? "60%" : "55%";
-  const ringSize = mobile ? 38 : 56;
+  const logoSize = mobile ? 34 : 46;
+  const ringSize = mobile ? 15 : 18;
+  const skeletonSize = mobile ? 34 : 46;
 
   return (
     <div
@@ -651,7 +661,7 @@ function CampfireOverlay({
                   transform: "translate(-50%, -50%)",
                 }}
               >
-                <SpinnerRing size={ringSize} delayMs={i * 120} />
+                <SpinnerRing size={skeletonSize} delayMs={i * 120} />
                 <span
                   className="block h-2 w-10 rounded-full sm:w-12"
                   style={{
@@ -677,7 +687,7 @@ function CampfireOverlay({
             <button
               key={p.kind}
               type="button"
-              aria-label={`${p.label} usage${maxPct == null ? "" : `, ${Math.round(maxPct)} percent`}`}
+              aria-label={`${p.label} usage${maxPct == null ? "" : `, ${Math.round(maxPct)} percent`}${onSelectAgent ? " — start a session" : ""}`}
               // Mouse drives focus by hover. Touch can't hover — and a tap emits
               // its own enter/leave pair that would immediately undo the focus —
               // so touch/pen toggle on pointerdown instead.
@@ -690,13 +700,20 @@ function CampfireOverlay({
                 }
               }}
               onPointerDown={(e) => {
-                if (e.pointerType === "mouse") return;
-                setFocusKind((c) => (c === p.kind ? null : p.kind));
+                // Touch can't hover — focus on press so the centre readout
+                // updates under the finger before the click lands.
+                if (e.pointerType !== "mouse") setFocusKind(p.kind);
+              }}
+              onClick={() => {
+                if (!onSelectAgent) return;
+                onSelectAgent(p.kind);
+                onClose();
               }}
               onFocus={() => setFocusKind(p.kind)}
               onBlur={() => setFocusKind((c) => (c === p.kind ? null : c))}
               className={cn(
-                "absolute z-20 flex w-[4.6rem] cursor-default select-none flex-col items-center gap-1 rounded-2xl px-1 py-1.5 sm:w-[6.6rem]",
+                "absolute z-20 flex w-[4.6rem] select-none flex-col items-center gap-1 rounded-2xl px-1 py-1.5 sm:w-[6.6rem]",
+                onSelectAgent ? "cursor-pointer" : "cursor-default",
                 "outline-none transition-[opacity,transform] duration-200 ease-out",
                 "focus-visible:ring-2 focus-visible:ring-orange-300/50",
                 "animate-in fade-in-0 zoom-in-95",
@@ -710,30 +727,44 @@ function CampfireOverlay({
                 animationDelay: `${i * 35}ms`,
               }}
             >
-              <div className="relative">
-                <MiniRings windows={windows} size={ringSize} />
-                <span className="absolute inset-0 flex items-center justify-center">
-                  <img
-                    src={agentIconSrc(p.kind)}
-                    alt=""
-                    className="size-3.5 rounded-[3px] sm:size-5"
-                  />
-                </span>
-              </div>
+              {/* The logo leads — it's the thing you aim at to start a session. */}
+              <img
+                src={agentIconSrc(p.kind)}
+                alt=""
+                className="rounded-xl"
+                style={{
+                  width: logoSize,
+                  height: logoSize,
+                  // drop-shadow, not box-shadow: several agent marks are
+                  // transparent SVGs, and a box shadow would draw a rectangle
+                  // behind the artwork instead of tracing it.
+                  filter: isFocused
+                    ? "drop-shadow(0 0 10px rgba(255,180,90,0.5)) drop-shadow(0 6px 14px rgba(0,0,0,0.5))"
+                    : "drop-shadow(0 4px 10px rgba(0,0,0,0.4))",
+                  transition: "filter 200ms ease-out",
+                }}
+              />
               <div
                 className="w-full truncate text-center text-[10px] font-medium sm:text-[11px]"
                 style={{ color: TONE.label }}
               >
                 {p.label}
               </div>
-              <div
-                className="font-semibold leading-none tabular-nums"
-                style={{
-                  fontSize: mobile ? 15 : 20,
-                  color: pctColor(maxPct),
-                }}
-              >
-                {maxPct == null ? "—" : `${Math.round(maxPct)}%`}
+              {/* Compact meter beside its own number — the ring and the digits
+                  describe the same window, so they read as one unit. */}
+              <div className="flex items-center justify-center gap-1.5">
+                {headline ? (
+                  <MiniRings windows={[headline]} size={ringSize} />
+                ) : null}
+                <span
+                  className="font-semibold leading-none tabular-nums"
+                  style={{
+                    fontSize: mobile ? 14 : 18,
+                    color: pctColor(maxPct),
+                  }}
+                >
+                  {maxPct == null ? "—" : `${Math.round(maxPct)}%`}
+                </span>
               </div>
               {/* The window name is the non-colour half of the status cue. */}
               {headline ? (

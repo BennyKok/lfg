@@ -4,6 +4,16 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 25, 2026 - Start a session from the campfire (v0.1.57)
+
+- Clicking an agent in the Usage Campfire now picks that agent in the composer
+  and opens it, so the campfire is a launcher as well as a readout. It resolves
+  to whichever variant of that agent this box actually has configured.
+- The agent logo leads each node at roughly double its old size, with the usage
+  meter shrunk to a compact ring beside its own percentage underneath.
+- Agent marks now cast a shape-tracing glow rather than a rectangular shadow,
+  which was drawing a box behind the transparent logos.
+
 ## July 25, 2026 - Clean session pins (v0.1.57)
 
 - Deleted sessions are now removed from browser-local pinned state instead of

@@ -3841,6 +3841,12 @@ export function App() {
   // `composerFocusNonce` (orb double-tap / "new session" affordances) focuses the
   // composer's textarea so the soft keyboard opens.
   const [composerExpanded, setComposerExpanded] = useState(false);
+  // Set when something outside the composer picks an agent for it (currently the
+  // usage campfire). The nonce lets the same agent be re-requested.
+  const [agentRequest, setAgentRequest] = useState<{
+    kind: AgentKind;
+    nonce: number;
+  } | null>(null);
   const [composerFocusNonce, setComposerFocusNonce] = useState(0);
   const [callOpen, setCallOpen] = useState(false);
   const [runLog, setRunLog] = useState<string | null>(null);
@@ -5470,6 +5476,7 @@ export function App() {
               expanded={composerExpanded}
               onExpandedChange={setComposerExpanded}
               focusNonce={composerFocusNonce}
+              agentRequest={agentRequest}
               users={users}
               repos={repos}
               scopedProject={projectFilter}
@@ -5536,6 +5543,7 @@ export function App() {
 
       <NewSessionDialog
         open={newOpen}
+        agentRequest={agentRequest}
         users={users}
         repos={repos}
         scopedProject={projectFilter}
@@ -5575,7 +5583,42 @@ export function App() {
       ) : null}
       <VoiceSetupDialog />
       {/* Shift toggles the all-agent usage campfire; long-press rings on mobile. */}
-      <UsageCampfireHost />
+      <UsageCampfireHost
+        onSelectAgent={(usageKind) => {
+          // The usage feed reports one entry per provider; the composer may offer
+          // both a CLI and an ai-sdk agent for that provider. Prefer the ai-sdk
+          // path (the default agent path), then fall back to the CLI one, and
+          // only offer what this box actually has configured.
+          const preference: Record<string, AgentKind[]> = {
+            claude: ["aisdk", "claude"],
+            codex: ["codex-aisdk", "codex"],
+            grok: ["grok"],
+            opencode: ["opencode"],
+            cursor: ["cursor"],
+            copilot: ["copilot"],
+            pi: ["pi"],
+          };
+          const available = new Set(
+            configuredAgentOptions(AGENT_OPTIONS, codingAgents).map((o) => o.key),
+          );
+          const kind = (preference[usageKind] ?? [usageKind as AgentKind]).find((k) =>
+            available.has(k),
+          );
+          if (!kind) {
+            toast.error("That agent isn't configured on this box");
+            return;
+          }
+          setAgentRequest((prev) => ({ kind, nonce: (prev?.nonce ?? 0) + 1 }));
+          // Mobile composer is always mounted and expands in place; desktop opens
+          // the drawer.
+          if (isMobile) {
+            setComposerExpanded(true);
+            setComposerFocusNonce((n) => n + 1);
+          } else {
+            setNewOpen(true);
+          }
+        }}
+      />
       <Toaster position="bottom-center" />
     </div>
     </ArtifactViewerContext.Provider>
@@ -13520,6 +13563,7 @@ function NewSessionDialog({
   onExpandedChange,
   focusNonce = 0,
   codingAgents,
+  agentRequest,
 }: {
   open: boolean;
   repos: Repo[];
@@ -13547,6 +13591,9 @@ function NewSessionDialog({
   // Inline only: bump to focus the textarea (orb double-tap / "new session").
   focusNonce?: number;
   codingAgents?: CodingAgentInfo[];
+  // Set when a surface outside the composer picks the agent for it (the usage
+  // campfire). The nonce lets the same agent be requested more than once.
+  agentRequest?: { kind: AgentKind; nonce: number } | null;
 }) {
   const catalog = useAgentModelCatalog();
   const defaultModelFor = (key: AgentKind) => catalog.defaults[key] ?? AGENT_DEFAULT_MODEL[key];
@@ -14066,6 +14113,21 @@ function NewSessionDialog({
     setAgent(next);
     setModel(localStorage.getItem(`lfg_model_${next}`) || defaultModelFor(next));
   }, [agent, visibleAgentOptions]);
+
+  // An outside surface (the usage campfire) picked an agent for us. Keyed on the
+  // nonce so choosing the same agent twice still applies.
+  const appliedAgentNonce = useRef<number | null>(null);
+  useEffect(() => {
+    if (!agentRequest) return;
+    if (appliedAgentNonce.current === agentRequest.nonce) return;
+    appliedAgentNonce.current = agentRequest.nonce;
+    setAgent(agentRequest.kind);
+    setModel(
+      localStorage.getItem(`lfg_model_${agentRequest.kind}`) ||
+        defaultModelFor(agentRequest.kind),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agentRequest]);
 
   // Keep this component alive while the resume picker is open. On desktop its
   // owning dialog closes first, otherwise the dialog's modal backdrop and focus
