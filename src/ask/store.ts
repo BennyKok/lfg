@@ -185,3 +185,41 @@ export async function expireQuestion(id: string): Promise<void> {
   await writeAll(next);
   wake(found);
 }
+
+/**
+ * How long an unanswered ask stays live. Past it the question is stale: the
+ * work it was blocking has moved on, and re-surfacing it does active harm —
+ * the channel adapter can route the user's next unrelated message into it as
+ * an "answer" (see the omg imsg pending-question park), and the voice agent
+ * keeps reading it out. Chosen to match the imsg side's own park TTL so the
+ * two ends agree on what "still answerable" means.
+ */
+export const ASK_TTL_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Flip every `open` ask older than `ttlMs` to `expired`, and return them.
+ *
+ * Called from the read paths that SURFACE open questions rather than from a
+ * timer: this store is a whole-file rewrite with no locking, so a background
+ * tick racing a concurrent `addQuestion` would clobber it. Sweeping on read
+ * means the rewrite only happens on the request that would otherwise have
+ * handed out a stale question, and a no-op sweep never writes at all.
+ *
+ * Long-poll waiters are woken (an expired question resolves the poll rather
+ * than hanging it to the timeout), matching `expireQuestion`.
+ */
+export async function sweepExpiredQuestions(ttlMs: number = ASK_TTL_MS): Promise<AskQuestion[]> {
+  const rows = await listQuestions();
+  const cutoff = Date.now() - ttlMs;
+  const expired: AskQuestion[] = [];
+  const next = rows.map((r) => {
+    if (r.status !== "open" || r.createdAt > cutoff) return r;
+    const flipped: AskQuestion = { ...r, status: "expired" };
+    expired.push(flipped);
+    return flipped;
+  });
+  if (!expired.length) return [];
+  await writeAll(next);
+  for (const q of expired) wake(q);
+  return expired;
+}
