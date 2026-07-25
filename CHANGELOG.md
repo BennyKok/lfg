@@ -4,6 +4,30 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 25, 2026 - Instant transcripts and a calmer workspace (v0.1.55)
+
+- Opening a session is now instant. The transcript pane used to clear itself
+  and refetch every time you opened a session — even one you had open seconds
+  earlier — so it always waited on a full network round trip. Transcripts are
+  now cached and repainted immediately, and the sessions you are most likely to
+  open next are warmed in the background. On a slow connection this took
+  session opens from roughly 1.7s to under 0.3s.
+- The Shipped and Artifacts galleries load much faster. The artifact index is
+  cached instead of rebuilt per request, and gallery tiles no longer boot a
+  live iframe apiece just to render a thumbnail.
+- The composer is now one shared component everywhere it appears, so the
+  session view, the new-session bar, and mobile all behave identically —
+  along with a single consistent status dot.
+- The chat input grows with what you type, the focused stage column is easier
+  to pick out at a glance, and the desktop rail has a right-click context menu.
+  Long session subtitles in the rail are clamped to two lines.
+- New keyboard shortcuts for opening Settings and toggling the sidebar.
+- Idle sessions can be cleared in bulk directly from the sessions list.
+- Agent-facing MCP payloads are slimmer and use short session ids, so agents
+  spend less of their context on session bookkeeping.
+- Fixed: the OpenCode backend now streams real tool arguments and results
+  instead of placeholders, and no longer collides on port 4096.
+
 ## July 25, 2026 - Quieter mobile starts and reliable ask replies (v0.1.54)
 
 - The empty mobile live view is now a quiet, unboxed status marker instead of
