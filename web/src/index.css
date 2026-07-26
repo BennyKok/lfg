@@ -745,28 +745,8 @@ html.lfg-keyboard-open {
     text-decoration: underline;
   }
 
-  .think-live {
-    display: -webkit-box;
-    overflow: hidden;
-    overflow-wrap: anywhere;
-    word-break: break-word;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 3;
-    background: linear-gradient(
-      100deg,
-      var(--muted-foreground) 30%,
-      var(--foreground) 50%,
-      var(--muted-foreground) 70%
-    );
-    background-size: 200% 100%;
-    background-clip: text;
-    -webkit-background-clip: text;
-    color: transparent;
-    -webkit-text-fill-color: transparent;
-    font-size: 12px;
-    line-height: 1.5;
-    animation: lfg-shimmer 1.4s linear infinite;
-  }
+  /* .think-live removed — the Shimmer component now delegates to the shared
+     ShimmerText primitive (.lfg-shimmer-text). */
 
   .ai-live-text {
     opacity: 0.92;
