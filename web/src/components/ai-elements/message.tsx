@@ -10,7 +10,10 @@ const StreamdownResponse = lazy(() =>
 
 type MessageRole = "user" | "assistant" | "system" | "data" | string;
 
-export type MessageProps = HTMLAttributes<HTMLDivElement> & {
+// ComponentProps rather than HTMLAttributes so `ref` is accepted: React 19
+// treats ref as an ordinary prop, and it already reaches the div via {...props}
+// — HTMLAttributes just omits it from the public type.
+export type MessageProps = ComponentProps<"div"> & {
   from: MessageRole;
 };
 

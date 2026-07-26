@@ -130,6 +130,7 @@ import { toast } from "@/lib/notify";
 import { haptic } from "@/lib/haptics";
 import { feedback } from "@/lib/feedback";
 import { useUiFeedbackPrefs, setUiFeedbackPrefs } from "@/lib/ui-feedback-prefs";
+import { useSendMorph } from "@/lib/use-send-morph";
 import { reportError } from "./lib/report-error";
 import { lazyWithReload } from "./lib/lazy-with-reload";
 import { buildChatRenderItems, toolGroupLabel } from "./lib/chat-render-items";
@@ -12804,6 +12805,11 @@ function MessageBubble({
   entering?: boolean;
 }) {
   const openArtifact = useContext(ArtifactViewerContext);
+  // Must run before the early returns below — hooks can't be conditional. The
+  // effect itself no-ops for anything that isn't a just-sent user turn.
+  const sendMorphRef = useSendMorph<HTMLDivElement>(
+    message.role === "user" && !!message.pending,
+  );
   if (message.kind === "thinking") {
     return (
       <AiMessage className="msg" from="assistant">
@@ -12924,10 +12930,15 @@ function MessageBubble({
   const isUser = message.role === "user";
   return (
     <AiMessage
+      ref={sendMorphRef}
       className={cn(
         "msg",
         entering && "lfg-msg-in",
         // A just-sent (optimistic) user turn springs up out of the composer.
+        // useSendMorph measures the real composer position and drives this via
+        // WAAPI; the class is the fallback for reduced-motion and for the case
+        // where the composer can't be found (it only sets the origin + a static
+        // entrance, so the two never double up).
         isUser && message.pending && "lfg-user-send",
       )}
       from={isUser ? "user" : "assistant"}
