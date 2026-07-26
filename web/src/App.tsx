@@ -1,4 +1,4 @@
-import { Component, createContext, type ComponentProps, forwardRef, memo, Suspense, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Component, createContext, type ComponentProps, forwardRef, memo, Suspense, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
 import { DEFAULT_TAB, pathnameToTab } from "./lib/app-search";
@@ -12526,6 +12526,7 @@ function UserBubble({ html, pending }: { html: string; pending?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const organicFilterId = `lfg-send-organic-${useId().replace(/:/g, "")}`;
 
   // Only measure while collapsed: when clamped, scrollHeight exceeds
   // clientHeight iff content is being hidden. While expanded the clamp is off
@@ -12557,15 +12558,62 @@ function UserBubble({ html, pending }: { html: string; pending?: boolean }) {
         pending && "is-pending",
       )}
     >
+      {pending ? (
+        <>
+          <svg
+            width="0"
+            height="0"
+            className="absolute"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <defs>
+              <filter
+                id={organicFilterId}
+                x="-24%"
+                y="-35%"
+                width="148%"
+                height="170%"
+              >
+                <feTurbulence
+                  type="fractalNoise"
+                  baseFrequency="0.011 0.026"
+                  numOctaves="2"
+                  seed="11"
+                  result="sendNoise"
+                />
+                <feDisplacementMap
+                  in="SourceGraphic"
+                  in2="sendNoise"
+                  scale="18"
+                  xChannelSelector="R"
+                  yChannelSelector="G"
+                />
+              </filter>
+            </defs>
+          </svg>
+          <span
+            className="user-bubble-organic"
+            style={{ filter: `url(#${organicFilterId})` }}
+            aria-hidden="true"
+          >
+            <span className="user-bubble-organic-wash" />
+            <span className="user-bubble-organic-edge" />
+          </span>
+        </>
+      ) : null}
       <div
         ref={bodyRef}
-        className={cn("user-bubble-body", !expanded && "user-bubble-clamp")}
+        className={cn(
+          "user-bubble-body relative z-[1]",
+          !expanded && "user-bubble-clamp",
+        )}
         dangerouslySetInnerHTML={{ __html: html }}
       />
       {overflowing && (
         <button
           type="button"
-          className="user-bubble-toggle"
+          className="user-bubble-toggle relative z-[1]"
           onClick={() => setExpanded((v) => !v)}
           aria-expanded={expanded}
         >

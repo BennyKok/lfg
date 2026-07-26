@@ -676,37 +676,104 @@ html.lfg-keyboard-open {
     color: var(--foreground);
   }
 
-  /* In-flight user message: only the border shimmers, so the text and fill stay
-     still while the send is pending. */
+  /* In-flight user message: transition.dev's organic-shimmer language adapted
+     to the chat bubble. The steady glass fill remains on the bubble while a
+     turbulence-warped colour wash and its edge glow travel together above it.
+     Text stays on a separate layer, so pending motion never shimmers glyphs. */
   .user-bubble.is-pending {
-    background:
-      linear-gradient(var(--user-bubble-fill), var(--user-bubble-fill)) padding-box,
-      linear-gradient(
-        100deg,
-        rgba(0, 122, 255, 0.28) 0%,
-        rgba(255, 255, 255, 0.9) 28%,
-        rgba(0, 122, 255, 0.58) 50%,
-        rgba(120, 120, 128, 0.22) 74%,
-        rgba(0, 122, 255, 0.28) 100%
-      )
-      border-box;
-    background-size: 200% 100%;
-    animation: lfg-shimmer 1.4s linear infinite;
+    isolation: isolate;
   }
 
-  .dark .user-bubble.is-pending {
+  .user-bubble-organic {
+    position: absolute;
+    z-index: 0;
+    inset: -14px;
+    pointer-events: none;
+    will-change: filter, mask-position;
+    -webkit-mask-image: linear-gradient(
+      135deg,
+      transparent 5%,
+      rgba(0, 0, 0, 0.16) 29%,
+      rgba(0, 0, 0, 0.82) 43%,
+      #000 50%,
+      rgba(0, 0, 0, 0.78) 58%,
+      rgba(0, 0, 0, 0.12) 72%,
+      transparent 95%
+    );
+    -webkit-mask-size: 270% 270%;
+    -webkit-mask-repeat: no-repeat;
+    mask-image: linear-gradient(
+      135deg,
+      transparent 5%,
+      rgba(0, 0, 0, 0.16) 29%,
+      rgba(0, 0, 0, 0.82) 43%,
+      #000 50%,
+      rgba(0, 0, 0, 0.78) 58%,
+      rgba(0, 0, 0, 0.12) 72%,
+      transparent 95%
+    );
+    mask-size: 270% 270%;
+    mask-repeat: no-repeat;
+    animation: lfg-organic-send 2.6s var(--ease-smooth-out) infinite;
+  }
+
+  .user-bubble-organic-wash {
+    position: absolute;
+    inset: 0;
     background:
-      linear-gradient(var(--user-bubble-fill), var(--user-bubble-fill)) padding-box,
-      linear-gradient(
-        100deg,
-        rgba(10, 132, 255, 0.28) 0%,
-        rgba(255, 255, 255, 0.52) 28%,
-        rgba(10, 132, 255, 0.68) 50%,
-        rgba(120, 120, 128, 0.34) 74%,
-        rgba(10, 132, 255, 0.28) 100%
-      )
-      border-box;
-    background-size: 200% 100%;
+      radial-gradient(ellipse 42% 54% at 18% 19%, rgba(0, 122, 255, 0.18), transparent 72%),
+      radial-gradient(ellipse 48% 40% at 70% 23%, rgba(175, 82, 222, 0.14), transparent 76%),
+      radial-gradient(ellipse 40% 58% at 31% 76%, rgba(52, 199, 89, 0.12), transparent 74%),
+      radial-gradient(ellipse 54% 44% at 82% 72%, rgba(90, 110, 255, 0.16), transparent 72%);
+    opacity: 0.86;
+    filter: blur(5px);
+  }
+
+  .user-bubble-organic-edge {
+    position: absolute;
+    inset: 14px;
+    border-radius: 22px;
+    padding: 1px;
+    background:
+      radial-gradient(ellipse 38% 20% at 23% 0%, rgba(0, 122, 255, 0.72), transparent 78%),
+      radial-gradient(ellipse 22% 52% at 100% 31%, rgba(175, 82, 222, 0.58), transparent 80%),
+      radial-gradient(ellipse 52% 18% at 68% 100%, rgba(90, 110, 255, 0.66), transparent 82%),
+      radial-gradient(ellipse 18% 46% at 0% 72%, rgba(52, 199, 89, 0.48), transparent 80%),
+      rgba(120, 120, 128, 0.16);
+    box-shadow: inset 0 0 10px rgba(0, 122, 255, 0.08);
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask-composite: exclude;
+  }
+
+  .dark .user-bubble-organic-wash {
+    opacity: 0.72;
+  }
+
+  .dark .user-bubble-organic-edge {
+    background:
+      radial-gradient(ellipse 38% 20% at 23% 0%, rgba(10, 132, 255, 0.82), transparent 78%),
+      radial-gradient(ellipse 22% 52% at 100% 31%, rgba(191, 90, 242, 0.7), transparent 80%),
+      radial-gradient(ellipse 52% 18% at 68% 100%, rgba(100, 120, 255, 0.74), transparent 82%),
+      radial-gradient(ellipse 18% 46% at 0% 72%, rgba(48, 209, 88, 0.54), transparent 80%),
+      rgba(255, 255, 255, 0.2);
+    box-shadow: inset 0 0 12px rgba(10, 132, 255, 0.14);
+  }
+
+  @keyframes lfg-organic-send {
+    from {
+      -webkit-mask-position: 100% 100%;
+      mask-position: 100% 100%;
+    }
+    to {
+      -webkit-mask-position: 0% 0%;
+      mask-position: 0% 0%;
+    }
   }
 
   .user-bubble.markdown code,
@@ -840,10 +907,15 @@ html.lfg-keyboard-open {
     .typing-indicator-slot,
     .typing-indicator > span,
     .tool-call-row,
-    .tool-call-row--live::before {
+    .tool-call-row--live::before,
+    .user-bubble-organic {
       transition: none;
       animation: none;
       transform: none;
+    }
+
+    .user-bubble-organic {
+      display: none;
     }
   }
 
