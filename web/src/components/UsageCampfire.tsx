@@ -14,6 +14,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { createPortal } from "react-dom";
@@ -628,7 +629,7 @@ function CampfireOverlay({
       role="dialog"
       aria-modal="true"
       aria-label="Agent usage"
-      className="fixed inset-0 z-[180] flex items-center justify-center animate-in fade-in-0 duration-200"
+      className="fixed inset-0 z-[180] flex select-none items-center justify-center animate-in fade-in-0 duration-200 [-webkit-touch-callout:none]"
       onClick={onClose}
     >
       {/* Warm ember scrim + vignette — not pure black modal chrome */}
@@ -648,7 +649,6 @@ function CampfireOverlay({
       {/* Stage */}
       <div
         className="relative z-10 flex h-[min(92dvh,740px)] w-full max-w-3xl items-center justify-center px-2 sm:px-3"
-        onClick={(e) => e.stopPropagation()}
       >
         {/* Campfire glow — opacity flicker only (no scale bounce) */}
         <div
@@ -753,12 +753,18 @@ function CampfireOverlay({
           ? positions.map((pos, i) => (
               <div
                 key={`skeleton-${i}`}
-                className="absolute z-20 flex flex-col items-center gap-1.5"
-                style={{
-                  left: `calc(50% + ${pos.x}px)`,
-                  top: `calc(${stageCenterY} + ${pos.y}px)`,
-                  transform: "translate(-50%, -50%)",
-                }}
+                className="lfg-campfire-arc-item absolute z-20 flex flex-col items-center gap-1.5"
+                style={
+                  {
+                    "--lfg-arc-x": `${pos.x}px`,
+                    "--lfg-arc-y": `${pos.y}px`,
+                    "--lfg-arc-scale": 1,
+                    left: `calc(50% + ${pos.x}px)`,
+                    top: `calc(${stageCenterY} + ${pos.y}px)`,
+                    transform: "translate(-50%, -50%)",
+                    animationDelay: `${i * 40}ms`,
+                  } as CSSProperties
+                }
               >
                 <SpinnerRing size={skeletonSize} delayMs={i * 120} />
                 <span
@@ -798,7 +804,11 @@ function CampfireOverlay({
                   setFocusKind((c) => (c === p.kind ? null : c));
                 }
               }}
-              onClick={() => {
+              onClick={(e) => {
+                // The stage itself is the outside-tap target on mobile. Keep
+                // taps on an agent inside the interaction instead of letting
+                // them bubble up and dismiss the overlay.
+                e.stopPropagation();
                 if (!onSelectAgent) return;
                 // Without hover, a single tap would launch a session before you
                 // ever got to read the agent's numbers. So on touch the first tap
@@ -822,20 +832,25 @@ function CampfireOverlay({
               onFocus={() => setFocusKind(p.kind)}
               onBlur={() => setFocusKind((c) => (c === p.kind ? null : c))}
               className={cn(
-                "absolute z-20 flex w-[4.6rem] select-none flex-col items-center gap-1 rounded-2xl px-1 py-1.5 sm:w-[6.6rem]",
+                "lfg-campfire-arc-item absolute z-20 flex w-[4.6rem] select-none flex-col items-center gap-1 rounded-2xl px-1 py-1.5 sm:w-[6.6rem]",
                 onSelectAgent ? "cursor-pointer" : "cursor-default",
                 "outline-none transition-[opacity,transform] duration-200 ease-out",
                 "focus-visible:ring-2 focus-visible:ring-orange-300/50",
-                "animate-in fade-in-0 zoom-in-95",
               )}
-              style={{
-                left: `calc(50% + ${pos.x}px)`,
-                top: `calc(${stageCenterY} + ${pos.y}px)`,
-                transform: `translate(-50%, -50%) scale(${isFocused ? 1.07 : 1})`,
-                // Emphasis: the hovered agent stays lit, the rest recede.
-                opacity: dimmed ? 0.42 : 1,
-                animationDelay: `${i * 35}ms`,
-              }}
+              style={
+                {
+                  "--lfg-arc-x": `${pos.x}px`,
+                  "--lfg-arc-y": `${pos.y}px`,
+                  "--lfg-arc-scale": isFocused ? 1.07 : 1,
+                  left: `calc(50% + ${pos.x}px)`,
+                  top: `calc(${stageCenterY} + ${pos.y}px)`,
+                  transform:
+                    "translate(-50%, -50%) scale(var(--lfg-arc-scale))",
+                  // Emphasis: the hovered agent stays lit, the rest recede.
+                  opacity: dimmed ? 0.42 : 1,
+                  animationDelay: `${i * 40}ms`,
+                } as CSSProperties
+              }
             >
               {/* The logo leads — it's the thing you aim at to start a session. */}
               <img
@@ -897,9 +912,34 @@ function CampfireOverlay({
           70% { opacity: 0.86; }
         }
         @keyframes lfg-ember-spin { to { transform: rotate(360deg); } }
+        @keyframes lfg-campfire-arc-fly-out {
+          from {
+            opacity: 0;
+            transform:
+              translate(
+                calc(-50% - var(--lfg-arc-x)),
+                calc(-50% - var(--lfg-arc-y))
+              )
+              scale(0.72);
+          }
+          to {
+            opacity: 1;
+            transform:
+              translate(-50%, -50%)
+              scale(var(--lfg-arc-scale));
+          }
+        }
+        .lfg-campfire-arc-item {
+          animation: lfg-campfire-arc-fly-out 500ms cubic-bezier(0.22, 1, 0.36, 1) both;
+        }
         @keyframes lfg-ember-shimmer {
           0% { background-position: 200% 0; }
           100% { background-position: -200% 0; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .lfg-campfire-arc-item {
+            animation: none;
+          }
         }
       `}</style>
     </div>

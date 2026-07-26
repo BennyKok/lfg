@@ -48,6 +48,13 @@ import {
   updateTranscriptCacheMessages,
   writeTranscriptCache,
 } from "./lib/transcript-cache";
+import {
+  ARTIFACTS_GALLERY_KEY,
+  readFeedCache,
+  SHIPPED_FEED_KEY,
+  writeFeedCache,
+} from "./lib/feed-cache";
+import { findingReference } from "./lib/finding-reference";
 import { setThemePreference, THEME_CHANGE_EVENT } from "./lib/theme";
 import { startsInBottomSystemGestureZone } from "./lib/touch-gestures";
 import { retainLivePinnedSessions } from "./lib/pinned-sessions";
@@ -1574,13 +1581,13 @@ function useComposerAttachments({
   };
 }
 
-// Fire-and-forget instrumentation: record which CTA a finding graduated
-// through (composer send vs one-tap "Make the change" vs dismiss) and whether
-// the user had typed an instruction first. Never block or surface errors — a
-// dropped telemetry beat must not interfere with the user's action.
+// Fire-and-forget instrumentation: record which CTA a finding used (composer
+// send, one-tap "Make the change", copy for an existing session, or dismiss)
+// and whether the user had typed an instruction first. Never block or surface
+// errors — a dropped telemetry beat must not interfere with the user's action.
 function logFindingAction(
   findingId: string,
-  path: "reply" | "execute" | "dismiss",
+  path: "reply" | "execute" | "copy" | "dismiss",
   hadText: boolean,
 ): void {
   void fetch(`/api/auto/findings/${findingId}/action`, {
@@ -3878,6 +3885,62 @@ export function App() {
     [navigate],
   );
   const extNavTabs = useExtensionNavTabs();
+  // Keep the session list + Shipped/Artifacts mounted after first visit so
+  // tab switches don't remount, re-fetch, or reboot gallery iframes. Hidden
+  // pages set `active=false` to pause polling. First paint of Shipped/Artifacts
+  // also seeds from the module-level feed cache (see feed-cache.ts).
+  const [keepLive, setKeepLive] = useState(false);
+  const [keepShipped, setKeepShipped] = useState(false);
+  const [keepArtifacts, setKeepArtifacts] = useState(false);
+  useEffect(() => {
+    if (tab === "live") setKeepLive(true);
+    if (tab === "shipped") setKeepShipped(true);
+    if (tab === "artifacts") setKeepArtifacts(true);
+  }, [tab]);
+  // Warm Shipped + Artifacts list data during idle so the first open of either
+  // page can paint from cache instead of waiting on its first network trip.
+  useEffect(() => {
+    if (loading) return;
+    const ric = (
+      globalThis as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number }
+    ).requestIdleCallback;
+    const run = () => {
+      if (!readFeedCache(SHIPPED_FEED_KEY)) {
+        void api<{ posts: ShipPost[]; total?: number }>(`/api/shipped?limit=${FEED_PAGE}`, {
+          cache: "no-store",
+        })
+          .then((data) => {
+            writeFeedCache(SHIPPED_FEED_KEY, data.posts, data.total ?? data.posts.length);
+          })
+          .catch(() => {});
+      }
+      if (!readFeedCache(ARTIFACTS_GALLERY_KEY)) {
+        void api<{ artifacts: GalleryArtifact[]; total?: number }>(
+          `/api/artifacts?limit=${GALLERY_PAGE}&kind=html`,
+          { cache: "no-store" },
+        )
+          .then((data) => {
+            writeFeedCache(
+              ARTIFACTS_GALLERY_KEY,
+              data.artifacts,
+              data.total ?? data.artifacts.length,
+            );
+          })
+          .catch(() => {});
+      }
+    };
+    if (typeof ric === "function") {
+      const id = ric(run, { timeout: 4000 });
+      return () => {
+        const cancel = (
+          globalThis as { cancelIdleCallback?: (id: number) => void }
+        ).cancelIdleCallback;
+        if (typeof cancel === "function") cancel(id);
+      };
+    }
+    const t = window.setTimeout(run, 800);
+    return () => window.clearTimeout(t);
+  }, [loading]);
   const [autoAgents, setAutoAgents] = useState<AutoAgent[]>([]);
   const [settings, setSettings] = useState<GlobalSettings>({
     timeZone: DEFAULT_SCHED_TZ,
@@ -5338,38 +5401,49 @@ export function App() {
           liveDesktopWorkspace ? "overflow-hidden pb-3" : `overflow-y-auto ${mainBottomPadding}`,
         )}
       >
-        {tab === "live" ? (
-          <LiveView
-            sessions={liveSessions}
-            liveSessionIds={liveStatusIds}
-            users={users}
-            userFilter={userFilter}
-            projectFilter={projectFilter}
-            projectOptions={projectOptions}
-            onProjectChange={changeProjectFilter}
-            onUserChange={changeUserFilter}
-            onOpenSettings={() => setTab("settings")}
-            onOpenAsk={() => setTab("ask")}
-            onOpenShipped={() => setTab("shipped")}
-            messagesBySid={liveStream.messagesBySid}
-            busyBySid={liveStream.busyBySid}
-            promptsBySid={liveStream.promptsBySid}
-            onStreamSummary={useWsLive ? wsLiveStream.streamSummary : undefined}
-            onSubscribeTranscript={useWsLive ? wsLiveStream.subscribeTranscript : undefined}
-            onRefresh={refreshSessions}
-            onRemove={removeSession}
-            onNew={() =>
-              isMobile ? setComposerFocusNonce((n) => n + 1) : setNewOpen(true)
-            }
-            onManageSessions={(template) => void launchManageSessions(template)}
-            onClearIdle={() => void clearIdleSessions()}
-            findings={projectScopedFindings}
-            autoAgents={projectScopedAutoAgents}
-            onOpenFinding={setOpenFinding}
-            onDismissFinding={(finding) => void dismissFinding(finding)}
-            focus={liveFocus}
-          />
-        ) : tab === "auto" ? (
+        {keepLive || tab === "live" ? (
+          <div
+            className={cn(
+              // Desktop RailStage fills main via h-full; keep that chain intact
+              // when live is active. Mobile scrolls inside main, so no height
+              // lock there. Hidden when another tab is up.
+              tab !== "live" ? "hidden" : liveDesktopWorkspace ? "h-full min-h-0" : undefined,
+            )}
+            aria-hidden={tab !== "live"}
+          >
+            <LiveView
+              sessions={liveSessions}
+              liveSessionIds={liveStatusIds}
+              users={users}
+              userFilter={userFilter}
+              projectFilter={projectFilter}
+              projectOptions={projectOptions}
+              onProjectChange={changeProjectFilter}
+              onUserChange={changeUserFilter}
+              onOpenSettings={() => setTab("settings")}
+              onOpenAsk={() => setTab("ask")}
+              onOpenShipped={() => setTab("shipped")}
+              messagesBySid={liveStream.messagesBySid}
+              busyBySid={liveStream.busyBySid}
+              promptsBySid={liveStream.promptsBySid}
+              onStreamSummary={useWsLive ? wsLiveStream.streamSummary : undefined}
+              onSubscribeTranscript={useWsLive ? wsLiveStream.subscribeTranscript : undefined}
+              onRefresh={refreshSessions}
+              onRemove={removeSession}
+              onNew={() =>
+                isMobile ? setComposerFocusNonce((n) => n + 1) : setNewOpen(true)
+              }
+              onManageSessions={(template) => void launchManageSessions(template)}
+              onClearIdle={() => void clearIdleSessions()}
+              findings={projectScopedFindings}
+              autoAgents={projectScopedAutoAgents}
+              onOpenFinding={setOpenFinding}
+              onDismissFinding={(finding) => void dismissFinding(finding)}
+              focus={liveFocus}
+            />
+          </div>
+        ) : null}
+        {tab === "auto" ? (
           <AutoManageView
             autoAgents={autoAgents}
             findings={findings}
@@ -5377,11 +5451,10 @@ export function App() {
             onEdit={setEditingAgent}
             onRunNow={runAutoNow}
           />
-        ) : tab === "ask" ? (
-          <AskPage />
-        ) : tab === "usage" ? (
-          <UsagePage />
-        ) : tab === "coding-agents" ? (
+        ) : null}
+        {tab === "ask" ? <AskPage /> : null}
+        {tab === "usage" ? <UsagePage /> : null}
+        {tab === "coding-agents" ? (
           <CodingAgentsPage
             setupChecks={setupChecks}
             agents={codingAgents}
@@ -5391,39 +5464,62 @@ export function App() {
             onSetupCheck={runSetupCheck}
             onRefresh={() => void refreshCodingAgents({ refreshModels: true })}
           />
-        ) : tab === "shipped" ? (
-          <ShippedPage
-            liveSessionIds={
-              new Set(
-                liveSessions.flatMap((s) =>
-                  [s.sessionId, s.nativeSessionId].filter((x): x is string => !!x),
-                ),
-              )
-            }
-            onOpenSession={(sid) => {
-              setTab("live");
-              setLiveFocus({ sid, n: Date.now() });
-            }}
-          />
-        ) : tab === "artifacts" ? (
-          <ShippedPage
-            artifactsOnly
-            liveSessionIds={new Set()}
-            onOpenSession={() => {}}
-          />
-        ) : tab === "changelog" ? (
+        ) : null}
+        {keepShipped || tab === "shipped" ? (
+          <div className={tab === "shipped" ? undefined : "hidden"} aria-hidden={tab !== "shipped"}>
+            <ShippedPage
+              active={tab === "shipped"}
+              liveSessionIds={
+                new Set(
+                  liveSessions.flatMap((s) =>
+                    [s.sessionId, s.nativeSessionId].filter((x): x is string => !!x),
+                  ),
+                )
+              }
+              onOpenSession={(sid) => {
+                setTab("live");
+                setLiveFocus({ sid, n: Date.now() });
+              }}
+            />
+          </div>
+        ) : null}
+        {keepArtifacts || tab === "artifacts" ? (
+          <div className={tab === "artifacts" ? undefined : "hidden"} aria-hidden={tab !== "artifacts"}>
+            <ShippedPage
+              artifactsOnly
+              active={tab === "artifacts"}
+              liveSessionIds={new Set()}
+              onOpenSession={() => {}}
+            />
+          </div>
+        ) : null}
+        {tab === "changelog" ? (
           <ChangelogPage />
-        ) : tab === "term" ? (
+        ) : null}
+        {tab === "term" ? (
           <Suspense fallback={<div className="py-10 text-center text-sm text-muted-foreground">Loading terminal…</div>}>
             <TermView />
           </Suspense>
-        ) : tab === "browser" ? (
+        ) : null}
+        {tab === "browser" ? (
           <Suspense fallback={<div className="py-10 text-center text-sm text-muted-foreground">Loading browser profiles...</div>}>
             <BrowserProfiles />
           </Suspense>
-        ) : extNavTabs.some((t) => t.id === tab) ? (
+        ) : null}
+        {extNavTabs.some((t) => t.id === tab) ? (
           extNavTabs.find((t) => t.id === tab)!.render()
-        ) : (
+        ) : null}
+        {tab !== "live" &&
+        tab !== "auto" &&
+        tab !== "ask" &&
+        tab !== "usage" &&
+        tab !== "coding-agents" &&
+        tab !== "shipped" &&
+        tab !== "artifacts" &&
+        tab !== "changelog" &&
+        tab !== "term" &&
+        tab !== "browser" &&
+        !extNavTabs.some((t) => t.id === tab) ? (
           <SettingsView
             dark={dark}
             toggleTheme={toggleTheme}
@@ -5456,7 +5552,7 @@ export function App() {
             onSettingsChange={updateSettings}
             connection={useWsLive ? wsLiveStream.connection : null}
           />
-        )}
+        ) : null}
       </main>
 
       {!callOpen ? (
@@ -6107,7 +6203,7 @@ function UsageRingsButton({
             className={cn(
               // The wider left pad keeps the rings clear of the screen edge on
               // the mobile inline composer; on desktop it just reads as a gap.
-              "flex shrink-0 items-center justify-center rounded-full p-1 pl-4 transition active:scale-90 md:pl-1",
+              "flex shrink-0 touch-none select-none items-center justify-center rounded-full p-1 pl-4 transition active:scale-90 [-webkit-touch-callout:none] md:pl-1",
               className,
             )}
             onPointerDown={longPress.onPointerDown}
@@ -15564,6 +15660,16 @@ function FindingSheet({
     }
   }
 
+  async function copyReference() {
+    try {
+      await copyMessageText(findingReference(finding, agentName));
+      logFindingAction(finding.id, "copy", !!text.trim());
+      toast.success("Finding reference copied");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not copy finding reference");
+    }
+  }
+
   return (
     <BottomSheet onClose={onClose} title={`${agentName} finding`}>
       <div className="px-2 pb-4 pt-1">
@@ -15658,6 +15764,15 @@ function FindingSheet({
             Make the change
           </Button>
         )}
+        <Button
+          variant="outline"
+          disabled={busy}
+          onClick={() => void copyReference()}
+          className="mt-3 w-full"
+        >
+          <Copy className="size-4" />
+          Copy reference
+        </Button>
         <button
           type="button"
           onClick={() => {
@@ -17515,26 +17630,36 @@ const GALLERY_PAGE = 24;
 // The Shipped channel: a showcase feed of finished work, posted by agents via
 // lfg_ship. Media are ordinary artifacts (image / video / live html), so this
 // page is purely presentational.
+//
+// List data is stale-while-revalidated from `feed-cache` so a revisit paints the
+// last-known page instantly; when the parent keeps this component mounted
+// (`active=false` while hidden) we also skip the poll so a background tab is
+// free, and revalidate once when it becomes active again.
 function ShippedPage({
   onOpenSession,
   liveSessionIds,
   artifactsOnly = false,
+  active = true,
 }: {
   onOpenSession: (sessionId: string) => void;
   liveSessionIds: Set<string>;
   artifactsOnly?: boolean;
+  active?: boolean;
 }) {
-  const [posts, setPosts] = useState<ShipPost[] | null>(null);
-  const [postsTotal, setPostsTotal] = useState(0);
+  // Shipped and Artifacts are separate virtual pages. This shared loader keeps
+  // their paging/realtime behavior aligned without exposing a nested toggle.
+  const view: "feed" | "artifacts" = artifactsOnly ? "artifacts" : "feed";
+  const cachedGallery = artifactsOnly ? readFeedCache<GalleryArtifact>(ARTIFACTS_GALLERY_KEY) : null;
+  const cachedPosts = !artifactsOnly ? readFeedCache<ShipPost>(SHIPPED_FEED_KEY) : null;
+
+  const [posts, setPosts] = useState<ShipPost[] | null>(() => cachedPosts?.items ?? null);
+  const [postsTotal, setPostsTotal] = useState(() => cachedPosts?.total ?? 0);
   const [postsBusy, setPostsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Post whose (ended) session transcript is open read-only.
   const [viewing, setViewing] = useState<ShipPost | null>(null);
-  // Shipped and Artifacts are separate virtual pages. This shared loader keeps
-  // their paging/realtime behavior aligned without exposing a nested toggle.
-  const view: "feed" | "artifacts" = artifactsOnly ? "artifacts" : "feed";
-  const [gallery, setGallery] = useState<GalleryArtifact[] | null>(null);
-  const [galleryTotal, setGalleryTotal] = useState(0);
+  const [gallery, setGallery] = useState<GalleryArtifact[] | null>(() => cachedGallery?.items ?? null);
+  const [galleryTotal, setGalleryTotal] = useState(() => cachedGallery?.total ?? 0);
   const [galleryBusy, setGalleryBusy] = useState(false);
   const [refreshingArtifactId, setRefreshingArtifactId] = useState<string | null>(null);
   const [deletingArtifactId, setDeletingArtifactId] = useState<string | null>(null);
@@ -17543,17 +17668,14 @@ function ShippedPage({
   const galleryKindParam = "&kind=html";
   // How many items are currently on screen — the polling refresh re-fetches
   // exactly that window so "load more" pages survive the refresh.
-  const galleryLen = useRef(GALLERY_PAGE);
-  const postsLen = useRef(FEED_PAGE);
+  const galleryLen = useRef(Math.max(GALLERY_PAGE, cachedGallery?.items.length ?? 0));
+  const postsLen = useRef(Math.max(FEED_PAGE, cachedPosts?.items.length ?? 0));
   const openArtifact = useContext(ArtifactViewerContext);
   const appDialog = useAppDialog();
 
   useEffect(() => {
     if (view !== "artifacts") return;
     let alive = true;
-    // Switching filters starts a fresh first page (stale tiles would mix kinds).
-    setGallery(null);
-    galleryLen.current = GALLERY_PAGE;
     const load = async () => {
       try {
         const limit = Math.max(GALLERY_PAGE, galleryLen.current);
@@ -17562,20 +17684,29 @@ function ShippedPage({
           { cache: "no-store" },
         );
         if (!alive) return;
+        const total = data.total ?? data.artifacts.length;
         setGallery(data.artifacts);
-        setGalleryTotal(data.total ?? data.artifacts.length);
+        setGalleryTotal(total);
         galleryLen.current = Math.max(GALLERY_PAGE, data.artifacts.length);
+        writeFeedCache(ARTIFACTS_GALLERY_KEY, data.artifacts, total);
       } catch {
+        // Keep a cached paint if we have one; only fall to empty when nothing
+        // has ever loaded.
         if (alive) setGallery((g) => g ?? []);
       }
     };
     void load();
+    if (!active) {
+      return () => {
+        alive = false;
+      };
+    }
     const interval = setInterval(() => void load(), 20_000);
     return () => {
       alive = false;
       clearInterval(interval);
     };
-  }, [view]);
+  }, [view, active]);
 
   const loadMoreGallery = async () => {
     if (galleryBusy) return;
@@ -17589,9 +17720,13 @@ function ShippedPage({
         const seen = new Set((g ?? []).map((a) => a.id));
         const merged = [...(g ?? []), ...data.artifacts.filter((a) => !seen.has(a.id))];
         galleryLen.current = merged.length;
+        writeFeedCache(ARTIFACTS_GALLERY_KEY, merged, data.total ?? galleryTotal);
         return merged;
       });
-      setGalleryTotal((t) => data.total ?? t);
+      setGalleryTotal((t) => {
+        const next = data.total ?? t;
+        return next;
+      });
     } catch {
       // Leave the current page as-is; the next tap retries.
     } finally {
@@ -17617,7 +17752,11 @@ function ShippedPage({
           headers: { "X-LFG-Session-ID": artifact.sessionId ?? "" },
         },
       );
-      setGallery((current) => current?.filter((item) => item.id !== artifact.id) ?? null);
+      setGallery((current) => {
+        const next = current?.filter((item) => item.id !== artifact.id) ?? null;
+        if (next) writeFeedCache(ARTIFACTS_GALLERY_KEY, next, Math.max(0, galleryTotal - 1));
+        return next;
+      });
       setGalleryTotal((total) => Math.max(0, total - 1));
       galleryLen.current = Math.max(0, galleryLen.current - 1);
       toast.success("Artifact deleted");
@@ -17650,17 +17789,21 @@ function ShippedPage({
           headers: { "X-LFG-Session-ID": artifact.sessionId },
         },
       );
-      setGallery((current) => current?.map((item) => item.id === artifact.id
-        ? {
-            ...item,
-            ts: data.artifact.updatedAt ?? item.ts,
-            version: data.artifact.version ?? item.version,
-            size: data.artifact.size ?? item.size,
-            lastRefreshedAt: data.artifact.refresh?.lastSuccessAt ?? item.lastRefreshedAt,
-            refreshStatus: data.artifact.refresh?.status ?? item.refreshStatus,
-            refreshEnabled: data.artifact.refresh?.enabled ?? item.refreshEnabled,
-          }
-        : item) ?? null);
+      setGallery((current) => {
+        const next = current?.map((item) => item.id === artifact.id
+          ? {
+              ...item,
+              ts: data.artifact.updatedAt ?? item.ts,
+              version: data.artifact.version ?? item.version,
+              size: data.artifact.size ?? item.size,
+              lastRefreshedAt: data.artifact.refresh?.lastSuccessAt ?? item.lastRefreshedAt,
+              refreshStatus: data.artifact.refresh?.status ?? item.refreshStatus,
+              refreshEnabled: data.artifact.refresh?.enabled ?? item.refreshEnabled,
+            }
+          : item) ?? null;
+        if (next) writeFeedCache(ARTIFACTS_GALLERY_KEY, next, galleryTotal);
+        return next;
+      });
       toast.success("Artifact refreshed");
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Couldn't refresh artifact");
@@ -17680,21 +17823,28 @@ function ShippedPage({
           { cache: "no-store" },
         );
         if (!alive) return;
+        const total = data.total ?? data.posts.length;
         setPosts(data.posts);
-        setPostsTotal(data.total ?? data.posts.length);
+        setPostsTotal(total);
         postsLen.current = Math.max(FEED_PAGE, data.posts.length);
+        writeFeedCache(SHIPPED_FEED_KEY, data.posts, total);
         setError(null);
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : "Could not load the shipped feed");
       }
     };
     void load();
+    if (!active) {
+      return () => {
+        alive = false;
+      };
+    }
     const interval = setInterval(() => void load(), 15_000);
     return () => {
       alive = false;
       clearInterval(interval);
     };
-  }, [view]);
+  }, [view, active]);
 
   const loadMorePosts = async () => {
     if (postsBusy) return;
@@ -17708,6 +17858,7 @@ function ShippedPage({
         const seen = new Set((p ?? []).map((x) => x.id));
         const merged = [...(p ?? []), ...data.posts.filter((x) => !seen.has(x.id))];
         postsLen.current = merged.length;
+        writeFeedCache(SHIPPED_FEED_KEY, merged, data.total ?? postsTotal);
         return merged;
       });
       setPostsTotal((t) => data.total ?? t);
