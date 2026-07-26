@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 26, 2026 - Clean OpenCode streaming (v0.1.62)
+
+- OpenCode sessions no longer echo the initial user prompt as temporary
+  assistant output while a response is streaming.
+
 ## July 26, 2026 - Warm feeds and native groundwork (v0.1.61)
 
 - Shipped, Artifacts, and the session list no longer cold-reload on every tab
