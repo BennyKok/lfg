@@ -41,7 +41,7 @@ function DialogOverlay({
         // `pointer-events: none` on <body> while a Drawer is open, and
         // base-ui portals our Dialog content as a descendant of body —
         // without overriding here every click is dropped silently.
-        "pointer-events-auto fixed inset-0 isolate z-[160] bg-black/80 duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
+        "pointer-events-auto fixed inset-0 isolate z-[160] bg-black/80 data-open:duration-[var(--duration-fast)] data-closed:duration-[var(--duration-quick)] ease-ios data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0",
         className
       )}
       {...props}
@@ -137,7 +137,7 @@ function DialogContent({
           primary.click()
         }}
         className={cn(
-          "pointer-events-auto fixed top-1/2 left-1/2 z-[160] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-4xl bg-background text-sm ring-1 ring-foreground/5 duration-100 outline-none sm:max-w-md data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+          "pointer-events-auto fixed top-1/2 left-1/2 z-[160] w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 overflow-hidden rounded-4xl bg-background text-sm ring-1 ring-foreground/5 data-open:duration-[var(--duration-fast)] data-closed:duration-[var(--duration-quick)] ease-ios outline-none sm:max-w-md data-open:animate-in data-open:fade-in-0 data-open:zoom-in-[0.96] data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-[0.96]",
           className
         )}
         {...props}

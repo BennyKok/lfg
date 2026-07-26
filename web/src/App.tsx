@@ -1,4 +1,4 @@
-import { Component, createContext, type ComponentProps, forwardRef, memo, Suspense, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Component, createContext, type ComponentProps, forwardRef, memo, Suspense, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
 import { DEFAULT_TAB, pathnameToTab } from "./lib/app-search";
@@ -130,6 +130,7 @@ import { toast } from "@/lib/notify";
 import { haptic } from "@/lib/haptics";
 import { feedback } from "@/lib/feedback";
 import { useUiFeedbackPrefs, setUiFeedbackPrefs } from "@/lib/ui-feedback-prefs";
+import { useSendMorph } from "@/lib/use-send-morph";
 import { reportError } from "./lib/report-error";
 import { lazyWithReload } from "./lib/lazy-with-reload";
 import { buildChatRenderItems, toolGroupLabel } from "./lib/chat-render-items";
@@ -12348,11 +12349,118 @@ const ChatStream = memo(function ChatStream({
 // opens immediately. Close keeps a short grace so pill ↔ popup transit works.
 const TOOL_GROUP_HOVER_OPEN_MS = 450;
 const TOOL_GROUP_HOVER_CLOSE_MS = 120;
+const ORGANIC_ACTIVITY_EXIT_MS = 450;
+
+function useOrganicActivityPresence(active: boolean) {
+  const [exiting, setExiting] = useState(false);
+  const wasActiveRef = useRef(active);
+  const exitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Preserve the effect during the render where active first drops. The layout
+  // effect below turns that one-frame derived state into a timed exit before
+  // the browser paints, so there is no unmount/remount flash.
+  const startsExit = !active && wasActiveRef.current;
+
+  useLayoutEffect(() => {
+    if (exitTimerRef.current) {
+      clearTimeout(exitTimerRef.current);
+      exitTimerRef.current = null;
+    }
+
+    if (active) {
+      wasActiveRef.current = true;
+      setExiting(false);
+      return;
+    }
+    if (!wasActiveRef.current) return;
+
+    wasActiveRef.current = false;
+    setExiting(true);
+    exitTimerRef.current = setTimeout(() => {
+      exitTimerRef.current = null;
+      setExiting(false);
+    }, ORGANIC_ACTIVITY_EXIT_MS);
+
+    return () => {
+      if (exitTimerRef.current) {
+        clearTimeout(exitTimerRef.current);
+        exitTimerRef.current = null;
+      }
+    };
+  }, [active]);
+
+  return {
+    present: active || exiting || startsExit,
+    exiting: !active && (exiting || startsExit),
+  };
+}
+
+function OrganicActivityEffect({
+  active,
+  className,
+}: {
+  active: boolean;
+  className: string;
+}) {
+  const filterId = `lfg-organic-activity-${useId().replace(/:/g, "")}`;
+  const presence = useOrganicActivityPresence(active);
+  if (!presence.present) return null;
+
+  return (
+    <>
+      <svg
+        width="0"
+        height="0"
+        className="absolute"
+        aria-hidden="true"
+        focusable="false"
+      >
+        <defs>
+          <filter
+            id={filterId}
+            x="-24%"
+            y="-35%"
+            width="148%"
+            height="170%"
+          >
+            <feTurbulence
+              type="fractalNoise"
+              baseFrequency="0.011 0.026"
+              numOctaves="2"
+              seed="11"
+              result="activityNoise"
+            />
+            <feDisplacementMap
+              in="SourceGraphic"
+              in2="activityNoise"
+              scale="18"
+              xChannelSelector="R"
+              yChannelSelector="G"
+            />
+          </filter>
+        </defs>
+      </svg>
+      <span
+        className={cn(
+          "lfg-organic-activity",
+          className,
+          presence.exiting ? "is-exiting" : "is-active",
+        )}
+        aria-hidden="true"
+      >
+        <span
+          className="lfg-organic-activity-wash"
+          style={{ filter: `url(#${filterId}) blur(5px)` }}
+        />
+        <span className="lfg-organic-activity-edge lfg-organic-activity-edge--halo" />
+        <span className="lfg-organic-activity-edge lfg-organic-activity-edge--soft" />
+        <span className="lfg-organic-activity-edge lfg-organic-activity-edge--sharp" />
+      </span>
+    </>
+  );
+}
 
 function ToolGroup({ items, live }: { items: Message[]; live: boolean }) {
   const label = toolGroupLabel(items);
-  const last = items[items.length - 1];
-  const animationKey = `${live ? "live" : "done"}-${items.length}-${last?.id ?? last?.ts ?? label}`;
   const isMobile = useIsMobile();
   const [open, setOpen] = useState(false);
   const openRef = useRef(open);
@@ -12454,20 +12562,21 @@ function ToolGroup({ items, live }: { items: Message[]; live: boolean }) {
       onMouseEnter={scheduleHoverOpen}
       onMouseLeave={scheduleHoverClose}
     >
+      <OrganicActivityEffect active={live} className="tool-call-organic" />
       <span
         className={cn(
-          "size-1.5 shrink-0 rounded-full bg-muted-foreground/55",
+          "relative z-[1] size-1.5 shrink-0 rounded-full bg-muted-foreground/55",
           live && "animate-pulse bg-foreground",
         )}
         aria-hidden="true"
       />
-      <span className="truncate font-mono">{label}</span>
+      <span className="relative z-[1] truncate font-mono">{label}</span>
     </button>
   );
 
   if (isMobile) {
     return (
-      <div key={animationKey} className="w-fit max-w-full">
+      <div className="w-fit max-w-full">
         {pill}
         <VaulDrawer.Root open={open} onOpenChange={handleOpenChange} repositionInputs={false} shouldScaleBackground={false}>
           <VaulDrawer.Portal>
@@ -12556,15 +12665,19 @@ function UserBubble({ html, pending }: { html: string; pending?: boolean }) {
         pending && "is-pending",
       )}
     >
+      <OrganicActivityEffect active={!!pending} className="user-bubble-organic" />
       <div
         ref={bodyRef}
-        className={cn("user-bubble-body", !expanded && "user-bubble-clamp")}
+        className={cn(
+          "user-bubble-body relative z-[1]",
+          !expanded && "user-bubble-clamp",
+        )}
         dangerouslySetInnerHTML={{ __html: html }}
       />
       {overflowing && (
         <button
           type="button"
-          className="user-bubble-toggle"
+          className="user-bubble-toggle relative z-[1]"
           onClick={() => setExpanded((v) => !v)}
           aria-expanded={expanded}
         >
@@ -12804,6 +12917,11 @@ function MessageBubble({
   entering?: boolean;
 }) {
   const openArtifact = useContext(ArtifactViewerContext);
+  // Must run before the early returns below — hooks can't be conditional. The
+  // effect itself no-ops for anything that isn't a just-sent user turn.
+  const sendMorphRef = useSendMorph<HTMLDivElement>(
+    message.role === "user" && !!message.pending,
+  );
   if (message.kind === "thinking") {
     return (
       <AiMessage className="msg" from="assistant">
@@ -12924,10 +13042,15 @@ function MessageBubble({
   const isUser = message.role === "user";
   return (
     <AiMessage
+      ref={sendMorphRef}
       className={cn(
         "msg",
         entering && "lfg-msg-in",
         // A just-sent (optimistic) user turn springs up out of the composer.
+        // useSendMorph measures the real composer position and drives this via
+        // WAAPI; the class is the fallback for reduced-motion and for the case
+        // where the composer can't be found (it only sets the origin + a static
+        // entrance, so the two never double up).
         isUser && message.pending && "lfg-user-send",
       )}
       from={isUser ? "user" : "assistant"}

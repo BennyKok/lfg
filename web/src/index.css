@@ -114,6 +114,51 @@ html.lfg-keyboard-open {
   --border-strong: rgba(84, 84, 88, 0.65);
 }
 
+/* ── Motion token scale (transitions.dev) ────────────────────────────────────
+   A shared duration/distance/scale/blur vocabulary. lfg already had easing
+   tokens (--ease-ios and the --ease-apple* aliases below) but no duration
+   scale, so timings were hardcoded per component and drifted. Reference these
+   from CSS as var(--duration-fast) or from Tailwind as
+   duration-[var(--duration-fast)].
+
+   Deliberately a plain :root, NOT @theme: Tailwind v4 turns --ease-* theme
+   entries into utilities, so declaring --ease-out / --ease-in-out / --ease-linear
+   there would silently redefine the built-in ease-out/ease-in-out/ease-linear
+   classes used across the app.
+
+   The house curve stays --ease-ios. --ease-smooth-out below is transitions.dev's
+   curve, added for the recipes that are tuned around it rather than as a
+   replacement for our iOS feel. */
+:root {
+  /* Durations */
+  --duration-stagger: 40ms; /* per-item stagger offset */
+  --duration-micro: 80ms; /* shake segment, tooltip delay */
+  --duration-quick: 150ms; /* modal/dropdown close, text swap */
+  --duration-fast: 250ms; /* modal/dropdown open, icon swap, page slide */
+  --duration-medium: 350ms; /* panel close, toast close */
+  --duration-slow: 400ms; /* panel open, skeleton content reveal */
+  --duration-very-slow: 500ms; /* emphasis: badge appear, success check */
+  /* Easings — additive; --ease-ios remains the house curve. */
+  --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-bounce: cubic-bezier(0.34, 1.36, 0.64, 1);
+  --ease-bounce-strong: cubic-bezier(0.34, 3.85, 0.64, 1);
+  /* Distances */
+  --distance-micro: 4px;
+  --distance-small: 6px;
+  --distance-base: 8px;
+  --distance-medium: 12px;
+  --distance-large: 30px;
+  /* Scales */
+  --scale-large: 0.96; /* modal open / close */
+  --scale-medium: 0.97; /* dropdown open */
+  --scale-small: 0.98; /* tooltip open */
+  --scale-tiny: 0.99; /* dropdown close */
+  /* Blur */
+  --blur-small: 2px;
+  --blur-medium: 3px;
+  --blur-large: 8px;
+}
+
 @theme inline {
   /* iOS emphasized curve — the components reference --ease-apple*; alias them
      all to the single iOS curve lfg already uses. */
@@ -631,37 +676,157 @@ html.lfg-keyboard-open {
     color: var(--foreground);
   }
 
-  /* In-flight user message: only the border shimmers, so the text and fill stay
-     still while the send is pending. */
+  /* In-flight user message: transition.dev's organic-shimmer language adapted
+     to the chat bubble. The steady glass fill remains on the bubble while a
+     turbulence-warped colour wash and its edge glow travel together above it.
+     Text stays on a separate layer, so pending motion never shimmers glyphs. */
   .user-bubble.is-pending {
-    background:
-      linear-gradient(var(--user-bubble-fill), var(--user-bubble-fill)) padding-box,
-      linear-gradient(
-        100deg,
-        rgba(0, 122, 255, 0.28) 0%,
-        rgba(255, 255, 255, 0.9) 28%,
-        rgba(0, 122, 255, 0.58) 50%,
-        rgba(120, 120, 128, 0.22) 74%,
-        rgba(0, 122, 255, 0.28) 100%
-      )
-      border-box;
-    background-size: 200% 100%;
-    animation: lfg-shimmer 1.4s linear infinite;
+    isolation: isolate;
   }
 
-  .dark .user-bubble.is-pending {
+  .lfg-organic-activity {
+    --send-organic-edge:
+      radial-gradient(ellipse 38% 20% at 23% 0%, rgba(0, 122, 255, 0.78), transparent 78%),
+      radial-gradient(ellipse 22% 52% at 100% 31%, rgba(175, 82, 222, 0.64), transparent 80%),
+      radial-gradient(ellipse 52% 18% at 68% 100%, rgba(90, 110, 255, 0.72), transparent 82%),
+      radial-gradient(ellipse 18% 46% at 0% 72%, rgba(52, 199, 89, 0.54), transparent 80%),
+      rgba(120, 120, 128, 0.18);
+    position: absolute;
+    z-index: 0;
+    pointer-events: none;
+    will-change: mask-position;
+    -webkit-mask-image: linear-gradient(
+      135deg,
+      transparent 5%,
+      rgba(0, 0, 0, 0.16) 29%,
+      rgba(0, 0, 0, 0.82) 43%,
+      #000 50%,
+      rgba(0, 0, 0, 0.78) 58%,
+      rgba(0, 0, 0, 0.12) 72%,
+      transparent 95%
+    );
+    -webkit-mask-size: 270% 270%;
+    -webkit-mask-repeat: no-repeat;
+    mask-image: linear-gradient(
+      135deg,
+      transparent 5%,
+      rgba(0, 0, 0, 0.16) 29%,
+      rgba(0, 0, 0, 0.82) 43%,
+      #000 50%,
+      rgba(0, 0, 0, 0.78) 58%,
+      rgba(0, 0, 0, 0.12) 72%,
+      transparent 95%
+    );
+    mask-size: 270% 270%;
+    mask-repeat: no-repeat;
+    opacity: 0;
+    animation: lfg-organic-send 3s var(--ease-out) infinite;
+    transition: opacity 450ms var(--ease-in-out);
+  }
+
+  .lfg-organic-activity.is-active {
+    opacity: 1;
+  }
+
+  .lfg-organic-activity.is-exiting {
+    opacity: 0;
+  }
+
+  .user-bubble-organic {
+    inset: -14px;
+    --organic-halo-inset: 9px;
+    --organic-soft-inset: 12px;
+    --organic-sharp-inset: 14px;
+    --organic-halo-radius: 27px;
+    --organic-soft-radius: 24px;
+    --organic-sharp-radius: 22px;
+  }
+
+  .tool-call-organic {
+    inset: -10px;
+    --organic-halo-inset: 5px;
+    --organic-soft-inset: 8px;
+    --organic-sharp-inset: 10px;
+    --organic-halo-radius: 999px;
+    --organic-soft-radius: 999px;
+    --organic-sharp-radius: 999px;
+  }
+
+  .lfg-organic-activity-wash {
+    position: absolute;
+    inset: 0;
     background:
-      linear-gradient(var(--user-bubble-fill), var(--user-bubble-fill)) padding-box,
-      linear-gradient(
-        100deg,
-        rgba(10, 132, 255, 0.28) 0%,
-        rgba(255, 255, 255, 0.52) 28%,
-        rgba(10, 132, 255, 0.68) 50%,
-        rgba(120, 120, 128, 0.34) 74%,
-        rgba(10, 132, 255, 0.28) 100%
-      )
-      border-box;
-    background-size: 200% 100%;
+      radial-gradient(ellipse 42% 54% at 18% 19%, rgba(0, 122, 255, 0.18), transparent 72%),
+      radial-gradient(ellipse 48% 40% at 70% 23%, rgba(175, 82, 222, 0.14), transparent 76%),
+      radial-gradient(ellipse 40% 58% at 31% 76%, rgba(52, 199, 89, 0.12), transparent 74%),
+      radial-gradient(ellipse 54% 44% at 82% 72%, rgba(90, 110, 255, 0.16), transparent 72%);
+    opacity: 0.95;
+    will-change: filter;
+  }
+
+  .lfg-organic-activity-edge {
+    position: absolute;
+    background: var(--send-organic-edge);
+    -webkit-mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask:
+      linear-gradient(#000 0 0) content-box,
+      linear-gradient(#000 0 0);
+    mask-composite: exclude;
+  }
+
+  .lfg-organic-activity-edge--halo {
+    inset: var(--organic-halo-inset);
+    border-radius: var(--organic-halo-radius);
+    padding: 6px;
+    opacity: 0.26;
+    filter: blur(8px);
+  }
+
+  .lfg-organic-activity-edge--soft {
+    inset: var(--organic-soft-inset);
+    border-radius: var(--organic-soft-radius);
+    padding: 3px;
+    opacity: 0.5;
+    filter: blur(2.5px);
+  }
+
+  .lfg-organic-activity-edge--sharp {
+    inset: var(--organic-sharp-inset);
+    border-radius: var(--organic-sharp-radius);
+    padding: 1px;
+    opacity: 0.94;
+    box-shadow: inset 0 0 12px rgba(0, 122, 255, 0.1);
+  }
+
+  .dark .lfg-organic-activity-wash {
+    opacity: 0.82;
+  }
+
+  .dark .lfg-organic-activity {
+    --send-organic-edge:
+      radial-gradient(ellipse 38% 20% at 23% 0%, rgba(10, 132, 255, 0.82), transparent 78%),
+      radial-gradient(ellipse 22% 52% at 100% 31%, rgba(191, 90, 242, 0.7), transparent 80%),
+      radial-gradient(ellipse 52% 18% at 68% 100%, rgba(100, 120, 255, 0.74), transparent 82%),
+      radial-gradient(ellipse 18% 46% at 0% 72%, rgba(48, 209, 88, 0.54), transparent 80%),
+      rgba(255, 255, 255, 0.2);
+  }
+
+  .dark .lfg-organic-activity-edge--sharp {
+    box-shadow: inset 0 0 12px rgba(10, 132, 255, 0.14);
+  }
+
+  @keyframes lfg-organic-send {
+    from {
+      -webkit-mask-position: 100% 100%;
+      mask-position: 100% 100%;
+    }
+    to {
+      -webkit-mask-position: 0% 0%;
+      mask-position: 0% 0%;
+    }
   }
 
   .user-bubble.markdown code,
@@ -700,28 +865,8 @@ html.lfg-keyboard-open {
     text-decoration: underline;
   }
 
-  .think-live {
-    display: -webkit-box;
-    overflow: hidden;
-    overflow-wrap: anywhere;
-    word-break: break-word;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 3;
-    background: linear-gradient(
-      100deg,
-      var(--muted-foreground) 30%,
-      var(--foreground) 50%,
-      var(--muted-foreground) 70%
-    );
-    background-size: 200% 100%;
-    background-clip: text;
-    -webkit-background-clip: text;
-    color: transparent;
-    -webkit-text-fill-color: transparent;
-    font-size: 12px;
-    line-height: 1.5;
-    animation: lfg-shimmer 1.4s linear infinite;
-  }
+  /* .think-live removed — the Shimmer component now delegates to the shared
+     ShimmerText primitive (.lfg-shimmer-text). */
 
   .ai-live-text {
     opacity: 0.92;
@@ -815,10 +960,14 @@ html.lfg-keyboard-open {
     .typing-indicator-slot,
     .typing-indicator > span,
     .tool-call-row,
-    .tool-call-row--live::before {
+    .lfg-organic-activity {
       transition: none;
       animation: none;
       transform: none;
+    }
+
+    .lfg-organic-activity {
+      display: none;
     }
   }
 
@@ -923,34 +1072,6 @@ html.lfg-keyboard-open {
       color 180ms ease;
   }
 
-  .tool-call-row::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    z-index: -1;
-    border-radius: inherit;
-    padding: 1px;
-    background: linear-gradient(
-      100deg,
-      color-mix(in oklab, var(--primary) 20%, transparent),
-      rgba(255, 255, 255, 0.76) 28%,
-      color-mix(in oklab, var(--primary) 72%, transparent) 50%,
-      color-mix(in oklab, var(--border) 65%, transparent) 74%,
-      color-mix(in oklab, var(--primary) 20%, transparent)
-    );
-    background-size: 200% 100%;
-    opacity: 0;
-    pointer-events: none;
-    -webkit-mask:
-      linear-gradient(#000 0 0) content-box,
-      linear-gradient(#000 0 0);
-    mask:
-      linear-gradient(#000 0 0) content-box,
-      linear-gradient(#000 0 0);
-    -webkit-mask-composite: xor;
-    mask-composite: exclude;
-  }
-
   .tool-call-row--live {
     border-color: transparent;
     background:
@@ -959,11 +1080,6 @@ html.lfg-keyboard-open {
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.34),
       0 3px 14px -12px color-mix(in oklab, var(--primary) 80%, transparent);
-  }
-
-  .tool-call-row--live::before {
-    opacity: 1;
-    animation: lfg-shimmer 1.4s linear infinite;
   }
 
   @keyframes lfg-tool-row-in {
@@ -1416,5 +1532,155 @@ html.lfg-keyboard-open {
       --dot-to 320ms ease,
       box-shadow 320ms ease,
       opacity 260ms ease;
+  }
+}
+
+/* ── Shimmer text (transitions.dev #15) ──────────────────────────────────────
+   Loading / "thinking" label that shimmers instead of spinning. Two layers:
+   the base string renders in --shimmer-base, and ::before duplicates it via
+   attr(data-text), clips a moving gradient to the glyphs with
+   background-clip: text, and sweeps background-position.
+
+   Colors are wired to our theme tokens rather than the recipe's hardcoded
+   greys, so light/dark follow the palette automatically. */
+:root {
+  --shimmer-dur: 2000ms;
+  --shimmer-base: var(--muted-foreground);
+  --shimmer-highlight: var(--foreground);
+  --shimmer-band: 400%;
+}
+
+.lfg-shimmer-text {
+  position: relative;
+  display: inline-block;
+  color: var(--shimmer-base);
+}
+.lfg-shimmer-text::before {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  white-space: pre;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    transparent 40%,
+    var(--shimmer-highlight) 50%,
+    transparent 60%,
+    transparent 100%
+  );
+  background-size: var(--shimmer-band) 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  animation: lfg-shimmer-text var(--shimmer-dur) var(--ease-linear, linear) infinite;
+}
+@keyframes lfg-shimmer-text {
+  0% { background-position: 100% 0; }
+  100% { background-position: 0% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .lfg-shimmer-text::before { animation: none !important; }
+}
+
+/* ── Plus → menu morph (transitions.dev #20) ─────────────────────────────────
+   A circular trigger that becomes the panel it opens: the box grows and
+   relaxes its radius while the plus cross-fades/rotates out and the menu
+   slides in. Open uses a bouncier ease than close — deliberately two
+   variables, don't collapse them.
+
+   The recipe hardcodes the open footprint; exposed here as --morph-w/--morph-h
+   so each call site sets its own panel size. overflow:hidden is load-bearing:
+   it clips menu content while the box is still growing. */
+:root {
+  --morph-open-dur: 350ms;
+  --morph-close-dur: 250ms;
+  --morph-ease: cubic-bezier(0.34, 1.25, 0.64, 1);
+  --morph-close-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --morph-r-closed: 40px;
+  --morph-r-open: 20px;
+  --morph-fade-dur: 200ms;
+  --morph-slide: 40px;
+  --morph-rotate: 45deg;
+  --morph-scale: 0.97;
+  --morph-blur: var(--blur-small);
+  --morph-trigger: 40px;
+  --morph-w: 183px;
+  --morph-h: 172px;
+}
+
+.lfg-morph {
+  position: relative;
+  width: var(--morph-trigger);
+  height: var(--morph-trigger);
+  border-radius: var(--morph-r-closed);
+  overflow: hidden;
+  transition:
+    width var(--morph-close-dur) var(--morph-close-ease),
+    height var(--morph-close-dur) var(--morph-close-ease),
+    border-radius var(--morph-close-dur) var(--morph-close-ease);
+}
+.lfg-morph[data-open="true"] {
+  width: var(--morph-w);
+  height: var(--morph-h);
+  border-radius: var(--morph-r-open);
+  transition:
+    width var(--morph-open-dur) var(--morph-ease),
+    height var(--morph-open-dur) var(--morph-ease),
+    border-radius var(--morph-open-dur) var(--morph-ease);
+}
+.lfg-morph-plus {
+  position: absolute;
+  inset: auto 0 0 auto;
+  width: var(--morph-trigger);
+  height: var(--morph-trigger);
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  transition:
+    opacity var(--morph-fade-dur) var(--morph-close-ease),
+    transform var(--morph-open-dur) var(--morph-close-ease),
+    filter var(--morph-fade-dur) var(--morph-close-ease);
+}
+.lfg-morph-plus svg {
+  transition: transform var(--morph-open-dur) var(--morph-close-ease);
+}
+.lfg-morph[data-open="true"] .lfg-morph-plus {
+  opacity: 0;
+  transform: translateX(calc(-1 * var(--morph-slide)));
+  filter: blur(var(--morph-blur));
+  pointer-events: none;
+}
+.lfg-morph[data-open="true"] .lfg-morph-plus svg {
+  transform: scale(var(--morph-scale)) rotate(var(--morph-rotate));
+}
+.lfg-morph-menu {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transform: translateX(var(--morph-slide)) scale(var(--morph-scale));
+  filter: blur(var(--morph-blur));
+  pointer-events: none;
+  transition:
+    opacity var(--morph-fade-dur) var(--morph-close-ease),
+    transform var(--morph-open-dur) var(--morph-close-ease),
+    filter var(--morph-fade-dur) var(--morph-close-ease);
+}
+.lfg-morph[data-open="true"] .lfg-morph-menu {
+  opacity: 1;
+  transform: translateX(0) scale(1);
+  filter: blur(0);
+  pointer-events: auto;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lfg-morph,
+  .lfg-morph-plus,
+  .lfg-morph-plus svg,
+  .lfg-morph-menu {
+    transition: none !important;
   }
 }
