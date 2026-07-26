@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+- Shipped, Artifacts, and the session list no longer cold-reload on every tab
+  switch. List data is cached client-side (stale-while-revalidate, same idea as
+  transcripts), those pages stay warm in the background after the first visit so
+  gallery iframes don't reboot, and the feeds are prefetched during idle so the
+  first open can paint from cache too.
+
 ## July 26, 2026 - Reproducible motion release (v0.1.60)
 
 - Release installs now include the complete Number Flow dependency lock data,

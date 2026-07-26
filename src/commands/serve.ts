@@ -3292,8 +3292,13 @@ export async function cmdServe() {
             path?: FindingActionPath;
             hadText?: boolean;
           } | null;
-          if (b?.path !== "reply" && b?.path !== "execute" && b?.path !== "dismiss")
-            return err(400, "expected { path: reply|execute|dismiss }");
+          if (
+            b?.path !== "reply" &&
+            b?.path !== "execute" &&
+            b?.path !== "copy" &&
+            b?.path !== "dismiss"
+          )
+            return err(400, "expected { path: reply|execute|copy|dismiss }");
           await logFindingAction({
             findingId: m[1],
             path: b.path,

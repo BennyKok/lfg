@@ -258,11 +258,11 @@ export async function updateFinding(
 // ---------- finding actions (instrumentation) ----------
 // Which CTA a user actually taps on a finding, and whether they had typed an
 // instruction first. The FindingSheet stacks several affordances (composer
-// send, one-tap "Make the change", dismiss); without this we have no data on
-// which one earns its place. Append-only JSONL, fire-and-forget — never blocks
-// the user action.
+// send, one-tap "Make the change", copy for an existing session, dismiss);
+// without this we have no data on which one earns its place. Append-only JSONL,
+// fire-and-forget — never blocks the user action.
 
-export type FindingActionPath = "reply" | "execute" | "dismiss";
+export type FindingActionPath = "reply" | "execute" | "copy" | "dismiss";
 
 export type FindingActionEvent = {
   findingId: string;
