@@ -1,5 +1,5 @@
 {
-  "name": "mobile",
+  "name": "@lfg/mobile",
   "version": "1.0.0",
   "main": "expo-router/entry",
   "dependencies": {
@@ -8,6 +8,7 @@
     "expo": "~57.0.0",
     "expo-constants": "~57.0.7",
     "expo-glass-effect": "~57.0.1",
+    "expo-haptics": "~57.0.1",
     "expo-linear-gradient": "~57.0.1",
     "expo-linking": "~57.0.4",
     "expo-router": "~57.0.8",
@@ -18,7 +19,8 @@
     "react-native-reanimated": "4.5.0",
     "react-native-safe-area-context": "~5.7.0",
     "react-native-screens": "~4.26.0",
-    "react-native-web": "^0.21.2"
+    "react-native-web": "^0.21.2",
+    "react-native-worklets": "0.10.0"
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
@@ -28,7 +30,9 @@
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "typecheck": "tsc --noEmit",
+    "doctor": "expo-doctor"
   },
   "private": true
 }

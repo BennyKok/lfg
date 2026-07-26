@@ -1,17 +1,17 @@
 {
   "expo": {
-    "name": "LFG Glass",
-    "slug": "lfg-todo",
+    "name": "LFG",
+    "slug": "lfg-native",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "automatic",
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "dev.lfg.todo"
+      "bundleIdentifier": "dev.lfg.mobile"
     },
     "android": {
-      "package": "dev.lfg.todo",
+      "package": "dev.lfg.mobile",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
@@ -27,6 +27,6 @@
       "expo-status-bar",
       "expo-router"
     ],
-    "scheme": "lfgtodo"
+    "scheme": "lfg"
   }
 }
