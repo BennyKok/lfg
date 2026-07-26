@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 26, 2026 - Codex models in the OpenCode picker (v0.1.63)
+
+- When OpenCode is signed in with a ChatGPT Plus/Pro account, the model picker
+  now offers the latest Codex models (gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna,
+  gpt-5.5, and friends) for OpenCode sessions and auto agents, and newly
+  released gpt models appear automatically after the daily catalog refresh.
+
 ## July 26, 2026 - Clean OpenCode streaming (v0.1.62)
 
 - OpenCode sessions no longer echo the initial user prompt as temporary
