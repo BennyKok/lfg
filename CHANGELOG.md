@@ -4,6 +4,18 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 26, 2026 - Organic activity and smoother motion (v0.1.59)
+
+- Pending user messages and live agent tool calls now share a layered organic
+  colour wash, halo and crisp edge instead of a mechanical gradient sweep.
+  When activity finishes, the effect fades away smoothly rather than vanishing.
+- Newly sent messages now spring from the composer's actual on-screen position,
+  staying spatially correct with the soft keyboard, attachments, multiline
+  prompts and multi-column sessions.
+- Dialogs, dropdowns, context menus and alerts now use one consistent motion
+  scale, with reduced-motion fallbacks throughout.
+- Live reasoning labels remain readable while their highlight moves, rather
+  than fading toward invisible at the ends of the shimmer.
 - The Usage Campfire's "next restore" now counts down to the second, with each
   unit rolling on its own instead of the whole line swapping once a second.
 - Agent marks in the campfire are larger again.
