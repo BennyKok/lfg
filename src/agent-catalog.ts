@@ -287,7 +287,20 @@ function opencodeFamily(model: string): string | null {
   return null;
 }
 
-function curateOpenCodeModels(models: string[]): string[] {
+export function curateOpenCodeModels(models: string[]): string[] {
+  const out: string[] = [];
+  // ChatGPT subscription models (openai/*, present when opencode is logged in
+  // via ChatGPT Plus/Pro OAuth) lead the picker. Mirror the codex harness
+  // preference order, then stay future-proof by surfacing the newest release
+  // of each plain gpt family OpenAI adds to the catalog.
+  const openai = models.filter((model) => /^openai\/gpt-\d/.test(model));
+  if (openai.length) {
+    const available = new Set(openai.map((model) => model.slice("openai/".length)));
+    for (const id of CODEX_MODELS) if (available.has(id)) out.push(`openai/${id}`);
+    addLatest(out, openai.filter((model) => /^openai\/gpt-\d+(?:\.\d+)?$/.test(model)));
+    addLatest(out, openai.filter((model) => /^openai\/gpt-\d+(?:\.\d+)?-mini$/.test(model)));
+    addLatest(out, openai.filter((model) => /codex|spark/.test(model) && !model.endsWith("-fast")));
+  }
   const preferred = models.filter((model) =>
     /^(opencode-go|fugu|sakana)\//.test(model) ||
     /^novita-ai\/(deepseek|moonshotai|qwen|zai-org|minimax|minimaxai|xiaomimimo)\//.test(model),
@@ -311,7 +324,6 @@ function curateOpenCodeModels(models: string[]): string[] {
     "fugu-ultra",
     "fugu",
   ];
-  const out: string[] = [];
   for (const family of order) addLatest(out, byFamily.get(family) ?? []);
   return out.length ? out : models.slice(0, 16);
 }
