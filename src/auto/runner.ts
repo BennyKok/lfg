@@ -12,7 +12,7 @@ import {
   type Severity,
   addFinding,
   clearRunning,
-  hasOpenSimilar,
+  recordRecurrence,
   listFindings,
   markRunning,
 } from "./store.ts";
@@ -235,9 +235,20 @@ async function runAutoAgentInner(
     onLog("[auto] finding had no title — skipping");
     return null;
   }
-  if (await hasOpenSimilar(agent.id, title)) {
-    onLog(`[auto] duplicate of an existing finding — skipping: ${title}`);
-    return null;
+  // Recurrence is signal, not noise. Previously a repeat observation was
+  // dropped on the floor; now it bumps the occurrence count and re-surfaces the
+  // finding, so "reported 4 times" becomes visible instead of invisible.
+  const recurred = await recordRecurrence(agent.id, title);
+  if (recurred) {
+    const n = recurred.occurrences ?? 2;
+    onLog(`[auto] recurrence #${n} of an unresolved finding: ${title}`);
+    // Re-notify on escalation thresholds rather than on every repeat: the 2nd
+    // sighting says "this is persistent", and every 5th says "this is still
+    // being ignored". Silence in between avoids retraining you to swipe it away.
+    if (n === 2 || n % 5 === 0) {
+      void notifyAll().catch(() => {});
+    }
+    return recurred;
   }
   const finding = await addFinding({
     agentId: agent.id,
