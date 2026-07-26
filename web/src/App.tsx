@@ -12594,11 +12594,15 @@ function UserBubble({ html, pending }: { html: string; pending?: boolean }) {
           </svg>
           <span
             className="user-bubble-organic"
-            style={{ filter: `url(#${organicFilterId})` }}
             aria-hidden="true"
           >
-            <span className="user-bubble-organic-wash" />
-            <span className="user-bubble-organic-edge" />
+            <span
+              className="user-bubble-organic-wash"
+              style={{ filter: `url(#${organicFilterId}) blur(5px)` }}
+            />
+            <span className="user-bubble-organic-edge user-bubble-organic-edge--halo" />
+            <span className="user-bubble-organic-edge user-bubble-organic-edge--soft" />
+            <span className="user-bubble-organic-edge user-bubble-organic-edge--sharp" />
           </span>
         </>
       ) : null}
