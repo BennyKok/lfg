@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 26, 2026 - Reproducible motion release (v0.1.60)
+
+- Release installs now include the complete Number Flow dependency lock data,
+  so the organic activity and motion update builds reliably from a clean
+  checkout.
+
 ## July 26, 2026 - Organic activity and smoother motion (v0.1.59)
 
 - Pending user messages and live agent tool calls now share a layered organic
