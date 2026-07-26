@@ -4,11 +4,22 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 26, 2026 - Warm feeds and native groundwork (v0.1.61)
+
 - Shipped, Artifacts, and the session list no longer cold-reload on every tab
   switch. List data is cached client-side (stale-while-revalidate, same idea as
   transcripts), those pages stay warm in the background after the first visit so
   gallery iframes don't reboot, and the feeds are prefetched during idle so the
   first open can paint from cache too.
+- Auto findings can now be copied as a structured reference for use in an
+  existing session, with that handoff recorded alongside reply, execute, and
+  dismiss actions.
+- Recurring auto findings are escalated instead of being silently treated as
+  duplicates.
+- Usage Campfire agents now fly naturally onto their arc and handle touch
+  selection without accidental overlay dismissal.
+- A documented Expo SDK 57 mobile prototype now establishes the native
+  toolchain, navigation, persistence, glass experiments, and TestFlight path.
 
 ## July 26, 2026 - Reproducible motion release (v0.1.60)
 
