@@ -36,7 +36,25 @@ export type AutoAgent = {
   lastRunAt?: number;
 };
 
-export type FindingStatus = "open" | "dismissed" | "session" | "read";
+// "resolved" is TERMINAL and is the only status that means the underlying
+// problem is actually gone. Everything else — including "session" — only
+// records what happened to the *notification*, not to the problem. That gap is
+// why a correct, high-severity finding ("sqld WAL is 2.3 GB, checkpoints not
+// truncating", 2026-07-12) spawned a session, the session ended, nobody
+// re-checked, and the same failure caused a four-day backup outage ten days
+// later. A finding is not done because someone looked at it.
+export type FindingStatus =
+  | "open"
+  | "dismissed"
+  | "session"
+  | "read"
+  | "resolved";
+
+// Statuses where the underlying problem may still be live. Recurrence is
+// measured against these — NOT against "open"/"dismissed" alone, which was the
+// original bug: 302 of 396 findings sat in "session", so a repeat report never
+// matched and was filed as brand new instead of escalating.
+const UNRESOLVED: FindingStatus[] = ["open", "dismissed", "session", "read"];
 
 export type Finding = {
   id: string;
@@ -48,6 +66,10 @@ export type Finding = {
   createdAt: number;
   status: FindingStatus;
   sessionId?: string;
+  /** How many times an agent has independently reported this. 1 on first sight. */
+  occurrences?: number;
+  /** When it was most recently re-observed (differs from createdAt once it recurs). */
+  lastSeenAt?: number;
 };
 
 const dir = () => join(PATHS.data, "auto");
@@ -271,16 +293,66 @@ export async function logFindingAction(input: {
 // Dedup: a finding with the same normalized title for this agent that is still
 // open (or was dismissed) should not be re-added. Keeps the stream from
 // re-accumulating the same item every run.
+// Normalise a title for recurrence matching. Numbers are stripped because the
+// same problem is usually re-reported with a moved number — "sqld WAL is 2.3 GB"
+// and "sqld WAL is 3.1 GB" are one problem getting worse, not two problems.
+// Exact-title matching treated them as unrelated and filed both as new.
+export const normTitleForTest = (t: string) => normTitle(t);
+
+const normTitle = (t: string) =>
+  t
+    .toLowerCase()
+    .replace(/[\d.,]+\s*(gb|mb|kb|tb|b|ms|s|%|×|x)?/g, "#")
+    .replace(/[^a-z#\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+/**
+ * Record that an agent has just observed `title` again.
+ *
+ * Returns the existing finding when this is a recurrence, after bumping its
+ * occurrence count and re-surfacing it. Returns null when it is genuinely new
+ * and the caller should file it.
+ *
+ * The old behaviour (hasOpenSimilar -> skip) SILENTLY DISCARDED repeat
+ * observations. That is the worst possible response: the signal that a problem
+ * is persistent — the single most useful thing an agent can tell you — was the
+ * one signal thrown away. A thing reported four times is not noise, it is the
+ * thing you should be doing.
+ */
+export async function recordRecurrence(
+  agentId: string,
+  title: string,
+): Promise<Finding | null> {
+  const rows = await listFindings();
+  const now = Date.now();
+  const key = normTitle(title);
+  const match = rows.find(
+    (r) =>
+      r.agentId === agentId &&
+      UNRESOLVED.includes(r.status) &&
+      normTitle(r.title) === key,
+  );
+  if (!match) return null;
+
+  const occurrences = (match.occurrences ?? 1) + 1;
+  // Re-surface it. A recurrence that stays "dismissed"/"read" is invisible
+  // again, which is how these got lost the first time. "session" is preserved
+  // so an in-flight session is not yanked out from under whoever owns it.
+  const status: FindingStatus =
+    match.status === "session" ? "session" : "open";
+
+  const next = rows.map((r) =>
+    r.id === match.id ? { ...r, occurrences, lastSeenAt: now, status } : r,
+  );
+  await writeFindings(next);
+  return { ...match, occurrences, lastSeenAt: now, status };
+}
+
+/** @deprecated use recordRecurrence — kept so existing callers keep compiling. */
 export async function hasOpenSimilar(
   agentId: string,
   title: string,
 ): Promise<boolean> {
-  const norm = (t: string) => t.toLowerCase().replace(/\s+/g, " ").trim();
-  const rows = await listFindings();
-  return rows.some(
-    (r) =>
-      r.agentId === agentId &&
-      (r.status === "open" || r.status === "dismissed") &&
-      norm(r.title) === norm(title),
-  );
+  return (await recordRecurrence(agentId, title)) !== null;
 }
