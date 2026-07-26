@@ -1,5 +1,41 @@
 import { describe, expect, test } from "bun:test";
-import { answersForIndex, pendingToPrompt, toolPartMessages } from "./opencode-aisdk-session.ts";
+import {
+  answersForIndex,
+  pendingToPrompt,
+  shouldPublishDraftPart,
+  toolPartMessages,
+} from "./opencode-aisdk-session.ts";
+
+describe("opencode draft streaming", () => {
+  test("does not publish OpenCode's streamed user prompt as an assistant draft", () => {
+    const roles = new Map<string, "user" | "assistant">([
+      ["msg_user", "user"],
+      ["msg_assistant", "assistant"],
+    ]);
+
+    expect(
+      shouldPublishDraftPart(
+        { type: "text", text: "launch prompt", messageID: "msg_user" },
+        roles,
+      ),
+    ).toBe(false);
+    expect(
+      shouldPublishDraftPart(
+        { type: "text", text: "working on it", messageID: "msg_assistant" },
+        roles,
+      ),
+    ).toBe(true);
+  });
+
+  test("waits for message role metadata instead of guessing on an unknown part", () => {
+    expect(
+      shouldPublishDraftPart(
+        { type: "text", text: "ambiguous", messageID: "msg_unknown" },
+        new Map(),
+      ),
+    ).toBe(false);
+  });
+});
 
 describe("opencode question prompt helpers", () => {
   const pending = {

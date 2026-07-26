@@ -101,6 +101,16 @@ type OcPart = {
   messageID?: string;
 };
 
+type OcMessageRole = "user" | "assistant";
+
+/** @internal exported for unit tests */
+export function shouldPublishDraftPart(
+  part: OcPart,
+  messageRoles: ReadonlyMap<string, OcMessageRole>,
+): boolean {
+  return !!part.messageID && messageRoles.get(part.messageID) === "assistant";
+}
+
 type OcQuestionOption = { label?: string; description?: string };
 type OcQuestionInfo = {
   question?: string;
@@ -629,6 +639,12 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
       // OpenCode re-sends the whole part on every mutation, so this is what keeps
       // a call from being re-emitted on each tick.
       const emittedToolIds = new Set<string>();
+      // message.part.updated is emitted for BOTH sides of the conversation.
+      // In particular, OpenCode streams the newly-created user text part before
+      // the assistant starts, which used to publish the whole launch prompt as
+      // the live assistant draft. Track message.updated roles and only promote
+      // text belonging to an assistant message.
+      const messageRoles = new Map<string, OcMessageRole>();
       for await (const raw of stream) {
         if (closing) break;
         const ev = raw as {
@@ -639,9 +655,26 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
           part?: OcPart & { sessionID?: string };
           sessionID?: string;
           id?: string;
+          messageID?: string;
+          info?: { id?: string; sessionID?: string; role?: string };
           questions?: OcQuestionInfo[];
         };
-        const evSession = props.sessionID ?? props.part?.sessionID ?? null;
+        const evSession = props.sessionID ?? props.part?.sessionID ?? props.info?.sessionID ?? null;
+
+        if (ev?.type === "message.updated" && (!evSession || evSession === ocSessionId)) {
+          const info = props.info;
+          if (
+            typeof info?.id === "string" &&
+            (info.role === "user" || info.role === "assistant")
+          ) {
+            messageRoles.set(info.id, info.role);
+          }
+          continue;
+        }
+        if (ev?.type === "message.removed" && (!evSession || evSession === ocSessionId)) {
+          if (typeof props.messageID === "string") messageRoles.delete(props.messageID);
+          continue;
+        }
 
         // OpenCode question events (v1 + v2 names).
         if (
@@ -676,6 +709,7 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
         const part = props.part;
         if (ev?.type === "message.part.updated" && part?.sessionID === ocSessionId) {
           if ((part.type === "text" || part.type === "reasoning") && typeof part.text === "string") {
+            if (!shouldPublishDraftPart(part, messageRoles)) continue;
             // Prefer the latest assistant text blob for the draft; reasoning
             // only fills in when we don't have text yet.
             if (part.type === "text") {
