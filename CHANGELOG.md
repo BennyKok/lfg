@@ -4,6 +4,15 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 27, 2026 - Embed mode for omg Computer (v0.1.65)
+
+- When framed inside omg (or with `?embed=1`), LFG hides its own header,
+  settings, user picker, and onboarding so the host product owns that chrome.
+- Embedded mode defaults to all sessions and does not overwrite standalone
+  filter preferences.
+- Session deep-links (`?session=`) prioritize Live from first paint so the
+  target session focuses faster.
+
 ## July 27, 2026 - Dismissible agent questions (v0.1.64)
 
 - Agent questions can now be dismissed without sending a reply, including when
