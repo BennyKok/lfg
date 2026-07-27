@@ -65,6 +65,17 @@
   --lfg-inline-composer-height: var(--lfg-composer-clear);
   --lfg-orb-stack-bottom: calc(var(--lfg-composer-clear) + 0.5rem);
   --lfg-above-orb: var(--lfg-composer-clear);
+  /* Host-chrome inset (omg Computer compact bottom nav). 0 outside embed. */
+  --lfg-host-bottom-inset: 0px;
+}
+
+/* Framed inside omg Computer (`?embed=1` / iframe): the host's icon-only
+   bottom pill floats over us. Lift content by a *tight* inset so composer +
+   controls clear the pill, while our background still paints full-bleed under
+   it (no color band from host crop). Sized for the compact pill (~40px), not
+   the old labeled bar. */
+html[data-lfg-embed="true"] {
+  --lfg-host-bottom-inset: 2.75rem;
 }
 
 /* Soft keyboard up: the orb is tucked away, so toasts and the dictation pill no

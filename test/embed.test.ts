@@ -43,3 +43,11 @@ describe("session prioritization + search validation", () => {
     expect(shouldPrioritizeSession(null)).toBe(false);
   });
 });
+
+describe("host bottom inset contract", () => {
+  test("CSS defines a tight embed host inset for the compact omg pill", () => {
+    const css = require("node:fs").readFileSync("web/src/index.css", "utf8") as string;
+    expect(css).toContain('html[data-lfg-embed="true"]');
+    expect(css).toMatch(/--lfg-host-bottom-inset:\s*2\.75rem/);
+  });
+});

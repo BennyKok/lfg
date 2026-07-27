@@ -312,7 +312,7 @@ export function AskCenter({ onExpand }: { onExpand: () => void }) {
   const queued = questions.length - 1;
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex justify-center px-3 pb-[var(--lfg-orb-stack-bottom)]">
+    <div className="pointer-events-none fixed inset-x-0 bottom-0 z-[60] flex justify-center px-3 pb-[calc(var(--lfg-orb-stack-bottom)+var(--lfg-host-bottom-inset))]">
       <div className="pointer-events-auto w-full max-w-md rounded-2xl border border-primary/30 bg-background p-3.5 shadow-[0_12px_40px_rgba(0,0,0,0.28)]">
         <div className="mb-2 flex items-start gap-2">
           <div className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-primary">

@@ -3825,6 +3825,15 @@ export function App() {
   // Session deep-links win over filter/identity work so the target card opens
   // as soon as bootstrap returns sessions.
   const prioritizeSession = shouldPrioritizeSession(deepLinkSearch) || !!sessionDeepLinkRef.current;
+  // Tell CSS (and any fixed bottom chrome) we're framed under omg's compact
+  // bottom nav so --lfg-host-bottom-inset lifts content without host crop.
+  useEffect(() => {
+    if (!embedded) return;
+    document.documentElement.dataset.lfgEmbed = "true";
+    return () => {
+      delete document.documentElement.dataset.lfgEmbed;
+    };
+  }, [embedded]);
   const isMobile = useIsMobile();
   const isWide = useIsWide();
   const [keyboardOpen, setKeyboardOpen] = useState(false);
@@ -5335,7 +5344,15 @@ export function App() {
     <AgentModelCatalogContext.Provider value={modelCatalog}>
     <AskProvider>
     <ArtifactViewerContext.Provider value={openArtifactViewer}>
-    <div ref={rootRef} className={APP_SHELL_CLASS}>
+    <div
+      ref={rootRef}
+      className={cn(
+        APP_SHELL_CLASS,
+        // Embed: leave a blank band of our own background under the host
+        // compact pill so LFG controls sit above it without a color mismatch.
+        embedded && "pb-[var(--lfg-host-bottom-inset)]",
+      )}
+    >
       {viewerArtifact ? (
         <ArtifactViewerPage artifact={viewerArtifact} onClose={closeArtifactViewer} />
       ) : null}
@@ -5843,7 +5860,7 @@ function FloatingSessionAudio({
 
   return (
     <div
-      className="fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+4.75rem)] z-[75] flex justify-center px-3 md:bottom-5"
+      className="fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+4.75rem+var(--lfg-host-bottom-inset))] z-[75] flex justify-center px-3 md:bottom-[calc(1.25rem+var(--lfg-host-bottom-inset))]"
       role="region"
       aria-label="Session audio controls"
     >
