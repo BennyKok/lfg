@@ -12,6 +12,7 @@ import { PATHS } from "../src/config.ts";
 import {
   addQuestion,
   answerQuestion,
+  dismissQuestion,
   listQuestions,
   sweepExpiredQuestions,
   waitForAnswer,
@@ -35,6 +36,32 @@ beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), "lfg-ask-"));
   await mkdir(join(dir, "ask"), { recursive: true });
   PATHS.data = dir;
+});
+
+describe("dismissQuestion", () => {
+  test("dismisses an open question and wakes its waiter", async () => {
+    const q = await addQuestion({ question: "still needed?", pushback: false });
+    const waiting = waitForAnswer(q.id, 5_000);
+
+    const dismissed = await dismissQuestion(q.id);
+
+    expect(dismissed?.status).toBe("dismissed");
+    expect((await waiting)?.status).toBe("dismissed");
+    expect(await listQuestions("open")).toEqual([]);
+    expect((await listQuestions("dismissed")).map((r) => r.id)).toEqual([q.id]);
+  });
+
+  test("treats an already-answered question as an idempotent success", async () => {
+    const q = await addQuestion({ question: "already answered?" });
+    await answerQuestion(q.id, { answer: "yes" });
+
+    expect((await dismissQuestion(q.id))?.status).toBe("answered");
+    expect((await listQuestions("answered")).map((r) => r.id)).toEqual([q.id]);
+  });
+
+  test("returns null only for an unknown question", async () => {
+    expect(await dismissQuestion("missing")).toBeNull();
+  });
 });
 
 afterEach(async () => {

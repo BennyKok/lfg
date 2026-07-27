@@ -11,9 +11,10 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { PATHS } from "../config.ts";
 
-// open → answered (user replied) → handled (the agent acted on the reply).
+// open → answered (user replied) → handled (the agent acted on the reply), or
+// open → dismissed/expired when no answer should be delivered.
 // "handled" is what stops the supervisor re-acting on the same answer each run.
-export type AskStatus = "open" | "answered" | "expired" | "handled";
+export type AskStatus = "open" | "answered" | "dismissed" | "expired" | "handled";
 
 export type AskQuestion = {
   id: string;
@@ -184,6 +185,29 @@ export async function expireQuestion(id: string): Promise<void> {
   if (!found) return;
   await writeAll(next);
   wake(found);
+}
+
+/**
+ * Dismiss an open question without delivering an answer to the asking agent.
+ * Already-resolved questions are returned unchanged so retries are idempotent.
+ */
+export async function dismissQuestion(id: string): Promise<AskQuestion | null> {
+  const rows = await listQuestions();
+  let found: AskQuestion | null = null;
+  let changed = false;
+  const next = rows.map((r) => {
+    if (r.id !== id) return r;
+    found = r;
+    if (r.status !== "open") return r;
+    changed = true;
+    found = { ...r, status: "dismissed" };
+    return found;
+  });
+  if (!found) return null;
+  if (!changed) return found;
+  await writeAll(next);
+  wake(found);
+  return found;
 }
 
 /**

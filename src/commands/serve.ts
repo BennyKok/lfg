@@ -68,6 +68,7 @@ import {
   getQuestion,
   addQuestion,
   answerQuestion,
+  dismissQuestion,
   markHandled,
   waitForAnswer,
   sweepExpiredQuestions,
@@ -3104,6 +3105,7 @@ export async function cmdServe() {
         const status = url.searchParams.get("status") as
           | "open"
           | "answered"
+          | "dismissed"
           | "expired"
           | null;
         const user = url.searchParams.get("user");
@@ -3160,6 +3162,15 @@ export async function cmdServe() {
         const m = path.match(/^\/api\/ask\/([0-9a-f]+)$/);
         if (m && req.method === "GET") {
           const q = await getQuestion(m[1]);
+          if (!q) return err(404, "unknown question");
+          return json({ question: q });
+        }
+      }
+      // Dismiss a question without treating that action as an answer.
+      {
+        const m = path.match(/^\/api\/ask\/([0-9a-f]+)\/dismiss$/);
+        if (m && req.method === "POST") {
+          const q = await dismissQuestion(m[1]);
           if (!q) return err(404, "unknown question");
           return json({ question: q });
         }

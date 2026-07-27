@@ -35,6 +35,7 @@ import {
   Maximize2,
   MessageCircleQuestion,
   Send,
+  X,
 } from "lucide-react";
 
 type Question = {
@@ -110,6 +111,7 @@ type AskContextValue = {
   questions: Question[];
   busy: boolean;
   answer: (q: Question, text: string) => Promise<void>;
+  dismiss: (q: Question) => Promise<void>;
   /** Tuck the floating card away "for later" without answering. */
   collapsed: boolean;
   setCollapsed: (v: boolean) => void;
@@ -215,9 +217,27 @@ export function AskProvider({ children }: { children: React.ReactNode }) {
     [busy],
   );
 
+  const dismiss = useCallback(
+    async (q: Question) => {
+      if (busy) return;
+      setBusy(true);
+      try {
+        const res = await fetch(`/api/ask/${q.id}/dismiss`, { method: "POST" });
+        if (!res.ok) throw new Error(await res.text());
+        setQuestions((prev) => prev.filter((x) => x.id !== q.id));
+        toast("Question dismissed");
+      } catch {
+        toast.error("Could not dismiss the question");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy],
+  );
+
   return (
     <AskContext.Provider
-      value={{ questions, busy, answer, collapsed, setCollapsed }}
+      value={{ questions, busy, answer, dismiss, collapsed, setCollapsed }}
     >
       {children}
     </AskContext.Provider>
@@ -278,7 +298,7 @@ export function AskNavButton({
 
 // Compact floating card for the next question. Hidden when collapsed.
 export function AskCenter({ onExpand }: { onExpand: () => void }) {
-  const { questions, busy, answer, setCollapsed, collapsed } = useAsk();
+  const { questions, busy, answer, dismiss, setCollapsed, collapsed } = useAsk();
   const [draft, setDraft] = useState("");
   const current = questions[0] ?? null;
 
@@ -319,6 +339,16 @@ export function AskCenter({ onExpand }: { onExpand: () => void }) {
               className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             >
               <Maximize2 className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => void dismiss(current)}
+              disabled={busy}
+              aria-label="Dismiss question"
+              title="Dismiss question"
+              className="flex size-7 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            >
+              <X className="size-3.5" />
             </button>
             <button
               type="button"
@@ -383,22 +413,6 @@ export function AskPage() {
   const count = questions.length;
   return (
     <div className="mx-auto flex h-full w-full max-w-xl flex-col">
-      <div className="mb-4 flex items-center gap-3">
-        <div className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-primary/15 text-primary">
-          <MessageCircleQuestion className="size-6" />
-        </div>
-        <div>
-          <h1 className="font-heading text-lg font-medium tracking-[-0.01em]">
-            Questions for you
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            {count > 0
-              ? `${count} agent${count === 1 ? "" : "s"} waiting on your input`
-              : "You're all caught up"}
-          </p>
-        </div>
-      </div>
-
       {count === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-border py-20 text-center">
           <div className="flex size-14 items-center justify-center rounded-2xl bg-muted text-muted-foreground">
@@ -648,7 +662,7 @@ function QuestionCard({
   interactive: boolean;
   onAnswer?: (text: string) => void;
 }) {
-  const { busy } = useAsk();
+  const { busy, dismiss } = useAsk();
   const [draft, setDraft] = useState("");
   return (
     <div
@@ -671,6 +685,19 @@ function QuestionCard({
           ) : null}
           <span className="truncate">Needs your input · {timeAgo(q.createdAt)}</span>
         </div>
+        {interactive ? (
+          <button
+            type="button"
+            data-no-drag
+            onClick={() => void dismiss(q)}
+            disabled={busy}
+            aria-label="Dismiss question"
+            title="Dismiss question"
+            className="ml-auto flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+          >
+            <X className="size-4" />
+          </button>
+        ) : null}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
