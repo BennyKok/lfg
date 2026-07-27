@@ -5,8 +5,8 @@
 //
 // Routing is PATH-based: the visible page is the first path segment
 // (`/settings`, `/usage`, `/my-extension-tab`), with `/` meaning the default
-// ("live"). The only search param is `session` — an external deep-link contract
-// (see below). A legacy `?tab=` param is still accepted on `/` and redirected to
+// ("live"). Search params: `session` (deep-link contract) and `embed` (framed
+// host mode). A legacy `?tab=` param is still accepted on `/` and redirected to
 // the matching path so old links/bookmarks keep working.
 
 /** The built-in top-level pages. NOT exhaustive: runtime extensions register
@@ -48,12 +48,23 @@ export interface AppSearch {
    *  `/?session=<id>` via `publicSessionUrl` into messaging bridges and Shipped
    *  posts, so this key must never be renamed or dropped. */
   session?: string;
+  /** Framed-host mode (omg Computer iframe). EXTERNAL CONTRACT with omg's
+   *  use-computer-session-frame mint — must stay as `embed=1`. */
+  embed?: boolean;
 }
 
 /** Validate the search params carried on every route. */
 export function validateAppSearch(search: Record<string, unknown>): AppSearch {
   const out: AppSearch = {};
   if (typeof search.session === "string" && search.session) out.session = search.session;
+  if (
+    search.embed === true ||
+    search.embed === 1 ||
+    search.embed === "1" ||
+    search.embed === "true"
+  ) {
+    out.embed = true;
+  }
   return out;
 }
 
@@ -69,4 +80,11 @@ export function validateIndexSearch(search: Record<string, unknown>): IndexSearc
     out.tab = search.tab;
   }
   return out;
+}
+
+/** Whether routing should prioritize focusing a live session over other shell
+ *  work (filters, identity gate, secondary tab warmups). True when a session
+ *  deep-link is present. */
+export function shouldPrioritizeSession(search: AppSearch | null | undefined): boolean {
+  return typeof search?.session === "string" && search.session.length > 0;
 }

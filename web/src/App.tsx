@@ -1,7 +1,8 @@
 import { Component, createContext, type ComponentProps, forwardRef, memo, Suspense, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
-import { DEFAULT_TAB, pathnameToTab } from "./lib/app-search";
+import { DEFAULT_TAB, pathnameToTab, shouldPrioritizeSession } from "./lib/app-search";
+import { isEmbedded, readLocationEmbedFlag } from "./lib/embed";
 import { useChat } from "@ai-sdk/react";
 import {
   DEFAULT_SCHED_TZ,
@@ -3817,6 +3818,13 @@ export function App() {
   if (sessionDeepLinkRef.current === undefined) {
     sessionDeepLinkRef.current = deepLinkSearch.session ?? null;
   }
+  // Hosted inside omg (or any frame): drop LFG chrome, skip onboarding/picker,
+  // default to all sessions. `?embed=1` is the explicit contract; framing alone
+  // is enough as a defence-in-depth signal.
+  const embedded = isEmbedded(deepLinkSearch);
+  // Session deep-links win over filter/identity work so the target card opens
+  // as soon as bootstrap returns sessions.
+  const prioritizeSession = shouldPrioritizeSession(deepLinkSearch) || !!sessionDeepLinkRef.current;
   const isMobile = useIsMobile();
   const isWide = useIsWide();
   const [keyboardOpen, setKeyboardOpen] = useState(false);
@@ -3889,7 +3897,9 @@ export function App() {
   // tab switches don't remount, re-fetch, or reboot gallery iframes. Hidden
   // pages set `active=false` to pause polling. First paint of Shipped/Artifacts
   // also seeds from the module-level feed cache (see feed-cache.ts).
-  const [keepLive, setKeepLive] = useState(false);
+  // Session deep-links keep Live mounted from the first paint so we don't wait
+  // a tab effect tick before the list (and focus target) can render.
+  const [keepLive, setKeepLive] = useState(() => prioritizeSession);
   const [keepShipped, setKeepShipped] = useState(false);
   const [keepArtifacts, setKeepArtifacts] = useState(false);
   useEffect(() => {
@@ -3955,6 +3965,15 @@ export function App() {
   const seededAuto = useRef(false);
   const seenFindings = useRef<Set<string>>(new Set());
   const [userFilter, setUserFilter] = useState(() => {
+    // Embedded hosts (omg Computer) always start on every session — the host
+    // manages account identity later; a per-user filter would hide work.
+    if (readLocationEmbedFlag()) return "__all";
+    // Session deep-links also start open so a linked session isn't filtered out
+    // before the resolver runs.
+    try {
+      const sid = new URLSearchParams(window.location.search).get("session");
+      if (sid) return "__all";
+    } catch { /* ignore */ }
     const saved = localStorage.getItem("lfg_v2_user_filter");
     // Honor an explicitly chosen user / unassigned view, but otherwise default
     // to the active profile rather than "everyone".
@@ -4106,6 +4125,7 @@ export function App() {
     // (only ever set true here) so creating a profile/session mid-flow doesn't
     // yank the flow away — OnboardingFlow dismisses it via onDone.
     if (
+      !embedded &&
       payload.onboarding &&
       !payload.onboarding.completedAt &&
       !(payload.users?.length) &&
@@ -4134,7 +4154,7 @@ export function App() {
     setFindings(findingList);
     findingList.forEach((f) => seenFindings.current.add(f.id));
     seededAuto.current = true;
-  }, []);
+  }, [embedded]);
 
   // Sessions the user just deleted. The server's list can lag a beat (tmux pane
   // still tearing down), and the 5s poll below would otherwise resurrect a card
@@ -4364,16 +4384,14 @@ export function App() {
   useEffect(() => {
     if (didDefaultFilter.current || !users.length) return;
     didDefaultFilter.current = true;
-    // A pending `?session=` link outranks the saved profile: narrowing to a
-    // profile here would hide a session owned by someone else and the link
-    // would silently never resolve.
-    if (sessionDeepLinkRef.current) return;
+    // Embed + pending session links stay on "__all" so no owner is hidden.
+    if (embedded || sessionDeepLinkRef.current || prioritizeSession) return;
     const isUser = users.some((u) => u.email === userFilter);
     if (userFilter === "__unassigned" || isUser) return;
     const profile = localStorage.getItem("lfg_user");
     const next = profile && users.some((u) => u.email === profile) ? profile : users[0]?.email;
     if (next) setUserFilter(next);
-  }, [users, userFilter]);
+  }, [users, userFilter, embedded, prioritizeSession]);
 
   // Drop a filter that points at a user who no longer exists.
   useEffect(() => {
@@ -4386,12 +4404,15 @@ export function App() {
   }, [userFilter, users]);
 
   useEffect(() => {
+    // Don't clobber the standalone profile filter while framed inside omg.
+    if (embedded) return;
     localStorage.setItem("lfg_v2_user_filter", userFilter);
-  }, [userFilter]);
+  }, [userFilter, embedded]);
 
   useEffect(() => {
+    if (embedded) return;
     localStorage.setItem("lfg_v2_project_filter", projectFilter);
-  }, [projectFilter]);
+  }, [projectFilter, embedded]);
 
   const changeUserFilter = useCallback((value: string) => {
     setUserFilter(value);
@@ -4476,7 +4497,16 @@ export function App() {
   // early return) covers the whole app, so a deep link arriving on a fresh
   // browser has to survive until the gate closes rather than being resolved or
   // timed out behind it.
-  const identityGateOpen = !identity && users.length > 0;
+  // Embed never gates on "who are you" — the host product owns identity.
+  const identityGateOpen = !embedded && !identity && users.length > 0;
+
+  // As soon as a session deep-link is pending, pin Live so the list can paint
+  // without waiting for an unrelated tab effect.
+  useEffect(() => {
+    if (!prioritizeSession) return;
+    setKeepLive(true);
+    if (tab !== "live") setTab("live");
+  }, [prioritizeSession, tab, setTab]);
 
   useEffect(() => {
     const sid = sessionDeepLinkRef.current;
@@ -4495,7 +4525,7 @@ export function App() {
     }
     setTab("live");
     setLiveFocus({ sid, n: Date.now() });
-  }, [allLiveSessions, loading, userFilter, projectFilter, identityGateOpen]);
+  }, [allLiveSessions, loading, userFilter, projectFilter, identityGateOpen, setTab]);
 
   // ...and stop waiting if it never shows up (ended, removed, or another box's
   // id), so the link reports itself instead of hanging silently forever.
@@ -5244,7 +5274,7 @@ export function App() {
   // walk through profile → agents → first session. State is service-ized
   // server-side (data/onboarding.json via /api/onboarding), so a second
   // browser/device skips straight past this once it's done anywhere.
-  if (showOnboarding) {
+  if (!embedded && showOnboarding) {
     return (
       <OnboardingFlow
         onboarding={onboarding}
@@ -5273,7 +5303,7 @@ export function App() {
   // First start on this browser: ask who you are before showing the app. Only
   // gates when a roster exists and no profile is chosen yet — once picked it's
   // remembered in localStorage (lfg_user) so we don't ask again.
-  if (!identity && users.length) {
+  if (!embedded && !identity && users.length) {
     return (
       <WhoAreYou
         users={users}
@@ -5313,7 +5343,8 @@ export function App() {
           Settings button on the right — mirroring the bottom nav's
           gradient-bordered pill so the whole chrome reads as one matched set.
           Auto + extension tabs now live inside the Settings page. */}
-      {liveDesktopWorkspace ? null : (
+      {/* Embed (omg Computer iframe): host owns settings/user chrome — no LFG header. */}
+      {embedded || liveDesktopWorkspace ? null : (
       <header
         className="z-40 flex shrink-0 items-center justify-between gap-2 px-3 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))]"
       >
@@ -5386,7 +5417,7 @@ export function App() {
       </header>
       )}
 
-      <PwaInstallCallout />
+      {embedded ? null : <PwaInstallCallout />}
 
       {error ? (
         <div className="mx-3 mt-3 rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
@@ -5418,11 +5449,13 @@ export function App() {
               userFilter={userFilter}
               projectFilter={projectFilter}
               projectOptions={projectOptions}
-              onProjectChange={changeProjectFilter}
-              onUserChange={changeUserFilter}
-              onOpenSettings={() => setTab("settings")}
-              onOpenAsk={() => setTab("ask")}
-              onOpenShipped={() => setTab("shipped")}
+              onProjectChange={embedded ? undefined : changeProjectFilter}
+              // Embed: host owns identity/settings — no user picker, settings,
+              // ask, or shipped chrome inside the iframe.
+              onUserChange={embedded ? undefined : changeUserFilter}
+              onOpenSettings={embedded ? undefined : () => setTab("settings")}
+              onOpenAsk={embedded ? undefined : () => setTab("ask")}
+              onOpenShipped={embedded ? undefined : () => setTab("shipped")}
               messagesBySid={liveStream.messagesBySid}
               busyBySid={liveStream.busyBySid}
               promptsBySid={liveStream.promptsBySid}
