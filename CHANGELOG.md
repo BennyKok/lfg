@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 27, 2026 - Embed host bottom inset (v0.1.66)
+
+- When framed inside omg Computer, content lifts with a tight internal bottom
+  inset so the compact host nav no longer covers the composer, while LFG's
+  background still paints full-bleed under the pill (no color mismatch).
+
 ## July 27, 2026 - Embed mode for omg Computer (v0.1.65)
 
 - When framed inside omg (or with `?embed=1`), LFG hides its own header,
