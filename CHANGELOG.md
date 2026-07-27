@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 27, 2026 - Dismissible agent questions (v0.1.64)
+
+- Agent questions can now be dismissed without sending a reply, including when
+  another action resolves the question at the same time.
+- The mobile question screen now opens directly on the question card without
+  the redundant page header.
+
 ## July 26, 2026 - Codex models in the OpenCode picker (v0.1.63)
 
 - When OpenCode is signed in with a ChatGPT Plus/Pro account, the model picker
