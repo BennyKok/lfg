@@ -785,7 +785,7 @@ function persistManagedResume(session: Session): void {
     model: session.model,
     assignedUser: session.assignedUser,
     managed: !!backend,
-    resumable: agent !== "grok" && agent !== "cursor",
+    resumable: true,
   }]);
 }
 
@@ -3945,6 +3945,74 @@ export async function cmdServe() {
           console.warn(`[resume] no transcript found for ${sessionId} — cannot resume`);
           return err(404, "no transcript found for that session");
         }
+        // Grok and Cursor both resume their native file-backed conversation in
+        // place. Keep the native id as the stable LFG id, warm the transcript
+        // before launch, and persist a managed row so serve restarts rediscover
+        // the same live session instead of replacing it with an empty card.
+        if (cachedResume?.agent === "grok" || cachedResume?.agent === "cursor") {
+          const agent = cachedResume.agent;
+          const cwd = await resolveResumeCwd(
+            cachedResume.cwd || await cwdForTranscript(transcript).catch(() => null),
+            cachedResume.project,
+          );
+          const tmuxName = `lfg-${randomBytes(3).toString("hex")}`;
+          const assignedUser = body?.user || cachedResume.assignedUser || undefined;
+          if (assignedUser && !rosterEmails().includes(assignedUser)) return err(400, "unknown user");
+          const resumeModel = model || cachedResume.model || (
+            agent === "grok" ? GROK_DEFAULT_MODEL : "auto"
+          );
+          await indexTranscript(transcript, sessionId);
+          addManaged({
+            tmuxName,
+            cwd,
+            createdAt: Date.now(),
+            agent,
+            sessionId,
+            nativeSessionId: sessionId,
+            launchState: "launching",
+            model: resumeModel,
+            title: cachedResume.title,
+            project: cachedResume.project || undefined,
+            repoRoot: repoRootForManagedCwd(cwd),
+          });
+          if (assignedUser) assignUser(tmuxName, assignedUser);
+          const prompt = body?.prompt?.trim() || undefined;
+          const spawned = agent === "grok"
+            ? spawnManagedGrokSession({
+                name: tmuxName,
+                cwd,
+                prompt,
+                model: resumeModel,
+                resume: sessionId,
+                lfgSessionId: sessionId,
+                lfgUser: assignedUser,
+              })
+            : spawnManagedCursorSession({
+                name: tmuxName,
+                cwd,
+                prompt,
+                model: resumeModel,
+                nativeSessionId: sessionId,
+                lfgSessionId: sessionId,
+                lfgUser: assignedUser,
+              });
+          if (!spawned.ok) {
+            removeManaged(tmuxName);
+            assignUser(tmuxName, null);
+            return err(502, spawned.error || "failed to resume session");
+          }
+          patchManaged(tmuxName, { launchState: "running" });
+          updateResumableUser(sessionId, assignedUser ?? null);
+          invalidateListSessionsCache();
+          return json({
+            ok: true,
+            tmuxName,
+            cwd,
+            sessionId,
+            resumedFrom: sessionId,
+            agent,
+          });
+        }
         // Codex rollouts live under ~/.codex/sessions — resume them through a
         // codex-aisdk harness keyed to the rollout's threadId rather than the
         // claude CLI.
@@ -4011,6 +4079,10 @@ export async function cmdServe() {
         const cwd = await resolveResumeCwd(await cwdForTranscript(transcript), cachedResume?.project);
         const tmuxName = `lfg-${randomBytes(3).toString("hex")}`;
         const resumePrompt = body?.prompt?.trim() || undefined;
+        // Claude transcripts are discovered lazily just like Codex rollouts.
+        // Import and seed the direct read model before launching the resumed
+        // harness so every file-backed backend has the same non-empty contract.
+        await prepareFileHistoryForResume(transcript, sessionId, sessionId);
         addManaged({
           tmuxName,
           cwd,

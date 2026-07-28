@@ -4,6 +4,15 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 28, 2026 - Durable sessions across every resume path (v0.1.77)
+
+- Claude, Codex, OpenCode, and Pi retain their full indexed conversation when
+  resumed, and Grok and Cursor sessions can now be resumed from their native
+  histories in the same picker.
+- The live managed-session roster now stays in memory for fast reads while
+  persisting every mutation atomically, so a serve crash or restart rehydrates
+  the intact session list instead of losing or briefly emptying it.
+
 ## July 28, 2026 - Codex resume history restored (v0.1.76)
 
 - Resuming a file-backed Codex session now imports its conversation before the

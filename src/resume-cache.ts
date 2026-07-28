@@ -150,6 +150,13 @@ function init(): Database {
     );
     d.exec(migration);
   }
+  if (version < 3) {
+    const migration = readFileSync(
+      new URL("./migrations/resume-cache/003_native_tui_resume.sql", import.meta.url),
+      "utf8",
+    );
+    d.exec(migration);
+  }
   initialized = true;
   return d;
 }

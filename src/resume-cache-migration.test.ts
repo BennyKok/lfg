@@ -38,6 +38,19 @@ describe("resume cache migration", () => {
       "utf8",
     );
     db.exec(historicalSql);
+    db.exec(`
+      INSERT INTO resumable_sessions
+        (session_id, agent, resumable)
+      VALUES
+        ('grok-session', 'grok', 0),
+        ('cursor-session', 'cursor', 0),
+        ('other-session', 'claude', 0);
+    `);
+    const nativeTuiSql = readFileSync(
+      new URL("./migrations/resume-cache/003_native_tui_resume.sql", import.meta.url),
+      "utf8",
+    );
+    db.exec(nativeTuiSql);
 
     const columns = db.query<{ name: string }, []>("PRAGMA table_info(resumable_sessions)").all();
     expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining([
@@ -48,7 +61,10 @@ describe("resume cache migration", () => {
       "managed",
       "resumable",
     ]));
-    expect(db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(2);
+    expect(db.query<{ session_id: string }, []>(
+      "SELECT session_id FROM resumable_sessions WHERE resumable = 1 ORDER BY session_id",
+    ).all().map((row) => row.session_id)).toEqual(["cursor-session", "grok-session"]);
+    expect(db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(3);
     db.close();
   });
 });

@@ -64,4 +64,37 @@ describe("file-backed session resume history", () => {
       ({ role, text }) => role === "assistant" && text === "I have the prior context.",
     )).toBe(true);
   });
+
+  test("cold Claude transcript is imported before resuming under the same id", async () => {
+    const transcript = join(root, `${SOURCE_SESSION}.jsonl`);
+    writeFileSync(
+      transcript,
+      [
+        JSON.stringify({
+          type: "user",
+          uuid: "user-one",
+          timestamp: "2026-07-28T07:00:00.000Z",
+          message: { role: "user", content: "Keep my Claude history" },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          uuid: "assistant-one",
+          timestamp: "2026-07-28T07:00:01.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "History retained." }],
+          },
+        }),
+        "",
+      ].join("\n"),
+    );
+
+    expect(
+      await prepareFileHistoryForResume(transcript, SOURCE_SESSION, SOURCE_SESSION),
+    ).toBeGreaterThan(0);
+
+    const page = await indexedMessagePage(sessionIndexKey(SOURCE_SESSION), SOURCE_SESSION);
+    expect(page.messages.some(({ text }) => text === "Keep my Claude history")).toBe(true);
+    expect(page.messages.some(({ text }) => text === "History retained.")).toBe(true);
+  });
 });

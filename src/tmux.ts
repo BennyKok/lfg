@@ -550,17 +550,19 @@ export function spawnManagedCodexSession(opts: {
   return { ok: true };
 }
 
-export function spawnManagedGrokSession(opts: {
+export type ManagedGrokSessionOptions = {
   name: string;
   cwd: string;
   prompt?: string;
   model?: string;
   thinkingLevel?: string;
+  resume?: string;
   lfgSessionId?: string;
   lfgUser?: string | null;
   containInAgentSlice?: boolean;
-}): { ok: boolean; error?: string } {
-  const dec = new TextDecoder();
+};
+
+export function managedGrokSessionArgv(opts: ManagedGrokSessionOptions): string[] {
   const argv = [
     "tmux",
     "new-session",
@@ -576,12 +578,19 @@ export function spawnManagedGrokSession(opts: {
     "--permission-mode",
     "bypassPermissions",
   ];
+  if (opts.resume) argv.push("--resume", opts.resume);
   if (opts.model) argv.push("--model", opts.model);
   const effort = claudeEffortFor(opts.thinkingLevel);
   if (effort) argv.push("--effort", effort);
   const prompt = withLfgRuntimeContract(opts.prompt);
   if (prompt?.trim()) argv.push("--", prompt);
   addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
+  return argv;
+}
+
+export function spawnManagedGrokSession(opts: ManagedGrokSessionOptions): { ok: boolean; error?: string } {
+  const dec = new TextDecoder();
+  const argv = managedGrokSessionArgv(opts);
   containTmuxCommand(argv, grokBin(), opts.containInAgentSlice, opts);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
@@ -685,21 +694,25 @@ export function spawnManagedCursorSession(opts: ManagedCursorSessionOptions): {
   // suppresses Cursor's per-command approval selector; `--sandbox disabled`
   // alone still asks before shell calls and can strand a live session mid-turn.
   ensureCursorFolderTrusted(opts.cwd);
-  // Allocate Cursor's native chat id before starting the TUI. Discovering it as
+  // Allocate Cursor's native chat id before starting a NEW TUI. Discovering it as
   // "the newest transcript in cwd" races with old chats: until the new file is
   // created, newest is necessarily a previous session and the live view
-  // backfills that conversation. An explicit id makes the mapping deterministic.
-  const chat = Bun.spawnSync({
-    cmd: [cursorBin(), "create-chat"],
-    cwd: opts.cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  if (chat.exitCode !== 0) {
-    return { ok: false, error: dec.decode(chat.stderr) || "failed to create cursor chat" };
+  // backfills that conversation. A resume already owns its native id, so reuse
+  // it directly instead of accidentally creating and opening an empty chat.
+  let nativeSessionId = opts.nativeSessionId;
+  if (!nativeSessionId) {
+    const chat = Bun.spawnSync({
+      cmd: [cursorBin(), "create-chat"],
+      cwd: opts.cwd,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (chat.exitCode !== 0) {
+      return { ok: false, error: dec.decode(chat.stderr) || "failed to create cursor chat" };
+    }
+    nativeSessionId = cursorChatIdFromOutput(dec.decode(chat.stdout)) ?? undefined;
+    if (!nativeSessionId) return { ok: false, error: "cursor create-chat returned no chat id" };
   }
-  const nativeSessionId = cursorChatIdFromOutput(dec.decode(chat.stdout));
-  if (!nativeSessionId) return { ok: false, error: "cursor create-chat returned no chat id" };
   const argv = managedCursorSessionArgv({ ...opts, nativeSessionId });
   containTmuxCommand(argv, cursorBin(), opts.containInAgentSlice, opts);
   const create = Bun.spawnSync(argv);

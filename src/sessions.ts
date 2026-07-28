@@ -2421,7 +2421,10 @@ export async function resolveTranscript(sessionId: string): Promise<string | nul
     if (grokId) return findGrokTranscriptById(grokId);
   }
   let p =
-    (await findTranscriptById(sessionId)) ?? (await findCodexTranscriptById(sessionId)) ?? findGrokTranscriptById(sessionId);
+    (await findTranscriptById(sessionId)) ??
+    (await findCodexTranscriptById(sessionId)) ??
+    findGrokTranscriptById(sessionId) ??
+    (await findCursorTranscriptById(sessionId));
   if (p) return p;
   return null;
 }
@@ -2661,7 +2664,7 @@ async function refreshResumableCacheOnce(focusSessionId?: string): Promise<void>
       mtimeMs: mtime,
       model: summary?.current_model_id ?? null,
       assignedUser: managedRec ? assignments[managedRec.tmuxName] ?? null : null,
-      resumable: false,
+      resumable: true,
     });
   }
 
@@ -2726,7 +2729,7 @@ async function refreshResumableCacheOnce(focusSessionId?: string): Promise<void>
       path,
       mtimeMs: mtime,
       assignedUser: owner ? assignments[owner.tmuxName] ?? null : null,
-      resumable: false,
+      resumable: true,
     });
   }
 

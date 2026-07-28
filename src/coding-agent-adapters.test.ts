@@ -21,6 +21,7 @@ import {
   spawnManagedSession,
   managedCopilotSessionArgv,
   managedCursorSessionArgv,
+  managedGrokSessionArgv,
   cursorChatIdFromOutput,
   containedAgentCommand,
   parsePrompt,
@@ -126,6 +127,23 @@ describe("coding agent adapter contract", () => {
     ]);
     expect(cursorChatIdFromOutput(`Created chat: ${nativeSessionId}\n`)).toBe(nativeSessionId);
     expect(cursorChatIdFromOutput("chat creation failed")).toBeNull();
+  });
+
+  test("grok managed sessions resume their native conversation", () => {
+    const nativeSessionId = "64cb7cba-1e83-4c70-b0e0-248cce3ad5f4";
+    const argv = managedGrokSessionArgv({
+      name: "lfg-test",
+      cwd: "/tmp/lfg-test",
+      prompt: "continue",
+      resume: nativeSessionId,
+      lfgSessionId: nativeSessionId,
+    });
+
+    expect(argv.slice(argv.indexOf("--resume"), argv.indexOf("--resume") + 2)).toEqual([
+      "--resume",
+      nativeSessionId,
+    ]);
+    expect(argv).toContain(`LFG_SESSION_ID=${nativeSessionId}`);
   });
 
   test("contained subagents run in the shared slice with cleanup and OOM priority", () => {

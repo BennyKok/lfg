@@ -13579,7 +13579,7 @@ type ResumableSession = {
   title: string;
   lastActivityAt: number | null;
   lastUserText: string | null;
-  agent: "claude" | "codex" | "opencode";
+  agent: "claude" | "codex" | "opencode" | "grok" | "cursor";
   model?: string | null;
 };
 
@@ -14265,9 +14265,11 @@ function NewSessionDialog({
           ? (catalog.models.opencode ?? AGENT_MODELS.opencode).includes(model)
             ? model
             : defaultModelFor("opencode")
-        : (catalog.models["codex-aisdk"] ?? AGENT_MODELS["codex-aisdk"]).includes(model)
-          ? model
-          : defaultModelFor("codex-aisdk");
+        : session.agent === "codex"
+          ? (catalog.models["codex-aisdk"] ?? AGENT_MODELS["codex-aisdk"]).includes(model)
+            ? model
+            : defaultModelFor("codex-aisdk")
+          : undefined;
     onClose();
     toast.promise(
       api("/api/sessions/resume", {
@@ -14945,7 +14947,9 @@ function ResumeSessionSheet({
 
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
-  const [agent, setAgent] = useState<"all" | "claude" | "codex" | "opencode">("all");
+  const [agent, setAgent] = useState<
+    "all" | "claude" | "codex" | "opencode" | "grok" | "cursor"
+  >("all");
   const [project, setProject] = useState<string>(scoped);
   // Seed from the parent prefetch only when opening unscoped — a scoped open
   // needs its own first page, so the unfiltered seed would be wrong.
@@ -15031,7 +15035,7 @@ function ResumeSessionSheet({
     return () => obs.disconnect();
   }, []);
 
-  const agentCount = (kind: "claude" | "codex" | "opencode") =>
+  const agentCount = (kind: "claude" | "codex" | "opencode" | "grok" | "cursor") =>
     facets.agents.find((a) => a.agent === kind)?.count ?? 0;
   // Keep the currently-selected project visible even if the active search would
   // otherwise drop it out of the facet list.
@@ -15045,11 +15049,17 @@ function ResumeSessionSheet({
   const filtersActive = agent !== "all" || project !== "all" || !!debounced;
   const showSkeleton = loading && items.length === 0;
 
-  const agentTabs: Array<{ key: "all" | "claude" | "codex" | "opencode"; label: string; badge?: number }> = [
+  const agentTabs: Array<{
+    key: "all" | "claude" | "codex" | "opencode" | "grok" | "cursor";
+    label: string;
+    badge?: number;
+  }> = [
     { key: "all", label: "All" },
     { key: "claude", label: "Claude", badge: agentCount("claude") },
     { key: "codex", label: "Codex", badge: agentCount("codex") },
     { key: "opencode", label: "OpenCode", badge: agentCount("opencode") },
+    { key: "grok", label: "Grok", badge: agentCount("grok") },
+    { key: "cursor", label: "Cursor", badge: agentCount("cursor") },
   ];
 
   return createPortal(
@@ -15105,7 +15115,7 @@ function ResumeSessionSheet({
         </div>
 
         {/* Agent segmented control */}
-        <div className="flex items-center gap-1">
+        <div className="-mx-2 flex items-center gap-1 overflow-x-auto px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           <div className="inline-flex h-8 items-center rounded-full bg-muted p-0.5 text-xs font-semibold">
             {agentTabs.map((t) => (
               <button
