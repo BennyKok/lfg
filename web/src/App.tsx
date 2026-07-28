@@ -14679,8 +14679,14 @@ function NewSessionDialog({
       onSubmit={submit}
       {...files.dropZoneProps}
       className={cn(
-        "max-h-[70dvh] overscroll-contain px-2 pb-[max(var(--lfg-safe-bottom),0.5rem)] transition-colors",
-        variant === "inline" ? "overflow-visible pt-1.5" : "overflow-y-auto pt-1",
+        // Inline home sits above the shell's host-inset band when embedded, so
+        // only a tight pad — full --lfg-safe-bottom here double-counts the pill
+        // and leaves a large empty gap under Start in the omg PWA. Drawer /
+        // dialog variants are full-bleed and need the global safe bottom.
+        "max-h-[70dvh] overscroll-contain px-2 transition-colors",
+        variant === "inline"
+          ? "overflow-visible pb-2 pt-1.5"
+          : "overflow-y-auto pb-[max(var(--lfg-safe-bottom),0.5rem)] pt-1",
         draggingFiles && "bg-primary/8",
       )}
     >

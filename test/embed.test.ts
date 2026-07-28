@@ -51,13 +51,16 @@ describe("host bottom inset contract", () => {
     expect(css).toMatch(/--lfg-host-bottom-inset:\s*2\.75rem/);
   });
 
-  test("global --lfg-safe-bottom folds host inset into every clearance token", () => {
+  test("global --lfg-safe-bottom is device-only standalone, host-only in embed", () => {
     const css = require("node:fs").readFileSync("web/src/index.css", "utf8") as string;
-    // Single source of truth: device safe-area + host chrome.
-    expect(css).toMatch(
-      /--lfg-safe-bottom:\s*calc\(env\(safe-area-inset-bottom,\s*0px\)\s*\+\s*var\(--lfg-host-bottom-inset\)\)/,
-    );
-    // Clearance tokens derive from the global safe bottom — not raw safe-area alone.
+    // Standalone default: device home-indicator only.
+    expect(css).toMatch(/--lfg-device-safe-bottom:\s*env\(safe-area-inset-bottom,\s*0px\)/);
+    expect(css).toMatch(/--lfg-safe-bottom:\s*var\(--lfg-device-safe-bottom\)/);
+    // Embed: host pill only — do NOT stack device safe-area (host already
+    // sits the pill above the home indicator; stacking double-pads iOS PWAs).
+    const embedBlock = css.slice(css.indexOf('html[data-lfg-embed="true"]'));
+    expect(embedBlock).toMatch(/--lfg-safe-bottom:\s*var\(--lfg-host-bottom-inset\)/);
+    // Clearance tokens derive from the global safe bottom.
     expect(css).toMatch(/--lfg-composer-clear:\s*calc\(10\.5rem\s*\+\s*var\(--lfg-safe-bottom\)\)/);
     expect(css).toMatch(/--lfg-orb-bottom:\s*calc\(1\.5rem\s*\+\s*var\(--lfg-safe-bottom\)\)/);
   });
@@ -71,5 +74,13 @@ describe("host bottom inset contract", () => {
     expect(app).not.toMatch(
       /paddingBottom:\s*["']env\(safe-area-inset-bottom(?:,\s*0px)?\)["']/,
     );
+  });
+
+  test("inline home composer does not double-count host inset with shell pad", () => {
+    const app = require("node:fs").readFileSync("web/src/App.tsx", "utf8") as string;
+    // Shell already applies host-inset when embedded; the inline form keeps a
+    // tight pb-2 so Start sits just above the pill band.
+    expect(app).toMatch(/variant === "inline"[\s\S]*?overflow-visible pb-2 pt-1\.5/);
+    expect(app).toContain('embedded && "pb-[var(--lfg-host-bottom-inset)]"');
   });
 });
