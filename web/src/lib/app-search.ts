@@ -42,6 +42,13 @@ export function tabToPath(tab: string): string {
   return tab === DEFAULT_TAB ? "/" : `/${encodeURIComponent(tab)}`;
 }
 
+/** Same-tab requests are state updates, not route changes. Avoiding a redundant
+ * navigation also preserves active search contracts such as `session` and
+ * `embed`, which the router would otherwise clear when no `search` is supplied. */
+export function shouldNavigateToTab(currentTab: string, nextTab: string): boolean {
+  return currentTab !== nextTab;
+}
+
 /** The typed shape of the app's search params (path aside). */
 export interface AppSearch {
   /** Deep link to focus a session on load. EXTERNAL CONTRACT: the server emits

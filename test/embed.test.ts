@@ -1,6 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { embedSearchFlag, isEmbedded, isFramed } from "../web/src/lib/embed.ts";
-import { shouldPrioritizeSession, validateAppSearch } from "../web/src/lib/app-search.ts";
+import {
+  shouldNavigateToTab,
+  shouldPrioritizeSession,
+  validateAppSearch,
+} from "../web/src/lib/app-search.ts";
 
 describe("embed detection", () => {
   test("accepts embed=1 / true / boolean from search", () => {
@@ -41,6 +45,12 @@ describe("session prioritization + search validation", () => {
     expect(shouldPrioritizeSession({ embed: true })).toBe(false);
     expect(shouldPrioritizeSession({})).toBe(false);
     expect(shouldPrioritizeSession(null)).toBe(false);
+  });
+
+  test("same-tab state updates do not navigate and discard deep-link search", () => {
+    expect(shouldNavigateToTab("live", "live")).toBe(false);
+    expect(shouldNavigateToTab("settings", "settings")).toBe(false);
+    expect(shouldNavigateToTab("settings", "live")).toBe(true);
   });
 });
 
