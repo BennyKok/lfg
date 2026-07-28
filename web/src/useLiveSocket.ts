@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { visibilityRecoveryAction } from "./live-visibility";
 
 type Session = {
   agent?: string;
@@ -325,6 +326,7 @@ function reconcileSnapshotMessages(current: Message[], incoming: Message[]): Mes
 
 const BACKOFF_MIN_MS = 250;
 const BACKOFF_MAX_MS = 10_000;
+const VISIBILITY_PROBE_TIMEOUT_MS = 2_000;
 // Consecutive failed reconnect attempts after which we stop calling it a brief
 // "reconnecting" blip and surface the more alarming "offline" state instead.
 const OFFLINE_AFTER_ATTEMPTS = 5;
@@ -405,6 +407,11 @@ export function useLiveSocket(
   const pendingReconnectRef = useRef(false);
   const lastMessageFlushRef = useRef(0);
   const latencyProbeRef = useRef<{ id: string; startedAt: number } | null>(null);
+  const visibilityProbeRef = useRef<{
+    id: string;
+    ws: WebSocket;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
   const connectRef = useRef<() => void>(() => {});
 
   const [connection, setConnection] = useState<ConnectionState>(INITIAL_CONNECTION_STATE);
@@ -469,6 +476,11 @@ export function useLiveSocket(
       return;
     }
     if (payload.t === "pong") {
+      const visibilityProbe = visibilityProbeRef.current;
+      if (payload.id && visibilityProbe?.id === payload.id) {
+        clearTimeout(visibilityProbe.timer);
+        visibilityProbeRef.current = null;
+      }
       const probe = latencyProbeRef.current;
       if (!payload.id || !probe || payload.id !== probe.id) return;
       latencyProbeRef.current = null;
@@ -741,7 +753,16 @@ export function useLiveSocket(
         handleMessage(payload);
       };
       ws.onclose = (event) => {
-        if (wsRef.current === ws) wsRef.current = null;
+        const visibilityProbe = visibilityProbeRef.current;
+        if (visibilityProbe?.ws === ws) {
+          clearTimeout(visibilityProbe.timer);
+          visibilityProbeRef.current = null;
+        }
+        // A visibility recovery can replace a half-dead socket before its close
+        // event arrives. Never let that stale event tear down the replacement's
+        // subscription bookkeeping or schedule another reconnect over it.
+        if (wsRef.current !== ws) return;
+        wsRef.current = null;
         subscribedRef.current = new Set();
         subscribedChannelsRef.current = new Set();
         if (closedByHookRef.current) return;
@@ -780,7 +801,45 @@ export function useLiveSocket(
 
     const onVisible = () => {
       if (typeof document === "undefined" || document.visibilityState !== "visible") return;
-      if (pendingReconnectRef.current) connect();
+      const ws = wsRef.current;
+      const action = visibilityRecoveryAction(
+        ws?.readyState ?? null,
+        pendingReconnectRef.current,
+      );
+      if (action === "connect") {
+        pendingReconnectRef.current = false;
+        connect();
+        return;
+      }
+      if (action !== "probe" || !ws) return;
+
+      // Browsers can leave a dead connection in OPEN after a desktop/tab
+      // switch. Probe immediately instead of waiting for the TCP stack to
+      // notice; if the server does not answer, closing the stale socket runs
+      // the normal reconnect + sequence replay path.
+      const previous = visibilityProbeRef.current;
+      if (previous) clearTimeout(previous.timer);
+      const id =
+        crypto.randomUUID?.() ??
+        `visible-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      latencyProbeRef.current = { id, startedAt: performance.now() };
+      ws.send(JSON.stringify({ t: "ping", id }));
+      const timer = setTimeout(() => {
+        const current = visibilityProbeRef.current;
+        if (!current || current.id !== id || current.ws !== ws) return;
+        visibilityProbeRef.current = null;
+        evlog("ws_client_visibility_probe_timeout", {
+          elapsedMs: VISIBILITY_PROBE_TIMEOUT_MS,
+        });
+        if (wsRef.current === ws) wsRef.current = null;
+        subscribedRef.current = new Set();
+        subscribedChannelsRef.current = new Set();
+        try {
+          ws.close(4000, "visibility probe timeout");
+        } catch {}
+        connect();
+      }, VISIBILITY_PROBE_TIMEOUT_MS);
+      visibilityProbeRef.current = { id, ws, timer };
     };
     const onOnline = () => {
       pendingReconnectRef.current = false;
@@ -796,6 +855,11 @@ export function useLiveSocket(
       window.removeEventListener("online", onOnline);
       window.clearInterval(latencyTimer);
       latencyProbeRef.current = null;
+      const visibilityProbe = visibilityProbeRef.current;
+      if (visibilityProbe) {
+        clearTimeout(visibilityProbe.timer);
+        visibilityProbeRef.current = null;
+      }
       if (reconnectTimerRef.current != null) {
         clearTimeout(reconnectTimerRef.current);
         reconnectTimerRef.current = null;
