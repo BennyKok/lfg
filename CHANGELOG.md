@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 28, 2026 - Merged branch badges (v0.1.80)
+
+- Session change badges now switch from the neutral Review treatment to a
+  green check and Merged label once the branch is merged.
+- New edits or commits made after a merge return the badge to Review, keeping
+  the displayed branch state accurate.
+
 ## July 28, 2026 - Transcript indexing no longer stalls serve (v0.1.79)
 
 - Indexing a transcript message used to scan the entire search mirror, so a
