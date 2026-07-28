@@ -10,6 +10,12 @@ import {
 } from "./lib/app-search";
 import { isEmbedded, readLocationEmbedFlag } from "./lib/embed";
 import {
+  embeddedConnectOptions,
+  shouldShowEmbeddedConnectGate,
+} from "./lib/embedded-connect";
+import { emitSessionCreatedToHost } from "./lib/embed-host-signal";
+import { EmbeddedConnectGate } from "./components/embedded-connect-gate";
+import {
   isComputerHostResumeMessage,
   restartContinuousAnimations,
 } from "./embedded-animation-recovery";
@@ -3156,6 +3162,11 @@ const recentlyCreatedSids = new Set<string>();
 function markCreatedSid(sid: string): void {
   recentlyCreatedSids.add(sid);
   window.setTimeout(() => recentlyCreatedSids.delete(sid), 2000);
+  // Single funnel for "this tab just created a session", so it is also the one
+  // place the embedding host learns about it (see lib/embed-host-signal.ts).
+  // Embed intent is read from the location rather than React state to keep
+  // this module-level helper free of a second owner of that flag.
+  emitSessionCreatedToHost(sid, readLocationEmbedFlag());
 }
 
 // The set of EXPANDED session ids among `sessions`, kept in sync with the
@@ -3879,6 +3890,10 @@ export function App() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [codingAgents, setCodingAgents] = useState<CodingAgentInfo[]>([]);
   const [codingAgentAuth, setCodingAgentAuth] = useState<CodingAgentAuthSession | null>(null);
+  // Embed-only first-run gate: which provider row has an in-flight click, and
+  // whether the user chose to look past the gate for this app load.
+  const [connectPendingKind, setConnectPendingKind] = useState<AgentKind | null>(null);
+  const [connectGateSkipped, setConnectGateSkipped] = useState(false);
   const [modelCatalog, setModelCatalog] = useState<AgentModelCatalog>(() =>
     buildAgentModelCatalog(),
   );
@@ -5315,8 +5330,56 @@ export function App() {
     }
   }
 
+  // Embedded fresh box: onboarding and settings are hidden under a host, so
+  // the gate below is the only place a framed user can connect a coding agent.
+  // While it is open we re-read the roster so a finished CLI install (or an
+  // out-of-band login) reveals the app without a manual reload; the auth dialog
+  // already refreshes on its own when a browser login completes.
+  const connectGateOpen = shouldShowEmbeddedConnectGate({
+    embedded,
+    agents: codingAgents,
+    dismissed: connectGateSkipped,
+  });
+  useEffect(() => {
+    if (!connectGateOpen) return;
+    const timer = window.setInterval(() => void refreshCodingAgents(), 4000);
+    return () => window.clearInterval(timer);
+  }, [connectGateOpen, refreshCodingAgents]);
+
   if (loading) {
     return <AppShellSkeleton />;
+  }
+
+  // Reuses loginCodingAgent/setupCodingAgent and the shared auth dialog, and
+  // closes itself as soon as refreshCodingAgents reports something configured.
+  if (connectGateOpen) {
+    return (
+      <>
+        <EmbeddedConnectGate
+          options={embeddedConnectOptions(codingAgents)}
+          pendingKind={connectPendingKind}
+          onConnect={(kind) => {
+            setConnectPendingKind(kind as AgentKind);
+            void loginCodingAgent(kind as AgentKind).finally(() =>
+              setConnectPendingKind(null),
+            );
+          }}
+          onInstall={(kind) => {
+            setupCodingAgent(kind as AgentKind);
+          }}
+          onSkip={() => setConnectGateSkipped(true)}
+        />
+        <CodingAgentAuthDialog
+          session={codingAgentAuth}
+          onSessionChange={setCodingAgentAuth}
+          onComplete={async () => {
+            setCodingAgentAuth(null);
+            await refreshCodingAgents({ refreshModels: true });
+          }}
+        />
+        <Toaster position="bottom-center" />
+      </>
+    );
   }
 
   // Brand-new install (no roster, no sessions, onboarding never completed):
