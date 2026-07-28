@@ -1008,6 +1008,19 @@ export function reindexFileHistoryUnderSessionKey(
   return inserted;
 }
 
+// Cold-resuming a file-backed session must not depend on the background/read
+// indexer having happened to visit the transcript already. The harness can only
+// copy rows that are committed before it starts, so synchronously import the
+// source file and seed the new direct-index key as one resume preparation step.
+export async function prepareFileHistoryForResume(
+  path: string,
+  sourceSessionId: string,
+  targetSessionId: string,
+): Promise<number> {
+  await indexTranscript(path, sourceSessionId);
+  return reindexFileHistoryUnderSessionKey(targetSessionId, sourceSessionId);
+}
+
 function cursorFor(path: string): { offset: number; size: number; mtimeMs: number } | null {
   init();
   return database()

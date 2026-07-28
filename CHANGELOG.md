@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 28, 2026 - Codex resume history restored (v0.1.76)
+
+- Resuming a file-backed Codex session now imports its conversation before the
+  new agent starts, preventing successful resumes from opening as an empty chat.
+
 ## July 28, 2026 - Desktop embed drops bottom host pad (v0.1.75)
 
 - When framed in omg at desktop width (lg+), host bottom inset cancels so the
