@@ -36,9 +36,13 @@ const PRECOMPRESS_SKIP_EXTENSIONS = new Set([
 // the build's actual output changes.
 function stampServiceWorkerVersion(): Plugin {
   let version = "dev";
+  let outDir = path.resolve(__dirname, "dist");
   return {
     name: "lfg-sw-version",
     apply: "build",
+    configResolved(config) {
+      outDir = config.build.outDir;
+    },
     writeBundle(_options, bundle) {
       const entry = Object.values(bundle).find(
         (chunk) => chunk.type === "chunk" && chunk.isEntry,
@@ -47,7 +51,7 @@ function stampServiceWorkerVersion(): Plugin {
       version = createHash("sha256").update(basis).digest("hex").slice(0, 12);
     },
     closeBundle() {
-      const swPath = path.resolve(__dirname, "dist/sw.js");
+      const swPath = path.resolve(outDir, "sw.js");
       if (!fs.existsSync(swPath)) return;
       const src = fs.readFileSync(swPath, "utf8");
       fs.writeFileSync(swPath, src.replaceAll("__VERSION__", version));
@@ -56,6 +60,7 @@ function stampServiceWorkerVersion(): Plugin {
 }
 
 function precompressAssets(): Plugin {
+  let outDir = path.resolve(__dirname, "dist");
   const walk = (dir: string): string[] =>
     fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
       const full = path.join(dir, entry.name);
@@ -68,8 +73,11 @@ function precompressAssets(): Plugin {
   return {
     name: "lfg-precompress-assets",
     apply: "build",
+    configResolved(config) {
+      outDir = config.build.outDir;
+    },
     closeBundle() {
-      const assetsDir = path.resolve(__dirname, "dist/assets");
+      const assetsDir = path.resolve(outDir, "assets");
       if (!fs.existsSync(assetsDir)) return;
       for (const file of walk(assetsDir)) {
         const src = fs.readFileSync(file);
