@@ -53,12 +53,13 @@ describe("host bottom inset contract", () => {
 
   test("global --lfg-safe-bottom is device-only standalone, host-only in embed", () => {
     const css = require("node:fs").readFileSync("web/src/index.css", "utf8") as string;
-    // Standalone default: device home-indicator only.
+    // Standalone default: original device home-indicator.
     expect(css).toMatch(/--lfg-device-safe-bottom:\s*env\(safe-area-inset-bottom,\s*0px\)/);
     expect(css).toMatch(/--lfg-safe-bottom:\s*var\(--lfg-device-safe-bottom\)/);
-    // Embed: host pill only — do NOT stack device safe-area (host already
-    // sits the pill above the home indicator; stacking double-pads iOS PWAs).
+    // Embed: cancel device pad + host pill only (host already owns the
+    // home-indicator zone; stacking it double-pads iOS PWAs).
     const embedBlock = css.slice(css.indexOf('html[data-lfg-embed="true"]'));
+    expect(embedBlock).toMatch(/--lfg-device-safe-bottom:\s*0px/);
     expect(embedBlock).toMatch(/--lfg-safe-bottom:\s*var\(--lfg-host-bottom-inset\)/);
     // Clearance tokens derive from the global safe bottom.
     expect(css).toMatch(/--lfg-composer-clear:\s*calc\(10\.5rem\s*\+\s*var\(--lfg-safe-bottom\)\)/);
@@ -76,11 +77,11 @@ describe("host bottom inset contract", () => {
     );
   });
 
-  test("inline home composer does not double-count host inset with shell pad", () => {
+  test("inline home uses device pad (standalone) and cancels under embed", () => {
     const app = require("node:fs").readFileSync("web/src/App.tsx", "utf8") as string;
-    // Shell already applies host-inset when embedded; the inline form keeps a
-    // tight pb-2 so Start sits just above the pill band.
-    expect(app).toMatch(/variant === "inline"[\s\S]*?overflow-visible pb-2 pt-1\.5/);
+    // Standalone: original home-indicator via --lfg-device-safe-bottom.
+    // Embed: that token is cancelled to 0; shell host-inset clears the pill.
+    expect(app).toContain("pb-[max(var(--lfg-device-safe-bottom),0.5rem)]");
     expect(app).toContain('embedded && "pb-[var(--lfg-host-bottom-inset)]"');
   });
 });

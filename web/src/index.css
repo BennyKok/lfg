@@ -53,12 +53,12 @@
   --lfg-orb-size: 4.5rem;
   /* Host-chrome inset (omg Computer compact bottom nav). 0 outside embed. */
   --lfg-host-bottom-inset: 0px;
-  /* Device home-indicator only — never use this alone for embed surfaces. */
+  /* Device home-indicator. Standalone uses the real inset; embed cancels it
+     (host already places chrome above the home indicator). */
   --lfg-device-safe-bottom: env(safe-area-inset-bottom, 0px);
   /* GLOBAL bottom safe padding.
-     Standalone: device home-indicator.
-     Embed: host pill only — the host already sits the pill above the home
-     indicator, so stacking env(safe-area) on top double-pads (esp. iOS PWA). */
+     Standalone: original device home-indicator pad.
+     Embed: host pill only (device pad cancelled — see data-lfg-embed). */
   --lfg-safe-bottom: var(--lfg-device-safe-bottom);
   --lfg-orb-bottom: calc(1.5rem + var(--lfg-safe-bottom));
   --lfg-orb-gap: 1rem;
@@ -76,13 +76,11 @@
   --lfg-above-orb: var(--lfg-composer-clear);
 }
 
-/* Framed inside omg Computer (`?embed=1` / iframe): the host's icon-only
-   bottom pill floats over us. Lift content by a *tight* inset so composer +
-   controls clear the pill, while our background still paints full-bleed under
-   it (no color band from host crop). Sized for the compact pill (~40px), not
-   the old labeled bar. Safe-bottom becomes host-only so we don't re-add the
-   device home-indicator the host already cleared. */
+/* Framed inside omg Computer (`?embed=1` / iframe): cancel the device
+   home-indicator pad (host already owns that zone) and lift content by a
+   tight host-pill inset so composer + controls clear the floating nav. */
 html[data-lfg-embed="true"] {
+  --lfg-device-safe-bottom: 0px;
   --lfg-host-bottom-inset: 2.75rem;
   --lfg-safe-bottom: var(--lfg-host-bottom-inset);
 }
