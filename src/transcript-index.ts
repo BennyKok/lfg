@@ -66,6 +66,24 @@ const BACKGROUND_LIMIT = 8;
 const WAL_CHECKPOINT_INTERVAL_MS = 30_000;
 const TRANSCRIPT_BUSY_TIMEOUT_MS = 15_000;
 
+// The FTS mirror is addressed by rowid, never by its `id` column. `id` is
+// declared UNINDEXED (fts5 stores it but builds no index), so `WHERE id = ?`
+// cannot seek and degrades to a full scan of the mirror — 110ms per row at
+// 200k rows. bun:sqlite is synchronous, so with one of those per indexed
+// message the ingest path pinned the main thread and the HTTP server stopped
+// accepting connections while search silently fell behind. Migration 10 aligns
+// the mirror's rowid with transcript_messages.rowid, making every guard and
+// delete an O(log n) docid seek. Keep it that way: filter the base table (whose
+// id is a PRIMARY KEY) and carry the rowid across, rather than filtering the
+// mirror by id.
+const FTS_MIRROR_INSERT = `
+  INSERT INTO transcript_messages_fts (rowid, id, session_id, text)
+  SELECT m.rowid, m.id, m.session_id, m.text
+    FROM transcript_messages m
+   WHERE m.id = ?
+     AND NOT EXISTS (SELECT 1 FROM transcript_messages_fts f WHERE f.rowid = m.rowid)
+`;
+
 let db: Database | null = null;
 let dbOpenedPath: string | null = null;
 let initialized = false;
@@ -152,7 +170,7 @@ function upsertArtifactRow(d: Database, artifact: ImageArtifact): void {
 function deleteArtifactRow(d: Database, artifactId: string): void {
   d.query("DELETE FROM artifacts WHERE id = ?").run(artifactId);
   d.query(
-    "DELETE FROM transcript_messages_fts WHERE id IN (SELECT id FROM transcript_messages WHERE message_id = ?)",
+    "DELETE FROM transcript_messages_fts WHERE rowid IN (SELECT rowid FROM transcript_messages WHERE message_id = ?)",
   ).run(`artifact-${artifactId}`);
   d.query("DELETE FROM transcript_messages WHERE message_id = ?").run(`artifact-${artifactId}`);
 }
@@ -197,11 +215,10 @@ export function indexArtifactMessage(path: string, sessionId: string, artifact: 
            WHERE id = ?
         `).run(message.ts, message.role, message.kind, text, existing.id);
       }
-      d.query("DELETE FROM transcript_messages_fts WHERE id = ?").run(existing.id);
-      d.query(`
-        INSERT INTO transcript_messages_fts (id, session_id, text)
-        VALUES (?, ?, ?)
-      `).run(existing.id, sessionId, text);
+      d.query(
+        "DELETE FROM transcript_messages_fts WHERE rowid IN (SELECT rowid FROM transcript_messages WHERE id = ?)",
+      ).run(existing.id);
+      d.query(FTS_MIRROR_INSERT).run(existing.id);
       pageTotalCache.delete(existing.path);
       pageTotalCache.delete(path);
       return 0;
@@ -228,11 +245,7 @@ export function indexArtifactMessage(path: string, sessionId: string, artifact: 
     );
     const inserted = Number(result.changes ?? 0);
     if (inserted) {
-      d.query(`
-        INSERT INTO transcript_messages_fts (id, session_id, text)
-        SELECT ?, ?, ?
-        WHERE NOT EXISTS (SELECT 1 FROM transcript_messages_fts WHERE id = ?)
-      `).run(rowId, sessionId, text, rowId);
+      d.query(FTS_MIRROR_INSERT).run(rowId);
       pageTotalCache.delete(path);
     }
     return inserted;
@@ -421,6 +434,9 @@ function init(busyTimeoutMs = TRANSCRIPT_BUSY_TIMEOUT_MS) {
     -- loopback requests and inflating the live ping display into seconds.
     CREATE INDEX IF NOT EXISTS transcript_messages_message_id
       ON transcript_messages(message_id);
+    -- Rows are keyed by rowid, aligned to transcript_messages.rowid (migration
+    -- 10). The id column is carried for reads to join on; it is NOT searchable,
+    -- so it must never appear in a WHERE clause here. See FTS_MIRROR_INSERT.
     CREATE VIRTUAL TABLE IF NOT EXISTS transcript_messages_fts USING fts5(
       id UNINDEXED,
       session_id UNINDEXED,
@@ -620,6 +636,37 @@ function init(busyTimeoutMs = TRANSCRIPT_BUSY_TIMEOUT_MS) {
       d.exec("PRAGMA user_version = 9");
     }).immediate();
   }
+  if (version < 10) {
+    // Re-key the FTS mirror by rowid (see FTS_MIRROR_INSERT). Existing mirrors
+    // were built with fts5-assigned rowids that have no relation to
+    // transcript_messages.rowid, so the new O(log n) docid lookups would match
+    // the wrong document until the mirror is rebuilt in alignment.
+    //
+    // transcript_messages carries the full text, so this rebuilds from the base
+    // table rather than re-ingesting: no transcript files are re-read, and the
+    // lfg:// rows from direct SDK-stream indexing — which have no file to
+    // re-read and would be lost by a wipe-and-reindex — are preserved. Takes
+    // ~8s per 200k rows, under the 15s busy timeout other writers wait on.
+    d.transaction(() => {
+      // `version` was read outside this transaction. The index has multiple
+      // process writers, so a second process can arrive here holding a stale
+      // read and rebuild a mirror that is already correct — doubling the stall
+      // on exactly the large installs this is slowest for. Re-read under the
+      // write lock and no-op if someone else finished first.
+      const current = d.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version ?? 0;
+      if (current >= 10) return;
+      d.exec("DROP TABLE IF EXISTS transcript_messages_fts");
+      d.exec(`CREATE VIRTUAL TABLE transcript_messages_fts USING fts5(
+        id UNINDEXED,
+        session_id UNINDEXED,
+        text,
+        tokenize = 'unicode61'
+      )`);
+      d.exec(`INSERT INTO transcript_messages_fts (rowid, id, session_id, text)
+        SELECT rowid, id, session_id, text FROM transcript_messages`);
+      d.exec("PRAGMA user_version = 10");
+    }).immediate();
+  }
   d.exec(`CREATE UNIQUE INDEX IF NOT EXISTS transcript_artifact_message_unique
     ON transcript_messages(message_id)
     WHERE message_id LIKE 'artifact-%'`);
@@ -776,7 +823,7 @@ export function deleteTranscriptIndexForPath(path: string): void {
   pageTotalCache.delete(path);
   const d = database();
   d.transaction(() => {
-    d.query("DELETE FROM transcript_messages_fts WHERE id IN (SELECT id FROM transcript_messages WHERE path = ?)")
+    d.query("DELETE FROM transcript_messages_fts WHERE rowid IN (SELECT rowid FROM transcript_messages WHERE path = ?)")
       .run(path);
     d.query("DELETE FROM transcript_messages WHERE path = ?").run(path);
     d.query("DELETE FROM transcript_index_cursors WHERE path = ?").run(path);
@@ -816,11 +863,7 @@ export function indexTranscriptMessages(
         (id, session_id, path, message_id, byte_offset, order_seq, ts, role, kind, text)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    const ftsStmt = d.query(`
-      INSERT INTO transcript_messages_fts (id, session_id, text)
-      SELECT ?, ?, ?
-      WHERE NOT EXISTS (SELECT 1 FROM transcript_messages_fts WHERE id = ?)
-    `);
+    const ftsStmt = d.query(FTS_MIRROR_INSERT);
     let insertedRows = 0;
     for (const row of pending) {
       const result = msgStmt.run(
@@ -836,7 +879,7 @@ export function indexTranscriptMessages(
         row.text,
       );
       insertedRows += Number(result.changes ?? 0);
-      ftsStmt.run(row.id, sessionId, row.text, row.id);
+      ftsStmt.run(row.id);
     }
     if (cursor) updateCursorInDb(d, path, sessionId, cursor);
     return insertedRows;
@@ -903,11 +946,7 @@ export function indexSessionMessagesDirect(sessionId: string, messages: SessionM
         (id, session_id, path, message_id, byte_offset, order_seq, ts, role, kind, text)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    const ftsStmt = d.query(`
-      INSERT INTO transcript_messages_fts (id, session_id, text)
-      SELECT ?, ?, ?
-      WHERE NOT EXISTS (SELECT 1 FROM transcript_messages_fts WHERE id = ?)
-    `);
+    const ftsStmt = d.query(FTS_MIRROR_INSERT);
     let insertedRows = 0;
     for (const row of pending) {
       const result = msgStmt.run(
@@ -923,7 +962,7 @@ export function indexSessionMessagesDirect(sessionId: string, messages: SessionM
         row.text,
       );
       insertedRows += Number(result.changes ?? 0);
-      ftsStmt.run(row.id, sessionId, row.text, row.id);
+      ftsStmt.run(row.id);
     }
     return insertedRows;
   }).immediate(rows);
@@ -988,17 +1027,13 @@ export function reindexFileHistoryUnderSessionKey(
         (id, session_id, path, message_id, byte_offset, order_seq, ts, role, kind, text)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    const ftsStmt = d.query(`
-      INSERT INTO transcript_messages_fts (id, session_id, text)
-      SELECT ?, ?, ?
-      WHERE NOT EXISTS (SELECT 1 FROM transcript_messages_fts WHERE id = ?)
-    `);
+    const ftsStmt = d.query(FTS_MIRROR_INSERT);
     let n = 0;
     for (const r of rows) {
       const id = `${key}\0${r.message_id ?? String(seq)}\0${seq}`;
       const result = msgStmt.run(id, sessionId, key, r.message_id, seq, seq, r.ts, r.role, r.kind, r.text);
       n += Number(result.changes ?? 0);
-      ftsStmt.run(id, sessionId, r.text, id);
+      ftsStmt.run(id);
       seq++;
     }
     return n;
@@ -1055,7 +1090,7 @@ async function indexTranscriptOnce(path: string, sessionId: string): Promise<{
 
   if (st.size < cursor) {
     d.transaction(() => {
-      d.query("DELETE FROM transcript_messages_fts WHERE id IN (SELECT id FROM transcript_messages WHERE path = ?)")
+      d.query("DELETE FROM transcript_messages_fts WHERE rowid IN (SELECT rowid FROM transcript_messages WHERE path = ?)")
         .run(path);
       d.query("DELETE FROM transcript_messages WHERE path = ?").run(path);
       d.query("DELETE FROM transcript_index_cursors WHERE path = ?").run(path);
@@ -1075,11 +1110,7 @@ async function indexTranscriptOnce(path: string, sessionId: string): Promise<{
         (id, session_id, path, message_id, byte_offset, order_seq, ts, role, kind, text)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
-    const ftsStmt = d.query(`
-      INSERT INTO transcript_messages_fts (id, session_id, text)
-      SELECT ?, ?, ?
-      WHERE NOT EXISTS (SELECT 1 FROM transcript_messages_fts WHERE id = ?)
-    `);
+    const ftsStmt = d.query(FTS_MIRROR_INSERT);
     for (const row of rows) {
       msgStmt.run(
         row.id,
@@ -1093,7 +1124,7 @@ async function indexTranscriptOnce(path: string, sessionId: string): Promise<{
         row.msg.kind,
         row.text,
       );
-      ftsStmt.run(row.id, sessionId, row.text, row.id);
+      ftsStmt.run(row.id);
     }
     updateCursorInDb(d, path, sessionId, { size: st.size, offset: committed, mtimeMs: st.mtimeMs });
   });
