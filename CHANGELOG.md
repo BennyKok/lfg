@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 28, 2026 - Hosted animations resume reliably (v0.1.81)
+
+- Hosted Computer activity animations now resume after returning from another
+  tab or window, without reloading or interrupting the live coding session.
+
 ## July 28, 2026 - Merged branch badges (v0.1.80)
 
 - Session change badges now switch from the neutral Review treatment to a
