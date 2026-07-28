@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 28, 2026 - Local Computer conversation manager (v0.1.74)
+
+- Connected Computers can now run lightweight conversation reasoning locally
+  through a versioned manager protocol while the calling service retains
+  privileged tool execution.
+- Retried manager rounds are deduplicated durably, preventing duplicate local
+  model requests during relay reconnects or Computer wake-up.
+
 ## July 28, 2026 - Reliable hosted session focus (v0.1.73)
 
 - Hosted Computer links read their target session directly from the browser
