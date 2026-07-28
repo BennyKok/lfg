@@ -107,6 +107,7 @@ import {
   indexArtifactMessage,
   indexedArtifactPlacement,
   indexTranscript,
+  prepareFileHistoryForResume,
   removeIndexedArtifact,
   sessionIndexKey,
   searchAllTranscriptIndexes,
@@ -3954,6 +3955,11 @@ export async function cmdServe() {
           );
           const tmuxName = `lfg-${randomBytes(3).toString("hex")}`;
           const key = crypto.randomUUID(); // control-plane key (names registry/cmd files)
+          // The resumable catalog discovers rollout files without eagerly
+          // indexing their messages. Import and seed history before spawning:
+          // otherwise the harness's one-shot copy races the lazy indexer and a
+          // successfully resumed Codex session opens with an empty transcript.
+          await prepareFileHistoryForResume(transcript, sessionId, key);
           const r = spawnManagedCodexAisdkSession({
             name: tmuxName,
             cwd,
