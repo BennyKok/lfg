@@ -102,6 +102,15 @@ html.lfg-keyboard-open {
   }
 }
 
+/* omg desktop (lg = 1024): global nav docks top-middle, not bottom. Cancel
+   host-bottom-inset so embed doesn't leave a ghost band under the composer. */
+@media (min-width: 1024px) {
+  html[data-lfg-embed="true"] {
+    --lfg-host-bottom-inset: 0px;
+    --lfg-safe-bottom: 0px;
+  }
+}
+
 .dark {
   color-scheme: dark;
   --background: #000000;

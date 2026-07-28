@@ -101,4 +101,12 @@ describe("host bottom inset contract", () => {
     expect(app).toContain("pb-[max(var(--lfg-device-safe-bottom),0.5rem)]");
     expect(app).toContain('embedded && "pb-[var(--lfg-host-bottom-inset)]"');
   });
+
+  test("desktop embed zeroes host-bottom-inset (omg nav is top-middle)", () => {
+    const css = require("node:fs").readFileSync("web/src/index.css", "utf8") as string;
+    // Match omg useIsDesktop (lg = 1024). Mobile keeps the 2.75rem bottom pill.
+    expect(css).toMatch(
+      /@media\s*\(min-width:\s*1024px\)\s*\{[\s\S]*?html\[data-lfg-embed="true"\]\s*\{[\s\S]*?--lfg-host-bottom-inset:\s*0px/,
+    );
+  });
 });
