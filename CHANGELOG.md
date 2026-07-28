@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 28, 2026 - Hosted desktop project switcher restored (v0.1.78)
+
+- Hosted desktop workspaces once again show the folder/project selector in the
+  session rail, while account and settings controls remain owned by the host.
+
 ## July 28, 2026 - Durable sessions across every resume path (v0.1.77)
 
 - Claude, Codex, OpenCode, and Pi retain their full indexed conversation when
