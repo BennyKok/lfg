@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 28, 2026 - Desktop embed drops bottom host pad (v0.1.75)
+
+- When framed in omg at desktop width (lg+), host bottom inset cancels so the
+  composer no longer sits above a ghost empty band. Mobile embed still clears
+  the bottom Computer/Settings pill.
+
 ## July 28, 2026 - Local Computer conversation manager (v0.1.74)
 
 - Connected Computers can now run lightweight conversation reasoning locally
