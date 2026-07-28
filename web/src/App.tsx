@@ -5335,10 +5335,13 @@ export function App() {
   // While it is open we re-read the roster so a finished CLI install (or an
   // out-of-band login) reveals the app without a manual reload; the auth dialog
   // already refreshes on its own when a browser login completes.
+  // A `?session=` deep link is the host asking for one specific session, which
+  // only exists on a box that is past first run — never hold that behind the
+  // gate. The gate is back on the next plain load while nothing is connected.
   const connectGateOpen = shouldShowEmbeddedConnectGate({
     embedded,
     agents: codingAgents,
-    dismissed: connectGateSkipped,
+    dismissed: connectGateSkipped || !!sessionDeepLinkRef.current,
   });
   useEffect(() => {
     if (!connectGateOpen) return;

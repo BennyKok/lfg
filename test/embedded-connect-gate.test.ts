@@ -268,6 +268,10 @@ describe("App wiring", () => {
     expect(gate.slice(0, gate.indexOf("</>"))).toContain("setupCodingAgent(kind as AgentKind)");
   });
 
+  test("a session deep link is never held behind the gate", () => {
+    expect(app).toContain("dismissed: connectGateSkipped || !!sessionDeepLinkRef.current");
+  });
+
   test("the host signal hangs off the single created-session funnel", () => {
     const funnel = app.slice(
       app.indexOf("function markCreatedSid("),
