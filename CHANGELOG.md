@@ -4,6 +4,15 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 28, 2026 - Transcript indexing no longer stalls serve (v0.1.79)
+
+- Indexing a transcript message used to scan the entire search mirror, so a
+  busy install would pin a CPU core and stop accepting connections — pages hung
+  and the Computer looked disconnected while both services reported healthy.
+  Indexing is now a constant-time lookup.
+- Upgrading rebuilds the search mirror once on first start, about 8 seconds per
+  200k indexed messages. Nothing is re-read from disk and no history is lost.
+
 ## July 28, 2026 - Hosted desktop project switcher restored (v0.1.78)
 
 - Hosted desktop workspaces once again show the folder/project selector in the
