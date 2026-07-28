@@ -7,6 +7,10 @@ import { marked } from "marked";
 import { PATHS, appVersion, installInfo } from "../config.ts";
 import { claudeOauthToken as sharedClaudeOauthToken } from "../claude-creds.ts";
 import {
+  ManagerRoundError,
+  createManagerRoundService,
+} from "../manager-round.ts";
+import {
   applyReleaseUpdate,
   applySourceUpdate,
   releaseUpdateStatus,
@@ -269,6 +273,7 @@ const REPOS_ROOT = reposRoot();
 const SELF_REPO = PATHS.root;
 const EVLOG_DIR = join(PATHS.data, "evlogs");
 const SERVER_INSTANCE_ID = randomBytes(8).toString("hex");
+const managerRoundService = createManagerRoundService({ dataDir: PATHS.data });
 let selfUpdateRunning = false;
 
 function evlog(event: string, fields: Record<string, unknown> = {}) {
@@ -2104,6 +2109,33 @@ export async function cmdServe() {
 
       const response = await (async () => {
       try {
+      if (path === "/api/manager/capabilities") {
+        if (req.method !== "GET") return err(405, "method not allowed");
+        return json(managerRoundService.capabilities());
+      }
+
+      if (path === "/api/manager/round") {
+        if (req.method !== "POST") return err(405, "method not allowed");
+        const declaredLength = Number(req.headers.get("content-length") ?? "0");
+        if (Number.isFinite(declaredLength) && declaredLength > 1_000_000) {
+          return err(413, "request too large");
+        }
+        const raw = await req.text();
+        if (raw.length > 1_000_000) return err(413, "request too large");
+        let body: unknown;
+        try {
+          body = JSON.parse(raw);
+        } catch {
+          return err(400, "invalid JSON");
+        }
+        try {
+          return json(await managerRoundService.run(body));
+        } catch (error) {
+          if (error instanceof ManagerRoundError) return err(error.status, error.message);
+          throw error;
+        }
+      }
+
       if (path === "/api/evlog") {
         if (req.method === "POST") {
           const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
