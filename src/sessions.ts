@@ -803,7 +803,7 @@ async function scanCodexRolloutFiles(): Promise<string[]> {
   return out;
 }
 
-async function findCodexTranscriptById(id: string): Promise<string | null> {
+export async function findCodexTranscriptById(id: string): Promise<string | null> {
   if (!UUID.test(id)) return null;
   const hit = codexPathById.get(id);
   if (hit) return hit;
