@@ -816,7 +816,7 @@ function ArtifactViewerPage({
           ) : null}
         </div>
       </header>
-      <div className="min-h-0 flex-1 pb-[env(safe-area-inset-bottom)]">
+      <div className="min-h-0 flex-1 pb-[var(--lfg-safe-bottom)]">
         {artifact.kind === "html" ? (
           <iframe
             src={src}
@@ -5349,7 +5349,8 @@ export function App() {
       className={cn(
         APP_SHELL_CLASS,
         // Embed: leave a blank band of our own background under the host
-        // compact pill so LFG controls sit above it without a color mismatch.
+        // compact pill so list/inline composer sit above it. Full-bleed
+        // portals (session sheet) use --lfg-safe-bottom on their own chrome.
         embedded && "pb-[var(--lfg-host-bottom-inset)]",
       )}
     >
@@ -5860,7 +5861,7 @@ function FloatingSessionAudio({
 
   return (
     <div
-      className="fixed inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+4.75rem+var(--lfg-host-bottom-inset))] z-[75] flex justify-center px-3 md:bottom-[calc(1.25rem+var(--lfg-host-bottom-inset))]"
+      className="fixed inset-x-0 bottom-[calc(var(--lfg-safe-bottom)+4.75rem)] z-[75] flex justify-center px-3 md:bottom-[calc(1.25rem+var(--lfg-safe-bottom))]"
       role="region"
       aria-label="Session audio controls"
     >
@@ -10135,7 +10136,9 @@ function SessionChat({
             // Sit on the same surface as the chat (no card/border seam) and let
             // the transcript melt into the bar via a soft gradient fade so the
             // composer reads as part of the conversation, not a bolted-on panel.
-            "relative overflow-x-clip bg-background px-2 pb-2 pt-1.5 transition-colors",
+            // pb uses global --lfg-safe-bottom so embed host chrome never covers
+            // the input (session portal is full-bleed outside the shell pad).
+            "relative overflow-x-clip bg-background px-2 pb-[calc(0.5rem+var(--lfg-safe-bottom))] pt-1.5 transition-colors",
             "before:pointer-events-none before:absolute before:inset-x-0 before:-top-6 before:h-8 before:bg-gradient-to-t before:from-background before:to-transparent before:content-['']",
             draggingFiles && "bg-primary/8",
             launching && "lfg-composer-launching",
@@ -11399,11 +11402,7 @@ function SessionTitleSheet({
           onSaved={onRefresh}
           onError={setError}
         />
-        <div
-          ref={bodyRef}
-          className="flex min-h-0 flex-1 flex-col"
-          style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
-        >
+        <div ref={bodyRef} className="flex min-h-0 flex-1 flex-col">
           <SessionChat
             session={session}
             busy={busy}
@@ -12727,7 +12726,7 @@ function ToolGroup({ items, live }: { items: Message[]; live: boolean }) {
         <VaulDrawer.Root open={open} onOpenChange={handleOpenChange} repositionInputs={false} shouldScaleBackground={false}>
           <VaulDrawer.Portal>
             <VaulDrawer.Overlay className="fixed inset-0 z-[149] bg-black/80" />
-            <VaulDrawer.Content className="fixed inset-x-0 bottom-0 z-[150] mx-auto flex max-h-[82dvh] max-w-lg flex-col rounded-t-[2rem] border border-border bg-background p-4 pb-[max(env(safe-area-inset-bottom),1rem)] text-foreground shadow-2xl outline-none">
+            <VaulDrawer.Content className="fixed inset-x-0 bottom-0 z-[150] mx-auto flex max-h-[82dvh] max-w-lg flex-col rounded-t-[2rem] border border-border bg-background p-4 pb-[max(var(--lfg-safe-bottom),1rem)] text-foreground shadow-2xl outline-none">
               <div className="mx-auto mb-3 h-1.5 w-24 shrink-0 rounded-full bg-muted" />
               <VaulDrawer.Title className="mb-3 text-base font-semibold">Command details</VaulDrawer.Title>
               <div className="min-h-0 overflow-y-auto">{details}</div>
@@ -13657,7 +13656,7 @@ function ProjectFolderBrowser({
     <Drawer open={open} onOpenChange={onOpenChange} shouldScaleBackground={false}>
       <DrawerContent className="mx-auto h-[min(82dvh,42rem)] max-w-lg overflow-hidden">
         <DrawerTitle className="sr-only">Choose a project folder</DrawerTitle>
-        <div className="flex min-h-0 flex-1 flex-col px-4 pb-[max(env(safe-area-inset-bottom),1rem)]">
+        <div className="flex min-h-0 flex-1 flex-col px-4 pb-[max(var(--lfg-safe-bottom),1rem)]">
           <div className="mb-3 flex items-center justify-between">
             <div className="min-w-0">
               <h2 className="text-lg font-semibold">Choose a project</h2>
@@ -13773,7 +13772,7 @@ function ComposerProjectSheet({
     <Drawer open={open} onOpenChange={onOpenChange} shouldScaleBackground={false}>
       <DrawerContent className="mx-auto max-h-[78dvh] max-w-lg overflow-hidden">
         <DrawerTitle className="sr-only">Projects</DrawerTitle>
-        <div className="flex min-h-0 flex-col px-4 pb-[max(env(safe-area-inset-bottom),1rem)]">
+        <div className="flex min-h-0 flex-col px-4 pb-[max(var(--lfg-safe-bottom),1rem)]">
           <div className="mb-3 flex items-center justify-between">
             <div>
               <h2 className="text-lg font-semibold">Projects</h2>
@@ -14680,7 +14679,7 @@ function NewSessionDialog({
       onSubmit={submit}
       {...files.dropZoneProps}
       className={cn(
-        "max-h-[70dvh] overscroll-contain px-2 pb-[max(env(safe-area-inset-bottom),0.5rem)] transition-colors",
+        "max-h-[70dvh] overscroll-contain px-2 pb-[max(var(--lfg-safe-bottom),0.5rem)] transition-colors",
         variant === "inline" ? "overflow-visible pt-1.5" : "overflow-y-auto pt-1",
         draggingFiles && "bg-primary/8",
       )}
@@ -15158,7 +15157,7 @@ function ResumeSessionSheet({
 
       <div
         className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-2"
-        style={{ paddingBottom: "calc(env(safe-area-inset-bottom, 0px) + 0.5rem)" }}
+        style={{ paddingBottom: "calc(var(--lfg-safe-bottom) + 0.5rem)" }}
       >
         <div className="mx-auto max-w-lg">
           {showSkeleton ? (
@@ -15473,7 +15472,7 @@ function ModelPicker({
               <VaulDrawer.Overlay className="fixed inset-0 z-[179] bg-black/80" />
               <VaulDrawer.Content
                 data-slot="model-picker-drawer-content"
-                className="fixed inset-x-0 bottom-0 z-[180] mx-auto flex max-h-[82dvh] max-w-lg select-none flex-col rounded-t-[2rem] border border-border bg-background p-4 pb-[max(env(safe-area-inset-bottom),1rem)] text-foreground shadow-2xl outline-none"
+                className="fixed inset-x-0 bottom-0 z-[180] mx-auto flex max-h-[82dvh] max-w-lg select-none flex-col rounded-t-[2rem] border border-border bg-background p-4 pb-[max(var(--lfg-safe-bottom),1rem)] text-foreground shadow-2xl outline-none"
                 aria-label="Model"
               >
                 <div className="mx-auto mb-3 h-1.5 w-24 shrink-0 rounded-full bg-muted" />

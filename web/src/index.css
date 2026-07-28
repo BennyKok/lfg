@@ -51,7 +51,15 @@
   --text-2: #3c3c43;
   --border-strong: rgba(60, 60, 67, 0.29);
   --lfg-orb-size: 4.5rem;
-  --lfg-orb-bottom: calc(1.5rem + env(safe-area-inset-bottom));
+  /* Host-chrome inset (omg Computer compact bottom nav). 0 outside embed.
+     NEVER pad bottoms with env(safe-area-inset-bottom) alone — always use
+     --lfg-safe-bottom so embed host chrome is included globally. */
+  --lfg-host-bottom-inset: 0px;
+  /* GLOBAL bottom safe padding = device home-indicator + host chrome.
+     Session sheet, composers, drawers, fixed pills, and clearance tokens
+     all derive from this so no surface can forget the host pill. */
+  --lfg-safe-bottom: calc(env(safe-area-inset-bottom, 0px) + var(--lfg-host-bottom-inset));
+  --lfg-orb-bottom: calc(1.5rem + var(--lfg-safe-bottom));
   --lfg-orb-gap: 1rem;
   --lfg-orb-visual-overflow: 3rem;
   --lfg-orb-bubble-height: 2rem;
@@ -61,19 +69,17 @@
      space above that compact composer for scroll content, toasts, the dictation
      pill and the ask-center card. --lfg-composer-clear ≈ the composer's resting
      height: prompt, collapsed agent button and Start. */
-  --lfg-composer-clear: calc(10.5rem + env(safe-area-inset-bottom));
+  --lfg-composer-clear: calc(10.5rem + var(--lfg-safe-bottom));
   --lfg-inline-composer-height: var(--lfg-composer-clear);
   --lfg-orb-stack-bottom: calc(var(--lfg-composer-clear) + 0.5rem);
   --lfg-above-orb: var(--lfg-composer-clear);
-  /* Host-chrome inset (omg Computer compact bottom nav). 0 outside embed. */
-  --lfg-host-bottom-inset: 0px;
 }
 
 /* Framed inside omg Computer (`?embed=1` / iframe): the host's icon-only
    bottom pill floats over us. Lift content by a *tight* inset so composer +
    controls clear the pill, while our background still paints full-bleed under
    it (no color band from host crop). Sized for the compact pill (~40px), not
-   the old labeled bar. */
+   the old labeled bar. --lfg-safe-bottom / clearance tokens inherit this. */
 html[data-lfg-embed="true"] {
   --lfg-host-bottom-inset: 2.75rem;
 }
@@ -81,7 +87,8 @@ html[data-lfg-embed="true"] {
 /* Soft keyboard up: the orb is tucked away, so toasts and the dictation pill no
    longer need to clear the orb stack — hike them up to sit just above the
    keyboard. --lfg-keyboard-height is published live from the visualViewport
-   sync in App.tsx. */
+   sync in App.tsx. Keep host inset: the omg pill is on the parent document and
+   may still cover the iframe bottom while our soft keyboard is up. */
 html.lfg-keyboard-open {
   --lfg-orb-stack-bottom: calc(var(--lfg-keyboard-height, 0px) + 1rem);
   --lfg-above-orb: calc(var(--lfg-keyboard-height, 0px) + 1rem);

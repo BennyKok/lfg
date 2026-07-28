@@ -956,7 +956,7 @@ export function TermView() {
       {/* Fallback when the browser blocks clipboard reads: a real input the user
           can long-press → Paste into (always works on iOS), then send. */}
       {pasteInput ? (
-        <div className="fixed inset-x-0 bottom-0 z-50 flex items-center gap-2 border-t border-white/10 bg-[#0b0b0d] p-2 pb-[calc(0.5rem+env(safe-area-inset-bottom))]">
+        <div className="fixed inset-x-0 bottom-0 z-50 flex items-center gap-2 border-t border-white/10 bg-[#0b0b0d] p-2 pb-[calc(0.5rem+var(--lfg-safe-bottom))]">
           <input
             ref={pasteInputRef}
             autoFocus

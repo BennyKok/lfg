@@ -450,7 +450,7 @@ export function VoiceCall({
         className="lfg-call-root fixed z-[80] flex items-center gap-2 rounded-full border bg-background/95 py-1.5 pl-1.5 pr-2 shadow-lg backdrop-blur"
         style={{
           right: "calc(env(safe-area-inset-right) + 0.75rem)",
-          bottom: "calc(env(safe-area-inset-bottom) + 0.75rem)",
+          bottom: "calc(var(--lfg-safe-bottom) + 0.75rem)",
           borderColor: "color-mix(in srgb, var(--foreground) 12%, transparent)",
         }}
       >
@@ -511,7 +511,7 @@ export function VoiceCall({
         className="lfg-call-root lfg-call-win pointer-events-auto relative flex h-[72vh] max-h-[760px] w-full flex-col overflow-hidden rounded-t-3xl border bg-background text-foreground shadow-2xl sm:h-[min(80vh,720px)] sm:w-[min(46vw,520px)] sm:min-w-[380px] sm:rounded-3xl"
         style={{
           paddingTop: "calc(env(safe-area-inset-top) + 0.5rem)",
-          paddingBottom: "calc(env(safe-area-inset-bottom) + 1rem)",
+          paddingBottom: "calc(var(--lfg-safe-bottom) + 1rem)",
           borderColor: "color-mix(in srgb, var(--foreground) 12%, transparent)",
         }}
       >
