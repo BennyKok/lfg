@@ -9,6 +9,10 @@ import {
   shouldPrioritizeSession,
 } from "./lib/app-search";
 import { isEmbedded, readLocationEmbedFlag } from "./lib/embed";
+import {
+  isComputerHostResumeMessage,
+  restartContinuousAnimations,
+} from "./embedded-animation-recovery";
 import { useChat } from "@ai-sdk/react";
 import {
   DEFAULT_SCHED_TZ,
@@ -3839,6 +3843,34 @@ export function App() {
     document.documentElement.dataset.lfgEmbed = "true";
     return () => {
       delete document.documentElement.dataset.lfgEmbed;
+    };
+  }, [embedded]);
+  // Standalone WebKit resumes its own animation timelines. A cross-origin
+  // Computer iframe can remain suspended, so the top-level omg host forwards
+  // its authoritative foreground event and we restart infinite animations
+  // only. Finite transitions must never replay when a user returns.
+  useEffect(() => {
+    if (!embedded) return;
+    const recover = () => {
+      if (document.visibilityState !== "visible") return;
+      restartContinuousAnimations(document.getAnimations());
+    };
+    const onHostResume = (event: MessageEvent) => {
+      if (event.source !== window.parent || !isComputerHostResumeMessage(event.data)) return;
+      recover();
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") recover();
+    };
+    window.addEventListener("message", onHostResume);
+    window.addEventListener("pageshow", recover);
+    window.addEventListener("focus", recover);
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      window.removeEventListener("message", onHostResume);
+      window.removeEventListener("pageshow", recover);
+      window.removeEventListener("focus", recover);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [embedded]);
   const isMobile = useIsMobile();
