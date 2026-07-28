@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { embedSearchFlag, isEmbedded, isFramed } from "../web/src/lib/embed.ts";
 import {
+  readLocationSessionId,
   shouldNavigateToTab,
   shouldPrioritizeSession,
   validateAppSearch,
@@ -51,6 +52,12 @@ describe("session prioritization + search validation", () => {
     expect(shouldNavigateToTab("live", "live")).toBe(false);
     expect(shouldNavigateToTab("settings", "settings")).toBe(false);
     expect(shouldNavigateToTab("settings", "live")).toBe(true);
+  });
+
+  test("session deep links are available before router search hydration", () => {
+    expect(readLocationSessionId("?session=abc&embed=1")).toBe("abc");
+    expect(readLocationSessionId("?embed=1")).toBeNull();
+    expect(readLocationSessionId("?session=")).toBeNull();
   });
 });
 
