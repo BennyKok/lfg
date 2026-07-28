@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 28, 2026 - Standalone device pad, cancel when embedded (v0.1.71)
+
+- Standalone LFG restores the original home-indicator padding under Start.
+- When framed in omg, that device pad cancels out so only the host-pill inset
+  remains — no double gap, no flush-to-edge composer.
+
 ## July 28, 2026 - Tighten embed bottom pad on PWA (v0.1.70)
 
 - When framed in omg, bottom safe padding is host-pill only (no stacked device
