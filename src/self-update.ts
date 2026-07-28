@@ -56,16 +56,33 @@ async function run(
   return { ok: code === 0, stdout: stdout.trim(), stderr: stderr.trim() };
 }
 
+/**
+ * True for GNU tar, false for bsdtar (what macOS ships). The two don't share an
+ * option vocabulary, and bsdtar treats an unknown long option as a hard usage
+ * error rather than ignoring it.
+ */
+async function tarIsGnu(root: string): Promise<boolean> {
+  const probe = await run(["tar", "--version"], root);
+  return probe.ok && probe.stdout.includes("GNU tar");
+}
+
 // Sandboxes can inject TAR_OPTIONS (notably --keep-old-files), which turns a
 // normal release update into hundreds of "Cannot open: File exists" failures.
 // Release contents are application files and are meant to replace the prior
 // bundle. Avoid restoring archive metadata too: shared/sandbox filesystems may
 // allow writes while rejecting chmod/chown/utime, causing a successful content
 // update to be reported as a tar failure.
+//
+// The flags have to be chosen per tar flavour. `--overwrite` and `--touch` are
+// GNU-only, and passing them to macOS's bsdtar aborts the extraction with
+// "Option --overwrite is not supported" — which broke self-update on a Mac
+// outright. bsdtar needs neither: it overwrites by default and ignores
+// TAR_OPTIONS (a GNU env var), and it spells --touch as -m.
 export async function extractReleaseArchive(
   archive: string,
   root: string,
 ): Promise<CommandResult> {
+  const gnu = await tarIsGnu(root);
   return run(
     [
       "tar",
@@ -74,10 +91,9 @@ export async function extractReleaseArchive(
       "-C",
       root,
       "--strip-components=1",
-      "--overwrite",
+      ...(gnu ? ["--overwrite", "--touch"] : ["-m"]),
       "--no-same-owner",
       "--no-same-permissions",
-      "--touch",
     ],
     root,
     { ...process.env, TAR_OPTIONS: "" },
@@ -191,8 +207,12 @@ function omgSupervisorRestartCommand(
   home = homedir(),
   procRoot = "/proc",
   currentPid = process.pid,
+  // Injectable like restartCommand's own platform argument. Reading
+  // process.platform here instead meant the caller's injected value was ignored
+  // one level down, so this branch could only ever be exercised on Linux.
+  platform: string = process.platform,
 ): string[] | null {
-  if (process.platform !== "linux") return null;
+  if (platform !== "linux") return null;
   const script = join(home, OMG_SERVE_SCRIPT);
   const pidFile = join(home, OMG_SERVE_PID);
   if (!existsSync(script) || !existsSync(pidFile)) return null;
@@ -228,7 +248,7 @@ export function restartCommand(
         } catch {}
       }
     }
-    return omgSupervisorRestartCommand(home, procRoot);
+    return omgSupervisorRestartCommand(home, procRoot, process.pid, platform);
   }
   if (platform === "darwin") {
     const launchctl = "/bin/launchctl";
