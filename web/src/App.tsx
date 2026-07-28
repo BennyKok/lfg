@@ -14679,13 +14679,13 @@ function NewSessionDialog({
       onSubmit={submit}
       {...files.dropZoneProps}
       className={cn(
-        // Inline home sits above the shell's host-inset band when embedded, so
-        // only a tight pad — full --lfg-safe-bottom here double-counts the pill
-        // and leaves a large empty gap under Start in the omg PWA. Drawer /
-        // dialog variants are full-bleed and need the global safe bottom.
+        // Inline home: original device home-indicator pad when standalone.
+        // Embed cancels --lfg-device-safe-bottom to 0 (host owns that zone) and
+        // the shell still applies host-inset, so Start clears the pill without
+        // a double gap. Drawer / dialog are full-bleed → global safe bottom.
         "max-h-[70dvh] overscroll-contain px-2 transition-colors",
         variant === "inline"
-          ? "overflow-visible pb-2 pt-1.5"
+          ? "overflow-visible pb-[max(var(--lfg-device-safe-bottom),0.5rem)] pt-1.5"
           : "overflow-y-auto pb-[max(var(--lfg-safe-bottom),0.5rem)] pt-1",
         draggingFiles && "bg-primary/8",
       )}
