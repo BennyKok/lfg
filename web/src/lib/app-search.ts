@@ -49,6 +49,21 @@ export function shouldNavigateToTab(currentTab: string, nextTab: string): boolea
   return currentTab !== nextTab;
 }
 
+/** Read the session contract from the browser URL before router search state is
+ * hydrated. The location is the boot-time source of truth for external links;
+ * callers may pass a search string to test the parser without a browser. */
+export function readLocationSessionId(search?: string): string | null {
+  try {
+    const raw =
+      search ??
+      (typeof window !== "undefined" ? window.location.search : "");
+    const session = new URLSearchParams(raw).get("session");
+    return session || null;
+  } catch {
+    return null;
+  }
+}
+
 /** The typed shape of the app's search params (path aside). */
 export interface AppSearch {
   /** Deep link to focus a session on load. EXTERNAL CONTRACT: the server emits

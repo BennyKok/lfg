@@ -4,6 +4,7 @@ import { useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
 import {
   DEFAULT_TAB,
   pathnameToTab,
+  readLocationSessionId,
   shouldNavigateToTab,
   shouldPrioritizeSession,
 } from "./lib/app-search";
@@ -3821,7 +3822,8 @@ export function App() {
   const deepLinkSearch = useSearch({ strict: false });
   const sessionDeepLinkRef = useRef<string | null | undefined>(undefined);
   if (sessionDeepLinkRef.current === undefined) {
-    sessionDeepLinkRef.current = deepLinkSearch.session ?? null;
+    sessionDeepLinkRef.current =
+      deepLinkSearch.session ?? readLocationSessionId();
   }
   // Hosted inside omg (or any frame): drop LFG chrome, skip onboarding/picker,
   // default to all sessions. `?embed=1` is the explicit contract; framing alone
