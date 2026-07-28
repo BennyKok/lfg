@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 28, 2026 - Global safe bottom for embed (v0.1.69)
+
+- Session chat and every other bottom surface now pad with a global
+  `--lfg-safe-bottom` token (device home-indicator + omg Computer host pill), so
+  the Message composer no longer sits under the floating Computer/Settings
+  controls when framed in omg.
+
 ## July 28, 2026 - Reliable live-stream returns (v0.1.68)
 
 - Returning to LFG after switching tabs or desktops now detects and replaces a
