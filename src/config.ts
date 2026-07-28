@@ -11,6 +11,32 @@ export const PATHS = {
   installInfo: join(ROOT, "data", "install.json"),
 };
 
+// LFG_HOST is the server's BIND address, but the in-box clients — `lfg mcp`,
+// `lfg subagent`, `lfg connect` — read the same variable to DIAL that server.
+// A bind address is not always dialable: every containerized deploy sets
+// LFG_HOST to a wildcard (`0.0.0.0`, or `::` where the platform's private
+// network is IPv6-only). `http://0.0.0.0:8766` only connects by accident on
+// Linux, and `http://:::8766` does not parse as a URL at all. Fold wildcards
+// back to loopback and bracket bare IPv6 literals, so the result is always
+// safe to interpolate into a URL authority.
+export function localServeHost(raw: string | undefined = process.env.LFG_HOST): string {
+  const host = raw?.trim();
+  if (!host || host === "0.0.0.0") return "127.0.0.1";
+  if (host === "::" || host === "[::]") return "[::1]";
+  if (host.startsWith("[")) return host;
+  // A bare IPv6 literal has at least two colons. One colon means `host:port`,
+  // which this variable is not meant to carry — leave it alone rather than
+  // bracketing it into something even more wrong.
+  return host.split(":").length > 2 ? `[${host}]` : host;
+}
+
+// Absolute URL of the local `lfg serve`, for CLI subcommands that talk to it.
+export function localServeBaseUrl(): string {
+  if (process.env.LFG_BASE) return process.env.LFG_BASE.replace(/\/$/, "");
+  const port = process.env.LFG_PORT || process.env.PORT || "8766";
+  return `http://${localServeHost()}:${port}`;
+}
+
 export function appVersion(): string {
   try {
     const parsed = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as {

@@ -6,6 +6,7 @@ import {
   listModelCatalog,
   thinkingLevelsForAgent,
 } from "../agent-catalog.ts";
+import { localServeBaseUrl } from "../config.ts";
 import {
   LFG_CAPABILITIES,
   LFG_CAPABILITY_VERSION,
@@ -85,15 +86,8 @@ type OriginDeliveryResponse = {
 
 const VERSION = "0.1.21";
 
-function baseUrl(): string {
-  if (process.env.LFG_BASE) return process.env.LFG_BASE.replace(/\/$/, "");
-  const host = process.env.LFG_HOST || "127.0.0.1";
-  const port = process.env.LFG_PORT || process.env.PORT || "8766";
-  return `http://${host}:${port}`;
-}
-
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${baseUrl()}${path}`, init);
+  const res = await fetch(`${localServeBaseUrl()}${path}`, init);
   const data = (await res.json().catch(() => ({}))) as { error?: string };
   if (!res.ok) throw new Error(data.error || `${res.status} ${res.statusText}`);
   return data as T;
@@ -1239,5 +1233,5 @@ export async function cmdMcp() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`lfg MCP server connected to ${baseUrl()}`);
+  console.error(`lfg MCP server connected to ${localServeBaseUrl()}`);
 }
