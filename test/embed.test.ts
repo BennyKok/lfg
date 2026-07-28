@@ -50,4 +50,26 @@ describe("host bottom inset contract", () => {
     expect(css).toContain('html[data-lfg-embed="true"]');
     expect(css).toMatch(/--lfg-host-bottom-inset:\s*2\.75rem/);
   });
+
+  test("global --lfg-safe-bottom folds host inset into every clearance token", () => {
+    const css = require("node:fs").readFileSync("web/src/index.css", "utf8") as string;
+    // Single source of truth: device safe-area + host chrome.
+    expect(css).toMatch(
+      /--lfg-safe-bottom:\s*calc\(env\(safe-area-inset-bottom,\s*0px\)\s*\+\s*var\(--lfg-host-bottom-inset\)\)/,
+    );
+    // Clearance tokens derive from the global safe bottom — not raw safe-area alone.
+    expect(css).toMatch(/--lfg-composer-clear:\s*calc\(10\.5rem\s*\+\s*var\(--lfg-safe-bottom\)\)/);
+    expect(css).toMatch(/--lfg-orb-bottom:\s*calc\(1\.5rem\s*\+\s*var\(--lfg-safe-bottom\)\)/);
+  });
+
+  test("session chat composer pads with global safe bottom (portal is full-bleed)", () => {
+    const app = require("node:fs").readFileSync("web/src/App.tsx", "utf8") as string;
+    // The session sheet portals to document.body, so shell host-pad cannot
+    // protect the composer — the form itself must use --lfg-safe-bottom.
+    expect(app).toContain("pb-[calc(0.5rem+var(--lfg-safe-bottom))]");
+    // No residual session-body pad that only knew about the device safe-area.
+    expect(app).not.toMatch(
+      /paddingBottom:\s*["']env\(safe-area-inset-bottom(?:,\s*0px)?\)["']/,
+    );
+  });
 });
