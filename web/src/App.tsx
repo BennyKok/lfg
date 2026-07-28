@@ -1,7 +1,12 @@
 import { Component, createContext, type ComponentProps, forwardRef, memo, Suspense, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
-import { DEFAULT_TAB, pathnameToTab, shouldPrioritizeSession } from "./lib/app-search";
+import {
+  DEFAULT_TAB,
+  pathnameToTab,
+  shouldNavigateToTab,
+  shouldPrioritizeSession,
+} from "./lib/app-search";
 import { isEmbedded, readLocationEmbedFlag } from "./lib/embed";
 import { useChat } from "@ai-sdk/react";
 import {
@@ -3896,6 +3901,7 @@ export function App() {
   const setTab = useCallback(
     (next: string | ((current: string) => string)) => {
       const resolved = typeof next === "function" ? next(tabRef.current) : next;
+      if (!shouldNavigateToTab(tabRef.current, resolved)) return;
       if (resolved === DEFAULT_TAB) void navigate({ to: "/" });
       else void navigate({ to: "/$tab", params: { tab: resolved } });
     },
