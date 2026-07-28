@@ -1,7 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import {
   answersForIndex,
+  isTrustedUploadPermission,
   pendingToPrompt,
+  permissionToPrompt,
   shouldPublishDraftPart,
   toolPartMessages,
 } from "./opencode-aisdk-session.ts";
@@ -96,6 +98,53 @@ describe("opencode question prompt helpers", () => {
       ],
     };
     expect(answersForIndex(multi, 1)).toEqual([["B"], ["X"]]);
+  });
+});
+
+describe("opencode permission prompt helpers", () => {
+  test("trusts only external-directory access scoped to LFG uploads", () => {
+    expect(
+      isTrustedUploadPermission({
+        id: "per_upload",
+        permission: "external_directory",
+        patterns: ["/tmp/lfg-uploads/*"],
+      }),
+    ).toBe(true);
+    expect(
+      isTrustedUploadPermission({
+        id: "per_home",
+        permission: "external_directory",
+        patterns: ["/home/dev/*"],
+      }),
+    ).toBe(false);
+    expect(
+      isTrustedUploadPermission({
+        id: "per_bash",
+        permission: "bash",
+        patterns: ["/tmp/lfg-uploads/*"],
+      }),
+    ).toBe(false);
+    expect(
+      isTrustedUploadPermission({
+        id: "per_escape",
+        permission: "external_directory",
+        patterns: ["/tmp/lfg-uploads/../private/*"],
+      }),
+    ).toBe(false);
+  });
+
+  test("maps other permissions to explicit allow and deny choices", () => {
+    const prompt = permissionToPrompt({
+      id: "per_external",
+      permission: "external_directory",
+      patterns: ["/home/dev/footage/*"],
+    });
+    expect(prompt.question).toContain("/home/dev/footage/*");
+    expect(prompt.options.map((option) => option.label)).toEqual([
+      "Allow once",
+      "Always allow",
+      "Deny",
+    ]);
   });
 });
 

@@ -122,6 +122,17 @@ type OcPendingQuestion = {
   sessionID?: string;
   questions: OcQuestionInfo[];
 };
+type OcPendingPermission = {
+  id: string;
+  sessionID?: string;
+  permission?: string;
+  action?: string;
+  type?: string;
+  title?: string;
+  patterns?: string[];
+  resources?: string[];
+  pattern?: string | string[];
+};
 
 function partsToBlocks(parts: OcPart[]): { text: string; blocks: unknown[] } {
   let text = "";
@@ -179,6 +190,85 @@ async function rejectQuestion(baseUrl: string, requestId: string): Promise<boole
   } catch {
     return false;
   }
+}
+
+async function listPendingPermissions(baseUrl: string): Promise<OcPendingPermission[]> {
+  const data = await ocFetchJson<OcPendingPermission[]>(baseUrl, "/permission");
+  return Array.isArray(data) ? data : [];
+}
+
+async function replyPermission(
+  baseUrl: string,
+  pending: OcPendingPermission,
+  reply: "once" | "always" | "reject",
+): Promise<boolean> {
+  const root = baseUrl.replace(/\/$/, "");
+  try {
+    const res = await fetch(
+      `${root}/permission/${encodeURIComponent(pending.id)}/reply`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reply }),
+      },
+    );
+    if (res.ok) return true;
+  } catch {}
+  // Compatibility with OpenCode's older permission endpoint.
+  if (!pending.sessionID) return false;
+  try {
+    const res = await fetch(
+      `${root}/session/${encodeURIComponent(pending.sessionID)}/permissions/${encodeURIComponent(pending.id)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ response: reply }),
+      },
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+function permissionPatterns(pending: OcPendingPermission): string[] {
+  const pattern = Array.isArray(pending.pattern)
+    ? pending.pattern
+    : typeof pending.pattern === "string"
+      ? [pending.pattern]
+      : [];
+  return [...(pending.patterns ?? []), ...(pending.resources ?? []), ...pattern];
+}
+
+/** @internal exported for unit tests */
+export function isTrustedUploadPermission(pending: OcPendingPermission): boolean {
+  const kind = pending.permission ?? pending.action ?? pending.type ?? "";
+  const patterns = permissionPatterns(pending);
+  return (
+    kind === "external_directory" &&
+    patterns.length > 0 &&
+    patterns.every((item) => {
+      if (item === "/tmp/lfg-uploads") return true;
+      if (!item.startsWith("/tmp/lfg-uploads/")) return false;
+      return !item.slice("/tmp/lfg-uploads/".length).split("/").includes("..");
+    })
+  );
+}
+
+/** @internal exported for unit tests */
+export function permissionToPrompt(pending: OcPendingPermission): AisdkPrompt {
+  const kind = pending.permission ?? pending.action ?? pending.type ?? "permission";
+  const patterns = permissionPatterns(pending);
+  const target = patterns.length ? `\n${patterns.join("\n")}` : "";
+  return {
+    header: "OpenCode permission",
+    question: pending.title ?? `Allow ${kind}?${target}`,
+    options: [
+      { index: 0, label: "Allow once", selected: true },
+      { index: 1, label: "Always allow", selected: false },
+      { index: 2, label: "Deny", selected: false },
+    ],
+  };
 }
 
 /** @internal exported for unit tests */
@@ -311,6 +401,12 @@ async function autoRejectPendingQuestions(baseUrl: string, sessionId: string): P
   );
   for (const q of pending) {
     await rejectQuestion(baseUrl, q.id);
+  }
+  const permissions = (await listPendingPermissions(baseUrl)).filter(
+    (p) => !p.sessionID || p.sessionID === sessionId,
+  );
+  for (const permission of permissions) {
+    await replyPermission(baseUrl, permission, "reject");
   }
 }
 
@@ -506,6 +602,7 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
   // `never` inside `for await` loops when they are only mutated from nested
   // helpers, which broke openQuestionRef.current?.id. A mutable box keeps the type.
   const openQuestionRef: { current: OcPendingQuestion | null } = { current: null };
+  const openPermissionRef: { current: OcPendingPermission | null } = { current: null };
   let questionTimer: ReturnType<typeof setTimeout> | null = null;
   const publishDraft = makeDraftPublisher(key);
 
@@ -558,9 +655,34 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
     }, QUESTION_TIMEOUT_MS);
   }
 
+  function surfacePermission(pending: OcPendingPermission): void {
+    if (closing || !turnActive) return;
+    if (pending.sessionID && pending.sessionID !== ocSessionId) return;
+    if (isTrustedUploadPermission(pending)) {
+      void replyPermission(serverUrl, pending, "once");
+      return;
+    }
+    openPermissionRef.current = pending;
+    waitingOnQuestion = true;
+    clearQuestionTimer();
+    patchEntry(key, {
+      busy: false,
+      prompt: permissionToPrompt(pending),
+      draftText: null,
+      draftUpdatedAt: null,
+    });
+    publishDraft("", true);
+    questionTimer = setTimeout(() => {
+      if (openPermissionRef.current?.id === pending.id) {
+        void handleDismissQuestion("timed out waiting for permission");
+      }
+    }, QUESTION_TIMEOUT_MS);
+  }
+
   function clearQuestionState(resumeBusy: boolean): void {
     clearQuestionTimer();
     openQuestionRef.current = null;
+    openPermissionRef.current = null;
     waitingOnQuestion = false;
     if (closing) return;
     patchEntry(key, {
@@ -570,6 +692,17 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
   }
 
   async function handleAnswerQuestion(index: number): Promise<void> {
+    const permission = openPermissionRef.current;
+    if (permission) {
+      const reply = index === 1 ? "always" : index === 2 ? "reject" : "once";
+      const ok = await replyPermission(serverUrl, permission, reply);
+      if (!ok) {
+        console.error(`opencode-aisdk-session: failed to reply to permission ${permission.id}`);
+        return;
+      }
+      clearQuestionState(true);
+      return;
+    }
     const pending = openQuestionRef.current;
     if (!pending) return;
     const answers = answersForIndex(pending, index);
@@ -592,6 +725,15 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
   }
 
   async function handleDismissQuestion(reason = "dismissed"): Promise<void> {
+    const permission = openPermissionRef.current;
+    if (permission) {
+      const ok = await replyPermission(serverUrl, permission, "reject");
+      if (!ok) {
+        console.error(`opencode-aisdk-session: failed to reject permission ${permission.id}`);
+      }
+      clearQuestionState(true);
+      return;
+    }
     const pending = openQuestionRef.current;
     if (!pending) return;
     const ok = await rejectQuestion(serverUrl, pending.id);
@@ -617,13 +759,26 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
     const all = await listPendingQuestions(serverUrl);
     const mine = all.filter((q) => !q.sessionID || q.sessionID === ocSessionId);
     if (!mine.length) {
-      if (waitingOnQuestion) clearQuestionState(turnActive);
+      if (waitingOnQuestion && !openPermissionRef.current) clearQuestionState(turnActive);
       return;
     }
     // Prefer the newest request for this session.
     const next = mine[mine.length - 1]!;
     if (openQuestionRef.current?.id === next.id) return;
     surfaceQuestion(next);
+  }
+
+  async function syncPendingPermissions(): Promise<void> {
+    if (!ocSessionId || closing) return;
+    const all = await listPendingPermissions(serverUrl);
+    const mine = all.filter((p) => !p.sessionID || p.sessionID === ocSessionId);
+    if (!mine.length) {
+      if (waitingOnQuestion && !openQuestionRef.current) clearQuestionState(turnActive);
+      return;
+    }
+    const next = mine[mine.length - 1]!;
+    if (openPermissionRef.current?.id === next.id) return;
+    surfacePermission(next);
   }
 
   // Live draft + tool stream + question events. Cosmetically drives the live
@@ -658,6 +813,13 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
           messageID?: string;
           info?: { id?: string; sessionID?: string; role?: string };
           questions?: OcQuestionInfo[];
+          permission?: string;
+          action?: string;
+          type?: string;
+          title?: string;
+          patterns?: string[];
+          resources?: string[];
+          pattern?: string | string[];
         };
         const evSession = props.sessionID ?? props.part?.sessionID ?? props.info?.sessionID ?? null;
 
@@ -705,6 +867,38 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
           continue;
         }
 
+        if (
+          (ev?.type === "permission.updated" ||
+            ev?.type === "permission.asked" ||
+            ev?.type === "permission.v2.asked") &&
+          (!evSession || evSession === ocSessionId)
+        ) {
+          const id = props.id;
+          if (typeof id === "string") {
+            surfacePermission({
+              id,
+              sessionID: evSession ?? ocSessionId ?? undefined,
+              permission: props.permission,
+              action: props.action,
+              type: props.type,
+              title: props.title,
+              patterns: props.patterns,
+              resources: props.resources,
+              pattern: props.pattern,
+            });
+          } else {
+            void syncPendingPermissions();
+          }
+          continue;
+        }
+        if (
+          (ev?.type === "permission.replied" || ev?.type === "permission.v2.replied") &&
+          (!evSession || evSession === ocSessionId)
+        ) {
+          if (openPermissionRef.current) clearQuestionState(turnActive);
+          continue;
+        }
+
         if (!turnActive) continue;
         const part = props.part;
         if (ev?.type === "message.part.updated" && part?.sessionID === ocSessionId) {
@@ -743,6 +937,7 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
   const questionPoll = setInterval(() => {
     if (closing || !turnActive) return;
     void syncPendingQuestions();
+    void syncPendingPermissions();
   }, 1500);
 
   async function runTurn(prompt: string): Promise<void> {
@@ -750,6 +945,7 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
     turnActive = true;
     waitingOnQuestion = false;
     openQuestionRef.current = null;
+    openPermissionRef.current = null;
     publishDraft("", true);
     try {
       const res = await client.session.prompt({
@@ -830,7 +1026,10 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
     if (!ocSessionId) return;
     // Reject any open question first so abort doesn't leave a zombie /question
     // entry (seen after the kimi-k3 hang).
-    if (openQuestionRef.current) {
+    if (openPermissionRef.current) {
+      void replyPermission(serverUrl, openPermissionRef.current, "reject");
+      clearQuestionState(false);
+    } else if (openQuestionRef.current) {
       void rejectQuestion(serverUrl, openQuestionRef.current.id);
       clearQuestionState(false);
     }
