@@ -5475,7 +5475,11 @@ export function App() {
               userFilter={userFilter}
               projectFilter={projectFilter}
               projectOptions={projectOptions}
-              onProjectChange={embedded ? undefined : changeProjectFilter}
+              // Project selection remains available in embed mode: on desktop
+              // the rail is the only visible folder UI because the normal
+              // header is hidden. The host owns identity/settings chrome, not
+              // the LFG workspace's project scope.
+              onProjectChange={changeProjectFilter}
               // Embed: host owns identity/settings — no user picker, settings,
               // ask, or shipped chrome inside the iframe.
               onUserChange={embedded ? undefined : changeUserFilter}
