@@ -104,6 +104,16 @@ const MODEL_CATALOG_KEYS: CodingAgentKind[] = [
 
 export const CODEX_THINKING_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
 export const CLAUDE_THINKING_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+// The `claude` CLI additionally accepts `--effort ultracode` (Claude Code
+// >= 2.1.203): xhigh reasoning PLUS automatic dynamic-workflow orchestration,
+// where Claude plans a multi-agent workflow for every substantive task. It is a
+// session-only level — it cannot be persisted via settings' effortLevel or
+// CLAUDE_CODE_EFFORT_LEVEL — which is exactly how lfg passes it (a per-spawn
+// flag), so the CLI path is the only backend that can offer it. NOT added to
+// CLAUDE_THINKING_LEVELS because that list is shared with grok/pi/aisdk, whose
+// CLIs and SDKs reject the value. See claudeCliEffortFor in tmux.ts for the
+// version gate and the xhigh fallback.
+export const CLAUDE_CLI_THINKING_LEVELS = [...CLAUDE_THINKING_LEVELS, "ultracode"] as const;
 export const PICKER_THINKING_LEVELS = ["low", "medium", "high", "xhigh"] as const;
 
 export type ModelCatalogItem = {
@@ -403,7 +413,9 @@ export function resolveModelForAgent(
 }
 
 export function thinkingLevelsForAgent(agent: string): readonly string[] | null {
-  if (agent === "claude" || agent === "aisdk" || agent === "grok" || agent === "pi") return CLAUDE_THINKING_LEVELS;
+  // "claude" is the tmux CLI backend, the only one that can take `ultracode`.
+  if (agent === "claude") return CLAUDE_CLI_THINKING_LEVELS;
+  if (agent === "aisdk" || agent === "grok" || agent === "pi") return CLAUDE_THINKING_LEVELS;
   if (agent === "codex" || agent === "codex-aisdk") return CODEX_THINKING_LEVELS;
   if (agent === "cursor") return CURSOR_THINKING_LEVELS;
   return null;

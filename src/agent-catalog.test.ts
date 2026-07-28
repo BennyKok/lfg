@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { curateOpenCodeModels } from "./agent-catalog.ts";
+import { curateOpenCodeModels, thinkingLevelsForAgent } from "./agent-catalog.ts";
+import { claudeCliEffortFor, claudeEffortFor, claudeSupportsUltracode } from "./tmux.ts";
 
 const DISCOVERED = [
   "openai/gpt-5.3-codex-spark",
@@ -49,5 +50,35 @@ describe("curateOpenCodeModels", () => {
     expect(curateOpenCodeModels(["opencode-go/kimi-k3", "openrouter/whatever"])).toEqual([
       "opencode-go/kimi-k3",
     ]);
+  });
+});
+
+describe("ultracode thinking level", () => {
+  test("is offered on the claude CLI backend only", () => {
+    expect(thinkingLevelsForAgent("claude")).toContain("ultracode");
+    // Everything else shares the plain claude effort vocabulary: grok's CLI and
+    // the ai-sdk/pi backends reject the literal value.
+    for (const agent of ["aisdk", "grok", "pi", "codex", "codex-aisdk", "cursor"]) {
+      expect(thinkingLevelsForAgent(agent) ?? []).not.toContain("ultracode");
+    }
+  });
+
+  test("collapses to xhigh for non-claude-CLI consumers", () => {
+    // grok's `--effort` goes through claudeEffortFor; it must never see the
+    // literal "ultracode", and must not silently lose the level either.
+    expect(claudeEffortFor("ultracode")).toBe("xhigh");
+  });
+
+  test("passes through to the claude CLI only when the CLI supports it", () => {
+    const effort = claudeCliEffortFor("ultracode");
+    expect(effort).toBe(claudeSupportsUltracode() ? "ultracode" : "xhigh");
+  });
+
+  test("leaves the other levels untouched", () => {
+    expect(claudeCliEffortFor("xhigh")).toBe("xhigh");
+    expect(claudeCliEffortFor("max")).toBe("max");
+    expect(claudeCliEffortFor("minimal")).toBe("low");
+    expect(claudeCliEffortFor(undefined)).toBeUndefined();
+    expect(claudeCliEffortFor("bogus")).toBeUndefined();
   });
 });

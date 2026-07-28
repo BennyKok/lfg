@@ -677,7 +677,12 @@ const AGENT_DEFAULT_MODEL: Record<AgentKind, string> = {
   copilot: "claude-sonnet-4.5",
 };
 const AGENT_THINKING_LEVELS: Record<AgentKind, string[]> = {
-  claude: ["low", "medium", "high", "xhigh", "max"],
+  // "ultracode" (claude CLI only, >= 2.1.203) is xhigh effort PLUS automatic
+  // dynamic-workflow orchestration — Claude plans a multi-agent workflow for
+  // every substantive task, so runs cost meaningfully more. Kept in sync with
+  // CLAUDE_CLI_THINKING_LEVELS in src/agent-catalog.ts (the server catalog
+  // overrides this fallback at bootstrap).
+  claude: ["low", "medium", "high", "xhigh", "max", "ultracode"],
   aisdk: ["low", "medium", "high", "xhigh", "max"],
   codex: ["none", "minimal", "low", "medium", "high", "xhigh"],
   "codex-aisdk": ["none", "minimal", "low", "medium", "high", "xhigh"],

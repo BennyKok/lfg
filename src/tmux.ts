@@ -428,8 +428,58 @@ export function spawnAgentSession(opts: {
 export function claudeEffortFor(level?: string): string | undefined {
   if (!level) return undefined;
   if (level === "none" || level === "minimal") return "low";
+  // "ultracode" is a claude-CLI-only level (xhigh + dynamic workflows). Every
+  // other consumer of this mapper (grok today) would reject the literal value,
+  // so collapse it to the effort half of what it means. This mirrors Claude
+  // Code's own documented behaviour when ultracode is unavailable: "--effort
+  // ultracode sets xhigh effort only". Callers that CAN honour the real thing
+  // go through claudeCliEffortFor below.
+  if (level === "ultracode") return "xhigh";
   if (["low", "medium", "high", "xhigh", "max"].includes(level)) return level;
   return undefined;
+}
+
+// Minimum Claude Code version that accepts `--effort ultracode`. Older CLIs
+// print `Unknown --effort value 'ultracode'` and then start the session at the
+// DEFAULT effort — silently losing the thinking level the user picked — so the
+// gate below downgrades to plain xhigh instead of risking that.
+const ULTRACODE_MIN_CLAUDE_VERSION = [2, 1, 203] as const;
+
+function parseSemver(text: string): number[] | null {
+  const m = text.match(/(\d+)\.(\d+)\.(\d+)/);
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+
+let _ultracodeSupported: boolean | null = null;
+
+// Whether the installed `claude` is new enough for `--effort ultracode`.
+// Cached for the life of the process: it shells out to `claude --version`, and
+// a CLI upgrade under a running lfg needs a restart to be picked up anyway.
+// Fails closed — an unparseable/erroring version means no ultracode.
+export function claudeSupportsUltracode(): boolean {
+  if (_ultracodeSupported !== null) return _ultracodeSupported;
+  let version: number[] | null = null;
+  try {
+    const r = Bun.spawnSync([claudeBin(), "--version"]);
+    if (r.exitCode === 0) version = parseSemver(new TextDecoder().decode(r.stdout));
+  } catch {
+    version = null; // claude missing/not executable — fall back to xhigh
+  }
+  if (!version) return (_ultracodeSupported = false);
+  const min = ULTRACODE_MIN_CLAUDE_VERSION;
+  const ok =
+    version[0]! !== min[0] ? version[0]! > min[0]
+    : version[1]! !== min[1] ? version[1]! > min[1]
+    : version[2]! >= min[2];
+  return (_ultracodeSupported = ok);
+}
+
+// Effort mapper for the `claude` CLI specifically: same as claudeEffortFor, but
+// passes "ultracode" through when the installed CLI supports it. Anything else
+// (including an old CLI) lands on claudeEffortFor's xhigh collapse.
+export function claudeCliEffortFor(level?: string): string | undefined {
+  if (level === "ultracode" && claudeSupportsUltracode()) return "ultracode";
+  return claudeEffortFor(level);
 }
 
 export function spawnManagedSession(opts: {
@@ -465,8 +515,9 @@ export function spawnManagedSession(opts: {
   argv.push("--model", opts.model || DEFAULT_MODEL);
   // Pin the reasoning effort when the caller asked for one (thinking mode). The
   // claude CLI exposes this as `--effort <level>`; map our shared thinking-level
-  // vocabulary onto it (see claudeEffortFor). Omitted → CLI default effort.
-  const effort = claudeEffortFor(opts.thinkingLevel);
+  // vocabulary onto it (see claudeCliEffortFor, which also handles the
+  // claude-only "ultracode" level). Omitted → CLI default effort.
+  const effort = claudeCliEffortFor(opts.thinkingLevel);
   if (effort) argv.push("--effort", effort);
   // `--` terminates option parsing so the variadic --add-dir can't swallow the
   // positional prompt as a second directory (which strands the new session at
