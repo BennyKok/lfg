@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 28, 2026 - Reliable live-stream returns (v0.1.68)
+
+- Returning to LFG after switching tabs or desktops now detects and replaces a
+  half-dead live connection automatically, restoring transcript updates without
+  requiring a page refresh.
+
 ## July 28, 2026 - OpenCode permission recovery (v0.1.67)
 
 - OpenCode sessions no longer remain stuck on Working when a tool needs
