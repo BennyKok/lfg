@@ -6,7 +6,7 @@
 
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, Columns2, FileDiff, GitBranch, Loader2, Minus, Plus, Rows3, X } from "lucide-react";
+import { Check, ChevronDown, Columns2, FileDiff, GitBranch, Loader2, Minus, Plus, Rows3, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 // Pierre's diff renderer (@pierre/diffs, ~380 KB) is only needed once a user
@@ -28,6 +28,7 @@ type DiffFile = {
 type SessionDiff = {
   ok: boolean;
   isWorktree: boolean;
+  merged: boolean;
   branch: string | null;
   base: string | null;
   files: DiffFile[];
@@ -37,7 +38,7 @@ type SessionDiff = {
   error?: string;
 };
 type FilePatch = { path: string; patch: string; binary: boolean; truncated: boolean };
-type DiffStat = { isWorktree: boolean; files: number; additions: number; deletions: number };
+type DiffStat = { isWorktree: boolean; merged: boolean; files: number; additions: number; deletions: number };
 type DiffStyle = "unified" | "split";
 
 async function getJson<T>(path: string): Promise<T> {
@@ -212,7 +213,9 @@ function SessionDiffViewer({ sid, onClose }: { sid: string; onClose: () => void 
         <header className="flex items-center gap-3 border-b border-border px-4 py-3">
           <FileDiff className="size-4 text-[var(--primary)]" />
           <div className="min-w-0 flex-1">
-            <div className="text-sm font-semibold text-foreground">Changes for review</div>
+            <div className="text-sm font-semibold text-foreground">
+              {diff?.merged ? "Merged changes" : "Changes for review"}
+            </div>
             {diff?.branch ? (
               <div className="flex items-center gap-1.5 truncate text-[11px] text-muted-foreground">
                 <GitBranch className="size-3" />
@@ -337,9 +340,18 @@ export const SessionDiffBar = memo(function SessionDiffBar({
           <button
             type="button"
             onClick={() => setOpen(true)}
-            className="lfg-scroll-pill pointer-events-auto flex items-center gap-2 rounded-full border border-border bg-card/95 px-3.5 py-1.5 text-xs font-medium text-foreground shadow-md backdrop-blur transition-colors hover:bg-card"
+            className={cn(
+              "lfg-scroll-pill pointer-events-auto flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-xs font-medium shadow-md backdrop-blur transition-colors",
+              stat?.merged
+                ? "border-[var(--success)]/35 bg-[var(--success)]/10 text-foreground hover:bg-[var(--success)]/15"
+                : "border-border bg-card/95 text-foreground hover:bg-card",
+            )}
           >
-            <FileDiff className="size-3.5 text-[var(--primary)]" />
+            {stat?.merged ? (
+              <Check className="size-3.5 text-[var(--success)]" strokeWidth={2.5} />
+            ) : (
+              <FileDiff className="size-3.5 text-[var(--primary)]" />
+            )}
             <span>{label} changed</span>
             <span className="flex items-center gap-1 font-mono text-[11px] tabular-nums">
               <span className="flex items-center text-[var(--success)]">
@@ -351,7 +363,9 @@ export const SessionDiffBar = memo(function SessionDiffBar({
                 {stat!.deletions}
               </span>
             </span>
-            <span className="text-[11px] text-muted-foreground">Review</span>
+            <span className={cn("text-[11px]", stat?.merged ? "font-semibold text-[var(--success)]" : "text-muted-foreground")}>
+              {stat?.merged ? "Merged" : "Review"}
+            </span>
           </button>
         </div>
       ) : null}

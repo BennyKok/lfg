@@ -42,6 +42,7 @@ export type DiffFile = {
 export type SessionDiff = {
   ok: boolean;
   isWorktree: boolean;
+  merged: boolean;
   branch: string | null;
   base: string | null; // short sha of the fork point
   files: DiffFile[];
@@ -54,6 +55,9 @@ export type SessionDiff = {
 const MAX_FILES = 200;
 const MAX_TOTAL_BYTES = 2_000_000; // cap patch text we parse, per request
 const MAX_UNTRACKED_BYTES = 200_000; // don't inline giant untracked blobs
+const MERGE_CACHE_MISS_MS = 30_000;
+const MERGE_CACHE_HIT_MS = 5 * 60_000;
+const mergeCache = new Map<string, { merged: boolean; checkedAt: number }>();
 
 function git(cwd: string, args: string[]): { ok: boolean; out: string; err: string; code: number } {
   const proc = Bun.spawnSync({ cmd: ["git", "-C", cwd, ...args], stdout: "pipe", stderr: "pipe" });
@@ -75,6 +79,7 @@ function emptyDiff(over: Partial<SessionDiff> = {}): SessionDiff {
   return {
     ok: true,
     isWorktree: false,
+    merged: false,
     branch: null,
     base: null,
     files: [],
@@ -233,6 +238,7 @@ export function computeSessionDiff(cwd: string | null | undefined): SessionDiff 
   return {
     ok: true,
     isWorktree: true,
+    merged: branchMergedIntoMain(wt),
     branch,
     base: base.slice(0, 12),
     files,
@@ -256,6 +262,55 @@ function forkBase(wt: string): string {
 function originMainWarning(wt: string): string | undefined {
   const ok = git(wt, ["rev-parse", "--verify", "--quiet", "origin/main"]).ok;
   return ok ? undefined : "origin/main not found locally — diff is vs HEAD's initial commit";
+}
+
+// A branch is only fully merged when its committed HEAD is contained in main
+// and no tracked/untracked work remains on top. The clean-worktree guard keeps
+// a session that made new edits after merging in the normal "Review" state.
+function branchMergedIntoMain(wt: string): boolean {
+  const status = git(wt, ["status", "--porcelain", "--untracked-files=normal"]);
+  if (!status.ok || status.out.trim() !== "") return false;
+
+  const local = git(wt, ["merge-base", "--is-ancestor", "HEAD", "origin/main"]);
+  if (local.ok) return true;
+
+  // origin/main intentionally stays unfetched on this hot path, so a just-
+  // merged GitHub PR can precede the local remote-tracking ref. Ask `gh` as a
+  // cached fallback; misses refresh quickly enough for the 8s UI poll while a
+  // confirmed merge remains stable.
+  const head = git(wt, ["rev-parse", "HEAD"]);
+  const branch = git(wt, ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (!head.ok || !branch.ok || branch.out.trim() === "HEAD") return false;
+  const key = `${wt}:${head.out.trim()}`;
+  const cached = mergeCache.get(key);
+  const now = Date.now();
+  const ttl = cached?.merged ? MERGE_CACHE_HIT_MS : MERGE_CACHE_MISS_MS;
+  if (cached && now - cached.checkedAt < ttl) return cached.merged;
+
+  let merged = false;
+  try {
+    const pr = Bun.spawnSync({
+      cmd: ["gh", "pr", "view", branch.out.trim(), "--json", "state,headRefOid"],
+      cwd: wt,
+      env: { ...process.env, GH_PROMPT_DISABLED: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (pr.exitCode === 0) {
+      const data = JSON.parse(pr.stdout.toString()) as { state?: string; headRefOid?: string };
+      merged = data.state?.toUpperCase() === "MERGED" && data.headRefOid === head.out.trim();
+    }
+  } catch {
+    // `gh` is optional. Local ancestry remains the source of truth when it is
+    // unavailable or the repository is not connected to GitHub.
+  }
+  mergeCache.set(key, { merged, checkedAt: now });
+  if (mergeCache.size > 500) {
+    for (const [cacheKey, entry] of mergeCache) {
+      if (now - entry.checkedAt > MERGE_CACHE_HIT_MS) mergeCache.delete(cacheKey);
+    }
+  }
+  return merged;
 }
 
 function statusFromLetter(letter: string): DiffFileStatus {
@@ -346,7 +401,17 @@ export function computeSessionDiffSummary(cwd: string | null | undefined): Sessi
     { files: 0, additions: 0, deletions: 0 },
   );
 
-  return { ok: true, isWorktree: true, branch, base: base.slice(0, 12), files, totals, truncated: false, fetchWarning };
+  return {
+    ok: true,
+    isWorktree: true,
+    merged: branchMergedIntoMain(wt),
+    branch,
+    base: base.slice(0, 12),
+    files,
+    totals,
+    truncated: false,
+    fetchWarning,
+  };
 }
 
 // One file's raw unified patch, loaded on demand when the user expands it in
@@ -385,11 +450,14 @@ export function computeSessionFilePatch(
 // skipping full patch parsing where possible.
 export function computeSessionDiffStat(cwd: string | null | undefined): {
   isWorktree: boolean;
+  merged: boolean;
   files: number;
   additions: number;
   deletions: number;
 } {
-  if (!isSessionWorktree(cwd)) return { isWorktree: false, files: 0, additions: 0, deletions: 0 };
+  if (!isSessionWorktree(cwd)) {
+    return { isWorktree: false, merged: false, files: 0, additions: 0, deletions: 0 };
+  }
   const wt = resolve(cwd!);
   const base = forkBase(wt);
   const numstat = git(wt, ["diff", "--numstat", base]);
@@ -407,5 +475,5 @@ export function computeSessionDiffStat(cwd: string | null | undefined): {
   }
   const untracked = git(wt, ["ls-files", "--others", "--exclude-standard"]);
   if (untracked.ok) files += untracked.out.split("\n").filter((l) => l.trim()).length;
-  return { isWorktree: true, files, additions, deletions };
+  return { isWorktree: true, merged: branchMergedIntoMain(wt), files, additions, deletions };
 }
