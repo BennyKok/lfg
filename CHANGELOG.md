@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 28, 2026 - OpenCode permission recovery (v0.1.67)
+
+- OpenCode sessions no longer remain stuck on Working when a tool needs
+  permission: attached LFG uploads are approved once automatically, while other
+  requests surface Allow once, Always allow, and Deny choices and time out
+  safely when unattended.
+
 ## July 27, 2026 - Embed host bottom inset (v0.1.66)
 
 - When framed inside omg Computer, content lifts with a tight internal bottom
