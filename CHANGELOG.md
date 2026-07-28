@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 28, 2026 - Reliable hosted session focus (v0.1.73)
+
+- Hosted Computer links read their target session directly from the browser
+  address during startup, so a slow router bootstrap cannot leave an older
+  session open inside an otherwise-correct iframe URL.
+
 ## July 28, 2026 - Stable hosted session deep links (v0.1.72)
 
 - Hosted Computer sessions keep their session and embed address while focus is
