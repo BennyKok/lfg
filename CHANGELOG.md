@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 28, 2026 - Tighten embed bottom pad on PWA (v0.1.70)
+
+- When framed in omg, bottom safe padding is host-pill only (no stacked device
+  home-indicator), and the home Start row no longer double-counts that band —
+  so the large empty gap under the composer on the iOS PWA is gone while the
+  session Message bar still clears the Computer/Settings pill.
+
 ## July 28, 2026 - Global safe bottom for embed (v0.1.69)
 
 - Session chat and every other bottom surface now pad with a global
