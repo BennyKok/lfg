@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 28, 2026 - Stable hosted session deep links (v0.1.72)
+
+- Hosted Computer sessions keep their session and embed address while focus is
+  resolved, preventing a redundant navigation from returning the iframe to the
+  generic LFG home or identity picker.
+
 ## July 28, 2026 - Standalone device pad, cancel when embedded (v0.1.71)
 
 - Standalone LFG restores the original home-indicator padding under Start.
