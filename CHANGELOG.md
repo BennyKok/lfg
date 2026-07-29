@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 28, 2026 - Embedded Computer agent connection (v0.1.82)
+
+- A fresh hosted Computer now offers Claude Code and Codex sign-in directly
+  inside LFG, using the existing provider login dialogs and without requiring
+  iMessage or showing a provisioning progress bar.
+- Starting the first session sends one origin-checked event to the omg host so
+  the $49 keep-your-Computer offer appears only after the Computer is useful.
+
 ## July 28, 2026 - Hosted animations resume reliably (v0.1.81)
 
 - Hosted Computer activity animations now resume after returning from another

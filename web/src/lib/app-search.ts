@@ -73,6 +73,11 @@ export interface AppSearch {
   /** Framed-host mode (omg Computer iframe). EXTERNAL CONTRACT with omg's
    *  use-computer-session-frame mint — must stay as `embed=1`. */
   embed?: boolean;
+  /** Optional absolute origin of the embedding host, for hosts whose
+   *  Referrer-Policy strips the referrer. Kept in the typed contract so the
+   *  router's own `?embed=1` → `?embed=true` rewrite doesn't drop it. Consumed
+   *  by lib/embed-host-signal.ts, which validates the scheme. */
+  embedOrigin?: string;
 }
 
 /** Validate the search params carried on every route. */
@@ -86,6 +91,9 @@ export function validateAppSearch(search: Record<string, unknown>): AppSearch {
     search.embed === "true"
   ) {
     out.embed = true;
+  }
+  if (typeof search.embedOrigin === "string" && search.embedOrigin) {
+    out.embedOrigin = search.embedOrigin;
   }
   return out;
 }

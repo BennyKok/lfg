@@ -31,9 +31,10 @@ const indexRoute = createRoute({
     if (search.tab) {
       // Preserve session deep-links and embed mode across the legacy ?tab=
       // redirect so framed hosts (omg) don't lose their chrome contract.
-      const nextSearch: { session?: string; embed?: boolean } = {};
+      const nextSearch: { session?: string; embed?: boolean; embedOrigin?: string } = {};
       if (search.session) nextSearch.session = search.session;
       if (search.embed) nextSearch.embed = true;
+      if (search.embedOrigin) nextSearch.embedOrigin = search.embedOrigin;
       throw redirect({
         to: tabToPath(search.tab),
         search: nextSearch,
