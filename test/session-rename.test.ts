@@ -23,7 +23,7 @@ describe("session rename UX", () => {
     expect(app).toContain("persistedAfterFetch");
     expect(app).toContain("sessionsAppliedFetchRevisionRef");
     expect(app).toContain("sessionTitleQueuesRef");
-    expect(app).toContain("const liveTitleConfirmed");
     expect(app).toContain("pendingRename?.title");
+    expect(app).toContain("whole settle window");
   });
 });

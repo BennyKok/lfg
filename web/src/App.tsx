@@ -4824,15 +4824,11 @@ export function App() {
         const pendingRename = sid
           ? pendingSessionTitlesRef.current.get(sid)
           : undefined;
-        const liveTitleConfirmed =
-          pendingRename &&
-          patch.title === pendingRename.title;
-        if (sid && liveTitleConfirmed) {
-          pendingSessionTitlesRef.current.delete(sid);
-        }
-        const pendingTitle = liveTitleConfirmed
-          ? undefined
-          : pendingRename?.title;
+        // Keep the optimistic fence for the whole settle window even after one
+        // live row matches. Under browser throttling, an older status snapshot
+        // can arrive *after* that matching row; dropping the fence on the first
+        // match would briefly restore the pre-rename title.
+        const pendingTitle = pendingRename?.title;
         const merged = {
           ...session,
           ...patch,
