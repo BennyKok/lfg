@@ -104,10 +104,25 @@ async function buildSkillCatalog(repoRoots: string[] = []): Promise<SkillCatalog
   const codexHome = process.env.CODEX_HOME || join(homedir(), ".codex");
   const claudeHome = process.env.CLAUDE_HOME || join(homedir(), ".claude");
   const selfRepo = PATHS.root;
+  // Installed-plugin caches. Skills found under these get a "plugin:name"
+  // trigger (see pluginSkillTrigger); everything else is addressed by bare name.
+  const pluginCacheRoots = [
+    join(codexHome, "plugins", "cache"),
+    join(claudeHome, "plugins", "cache"),
+  ];
   const roots: { root: string; source: SkillCatalogItem["source"] }[] = [
     { root: join(codexHome, "skills"), source: "codex" },
     { root: join(codexHome, "plugins", "cache"), source: "codex" },
     { root: join(claudeHome, "skills"), source: "claude" },
+    // Claude Code plugin skills, the mirror of the codex plugin cache above.
+    // Without this every plugin-provided skill was invisible to the catalog even
+    // though the agent could invoke it. Only `cache/` (what is actually
+    // installed) is scanned — `plugins/marketplaces/` is a marketplace checkout
+    // that also contains plugins the user never installed, so indexing it would
+    // advertise skills that aren't available. The layout matches codex's
+    // (<marketplace>/<plugin>/<version>/skills/...), so pluginSkillTrigger
+    // already resolves the "plugin:name" trigger correctly.
+    { root: join(claudeHome, "plugins", "cache"), source: "claude" },
     { root: join(selfRepo, ".claude", "skills"), source: "claude" },
     { root: join(selfRepo, ".codex", "skills"), source: "codex" },
     { root: join(selfRepo, ".agents", "skills"), source: "agent" },
@@ -139,7 +154,11 @@ async function buildSkillCatalog(repoRoots: string[] = []): Promise<SkillCatalog
     }
     const fm = parseSkillFrontmatter(raw);
     const name = fm.name || file.path.split(/[\\/]+/).at(-2) || "skill";
-    const trigger = file.path.includes(`${codexHome}/plugins/cache`)
+    // Namespace every plugin-provided skill as "plugin:name", whichever agent's
+    // cache it came from. Beyond matching how the agent addresses them, this is
+    // what keeps two plugins that ship the same skill name from colliding on
+    // `key` below and having one silently dropped.
+    const trigger = pluginCacheRoots.some((root) => file.path.startsWith(root))
       ? pluginSkillTrigger(file.path, name)
       : name;
     const key = `${file.source}:${trigger}`;
