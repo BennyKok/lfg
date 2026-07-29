@@ -140,6 +140,15 @@ describe("mobile overlay scroll contract", () => {
     );
     expect(css).toMatch(/--lfg-mobile-header-fade-height:\s*1\.25rem/);
     expect(css).toMatch(/opacity:\s*var\(--lfg-mobile-header-fade-opacity,\s*0\)/);
+    expect(css).toMatch(
+      /\.mobile-scroll-header-fade\s*\{[^}]*isolation:\s*isolate[^}]*\}/,
+    );
+    expect(css).not.toMatch(
+      /\.mobile-scroll-header-fade\s*\{[^}]*backdrop-filter/,
+    );
+    expect(css).toMatch(
+      /\.mobile-scroll-header-fade::before\s*\{[^}]*backdrop-filter:\s*blur\(10px\)/,
+    );
     expect(app).toContain("Math.max(0, main.scrollTop) / 24");
   });
 

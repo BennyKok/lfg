@@ -685,6 +685,18 @@ html.lfg-keyboard-open {
      while only the passing content is visually softened. */
   @media (max-width: 767px) {
     .mobile-scroll-header-fade {
+      isolation: isolate;
+    }
+
+    /* Keep backdrop compositing on its own layer behind the header. Applying
+       the filter to the chrome wrapper itself makes iOS flatten its SVG
+       children, which softens the small pixel-art LFG mark. */
+    .mobile-scroll-header-fade::before {
+      position: absolute;
+      z-index: -1;
+      inset: 0;
+      pointer-events: none;
+      content: "";
       background: linear-gradient(
         to bottom,
         color-mix(in srgb, var(--background) 94%, transparent) 0,
