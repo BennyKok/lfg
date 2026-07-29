@@ -4,6 +4,8 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Review-first shipped sessions (v0.1.105)
+
 - Opening a finished session from Recently Shipped now shows its transcript
   without resuming it; sending a new message resumes the session automatically
   and delivers that message as the first follow-up.
