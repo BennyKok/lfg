@@ -54,10 +54,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Build the web UI
-        run: |
-          cd web
-          bun install --frozen-lockfile
-          bun run build
+        run: bun run --cwd web build
 
       - name: Stage + pack the bundle
         # Reuse the same staging/prune logic as local releases (single source of

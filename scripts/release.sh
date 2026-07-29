@@ -77,7 +77,7 @@ if [ "${SKIP_INSTALL:-}" != "1" ]; then
   say "Installing dependencies (uses your configured registry)..."
   bun install
   say "Building the web UI..."
-  ( cd web && bun install && bun run build )
+  bun run --cwd web build
 else
   say "SKIP_INSTALL=1 - reusing existing node_modules + web/dist."
 fi

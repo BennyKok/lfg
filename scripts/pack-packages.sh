@@ -24,6 +24,7 @@ if [ "${1:-}" = "--build-only" ]; then
 fi
 
 mkdir -p "$OUT_DIR"
+rm -f "$OUT_DIR"/lfg-dev-*.tgz
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/lfg-packages.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 

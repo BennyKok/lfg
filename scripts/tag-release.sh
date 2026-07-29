@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # Cut a release in one step: bump the version, verify the CHANGELOG entry,
-# commit, tag, push, then build + publish the bundle via scripts/release.sh.
+# commit, tag, and push. The tag-triggered GitHub workflow owns building and
+# publishing the bundle so there is only one release writer.
 #
 # Usage:
 #   scripts/tag-release.sh            # patch bump (0.1.36 -> 0.1.37)
@@ -15,7 +16,6 @@
 #
 # Env:
 #   DRY_RUN=1       do everything except commit/tag/push/publish
-#   SKIP_PUBLISH=1  commit+tag+push but skip release.sh (bundle/GH release)
 
 set -euo pipefail
 
@@ -71,10 +71,4 @@ git tag -a "$TAG" -m "$TAG"
 git push origin main "$TAG"
 say "Tagged and pushed $TAG."
 
-# --- Build + publish bundle --------------------------------------------------
-if [ "${SKIP_PUBLISH:-}" = "1" ]; then
-  say "SKIP_PUBLISH=1 - skipping bundle build/publish."
-  exit 0
-fi
-say "Building and publishing the bundle..."
-"$ROOT/scripts/release.sh" "$TAG"
+say "The tag-triggered release workflow now owns bundle publishing."
