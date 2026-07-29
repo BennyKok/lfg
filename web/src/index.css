@@ -705,12 +705,14 @@ html.lfg-keyboard-open {
     .mobile-scroll-header-fade::after {
       top: 100%;
       height: var(--lfg-mobile-header-fade-height);
+      opacity: var(--lfg-mobile-header-fade-opacity, 0);
       background: linear-gradient(
         to bottom,
         color-mix(in srgb, var(--background) 84%, transparent) 0,
         color-mix(in srgb, var(--background) 82%, transparent) 34%,
         transparent 100%
       );
+      transition: opacity 80ms linear;
     }
 
     .mobile-scroll-composer-fade::before {

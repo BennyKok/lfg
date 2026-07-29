@@ -124,6 +124,8 @@ describe("mobile overlay scroll contract", () => {
       /--lfg-mobile-header-height:\s*calc\(3\.5rem\s*\+\s*env\(safe-area-inset-top,\s*0px\)\)/,
     );
     expect(css).toMatch(/--lfg-mobile-header-fade-height:\s*1\.25rem/);
+    expect(css).toMatch(/opacity:\s*var\(--lfg-mobile-header-fade-opacity,\s*0\)/);
+    expect(app).toContain("Math.max(0, main.scrollTop) / 24");
   });
 
   test("composer pages reserve chrome while the fade overlays content", () => {

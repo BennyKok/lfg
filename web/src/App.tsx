@@ -3907,6 +3907,24 @@ export function App() {
       document.documentElement.style.removeProperty("--lfg-mobile-header-height");
     };
   }, [isMobile, mobileChromeEl]);
+  useEffect(() => {
+    const main = mainRef.current;
+    const chrome = mobileChromeEl;
+    if (!isMobile || !main || !chrome) return;
+    // At the natural top there is nothing passing beneath the floating header,
+    // so leave the wash transparent and keep the first category label crisp.
+    // Ease it in over the first 24px of travel, then hold at full strength.
+    const syncFade = () => {
+      const opacity = Math.min(1, Math.max(0, main.scrollTop) / 24);
+      chrome.style.setProperty("--lfg-mobile-header-fade-opacity", String(opacity));
+    };
+    syncFade();
+    main.addEventListener("scroll", syncFade, { passive: true });
+    return () => {
+      main.removeEventListener("scroll", syncFade);
+      chrome.style.removeProperty("--lfg-mobile-header-fade-opacity");
+    };
+  }, [isMobile, mobileChromeEl]);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [codingAgents, setCodingAgents] = useState<CodingAgentInfo[]>([]);
