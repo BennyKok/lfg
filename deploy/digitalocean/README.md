@@ -8,13 +8,8 @@ DigitalOcean has two useful paths for `lfg`:
 ## App Platform
 
 The `.do/app.yaml` spec builds the shared Dockerfile and starts `lfg` on port
-`8766`. The Dockerfile installs the published bundled release, which is required
-while the Vibes SDK path is not live for source installs. Publish the bundle
-first:
-
-```bash
-scripts/release.sh v0.1.0
-```
+`8766`. The Dockerfile builds from the source tree App Platform checks out —
+there is no bundle to publish first.
 
 Add a Deploy to DigitalOcean button once the app spec is published from the
 target repo/account:

@@ -112,10 +112,10 @@ These PaaS targets are best for demos or private-network deployments. Day-to-day
 agent work is happiest on the machine that already has your repos, `tmux`, and
 authenticated CLIs. A VPS remains the cleanest production-style target.
 
-The Dockerfile installs the published bundle (`lfg-bundle.tar.gz`) rather than
-building from the GitHub source tree (the Vibes SDK path is not live for source
-installs yet). Publish a bundle with `scripts/release.sh <tag>` before relying
-on one-click cloud deploys.
+The Dockerfile builds from the source tree it is given: it installs dependencies
+with Bun, builds the web UI, and runs `bun run serve`. Nothing has to be
+published first — a one-click deploy builds whatever commit the platform checks
+out.
 
 **Maintainer note:** “deploy” means make current changes visible in the running
 instance (rebuild/restart as needed). “release” means cut a tag and publish

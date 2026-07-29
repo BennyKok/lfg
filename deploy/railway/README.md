@@ -21,10 +21,8 @@ Use Railway for a quick hosted preview. For day-to-day agent work, install
 The Dockerfile binds the app to `0.0.0.0` and maps Railway's injected `$PORT`
 to `LFG_PORT`.
 
-The Dockerfile installs the published bundled release from GitHub, not a live
-source build. This is intentional while the Vibes SDK path is not live for users.
-Publish `lfg-bundle.tar.gz` with `scripts/release.sh <tag>` before using this as
-a public one-click template.
+The Dockerfile builds from the source tree Railway checks out — there is no
+bundle to publish first.
 
 ## Private Tailscale Access
 

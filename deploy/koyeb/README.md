@@ -3,12 +3,8 @@
 Koyeb can deploy `lfg` from the shared Dockerfile. This is best for a hosted
 demo unless you add authentication and a private access path.
 
-The Dockerfile installs the published bundled release, which is required while
-the Vibes SDK path is not live for source installs. Publish the bundle first:
-
-```bash
-scripts/release.sh v0.1.0
-```
+The Dockerfile builds from the source tree Koyeb checks out — there is no bundle
+to publish first.
 
 ## Deploy Button
 
