@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Instant session renaming (v0.1.116)
+
+- Mobile session names now edit directly in the card or session header instead
+  of opening a separate drawer.
+- Renames appear immediately and stay stable while slow requests, background
+  polls, and live status updates finish, without flashing the previous name.
+
 ## July 29, 2026 - Balanced mobile fade heights (v0.1.115)
 
 - The mobile composer fade now matches the compact 20px header fade, removing
