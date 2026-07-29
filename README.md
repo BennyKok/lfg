@@ -147,6 +147,37 @@ cd web && bun install && bun run dev
 Authenticate the agent CLI you want to use (for example run `claude` once and
 complete OAuth), or set the required API key in `.env`.
 
+## Embedding the LFG application
+
+Every release publishes four immutable packages:
+
+- `@lfg-dev/protocol` — shared wire types
+- `@lfg-dev/client` — authenticated HTTP and multiplexed live transport
+- `@lfg-dev/react` — smaller headless/session surfaces
+- `@lfg-dev/app` — the exact full LFG application used by the standalone web UI
+
+React hosts mount the full application with their own transport and asset
+origin. LFG keeps its internal navigation in a memory router, so it does not
+take over the host product's URL:
+
+```tsx
+import { createGrantTransport } from "@lfg-dev/client";
+import { LfgAppSurface } from "@lfg-dev/app";
+import "@lfg-dev/app/styles.css";
+
+<LfgAppSurface
+  transport={createGrantTransport({
+    baseUrl: "https://sessions.example",
+    getGrant: mintSignedSessionGrant,
+  })}
+  assetBaseUrl="https://sessions.example"
+/>
+```
+
+Standalone LFG and embedded hosts therefore render one visual component tree;
+only authentication, API origin, and outer product navigation belong to the
+host.
+
 ## Commands
 
 ```bash

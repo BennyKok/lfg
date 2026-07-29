@@ -3,6 +3,7 @@ import {
   createRoute,
   createRouter,
   redirect,
+  type RouterHistory,
 } from "@tanstack/react-router";
 import { App } from "./App";
 import {
@@ -55,10 +56,15 @@ const tabRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([indexRoute, tabRoute]);
 
-export const router = createRouter({
-  routeTree,
-  defaultPreload: false,
-});
+export function createLfgRouter(history?: RouterHistory) {
+  return createRouter({
+    routeTree,
+    defaultPreload: false,
+    history,
+  });
+}
+
+export const router = createLfgRouter();
 
 declare module "@tanstack/react-router" {
   interface Register {

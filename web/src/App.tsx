@@ -14,7 +14,7 @@ import {
   shouldShowEmbeddedConnectGate,
 } from "./lib/embedded-connect";
 import { emitSessionCreatedToHost } from "./lib/embed-host-signal";
-import { api } from "./lib/lfg-client";
+import { api, lfgAssetUrl, lfgFetch } from "./lib/lfg-client";
 import { EmbeddedConnectGate } from "./components/embedded-connect-gate";
 import {
   isComputerHostResumeMessage,
@@ -914,14 +914,14 @@ function AutoHeightArtifactFrame({
 
 function agentIconSrc(agent?: string): string {
   const v = `?v=${AGENT_ICON_VERSION}`;
-  if (agent === "codex" || agent === "codex-aisdk") return `/agent-codex.svg${v}`;
-  if (agent === "grok") return `/agent-grok.svg${v}`;
-  if (agent === "cursor") return `/agent-cursor.svg${v}`;
-  if (agent === "hermes") return `/agent-hermes.svg${v}`;
-  if (agent === "opencode") return `/agent-opencode.svg${v}`;
-  if (agent === "pi") return `/agent-pi.svg${v}`;
-  if (agent === "copilot") return `/agent-copilot.svg${v}`;
-  return `/agent-claude.svg${v}`;
+  if (agent === "codex" || agent === "codex-aisdk") return lfgAssetUrl(`/agent-codex.svg${v}`);
+  if (agent === "grok") return lfgAssetUrl(`/agent-grok.svg${v}`);
+  if (agent === "cursor") return lfgAssetUrl(`/agent-cursor.svg${v}`);
+  if (agent === "hermes") return lfgAssetUrl(`/agent-hermes.svg${v}`);
+  if (agent === "opencode") return lfgAssetUrl(`/agent-opencode.svg${v}`);
+  if (agent === "pi") return lfgAssetUrl(`/agent-pi.svg${v}`);
+  if (agent === "copilot") return lfgAssetUrl(`/agent-copilot.svg${v}`);
+  return lfgAssetUrl(`/agent-claude.svg${v}`);
 }
 // One definition of "is this session working?" as a dot. Busy is a pulsing
 // amber that draws the eye; idle is deliberately quiet. Every surface that shows
@@ -1129,11 +1129,7 @@ function evlog(event: string, fields: Record<string, unknown> = {}) {
       path: location.pathname + location.search,
       ...fields,
     });
-    if (navigator.sendBeacon) {
-      const blob = new Blob([payload], { type: "application/json" });
-      if (navigator.sendBeacon("/api/evlog", blob)) return;
-    }
-    void fetch("/api/evlog", {
+    void lfgFetch("/api/evlog", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: payload,
@@ -1612,7 +1608,7 @@ function logFindingAction(
   path: "reply" | "execute" | "copy" | "dismiss",
   hadText: boolean,
 ): void {
-  void fetch(`/api/auto/findings/${findingId}/action`, {
+  void lfgFetch(`/api/auto/findings/${findingId}/action`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path, hadText }),
@@ -2222,7 +2218,7 @@ function useDictation(opts: {
         offset += c.length;
       }
       try {
-        const res = await fetch("/api/voice/stt", {
+        const res = await lfgFetch("/api/voice/stt", {
           method: "POST",
           headers: { "Content-Type": "application/octet-stream" },
           body: floatToWav(merged, s.rate),
@@ -5487,7 +5483,7 @@ export function App() {
                 aria-current={tab === "live" ? "page" : undefined}
                 className="flex items-center rounded-full px-1.5 transition-transform active:scale-[0.96]"
               >
-                <img src="/icon.svg" alt="lfg" className="mx-1 size-6 shrink-0" />
+                <img src={lfgAssetUrl("/icon.svg")} alt="lfg" className="mx-1 size-6 shrink-0" />
               </button>
             ) : (
               <button
@@ -6916,7 +6912,7 @@ function OnboardingFlow({
       <div className="my-auto w-full max-w-md py-6">
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <img src="/icon.svg" alt="lfg" className="size-7 shrink-0" />
+            <img src={lfgAssetUrl("/icon.svg")} alt="lfg" className="size-7 shrink-0" />
             <span className="text-xs font-medium text-muted-foreground">
               v{version}
             </span>
@@ -7284,7 +7280,7 @@ function WhoAreYou({
     <div className="flex h-dvh flex-col items-center justify-center bg-background px-6 text-foreground">
       <div className="w-full max-w-sm">
         <div className="mb-4 flex items-center gap-2">
-          <img src="/icon.svg" alt="lfg" className="size-7 shrink-0" />
+          <img src={lfgAssetUrl("/icon.svg")} alt="lfg" className="size-7 shrink-0" />
         </div>
         <h1 className="text-xl font-semibold">Who are you?</h1>
         <p className="mb-5 mt-1 text-sm text-muted-foreground">
@@ -8984,7 +8980,7 @@ function RailStage({
                 right edge with Ask/Settings beside it. No "Sessions" label —
                 the list below speaks for itself. */}
             <div className="flex items-center gap-1.5">
-              <img src="/icon.svg" alt="lfg" className="size-6 shrink-0 rounded-md" />
+              <img src={lfgAssetUrl("/icon.svg")} alt="lfg" className="size-6 shrink-0 rounded-md" />
               {onProjectChange ? (
                 <ProjectFilterMenu
                   value={projectFilter}
@@ -11952,7 +11948,7 @@ const SessionCard = memo(function SessionCard({
       if (onStreamSummary) {
         full = await onStreamSummary(sid, acceptChunk);
       } else {
-        const res = await fetch(`/api/sessions/${encodeURIComponent(sid)}/summary/stream`, {
+        const res = await lfgFetch(`/api/sessions/${encodeURIComponent(sid)}/summary/stream`, {
           method: "POST",
         });
         if (!res.ok) {
@@ -16691,7 +16687,7 @@ function VoiceSettingsSection() {
 
   useEffect(() => {
     let alive = true;
-    void fetch("/api/voice/config")
+    void lfgFetch("/api/voice/config")
       .then((r) => (r.ok ? r.json() : null))
       .then((d: VoiceConfig | null) => {
         if (alive && d) setCfg(d);
@@ -16706,7 +16702,7 @@ function VoiceSettingsSection() {
     setCfg((c) => (c ? { ...c, settings: { ...c.settings, ...patch } } : c));
     setSaving(true);
     try {
-      const r = await fetch("/api/voice/config", {
+      const r = await lfgFetch("/api/voice/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),

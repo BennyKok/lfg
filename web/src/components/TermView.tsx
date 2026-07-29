@@ -16,6 +16,7 @@ import {
   TerminalSquare,
   X,
 } from "lucide-react";
+import { lfgFetch } from "@/lib/lfg-client";
 
 // One WASM load per page, shared across mount/unmount of the tab.
 let ghosttyReady: Promise<void> | null = null;
@@ -707,7 +708,7 @@ export function TermView() {
     let alive = true;
     const poll = async () => {
       try {
-        const r = await fetch(`/api/term/scan?session=${encodeURIComponent(termSession)}`);
+        const r = await lfgFetch(`/api/term/scan?session=${encodeURIComponent(termSession)}`);
         const d = await r.json();
         if (alive && Array.isArray(d.urls) && d.urls.length)
           setLinks((prev) => mergeUrls(prev, d.urls));

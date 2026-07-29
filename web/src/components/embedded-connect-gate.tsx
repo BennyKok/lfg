@@ -13,6 +13,7 @@
 import { Loader2 } from "lucide-react";
 import { Button } from "./ui/button";
 import type { ConnectOption } from "../lib/embedded-connect";
+import { lfgAssetUrl } from "../lib/lfg-client";
 
 export function EmbeddedConnectGate({
   options,
@@ -35,7 +36,7 @@ export function EmbeddedConnectGate({
     >
       <div className="my-auto w-full max-w-sm py-6">
         <div className="mb-4 flex items-center gap-2">
-          <img src="/icon.svg" alt="lfg" className="size-7 shrink-0" />
+          <img src={lfgAssetUrl("/icon.svg")} alt="lfg" className="size-7 shrink-0" />
         </div>
         <h1 className="text-xl font-semibold">Connect a coding agent</h1>
         <p className="mb-5 mt-1 text-sm text-muted-foreground">

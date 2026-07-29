@@ -16,6 +16,8 @@
 
 // The hashed entry chunk this document loaded, e.g. "index-ab12cd.js". Present
 // only in a production `vite build`; null under dev/HMR. Mirrors main.tsx.
+import { lfgFetch } from "./lfg-client";
+
 const BUILD_ID =
   document
     .querySelector<HTMLScriptElement>('script[type="module"][src*="/assets/index-"]')
@@ -126,7 +128,7 @@ export function reportError(r: Report): void {
     };
     // Fire-and-forget. keepalive lets it survive a navigation/reload triggered
     // by the error. Any failure is swallowed — never re-enter the handlers.
-    void fetch("/api/client-error", {
+    void lfgFetch("/api/client-error", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

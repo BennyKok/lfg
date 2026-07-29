@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { lazyWithReload } from "./lib/lazy-with-reload";
 import { ensureVoiceConfigured } from "./voice-setup";
+import { lfgFetch } from "./lib/lfg-client";
 
 // ───────────────────────────────────────────────────────────────────────────
 // VoiceCall — "phone call mode" for the voice orb. A focused, fullscreen call
@@ -187,7 +188,7 @@ export function VoiceCall({
       setStatus("connecting");
       setAgentState("thinking");
       try {
-        const res = await fetch("/api/livekit/token");
+        const res = await lfgFetch("/api/livekit/token");
         if (!res.ok) throw new Error(`token ${res.status}`);
         const { url, token } = (await res.json()) as {
           url: string;

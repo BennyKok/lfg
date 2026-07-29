@@ -8,6 +8,7 @@ import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, Columns2, FileDiff, GitBranch, Loader2, Minus, Plus, Rows3, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { lfgFetch } from "@/lib/lfg-client";
 
 // Pierre's diff renderer (@pierre/diffs, ~380 KB) is only needed once a user
 // expands a file in the diff viewer — which most sessions never do. Load it
@@ -42,7 +43,7 @@ type DiffStat = { isWorktree: boolean; merged: boolean; files: number; additions
 type DiffStyle = "unified" | "split";
 
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+  const res = await lfgFetch(path);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((data as { error?: string })?.error || `${res.status}`);
   return data as T;

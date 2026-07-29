@@ -32,6 +32,12 @@ export interface LfgSocket {
 }
 
 export interface LfgTransport {
+  /**
+   * Authenticated raw HTTP access for application surfaces that consume
+   * streams, blobs, or response headers. Small data clients can stay on
+   * `request`, which parses JSON and normalizes errors.
+   */
+  fetch(path: string, init?: RequestInit): Promise<Response>;
   request<T>(path: string, init?: RequestInit): Promise<T>;
   openLiveSocket(): Promise<LfgSocket>;
 }
@@ -78,6 +84,9 @@ export function createSameOriginTransport(
   const fetchImpl = input.fetch ?? globalThis.fetch;
   const WebSocketImpl = input.WebSocket ?? globalThis.WebSocket;
   return {
+    fetch(path: string, init?: RequestInit): Promise<Response> {
+      return fetchImpl(path, init);
+    },
     async request<T>(path: string, init?: RequestInit): Promise<T> {
       const response = await fetchImpl(path, init);
       const data = await response.json().catch(() => ({}));
@@ -109,22 +118,30 @@ export function createGrantTransport(options: CreateGrantTransportOptions): LfgT
     return cached;
   };
 
+  const authenticatedFetch = async (
+    path: string,
+    init: RequestInit = {},
+  ): Promise<Response> => {
+    const execute = async (forceRefresh: boolean) => {
+      const current = await grant(forceRefresh);
+      const headers = new Headers(init.headers);
+      headers.set("Authorization", `Bearer ${current.token}`);
+      return fetchImpl(`${baseUrl}${path}`, {
+        ...init,
+        headers,
+        mode: "cors",
+        credentials: "omit",
+      });
+    };
+    let response = await execute(false);
+    if (response.status === 401) response = await execute(true);
+    return response;
+  };
+
   return {
+    fetch: authenticatedFetch,
     async request<T>(path: string, init: RequestInit = {}): Promise<T> {
-      const execute = async (forceRefresh: boolean) => {
-        const current = await grant(forceRefresh);
-        const headers = new Headers(init.headers);
-        headers.set("Authorization", `Bearer ${current.token}`);
-        const response = await fetchImpl(`${baseUrl}${path}`, {
-          ...init,
-          headers,
-          mode: "cors",
-          credentials: "omit",
-        });
-        return response;
-      };
-      let response = await execute(false);
-      if (response.status === 401) response = await execute(true);
+      const response = await authenticatedFetch(path, init);
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw apiError(response.status, response.statusText, data);
       return data as T;

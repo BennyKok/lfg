@@ -75,5 +75,6 @@ jobs:
             dist/lfg-dev-protocol-*.tgz
             dist/lfg-dev-client-*.tgz
             dist/lfg-dev-react-*.tgz
+            dist/lfg-dev-app-*.tgz
           fail_on_unmatched_files: true
           generate_release_notes: true

@@ -27,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
+import { lfgFetch } from "@/lib/lfg-client";
 import {
   ChevronDown,
   ChevronLeft,
@@ -154,7 +155,7 @@ export function AskProvider({ children }: { children: React.ReactNode }) {
       } catch {
         // no subscription — keep the unscoped fallback
       }
-      const res = await fetch(feedUrl, { cache: "no-store" });
+      const res = await lfgFetch(feedUrl, { cache: "no-store" });
       if (!res.ok) return;
       const data = (await res.json()) as { questions: Question[] };
       const qs = data.questions || [];
@@ -198,7 +199,7 @@ export function AskProvider({ children }: { children: React.ReactNode }) {
       if (busy || !text.trim()) return;
       setBusy(true);
       try {
-        const res = await fetch(`/api/ask/${q.id}/answer`, {
+        const res = await lfgFetch(`/api/ask/${q.id}/answer`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ answer: text.trim(), via: "web" }),
@@ -222,7 +223,7 @@ export function AskProvider({ children }: { children: React.ReactNode }) {
       if (busy) return;
       setBusy(true);
       try {
-        const res = await fetch(`/api/ask/${q.id}/dismiss`, { method: "POST" });
+        const res = await lfgFetch(`/api/ask/${q.id}/dismiss`, { method: "POST" });
         if (!res.ok) throw new Error(await res.text());
         setQuestions((prev) => prev.filter((x) => x.id !== q.id));
         toast("Question dismissed");

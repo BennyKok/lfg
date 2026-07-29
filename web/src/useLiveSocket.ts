@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { visibilityRecoveryAction } from "./live-visibility";
-import { api } from "./lib/lfg-client";
+import { api, lfgFetch, openLfgLiveSocket } from "./lib/lfg-client";
 
 type Session = {
   agent?: string;
@@ -145,11 +145,7 @@ function evlog(event: string, fields: Record<string, unknown> = {}) {
       path: location.pathname + location.search,
       ...fields,
     });
-    if (navigator.sendBeacon) {
-      const blob = new Blob([payload], { type: "application/json" });
-      if (navigator.sendBeacon("/api/evlog", blob)) return;
-    }
-    void fetch("/api/evlog", {
+    void lfgFetch("/api/evlog", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: payload,
@@ -378,6 +374,7 @@ export function useLiveSocket(
   const [nextBeforeBySid, setNextBeforeBySid] = useState<Record<string, number | null>>({});
 
   const wsRef = useRef<WebSocket | null>(null);
+  const openingRef = useRef(false);
   const desiredRef = useRef<Set<string>>(new Set());
   const subscribedRef = useRef<Set<string>>(new Set());
   const desiredChannelsRef = useRef<Map<string, LiveChannel>>(new Map());
@@ -702,7 +699,7 @@ export function useLiveSocket(
     };
 
     const connect = () => {
-      if (closedByHookRef.current) return;
+      if (closedByHookRef.current || openingRef.current) return;
       const existing = wsRef.current;
       // A timer fire, a manual retry, and an online/visibility trigger can all
       // race to call connect() around the same moment; never open a second
@@ -721,12 +718,28 @@ export function useLiveSocket(
         ...prev,
         status: prev.status === "offline" ? "offline" : prev.attempt > 0 ? "reconnecting" : "connecting",
       }));
-      const ws = new WebSocket(wsUrl("/api/live/ws"));
-      wsRef.current = ws;
-      openAtRef.current = performance.now();
-      firstMsgRef.current = new Set();
-      draftSeenRef.current = new Set();
-      ws.onopen = () => {
+      openingRef.current = true;
+      void openLfgLiveSocket().then((openedSocket) => {
+        openingRef.current = false;
+        const ws = openedSocket as WebSocket;
+        if (closedByHookRef.current) {
+          ws.close();
+          return;
+        }
+        const active = wsRef.current;
+        if (
+          active &&
+          (active.readyState === WebSocket.OPEN ||
+            active.readyState === WebSocket.CONNECTING)
+        ) {
+          ws.close();
+          return;
+        }
+        wsRef.current = ws;
+        openAtRef.current = performance.now();
+        firstMsgRef.current = new Set();
+        draftSeenRef.current = new Set();
+        ws.onopen = () => {
         backoffRef.current = BACKOFF_MIN_MS;
         evlog("ws_client_open", { reconnects: reconnectsRef.current });
         reconnectsRef.current = 0;
@@ -739,14 +752,14 @@ export function useLiveSocket(
           subscribedRef.current = new Set(channels.filter((channel) => channel.kind === "transcript").map((channel) => channel.key));
         }
       };
-      ws.onmessage = (event) => {
+        ws.onmessage = (event) => {
         if (typeof event.data !== "string") return;
         const payload = parseJson<LiveWsMessage>(event.data);
         if (!payload) return;
         noteMessage();
         handleMessage(payload);
       };
-      ws.onclose = (event) => {
+        ws.onclose = (event) => {
         const visibilityProbe = visibilityProbeRef.current;
         if (visibilityProbe?.ws === ws) {
           clearTimeout(visibilityProbe.timer);
@@ -784,11 +797,34 @@ export function useLiveSocket(
         backoffRef.current = Math.min(BACKOFF_MAX_MS, backoffRef.current * 2);
         reconnectTimerRef.current = setTimeout(connect, delay);
       };
-      ws.onerror = () => {
-        try {
-          ws.close();
-        } catch {}
-      };
+        ws.onerror = () => {
+          try {
+            ws.close();
+          } catch {}
+        };
+      }).catch((error) => {
+        openingRef.current = false;
+        if (closedByHookRef.current) return;
+        const attempt = (reconnectsRef.current += 1);
+        const reason = error instanceof Error ? error.message : "socket open failed";
+        evlog("ws_client_reconnect", {
+          attempt,
+          backoffMs: backoffRef.current,
+          reason,
+        });
+        setConnection((prev) => ({
+          ...prev,
+          status:
+            attempt >= OFFLINE_AFTER_ATTEMPTS ? "offline" : "reconnecting",
+          attempt,
+          lastCloseCode: null,
+          lastCloseReason: reason,
+          latencyMs: null,
+        }));
+        const delay = jitter(backoffRef.current);
+        backoffRef.current = Math.min(BACKOFF_MAX_MS, backoffRef.current * 2);
+        reconnectTimerRef.current = setTimeout(connect, delay);
+      });
     };
 
     connectRef.current = connect;
@@ -837,6 +873,7 @@ export function useLiveSocket(
     };
     const onOnline = () => {
       pendingReconnectRef.current = false;
+      openingRef.current = false;
       connect();
     };
     document.addEventListener("visibilitychange", onVisible);

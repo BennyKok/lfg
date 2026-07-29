@@ -22,6 +22,7 @@ import { Flame } from "lucide-react";
 import NumberFlow, { NumberFlowGroup } from "@number-flow/react";
 import { cn } from "@/lib/utils";
 import { haptic } from "@/lib/haptics";
+import { lfgAssetUrl, lfgFetch } from "@/lib/lfg-client";
 
 // ── public types (mirror /api/usage) ────────────────────────────────────────
 
@@ -82,14 +83,14 @@ const TONE = {
 
 function agentIconSrc(kind: string): string {
   const v = `?v=${AGENT_ICON_VERSION}`;
-  if (kind === "codex" || kind === "codex-aisdk") return `/agent-codex.svg${v}`;
-  if (kind === "grok") return `/agent-grok.svg${v}`;
-  if (kind === "cursor") return `/agent-cursor.svg${v}`;
-  if (kind === "hermes") return `/agent-hermes.svg${v}`;
-  if (kind === "opencode") return `/agent-opencode.svg${v}`;
-  if (kind === "pi") return `/agent-pi.svg${v}`;
-  if (kind === "copilot") return `/agent-copilot.svg${v}`;
-  return `/agent-claude.svg${v}`;
+  if (kind === "codex" || kind === "codex-aisdk") return lfgAssetUrl(`/agent-codex.svg${v}`);
+  if (kind === "grok") return lfgAssetUrl(`/agent-grok.svg${v}`);
+  if (kind === "cursor") return lfgAssetUrl(`/agent-cursor.svg${v}`);
+  if (kind === "hermes") return lfgAssetUrl(`/agent-hermes.svg${v}`);
+  if (kind === "opencode") return lfgAssetUrl(`/agent-opencode.svg${v}`);
+  if (kind === "pi") return lfgAssetUrl(`/agent-pi.svg${v}`);
+  if (kind === "copilot") return lfgAssetUrl(`/agent-copilot.svg${v}`);
+  return lfgAssetUrl(`/agent-claude.svg${v}`);
 }
 
 function isTextEditingElement(el: Element | null): boolean {
@@ -454,7 +455,7 @@ export function UsageCampfireHost({
     let cancelled = false;
     const load = async () => {
       try {
-        const res = await fetch("/api/usage");
+        const res = await lfgFetch("/api/usage");
         const data = (await res.json().catch(() => ({}))) as {
           providers?: ProviderUsage[];
         };

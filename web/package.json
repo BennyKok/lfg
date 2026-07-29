@@ -1,11 +1,22 @@
 {
-  "name": "lfg-web",
-  "version": "0.1.16",
-  "private": true,
+  "name": "@lfg-dev/app",
+  "version": "0.1.91",
+  "description": "The full LFG application surface for React hosts.",
+  "files": [
+    "dist-lib"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist-lib/index.d.ts",
+      "import": "./dist-lib/index.js"
+    },
+    "./styles.css": "./dist-lib/styles.css"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
+    "build:lib": "tsc --noEmit && vite build --config vite.lib.config.ts && cp src/embedded.d.ts dist-lib/index.d.ts",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
   },
@@ -48,6 +59,7 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@types/three": "^0.184.1",
+    "postcss-prefix-selector": "^2.1.1",
     "@vitejs/plugin-react": "^4.3.4",
     "shadcn": "^4.1.0",
     "tailwindcss": "^4.2.2",

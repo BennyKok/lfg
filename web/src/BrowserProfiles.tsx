@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import BrowserLoginView from "./BrowserLoginView";
 import { useAppDialog } from "@/components/ui/app-dialog";
+import { lfgFetch } from "@/lib/lfg-client";
 
 // Manage saved cloud-browser login profiles. Each profile captures the cookies
 // /storage state for a set of origins so an agent can act as the logged-in user
@@ -40,7 +41,7 @@ type TestResult = {
 // Mirror of App.tsx's tiny fetch wrapper: relative paths, JSON in/out, throws on
 // non-2xx with the server's `error` field when present.
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, init);
+  const res = await lfgFetch(path, init);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error((data as { error?: string })?.error || `${res.status} ${res.statusText}`);

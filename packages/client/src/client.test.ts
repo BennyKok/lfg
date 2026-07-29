@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
-import { LfgLiveConnection, type LfgSocket, type LfgTransport } from "./index";
+import {
+  LfgLiveConnection,
+  createGrantTransport,
+  type LfgSocket,
+  type LfgTransport,
+} from "./index";
 
 class FakeSocket implements LfgSocket {
   readyState = 0;
@@ -30,6 +35,7 @@ test("many transcript subscriptions share one socket and one batched subscribe f
   const socket = new FakeSocket();
   let opens = 0;
   const transport: LfgTransport = {
+    fetch: async () => new Response(),
     request: async () => ({}) as never,
     openLiveSocket: async () => {
       opens += 1;
@@ -56,4 +62,43 @@ test("many transcript subscriptions share one socket and one batched subscribe f
   offA();
   offB();
   live.dispose();
+});
+
+test("raw package fetch shares bearer auth and refreshes once on 401", async () => {
+  const grants: string[] = [];
+  const requests: Array<{ url: string; authorization: string | null }> = [];
+  const transport = createGrantTransport({
+    baseUrl: "https://sessions.example",
+    getGrant: async ({ forceRefresh }) => {
+      const token = forceRefresh ? "fresh" : "initial";
+      grants.push(token);
+      return { token, expiresAt: Date.now() + 60_000 };
+    },
+    fetch: (async (input, init) => {
+      const headers = new Headers(init?.headers);
+      requests.push({
+        url: String(input),
+        authorization: headers.get("Authorization"),
+      });
+      return new Response("stream", {
+        status: requests.length === 1 ? 401 : 200,
+      });
+    }) as typeof fetch,
+    WebSocket: class {} as typeof WebSocket,
+  });
+
+  const response = await transport.fetch("/api/bootstrap");
+
+  expect(await response.text()).toBe("stream");
+  expect(grants).toEqual(["initial", "fresh"]);
+  expect(requests).toEqual([
+    {
+      url: "https://sessions.example/api/bootstrap",
+      authorization: "Bearer initial",
+    },
+    {
+      url: "https://sessions.example/api/bootstrap",
+      authorization: "Bearer fresh",
+    },
+  ]);
 });

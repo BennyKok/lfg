@@ -85,7 +85,7 @@ else
 fi
 
 say "Building public packages..."
-bash scripts/pack-packages.sh
+SKIP_PACKAGE_BUILD=1 bash scripts/pack-packages.sh
 
 [ -f web/dist/index.html ] || die "web/dist missing - run without SKIP_INSTALL."
 

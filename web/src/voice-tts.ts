@@ -15,6 +15,7 @@
 
 import { useSyncExternalStore } from "react";
 import { showVoiceSetup } from "./voice-setup";
+import { lfgFetch } from "./lib/lfg-client";
 
 const TTS_SAMPLE_RATE = 24000; // matches synthesizeTts() output on the server
 const START_LEAD = 0.06; // small lead so the first chunk schedules cleanly
@@ -214,7 +215,7 @@ export async function speakText(
 
   let res: Response;
   try {
-    res = await fetch("/api/voice/tts", {
+    res = await lfgFetch("/api/voice/tts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text: t, voice: opts?.voice }),

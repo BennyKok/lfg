@@ -11,6 +11,7 @@ import {
 import { usePwaInstall, type PwaInstallMode } from "@/lib/pwa-install";
 import { cn } from "@/lib/utils";
 import { toast } from "@/lib/notify";
+import { lfgAssetUrl } from "@/lib/lfg-client";
 
 const CALLOUT_DISMISSED_KEY = "lfg_pwa_install_callout_dismissed";
 
@@ -112,7 +113,7 @@ export function PwaInstallCallout() {
   return (
     <>
       <aside className="mx-3 mt-2 flex items-center gap-3 rounded-2xl border border-primary/20 bg-card/90 px-3 py-2.5 shadow-sm backdrop-blur-xl">
-        <img src="/icon.svg" alt="" className="size-10 shrink-0 rounded-xl" />
+        <img src={lfgAssetUrl("/icon.svg")} alt="" className="size-10 shrink-0 rounded-xl" />
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold">Install lfg</div>
           <div className="truncate text-xs text-muted-foreground">

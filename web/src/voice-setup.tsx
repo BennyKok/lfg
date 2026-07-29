@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { lfgFetch } from "@/lib/lfg-client";
 
 export type VoiceCapability = "input" | "output" | "call";
 
@@ -51,7 +52,7 @@ export function showVoiceSetup(capability: VoiceCapability = "call") {
 
 export async function ensureVoiceConfigured(capability: VoiceCapability): Promise<boolean> {
   try {
-    const response = await fetch("/api/voice/config", { cache: "no-store" });
+    const response = await lfgFetch("/api/voice/config", { cache: "no-store" });
     if (!response.ok) return true;
     const cfg = (await response.json()) as VoiceConfig;
     if (voiceReady(cfg, capability)) return true;
@@ -74,7 +75,7 @@ export function VoiceSetupDialog() {
   const [message, setMessage] = useState("");
 
   const load = useCallback(async () => {
-    const response = await fetch("/api/voice/config", { cache: "no-store" });
+    const response = await lfgFetch("/api/voice/config", { cache: "no-store" });
     if (!response.ok) throw new Error("Could not check voice configuration");
     const next = (await response.json()) as VoiceConfig;
     setCfg(next);
@@ -120,7 +121,7 @@ export function VoiceSetupDialog() {
         : capability === "output"
           ? { ttsProvider: provider.id }
           : { sttProvider: provider.id, ttsProvider: provider.id };
-      const response = await fetch("/api/voice/config", {
+      const response = await lfgFetch("/api/voice/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ providerId: provider.id, apiKey: apiKey.trim(), ...selection }),
