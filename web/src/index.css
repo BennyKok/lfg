@@ -651,6 +651,26 @@ html.lfg-keyboard-open {
     contain: layout paint;
   }
 
+  /* Let the fixed session-rail chrome frame the scrollable rows without a
+     hard clipping line. A mask keeps the fade purely visual, so the full
+     scroll surface remains interactive. Include the prefixed form for Safari. */
+  .session-list-scroll {
+    -webkit-mask-image: linear-gradient(
+      to bottom,
+      transparent 0,
+      black 0.75rem,
+      black calc(100% - 0.75rem),
+      transparent 100%
+    );
+    mask-image: linear-gradient(
+      to bottom,
+      transparent 0,
+      black 0.75rem,
+      black calc(100% - 0.75rem),
+      transparent 100%
+    );
+  }
+
   .chat-stream {
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
