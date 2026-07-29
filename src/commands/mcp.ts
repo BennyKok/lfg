@@ -931,7 +931,7 @@ export async function cmdMcp() {
     {
       title: "Post To The LFG Shipped Channel",
       description:
-        "Showcase finished work in the LFG Shipped channel — a feed of what agents completed, with visuals. Call this when you finish something worth showing. Write it like a launch tweet: a punchy headline + at most 1-2 short sentences on WHAT shipped and why it matters. NOT a changelog — no bullet lists, no headings, no implementation detail, no file names; the session transcript already holds all of that. Attach the screenshots/recordings you captured while verifying (mediaPaths), or embed an existing artifact like a live dashboard (artifactIds). Images are optimized automatically before storage. To UPDATE an earlier post (e.g. after follow-up feedback), pass its id — the post revises in place and the feed shows the new version.",
+        "TERMINAL ACTION: post the assigned task's successful final result in the LFG Shipped/Finished channel, then automatically close this source session into the resumable finished-session roster. This includes completed changes, docs/analysis, verified no-ops, and work found already complete; never use it for planning, partial, blocked, or still-unverified work. Call it only after all work is complete, and do not continue after it succeeds. Write it like a launch tweet: a punchy headline + at most 1-2 short sentences on the outcome and why it matters. NOT a changelog — no bullet lists, no headings, no implementation detail, no file names; the session transcript already holds all of that. Attach the strongest evidence when available. To UPDATE an earlier post after a resumed follow-up, pass its id — the post revises in place and the session closes again.",
       inputSchema: {
         title: z.string().min(1).describe("Short headline for what shipped (e.g. 'WhatsApp reconnect loop fixed')."),
         id: z.string().optional().describe("Existing ship post id to update in place (returned when the post was created)."),
@@ -952,12 +952,16 @@ export async function cmdMcp() {
     },
     async ({ title, id, summary, mediaPaths, artifactIds, project, sessionId }) => {
       const sid = await activeSessionId(sessionId);
-      const data = await api<{ ok: boolean; post: unknown }>("/api/shipped", {
+      const data = await api<{
+        ok: boolean;
+        post: unknown;
+        session?: { status: "closing"; resumable: boolean };
+      }>("/api/shipped", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title, id, summary, mediaPaths, artifactIds, project, sessionId: sid }),
       });
-      return result({ shipped: true, post: data.post });
+      return result({ shipped: true, post: data.post, session: data.session });
     },
   );
 
@@ -1116,12 +1120,12 @@ export async function cmdMcp() {
         "The single verb for everything you send to the human. NARRATE your decisions and progress here as you work — do not go dark. `to` picks the destination: " +
         "'thread' delivers text and/or media back to the channel that launched this session (e.g. iMessage) — this is your default running narration; " +
         "'session' shows evidence inline in the LFG transcript (a screenshot/recording via `media`, or a self-contained HTML report/dashboard via `html`); " +
-        "'shipped' posts a finished, verified result to the Shipped feed (`title` + tweet-length `text`, plus the strongest `media`). " +
+        "'shipped' is terminal: it posts a finished, verified result to the Shipped feed (`title` + tweet-length `text`, plus the strongest `media`), then automatically closes the source session so it can be resumed later. Use it only as your final action and do not continue after success. " +
         "Attach local files with `media` (images/videos by absolute path) and/or existing artifacts with `artifactIds`. Re-use `id` to update an artifact or ship post in place. This is non-blocking — never wait after calling it.",
       inputSchema: {
         to: z
           .enum(["thread", "session", "shipped"])
-          .describe("Destination: 'thread' (originating channel / iMessage — your running narration), 'session' (inline transcript evidence), 'shipped' (verified completion feed)."),
+          .describe("Destination: 'thread' (originating channel / iMessage — your running narration), 'session' (inline transcript evidence), 'shipped' (terminal verified completion: post result, close source session, remain resumable)."),
         text: z
           .string()
           .max(4_000)
@@ -1148,12 +1152,16 @@ export async function cmdMcp() {
       }
       if (to === "shipped") {
         const sid = await activeSessionId(sessionId);
-        const data = await api<{ ok: boolean; post: unknown }>("/api/shipped", {
+        const data = await api<{
+          ok: boolean;
+          post: unknown;
+          session?: { status: "closing"; resumable: boolean };
+        }>("/api/shipped", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ title, id, summary: text, mediaPaths: media, artifactIds, project, sessionId: sid }),
         });
-        return result({ shipped: true, post: data.post });
+        return result({ shipped: true, post: data.post, session: data.session });
       }
       // to === "session"
       if (html !== undefined) {

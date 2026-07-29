@@ -1,5 +1,6 @@
-// The "Shipped" channel: a curated feed agents post to when they finish
-// something worth showing — title, a short summary, and rich media. Media
+// The "Shipped" channel: the finished-session feed agents post to when an
+// assigned task reaches a successful terminal outcome — title, a short result,
+// and optional rich media. Media
 // entries are ordinary artifacts (image / video / html), so the feed reuses
 // the artifact store, serving, and sandboxing wholesale.
 //
