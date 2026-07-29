@@ -22,4 +22,17 @@ describe("latestDistinctShippedSessions", () => {
       "e",
     ]);
   });
+
+  test("returns only sessions from the selected project", () => {
+    const posts = [
+      { id: "lfg-new", sessionId: "lfg-new", project: "lfg", ts: 50 },
+      { id: "omg-new", sessionId: "omg-new", project: "omg", ts: 40 },
+      { id: "lfg-old", sessionId: "lfg-old", project: "lfg", ts: 30 },
+      { id: "missing-project", sessionId: "legacy", ts: 60 },
+    ];
+
+    expect(
+      latestDistinctShippedSessions(posts, 5, "lfg").map((post) => post.id),
+    ).toEqual(["lfg-new", "lfg-old"]);
+  });
 });

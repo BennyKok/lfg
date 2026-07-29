@@ -5105,6 +5105,7 @@ export async function cmdServe() {
               : undefined;
             return {
               ...post,
+              project: post.project ?? source?.project,
               sessionTitle: post.sessionId
                 ? (titles[post.sessionId] ?? source?.title)
                 : undefined,
@@ -5152,7 +5153,12 @@ export async function cmdServe() {
             // byline survives registry pruning; the GET hydration still prefers
             // the live registry when the session is known.
             const sourceAgent = sourceManaged?.agent;
-            const post = await addShipPost({ ...body, agent: body.agent ?? sourceAgent, title: shipTitle });
+            const post = await addShipPost({
+              ...body,
+              agent: body.agent ?? sourceAgent,
+              project: body.project ?? sourceManaged?.project,
+              title: shipTitle,
+            });
             const sourceSession = body.sessionId
               ? (await listSessions()).find(
                   (session) =>

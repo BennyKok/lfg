@@ -4625,6 +4625,43 @@ export function App() {
     () => allLiveSessions.map((s) => s.sessionId).filter((id): id is string => !!id),
     [allLiveSessions],
   );
+  const openRecentShipped = useCallback(
+    async (post: ShipPost) => {
+      if (!post.sessionId) return;
+      setTab("live");
+
+      const live = allLiveSessions.find(
+        (session) =>
+          session.sessionId === post.sessionId ||
+          session.nativeSessionId === post.sessionId,
+      );
+      if (live?.sessionId) {
+        setLiveFocus({ sid: live.sessionId, n: Date.now() });
+        return;
+      }
+
+      toast.message("Resuming shipped session…");
+      try {
+        const resumed = await api<{ sessionId?: string }>("/api/sessions/resume", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: post.sessionId,
+            user: identity || undefined,
+          }),
+        });
+        const sid = resumed.sessionId || post.sessionId;
+        await refreshSessions();
+        setLiveFocus({ sid, n: Date.now() });
+        toast.success("Session resumed");
+      } catch (error) {
+        toast.error(
+          error instanceof Error ? error.message : "Couldn't resume shipped session",
+        );
+      }
+    },
+    [allLiveSessions, identity, refreshSessions, setTab],
+  );
   const liveStatusKey = liveStatusIds.join(",");
   const liveTransport = useMemo(() => liveTransportMode(), []);
   const useWsLive = liveTransport === "ws";
@@ -5628,6 +5665,7 @@ export function App() {
               onOpenSettings={embedded ? undefined : () => setTab("settings")}
               onOpenAsk={embedded ? undefined : () => setTab("ask")}
               onOpenShipped={embedded ? undefined : openShipped}
+              onOpenRecentShipped={embedded ? undefined : openRecentShipped}
               messagesBySid={liveStream.messagesBySid}
               busyBySid={liveStream.busyBySid}
               promptsBySid={liveStream.promptsBySid}
@@ -7735,6 +7773,7 @@ function LiveView({
   onOpenSettings,
   onOpenAsk,
   onOpenShipped,
+  onOpenRecentShipped,
   onManageSessions,
   onClearIdle,
   hosted = false,
@@ -7751,6 +7790,7 @@ function LiveView({
   onOpenSettings?: () => void;
   onOpenAsk?: () => void;
   onOpenShipped?: (post?: ShipPost) => void;
+  onOpenRecentShipped?: (post: ShipPost) => void;
   onManageSessions: (template: ManageSessionPromptTemplate) => void;
   onClearIdle: () => void;
   hosted?: boolean;
@@ -8007,6 +8047,7 @@ function LiveView({
         onOpenSettings={onOpenSettings}
         onOpenAsk={onOpenAsk}
         onOpenShipped={onOpenShipped}
+        onOpenRecentShipped={onOpenRecentShipped}
         onManageSessions={onManageSessions}
         onClearIdle={onClearIdle}
         hosted={hosted}
@@ -8130,6 +8171,7 @@ function RailStage({
   onOpenSettings,
   onOpenAsk,
   onOpenShipped,
+  onOpenRecentShipped,
   onManageSessions,
   onClearIdle,
   hosted = false,
@@ -8147,6 +8189,7 @@ function RailStage({
   onOpenSettings?: () => void;
   onOpenAsk?: () => void;
   onOpenShipped?: (post?: ShipPost) => void;
+  onOpenRecentShipped?: (post: ShipPost) => void;
   onManageSessions?: (template: ManageSessionPromptTemplate) => void;
   onClearIdle?: () => void;
   hosted?: boolean;
@@ -8197,14 +8240,18 @@ function RailStage({
   const [preview, setPreview] = useState<string | null>(null);
   const [railCollapsed, setRailCollapsed] = useState<boolean>(readRailCollapsed);
   const cachedShipped = readFeedCache<ShipPost>(SHIPPED_FEED_KEY);
-  const [recentShipped, setRecentShipped] = useState<ShipPost[]>(() =>
-    latestDistinctShippedSessions(cachedShipped?.items ?? []),
+  const [recentShippedPosts, setRecentShippedPosts] = useState<ShipPost[]>(
+    () => cachedShipped?.items ?? [],
+  );
+  const recentShipped = useMemo(
+    () => latestDistinctShippedSessions(recentShippedPosts, 5, projectFilter),
+    [projectFilter, recentShippedPosts],
   );
   // Keyboard cursor (highlighted rail row) + the shortcuts cheatsheet overlay.
   const [cursor, setCursor] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!onOpenShipped) return;
+    if (!onOpenRecentShipped) return;
     let alive = true;
     const load = async () => {
       try {
@@ -8213,7 +8260,7 @@ function RailStage({
         const data = await api<{ posts: ShipPost[] }>("/api/shipped?limit=25", {
           cache: "no-store",
         });
-        if (alive) setRecentShipped(latestDistinctShippedSessions(data.posts));
+        if (alive) setRecentShippedPosts(data.posts);
       } catch {
         // Keep the last cached paint; the Shipped page remains the fallback.
       }
@@ -8224,7 +8271,7 @@ function RailStage({
       alive = false;
       window.clearInterval(interval);
     };
-  }, [onOpenShipped]);
+  }, [onOpenRecentShipped]);
   const [showHelp, setShowHelp] = useState(false);
   // One-shot glow token for the stage pane just chosen from the rail. `n`
   // increments so re-selecting the same sid restarts the animation.
@@ -9223,7 +9270,7 @@ function RailStage({
               ) : null}
             </>
           )}
-          {!railCollapsed && onOpenShipped && recentShipped.length ? (
+          {!railCollapsed && onOpenRecentShipped && recentShipped.length ? (
             <RailGroup
               label="Recently shipped"
               count={recentShipped.length}
@@ -9233,7 +9280,7 @@ function RailStage({
                 <button
                   key={post.id}
                   type="button"
-                  onClick={() => onOpenShipped(post)}
+                  onClick={() => onOpenRecentShipped(post)}
                   title={`Open shipped session: ${post.title}`}
                   className="group flex w-full items-center gap-2 rounded-xl border border-transparent px-2 py-1.5 text-left outline-none transition-colors hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/60"
                 >
