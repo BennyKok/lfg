@@ -117,7 +117,7 @@ describe("mobile overlay scroll contract", () => {
     const css = require("node:fs").readFileSync("web/src/index.css", "utf8") as string;
 
     expect(app).toContain(
-      '"absolute inset-x-0 bottom-[var(--lfg-host-bottom-inset)] top-0 pt-[calc(var(--lfg-mobile-header-height)+var(--lfg-mobile-header-fade-height))]',
+      '"absolute inset-x-0 bottom-[var(--lfg-host-bottom-inset)] top-0 px-2 pt-[var(--lfg-mobile-header-height)]',
     );
     expect(app).toContain('isMobile && "mobile-scroll-header-fade"');
     expect(css).toMatch(
@@ -126,12 +126,15 @@ describe("mobile overlay scroll contract", () => {
     expect(css).toMatch(/--lfg-mobile-header-fade-height:\s*2\.5rem/);
   });
 
-  test("composer pages reserve the overlay and fade depth inside the scroller", () => {
+  test("composer pages reserve chrome while the fade overlays content", () => {
     const app = require("node:fs").readFileSync("web/src/App.tsx", "utf8") as string;
     const css = require("node:fs").readFileSync("web/src/index.css", "utf8") as string;
 
     expect(app).toContain('tab === "live" || tab === "shipped" || tab === "artifacts"');
     expect(app).toContain(
+      "pb-[var(--lfg-inline-composer-height,var(--lfg-composer-clear))]",
+    );
+    expect(app).not.toContain(
       "pb-[calc(var(--lfg-inline-composer-height,var(--lfg-composer-clear))+var(--lfg-mobile-composer-fade-height))]",
     );
     expect(app).toContain(

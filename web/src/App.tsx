@@ -5511,9 +5511,10 @@ export function App() {
   // shell's host-inset padding and would otherwise run its content underneath
   // the omg Computer nav pill. <main> now ends at the top of that band (see its
   // `bottom-[var(--lfg-host-bottom-inset)]`), so the padding here only has to
-  // clear the composer + its fade.
+  // clear the composer. The visual fade overlays the scroll surface and must
+  // not also become blank layout space.
   const mainBottomPadding = mobileComposerVisible
-    ? "pb-[calc(var(--lfg-inline-composer-height,var(--lfg-composer-clear))+var(--lfg-mobile-composer-fade-height))] [scroll-padding-bottom:calc(var(--lfg-inline-composer-height,var(--lfg-composer-clear))+var(--lfg-mobile-composer-fade-height))]"
+    ? "pb-[var(--lfg-inline-composer-height,var(--lfg-composer-clear))] [scroll-padding-bottom:var(--lfg-inline-composer-height,var(--lfg-composer-clear))]"
     : tab === "live"
       ? keyboardOpen
         ? "pb-[calc(var(--lfg-inline-composer-height,var(--lfg-composer-clear))+0.75rem)] md:pb-3"
@@ -5654,11 +5655,10 @@ export function App() {
           isMobile &&
             // Narrow layout scrolls behind the floating chrome, so the box is
             // pinned to the shell rather than living in the flex flow. It stops
-            // at the host inset (see mainBottomPadding).
-            "absolute inset-x-0 bottom-[var(--lfg-host-bottom-inset)] top-0 pt-[calc(var(--lfg-mobile-header-height)+var(--lfg-mobile-header-fade-height))] [scroll-padding-top:calc(var(--lfg-mobile-header-height)+var(--lfg-mobile-header-fade-height))]",
-          // The Live/chat page is intentionally full-width; its cards own any
-          // spacing they need. Keep the page gutter on the gallery-style tabs.
-          isMobile && tab !== "live" && "px-2",
+            // at the host inset (see mainBottomPadding) and keeps a real side
+            // gutter for card corners and shadows. The header fade overlays the
+            // scroll surface; only the measured chrome height is layout space.
+            "absolute inset-x-0 bottom-[var(--lfg-host-bottom-inset)] top-0 px-2 pt-[var(--lfg-mobile-header-height)] [scroll-padding-top:var(--lfg-mobile-header-height)]",
           liveDesktopWorkspace ? "overflow-hidden pb-3" : `overflow-y-auto ${mainBottomPadding}`,
         )}
       >
