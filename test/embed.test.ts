@@ -117,7 +117,7 @@ describe("mobile overlay scroll contract", () => {
     const css = require("node:fs").readFileSync("web/src/index.css", "utf8") as string;
 
     expect(app).toContain(
-      '"absolute inset-x-0 bottom-[var(--lfg-host-bottom-inset)] top-0 px-2 pt-[calc(var(--lfg-mobile-header-height)+var(--lfg-mobile-header-fade-height))]',
+      '"absolute inset-x-0 bottom-[var(--lfg-host-bottom-inset)] top-0 pt-[calc(var(--lfg-mobile-header-height)+var(--lfg-mobile-header-fade-height))]',
     );
     expect(app).toContain('isMobile && "mobile-scroll-header-fade"');
     expect(css).toMatch(
