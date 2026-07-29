@@ -3853,6 +3853,39 @@ export function App() {
   }, [embedded]);
   const isMobile = useIsMobile();
   const isWide = useIsWide();
+  // Narrow layout floats the top chrome over an absolutely-positioned scroll
+  // surface, so the scroll box has to reserve exactly as much room as that
+  // chrome actually occupies. The header alone is a fixed height, but the PWA
+  // install callout and the error banner ride along with it and change that
+  // total — publish the measured height so the two can never drift apart and
+  // overlap the first row (`--lfg-mobile-header-height` in index.css is only
+  // the header-only fallback).
+  // Callback ref (not useRef): the chrome only mounts once the profile /
+  // onboarding gates above have closed, and an effect keyed on a plain ref
+  // would never re-run for that later mount.
+  const [mobileChromeEl, setMobileChromeEl] = useState<HTMLDivElement | null>(null);
+  useLayoutEffect(() => {
+    const el = mobileChromeEl;
+    if (!isMobile || !el) {
+      document.documentElement.style.removeProperty("--lfg-mobile-header-height");
+      return;
+    }
+    const sync = () => {
+      document.documentElement.style.setProperty(
+        "--lfg-mobile-header-height",
+        `${Math.ceil(el.getBoundingClientRect().height)}px`,
+      );
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    ro.observe(el);
+    window.addEventListener("resize", sync);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", sync);
+      document.documentElement.style.removeProperty("--lfg-mobile-header-height");
+    };
+  }, [isMobile, mobileChromeEl]);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [codingAgents, setCodingAgents] = useState<CodingAgentInfo[]>([]);
@@ -5414,8 +5447,13 @@ export function App() {
     !callOpen &&
     !viewerArtifact &&
     (tab === "live" || tab === "shipped" || tab === "artifacts");
+  // The mobile scroll surface is absolutely positioned, so it escapes the app
+  // shell's host-inset padding and would otherwise run its content underneath
+  // the omg Computer nav pill. <main> now ends at the top of that band (see its
+  // `bottom-[var(--lfg-host-bottom-inset)]`), so the padding here only has to
+  // clear the composer + its fade.
   const mainBottomPadding = mobileComposerVisible
-    ? "pb-[calc(var(--lfg-inline-composer-height,var(--lfg-composer-clear))+var(--lfg-mobile-composer-fade-height)+var(--lfg-host-bottom-inset))] [scroll-padding-bottom:calc(var(--lfg-inline-composer-height,var(--lfg-composer-clear))+var(--lfg-mobile-composer-fade-height)+var(--lfg-host-bottom-inset))]"
+    ? "pb-[calc(var(--lfg-inline-composer-height,var(--lfg-composer-clear))+var(--lfg-mobile-composer-fade-height))] [scroll-padding-bottom:calc(var(--lfg-inline-composer-height,var(--lfg-composer-clear))+var(--lfg-mobile-composer-fade-height))]"
     : tab === "live"
       ? keyboardOpen
         ? "pb-[calc(var(--lfg-inline-composer-height,var(--lfg-composer-clear))+0.75rem)] md:pb-3"
@@ -5446,8 +5484,20 @@ export function App() {
           gradient-bordered pill so the whole chrome reads as one matched set.
           Auto + extension tabs now live inside the Settings page. */}
       {/* Embed keeps product branding but leaves settings/user chrome to omg. */}
+      {/* One measured chrome stack: header + install callout + error banner.
+          On mobile these all float above the scroll surface, so they share a
+          single fade backdrop and a single measured height (see
+          --lfg-mobile-header-height) instead of the header alone reserving
+          space and the callout landing on top of the first row. */}
+      <div
+        ref={setMobileChromeEl}
+        className={cn(
+          "relative z-40 flex shrink-0 flex-col",
+          isMobile && "mobile-scroll-header-fade",
+        )}
+      >
       {embedded && isMobile ? (
-        <header className="mobile-scroll-header-fade z-40 flex shrink-0 items-center px-3 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))]">
+        <header className="z-40 flex shrink-0 items-center px-3 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))]">
           <NavIsland className="shrink-0">
             <div
               className="flex size-11 items-center justify-center rounded-full bg-background/80 backdrop-blur-xl"
@@ -5458,12 +5508,7 @@ export function App() {
           </NavIsland>
         </header>
       ) : embedded || liveDesktopWorkspace ? null : (
-      <header
-        className={cn(
-          "relative z-40 flex shrink-0 items-center justify-between gap-2 px-2 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))] md:px-3",
-          isMobile && "mobile-scroll-header-fade",
-        )}
-      >
+      <header className="relative z-40 flex shrink-0 items-center justify-between gap-2 px-2 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))] md:px-3">
         <NavIsland className="shrink-0">
           <div className="flex h-11 items-center rounded-full bg-background/80 px-1.5 backdrop-blur-xl">
             {tab === "live" || tab === "shipped" || tab === "artifacts" ? (
@@ -5540,13 +5585,18 @@ export function App() {
           {error}
         </div>
       ) : null}
+      </div>
 
       <main
         ref={mainRef}
         className={cn(
           "min-h-0 px-0 md:flex-1 md:px-3 md:pt-3",
           isMobile &&
-            "absolute inset-0 pt-[calc(var(--lfg-mobile-header-height)+var(--lfg-mobile-header-fade-height))] [scroll-padding-top:calc(var(--lfg-mobile-header-height)+var(--lfg-mobile-header-fade-height))]",
+            // Narrow layout scrolls behind the floating chrome, so the box is
+            // pinned to the shell rather than living in the flex flow. It stops
+            // at the host inset (see mainBottomPadding) and keeps a real gutter
+            // so card corners/shadows aren't sheared off by the viewport edge.
+            "absolute inset-x-0 bottom-[var(--lfg-host-bottom-inset)] top-0 px-2 pt-[calc(var(--lfg-mobile-header-height)+var(--lfg-mobile-header-fade-height))] [scroll-padding-top:calc(var(--lfg-mobile-header-height)+var(--lfg-mobile-header-fade-height))]",
           liveDesktopWorkspace ? "overflow-hidden pb-3" : `overflow-y-auto ${mainBottomPadding}`,
         )}
       >
