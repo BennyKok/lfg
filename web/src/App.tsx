@@ -66,6 +66,17 @@ import {
   writeTranscriptCache,
 } from "./lib/transcript-cache";
 import {
+  PROMPT_STASH_EVENT,
+  clearPromptStash,
+  readPromptDraft,
+  readPromptStash,
+  removePromptStash,
+  setPromptStashStatus,
+  stagePromptSend,
+  stashPromptDraft,
+  type PromptStashEntry,
+} from "./lib/prompt-stash";
+import {
   ARTIFACTS_GALLERY_KEY,
   readFeedCache,
   SHIPPED_FEED_KEY,
@@ -92,6 +103,7 @@ import type {
 } from "react";
 import {
   Activity,
+  Archive,
   ArrowDown,
   ArrowUp,
   Bot,
@@ -9979,7 +9991,10 @@ function SessionChat({
   onDictatingChange?: (recording: boolean) => void;
 }) {
   const sid = session.sessionId;
-  const [messageText, setMessageText] = useState("");
+  const stashContext = sid ? `session:${sid}` : "session:missing";
+  const [messageText, setMessageTextState] = useState(
+    () => readPromptDraft(stashContext)?.text ?? "",
+  );
   const [sending, setSending] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [nextBefore, setNextBefore] = useState<number | null>(null);
@@ -10027,6 +10042,27 @@ function SessionChat({
   // driven from another device (where chatStatus never leaves "ready").
   const [liveBusy, setLiveBusy] = useState(false);
   const chatBusy = busy || liveBusy || chatStatus === "submitted" || chatStatus === "streaming";
+  const setMessageText = useCallback(
+    (text: string) => {
+      setMessageTextState(text);
+      if (!sid) return;
+      stashPromptDraft({
+        contextKey: stashContext,
+        source: "session",
+        text,
+        sessionId: sid,
+        sessionTitle: session.title || session.project || "Session",
+        project: session.project,
+      });
+    },
+    [session.project, session.title, sid, stashContext],
+  );
+
+  // SessionChat can be reused as the focused card changes. Recover that
+  // session's own draft instead of carrying text across cards.
+  useEffect(() => {
+    setMessageTextState(readPromptDraft(stashContext)?.text ?? "");
+  }, [stashContext]);
 
   useEffect(() => {
     chatStatusRef.current = chatStatus;
@@ -10152,10 +10188,18 @@ function SessionChat({
     const text = (overrideText ?? messageText).trim();
     const files = attachments;
     if (!sid || (!text && !files.length)) return;
+    const stashed = stagePromptSend({
+      contextKey: stashContext,
+      source: "session",
+      text,
+      sessionId: sid,
+      sessionTitle: session.title || session.project || "Session",
+      project: session.project,
+    });
     setSending(true);
     feedback.send();
     onError(null);
-    setMessageText("");
+    setMessageTextState("");
     try {
       // Audio mode: this session becomes the one we speak, and gets primed once
       // to stay conversational + delegate heavy work to a subagent.
@@ -10191,9 +10235,13 @@ function SessionChat({
           },
         },
         { body: { mode } },
-      ).catch((err) => {
-        onError(err instanceof Error ? err.message : String(err));
-      });
+      )
+        .then(() => setPromptStashStatus(stashed?.id, "sent"))
+        .catch((err) => {
+          setPromptStashStatus(stashed?.id, "draft");
+          setMessageTextState((current) => current || text);
+          onError(err instanceof Error ? err.message : String(err));
+        });
       for (const att of files) {
         if (att.previewUrl) URL.revokeObjectURL(att.previewUrl);
       }
@@ -10204,8 +10252,9 @@ function SessionChat({
         onError(err instanceof Error ? err.message : String(err));
       });
     } catch (err) {
+      setPromptStashStatus(stashed?.id, "draft");
       onError(err instanceof Error ? err.message : String(err));
-      setMessageText(text);
+      setMessageTextState((current) => current || text);
     } finally {
       setSending(false);
     }
@@ -13997,7 +14046,9 @@ function NewSessionDialog({
   const [user, setUser] = useState(
     () => defaultUser || localStorage.getItem("lfg_user") || users[0]?.email || "",
   );
-  const [prompt, setPrompt] = useState("");
+  const [prompt, setPromptState] = useState(
+    () => readPromptDraft("new-session")?.text ?? "",
+  );
   const [pendingUploads, setPendingUploads] = useState<ComposerAttachment[]>([]);
   const [usage, setUsage] = useState<ProviderUsage | null>(null);
   const [pendingCreates, setPendingCreates] = useState(0);
@@ -14359,6 +14410,14 @@ function NewSessionDialog({
 
   function resume(session: ResumableSession) {
     const resumePrompt = prompt.trim();
+    const stashed = stagePromptSend({
+      contextKey: `session:${session.sessionId}`,
+      source: "session",
+      text: resumePrompt,
+      sessionId: session.sessionId,
+      sessionTitle: session.title,
+      project: session.project,
+    });
     const resumeModel =
       session.agent === "claude"
         ? ["fable", "opus", "sonnet", "haiku"].includes(model)
@@ -14384,10 +14443,17 @@ function NewSessionDialog({
           user: user || undefined,
           model: resumeModel,
         }),
-      }).then(() => {
-        if (resumePrompt) setPrompt("");
-        return onCreated();
-      }),
+      })
+        .then(() => {
+          setPromptStashStatus(stashed?.id, "sent");
+          if (resumePrompt) setPromptState("");
+          return onCreated();
+        })
+        .catch((err) => {
+          setPromptStashStatus(stashed?.id, "draft");
+          setPromptState((current) => current || resumePrompt);
+          throw err;
+        }),
       {
         loading: "Resuming session…",
         success: "Session resumed",
@@ -14428,6 +14494,16 @@ function NewSessionDialog({
     if (r) return repoProject(r);
     return scopedProject !== "__all" ? scopedProject : "__all";
   })();
+
+  function setPrompt(text: string) {
+    setPromptState(text);
+    stashPromptDraft({
+      contextKey: "new-session",
+      source: "new-session",
+      text,
+      project: composerProject,
+    });
+  }
 
   function openProjectSheet() {
     setAgentPopoverOpen(false);
@@ -14530,9 +14606,15 @@ function NewSessionDialog({
     const launchAgent = agent;
     const launchModel = model;
     const launchThinkingLevel = thinkingLevel;
+    const stashed = stagePromptSend({
+      contextKey: "new-session",
+      source: "new-session",
+      text: taskPrompt,
+      project: composerProject,
+    });
     const uploadIds = new Set(files.map((att) => att.id));
     setError(null);
-    setPrompt("");
+    setPromptState("");
     setAttachments([]);
     // Carry each attachment's real upload state across. Most will already be
     // "uploaded" because the bytes went up when the file was attached; only
@@ -14581,8 +14663,11 @@ function NewSessionDialog({
           markCreatedSid(sid);
           markCollapsedSid(sid);
         }
+        setPromptStashStatus(stashed?.id, "sent");
         await onCreated({ launchId: sid, sessionId: sid });
       } catch (err) {
+        setPromptStashStatus(stashed?.id, "draft");
+        setPromptState((current) => current || taskPrompt);
         const message = err instanceof Error ? err.message : String(err);
         setError(message);
         toast.error(message || "Couldn't create session");
@@ -14721,11 +14806,9 @@ function NewSessionDialog({
     </div>
   );
 
-  // The recent-session ("resume") button. A dedicated full-screen sheet (below)
-  // opens rather than an inline list — the inline list reflowed the composer and
-  // jumped again when the async fetch landed. In the inline composer it rides
-  // along inside the expandable controls row (revealed only when expanded); the
-  // wrapper keeps it mounted, so toggling expand never flickers the height.
+  // Stash + recent-session recovery. This stays visible in the inline mobile
+  // composer too; the upward-swipe shortcut remains, but recovery should not
+  // depend on discovering a hidden gesture.
   const resumeButton = (
     <button
       type="button"
@@ -14733,11 +14816,11 @@ function NewSessionDialog({
         setResumeOpen(true);
         if (variant !== "inline") onClose();
       }}
-      title="Resume a recent session"
-      aria-label="Resume a recent session"
+      title="Open Stash and recent sessions"
+      aria-label="Open Stash and recent sessions"
       className="flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-sm transition hover:text-foreground"
     >
-      <RotateCcw className="size-4" />
+      <Archive className="size-4" />
     </button>
   );
 
@@ -14893,7 +14976,7 @@ function NewSessionDialog({
         </span>
         {/* Right cluster: resume + folder + photo + send, stacked together. */}
         <div className="flex shrink-0 items-center gap-2">
-          {variant !== "inline" ? resumeButton : null}
+          {resumeButton}
           {variant === "inline" && projectOptions && onProjectChange ? (
             <Button
               size="sm"
@@ -14930,6 +15013,7 @@ function NewSessionDialog({
         <ResumeSessionSheet
           initial={resumable}
           scopedProject={composerProject}
+          onRestore={(entry) => setPrompt(entry.text)}
           onPick={(session) => {
             closeResume();
             resume(session);
@@ -14987,6 +15071,7 @@ function NewSessionDialog({
       <ResumeSessionSheet
         initial={resumable}
         scopedProject={composerProject}
+        onRestore={(entry) => setPrompt(entry.text)}
         onPick={(session) => {
           closeResume();
           resume(session);
@@ -15026,61 +15111,65 @@ function NewSessionDialog({
   );
 }
 
-// Full-screen "Resume a recent session" picker. Portaled to <body> so it escapes
-// the composer's backdrop-filter containing block (a fixed child there would be
-// trapped inside the bottom bar). Skeleton rows hold the list's height while the
-// fetch is in flight, so the screen never jumps when the data lands.
+// Compact recovery surface. The shared Drawer renders this as a bottom drawer
+// on mobile and a centered dialog on desktop.
 function ResumeSessionSheet({
   initial,
   scopedProject,
+  onRestore,
   onPick,
   onClose,
 }: {
-  // Parent prefetch (newest, unfiltered) — used only to paint the first frame
-  // without a skeleton flash before this sheet's own fetch lands.
   initial: ResumableSession[] | null;
-  // The live view's active project filter ("__all" or a project name). When a
-  // specific project is active, the picker opens pre-scoped to it.
   scopedProject: string;
+  onRestore: (entry: PromptStashEntry) => void;
   onPick: (session: ResumableSession) => void;
   onClose: () => void;
 }) {
   const PAGE = 25;
   const scoped = scopedProject && scopedProject !== "__all" ? scopedProject : "all";
-
+  const initialStash = readPromptStash();
+  const [view, setView] = useState<"stash" | "sessions">(() =>
+    initialStash.some((entry) => entry.status !== "sent") ? "stash" : "sessions",
+  );
+  const [stash, setStash] = useState(initialStash);
   const [search, setSearch] = useState("");
   const [debounced, setDebounced] = useState("");
-  const [agent, setAgent] = useState<
-    "all" | "claude" | "codex" | "opencode" | "grok" | "cursor"
-  >("all");
-  const [project, setProject] = useState<string>(scoped);
-  // Seed from the parent prefetch only when opening unscoped — a scoped open
-  // needs its own first page, so the unfiltered seed would be wrong.
+  const [agent, setAgent] = useState("all");
+  const [project, setProject] = useState(scoped);
   const [items, setItems] = useState<ResumableSession[]>(
     scoped === "all" && initial ? initial : [],
   );
-  const [total, setTotal] = useState<number>(scoped === "all" && initial ? initial.length : 0);
+  const [total, setTotal] = useState(scoped === "all" && initial ? initial.length : 0);
   const [facets, setFacets] = useState<ResumableFacets>({ agents: [], projects: [] });
-  const [loading, setLoading] = useState(false); // full (reset) fetch
-  const [loadingMore, setLoadingMore] = useState(false); // next-page append
+  const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const itemsRef = useRef(items);
+  const requestRef = useRef(0);
+
   useEffect(() => {
     itemsRef.current = items;
   }, [items]);
 
-  // Debounce the search box so keystrokes don't hammer the endpoint.
   useEffect(() => {
-    const id = window.setTimeout(() => setDebounced(search.trim()), 220);
-    return () => window.clearTimeout(id);
+    const refresh = () => setStash(readPromptStash());
+    window.addEventListener(PROMPT_STASH_EVENT, refresh);
+    window.addEventListener("storage", refresh);
+    return () => {
+      window.removeEventListener(PROMPT_STASH_EVENT, refresh);
+      window.removeEventListener("storage", refresh);
+    };
+  }, []);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setDebounced(search.trim()), 220);
+    return () => window.clearTimeout(timeout);
   }, [search]);
 
-  // A monotonic token guards against out-of-order responses. reset=true fetches
-  // page 0 and replaces the list; reset=false appends the next page.
-  const reqRef = useRef(0);
   const fetchPage = useCallback(
     (reset: boolean) => {
-      const token = reset ? ++reqRef.current : reqRef.current;
+      const token = reset ? ++requestRef.current : requestRef.current;
       const offset = reset ? 0 : itemsRef.current.length;
       if (reset) setLoading(true);
       else setLoadingMore(true);
@@ -15089,300 +15178,338 @@ function ResumeSessionSheet({
       if (agent !== "all") params.set("agent", agent);
       if (project !== "all") params.set("project", project);
       api<ResumableResponse>(`/api/sessions/resumable?${params.toString()}`)
-        .then((r) => {
-          if (token !== reqRef.current) return;
-          const batch = Array.isArray(r.sessions) ? r.sessions : [];
-          setTotal(r.total ?? batch.length);
-          setFacets(r.facets ?? { agents: [], projects: [] });
-          setItems((prev) => (reset ? batch : [...prev, ...batch]));
+        .then((response) => {
+          if (token !== requestRef.current) return;
+          const batch = Array.isArray(response.sessions) ? response.sessions : [];
+          setItems((current) => (reset ? batch : [...current, ...batch]));
+          setTotal(response.total ?? batch.length);
+          setFacets(response.facets ?? { agents: [], projects: [] });
         })
         .catch(() => {
-          if (token !== reqRef.current || !reset) return;
+          if (token !== requestRef.current || !reset) return;
           setItems([]);
           setTotal(0);
           setFacets({ agents: [], projects: [] });
         })
         .finally(() => {
-          if (token !== reqRef.current) return;
+          if (token !== requestRef.current) return;
           if (reset) setLoading(false);
           else setLoadingMore(false);
         });
     },
-    [debounced, agent, project],
+    [agent, debounced, project],
   );
 
-  // Reset + refetch page 0 whenever the query / filters change (and on mount).
   useEffect(() => {
-    fetchPage(true);
-  }, [fetchPage]);
+    if (view === "sessions") fetchPage(true);
+  }, [fetchPage, view]);
 
-  const hasMore = items.length < total;
-  const canLoadMore = hasMore && !loading && !loadingMore;
-  // Stable ref so the mount-once IntersectionObserver always calls the latest
-  // closure (deps change every render as filters/counts move).
-  const loadMoreRef = useRef<() => void>(() => {});
-  loadMoreRef.current = () => {
-    if (canLoadMore) fetchPage(false);
-  };
-  const sentinelRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = sentinelRef.current;
-    if (!el) return;
-    const obs = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) loadMoreRef.current();
-      },
-      { rootMargin: "300px" },
-    );
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, []);
-
-  const agentCount = (kind: "claude" | "codex" | "opencode" | "grok" | "cursor") =>
-    facets.agents.find((a) => a.agent === kind)?.count ?? 0;
-  // Keep the currently-selected project visible even if the active search would
-  // otherwise drop it out of the facet list.
-  const projectChips = useMemo(() => {
-    const list = facets.projects.slice(0, 12);
-    if (project !== "all" && !list.some((p) => p.project === project)) {
-      list.unshift({ project, count: 0 });
-    }
-    return list;
-  }, [facets.projects, project]);
+  const stashQuery = search.trim().toLowerCase();
+  const visibleStash = stash.filter((entry) =>
+    !stashQuery
+      ? true
+      : `${entry.text} ${entry.sessionTitle ?? ""} ${entry.project ?? ""}`
+          .toLowerCase()
+          .includes(stashQuery),
+  );
+  const showSkeleton = loading && !items.length;
   const filtersActive = agent !== "all" || project !== "all" || !!debounced;
-  const showSkeleton = loading && items.length === 0;
+  const hasMore = items.length < total;
+  const statusLabel = (status: PromptStashEntry["status"]) =>
+    status === "draft"
+      ? "Draft"
+      : status === "sending"
+        ? "Sending"
+        : status === "failed"
+          ? "Failed"
+          : "Sent";
 
-  const agentTabs: Array<{
-    key: "all" | "claude" | "codex" | "opencode" | "grok" | "cursor";
-    label: string;
-    badge?: number;
-  }> = [
-    { key: "all", label: "All" },
-    { key: "claude", label: "Claude", badge: agentCount("claude") },
-    { key: "codex", label: "Codex", badge: agentCount("codex") },
-    { key: "opencode", label: "OpenCode", badge: agentCount("opencode") },
-    { key: "grok", label: "Grok", badge: agentCount("grok") },
-    { key: "cursor", label: "Cursor", badge: agentCount("cursor") },
-  ];
-
-  return createPortal(
-    <div className="pointer-events-auto fixed inset-0 z-[80] flex flex-col bg-background text-foreground lfg-resume-in">
-      <header
-        className="flex shrink-0 flex-col gap-2 border-b border-border px-2 pb-2"
-        style={{ paddingTop: "calc(env(safe-area-inset-top, 0px) + 0.75rem)" }}
-      >
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Back"
-            className="flex size-9 shrink-0 items-center justify-center rounded-full text-muted-foreground transition hover:text-foreground active:scale-95"
-          >
-            <ChevronLeft className="size-5" />
-          </button>
-          <h2 className="text-[15px] font-semibold">Resume a session</h2>
-          {!showSkeleton ? (
-            <span className="ml-auto rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium tabular-nums text-muted-foreground">
-              {total}
-            </span>
-          ) : null}
-        </div>
-
-        {/* Search */}
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground/70" />
-          <input
-            ref={searchRef}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search sessions, prompts, projects…"
-            aria-label="Search resumable sessions"
-            autoComplete="off"
-            autoCorrect="off"
-            spellCheck={false}
-            className="h-9 w-full rounded-full border border-border bg-muted/40 pl-9 pr-9 text-sm outline-none transition focus:border-ring focus:bg-background"
-          />
-          {search ? (
-            <button
-              type="button"
-              onClick={() => {
-                setSearch("");
-                searchRef.current?.focus();
-              }}
-              aria-label="Clear search"
-              className="absolute right-2.5 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground transition hover:text-foreground"
-            >
-              <X className="size-4" />
-            </button>
-          ) : null}
-        </div>
-
-        {/* Agent segmented control */}
-        <div className="-mx-2 flex items-center gap-1 overflow-x-auto px-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <div className="inline-flex h-8 items-center rounded-full bg-muted p-0.5 text-xs font-semibold">
-            {agentTabs.map((t) => (
+  return (
+    <Drawer
+      open
+      repositionInputs={false}
+      onOpenChange={(next) => {
+        if (!next) onClose();
+      }}
+    >
+      <DrawerContent className="mx-auto w-full max-w-2xl sm:max-w-2xl">
+        <div className="flex max-h-[72dvh] min-h-0 flex-col overflow-hidden">
+          <header className="shrink-0 border-b border-border/70 pb-2">
+            <div className="flex h-9 items-center gap-2">
+              <DrawerTitle className="text-[15px] font-semibold">Resume</DrawerTitle>
+              <span className="text-xs text-muted-foreground">Stash & sessions</span>
               <button
-                key={t.key}
                 type="button"
-                onClick={() => setAgent(t.key)}
-                className={cn(
-                  "flex h-7 items-center gap-1.5 rounded-full px-3 transition",
-                  agent === t.key
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-muted-foreground",
-                )}
+                onClick={onClose}
+                aria-label="Close"
+                className="ml-auto flex size-8 items-center justify-center rounded-full bg-muted text-muted-foreground transition hover:text-foreground active:scale-95"
               >
-                {t.key !== "all" ? (
-                  <img src={agentIconSrc(t.key)} alt="" className="size-4" />
-                ) : null}
-                <span>{t.label}</span>
-                {t.badge ? (
-                  <span className="rounded-full bg-muted-foreground/15 px-1.5 text-[10px] tabular-nums">
-                    {t.badge}
-                  </span>
-                ) : null}
+                <X className="size-4" />
               </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Project chips */}
-        {projectChips.length ? (
-          <div className="-mx-2 flex gap-1.5 overflow-x-auto px-2 pb-0.5 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            <button
-              type="button"
-              onClick={() => setProject("all")}
-              className={cn(
-                "flex h-7 shrink-0 items-center gap-1 rounded-full border px-2.5 text-xs font-medium transition",
-                project === "all"
-                  ? "border-foreground bg-foreground text-background"
-                  : "border-border text-muted-foreground hover:text-foreground",
-              )}
-            >
-              All projects
-            </button>
-            {projectChips.map((p) => (
-              <button
-                key={p.project}
-                type="button"
-                onClick={() => setProject(p.project === project ? "all" : p.project)}
-                className={cn(
-                  "flex h-7 shrink-0 items-center gap-1 rounded-full border px-2.5 text-xs font-medium transition",
-                  project === p.project
-                    ? "border-foreground bg-foreground text-background"
-                    : "border-border text-muted-foreground hover:text-foreground",
-                )}
-              >
-                <Folder className="size-3" />
-                <span className="max-w-32 truncate">{p.project}</span>
-                {p.count ? <span className="tabular-nums opacity-70">{p.count}</span> : null}
-              </button>
-            ))}
-          </div>
-        ) : null}
-      </header>
-
-      <div
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-2"
-        style={{ paddingBottom: "calc(var(--lfg-safe-bottom) + 0.5rem)" }}
-      >
-        <div className="mx-auto max-w-lg">
-          {showSkeleton ? (
-            <div className="animate-pulse space-y-1" aria-hidden>
-              {Array.from({ length: 7 }).map((_, i) => (
-                <div key={i} className="flex items-center gap-3 px-3 py-3">
-                  <div className="size-8 shrink-0 rounded-lg bg-muted" />
-                  <div className="min-w-0 flex-1 space-y-1.5">
-                    <div className="h-3 w-1/2 rounded bg-muted" />
-                    <div className="h-2.5 w-3/4 rounded bg-muted/60" />
-                  </div>
-                </div>
-              ))}
             </div>
-          ) : items.length === 0 ? (
-            <div className="flex flex-col items-center justify-center gap-2 px-4 py-16 text-center text-sm text-muted-foreground">
-              <RotateCcw className="size-5" />
-              <span>{filtersActive ? "No sessions match your filters" : "No recent sessions to resume"}</span>
-              {filtersActive ? (
+
+            <div className="mt-2 flex items-center gap-2">
+              <div className="inline-flex h-8 shrink-0 items-center rounded-full bg-muted p-0.5 text-xs font-medium">
                 <button
                   type="button"
-                  onClick={() => {
-                    setSearch("");
-                    setAgent("all");
-                    setProject("all");
-                  }}
-                  className="mt-1 rounded-full border border-border px-3 py-1 text-xs font-medium text-foreground transition hover:bg-muted"
+                  onClick={() => setView("stash")}
+                  className={cn(
+                    "flex h-7 items-center gap-1.5 rounded-full px-3 transition",
+                    view === "stash"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground",
+                  )}
                 >
-                  Clear filters
+                  <Archive className="size-3.5" />
+                  Stash
+                  {stash.length ? <span className="tabular-nums opacity-60">{stash.length}</span> : null}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setView("sessions")}
+                  className={cn(
+                    "flex h-7 items-center gap-1.5 rounded-full px-3 transition",
+                    view === "sessions"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground",
+                  )}
+                >
+                  <RotateCcw className="size-3.5" />
+                  Sessions
+                  {total ? <span className="tabular-nums opacity-60">{total}</span> : null}
+                </button>
+              </div>
+              {view === "stash" && stash.length ? (
+                <button
+                  type="button"
+                  onClick={() => clearPromptStash()}
+                  className="ml-auto h-8 rounded-full px-2.5 text-xs font-medium text-muted-foreground transition hover:bg-muted hover:text-destructive"
+                >
+                  Clear
                 </button>
               ) : null}
             </div>
-          ) : (
-            <>
-              <div className={cn("space-y-0.5 transition-opacity", loading && "opacity-60")}>
-              {items.map((s) => (
-                <button
-                  key={s.sessionId}
-                  type="button"
-                  onClick={() => onPick(s)}
-                  className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition hover:bg-muted active:scale-[0.99]"
-                >
-                  <span className="relative flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted">
-                    <img src={agentIconSrc(s.agent)} alt={agentIconAlt(s.agent)} className="size-5" />
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-foreground">
-                      {s.title}
-                    </span>
-                    {s.lastUserText ? (
-                      <span className="mt-0.5 block truncate text-xs text-muted-foreground/90">
-                        {s.lastUserText}
-                      </span>
-                    ) : null}
-                    <span className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                      {s.project ? (
-                        <span className="inline-flex max-w-40 items-center gap-1 truncate rounded-full bg-muted px-1.5 py-0.5 font-medium">
-                          <Folder className="size-3 shrink-0" />
-                          <span className="truncate">{s.project}</span>
-                        </span>
-                      ) : null}
-                      <span className="tabular-nums">{timeAgo(s.lastActivityAt)}</span>
-                    </span>
-                  </span>
-                  <ChevronRight className="size-4 shrink-0 self-center text-muted-foreground/70" />
-                </button>
-              ))}
+
+            <div className="mt-2 flex items-center gap-1.5">
+              <div className="relative min-w-0 flex-1">
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/70" />
+                <input
+                  ref={searchRef}
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder={view === "stash" ? "Search prompts" : "Search sessions"}
+                  aria-label={view === "stash" ? "Search stashed prompts" : "Search resumable sessions"}
+                  autoComplete="off"
+                  className="h-8 w-full rounded-full border border-border bg-muted/40 pl-8 pr-8 text-xs outline-none transition focus:border-ring focus:bg-background"
+                />
+                {search ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearch("");
+                      searchRef.current?.focus();
+                    }}
+                    aria-label="Clear search"
+                    className="absolute right-1.5 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                ) : null}
               </div>
 
-              {/* Infinite scroll: the observer trips this sentinel ~300px early
-                  and appends the next page; the button is the tap fallback. */}
-              <div ref={sentinelRef} aria-hidden className="h-px" />
-              {hasMore ? (
-                <button
-                  type="button"
-                  onClick={() => fetchPage(false)}
-                  disabled={loadingMore}
-                  className="mt-1 flex w-full items-center justify-center gap-2 rounded-xl px-3 py-3 text-xs font-medium text-muted-foreground transition hover:bg-muted disabled:opacity-60"
-                >
-                  {loadingMore ? (
-                    <>
-                      <Loader2 className="size-4 animate-spin" /> Loading…
-                    </>
-                  ) : (
-                    `Load ${Math.min(PAGE, total - items.length)} more`
-                  )}
-                </button>
-              ) : items.length > PAGE ? (
-                <p className="py-3 text-center text-[11px] text-muted-foreground/70">
-                  All {total} shown
-                </p>
+              {view === "sessions" ? (
+                <>
+                  <select
+                    value={agent}
+                    onChange={(event) => setAgent(event.target.value)}
+                    aria-label="Filter by agent"
+                    className="h-8 max-w-28 rounded-full border border-border bg-background px-2 text-xs outline-none"
+                  >
+                    <option value="all">All agents</option>
+                    {facets.agents.map((item) => (
+                      <option key={item.agent} value={item.agent}>
+                        {item.agent} · {item.count}
+                      </option>
+                    ))}
+                  </select>
+                  {facets.projects.length || project !== "all" ? (
+                    <select
+                      value={project}
+                      onChange={(event) => setProject(event.target.value)}
+                      aria-label="Filter by project"
+                      className="h-8 max-w-32 rounded-full border border-border bg-background px-2 text-xs outline-none"
+                    >
+                      <option value="all">All projects</option>
+                      {project !== "all" &&
+                      !facets.projects.some((item) => item.project === project) ? (
+                        <option value={project}>{project}</option>
+                      ) : null}
+                      {facets.projects.map((item) => (
+                        <option key={item.project} value={item.project}>
+                          {item.project} · {item.count}
+                        </option>
+                      ))}
+                    </select>
+                  ) : null}
+                </>
               ) : null}
-            </>
-          )}
+            </div>
+          </header>
+
+          <div className="min-h-0 max-h-[min(28rem,55dvh)] overflow-y-auto overscroll-contain pt-1">
+            {view === "stash" ? (
+              visibleStash.length ? (
+                <div className="space-y-0.5">
+                  {visibleStash.map((entry) => (
+                    <div
+                      key={entry.id}
+                      className="group flex items-center gap-1 rounded-xl transition hover:bg-muted"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onRestore(entry);
+                          onClose();
+                        }}
+                        className="flex min-w-0 flex-1 items-center gap-2.5 px-2 py-2 text-left active:scale-[0.99]"
+                      >
+                        <span
+                          className={cn(
+                            "flex size-7 shrink-0 items-center justify-center rounded-lg",
+                            entry.status === "draft" || entry.status === "failed"
+                              ? "bg-primary/12 text-primary"
+                              : "bg-muted text-muted-foreground",
+                          )}
+                        >
+                          <Archive className="size-3.5" />
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="line-clamp-2 text-sm leading-snug">{entry.text}</span>
+                          <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                            <span
+                              className={cn(
+                                "font-medium",
+                                entry.status === "failed" && "text-destructive",
+                                entry.status === "draft" && "text-primary",
+                              )}
+                            >
+                              {statusLabel(entry.status)}
+                            </span>
+                            <span>·</span>
+                            <span className="truncate">
+                              {entry.source === "new-session"
+                                ? entry.project || "New session"
+                                : entry.sessionTitle || "Session"}
+                            </span>
+                            <span>·</span>
+                            <span className="shrink-0 tabular-nums">{timeAgo(entry.updatedAt)}</span>
+                          </span>
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removePromptStash(entry.id)}
+                        aria-label="Remove from Stash"
+                        className="mr-1 flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground opacity-60 transition hover:bg-background hover:text-destructive group-hover:opacity-100"
+                      >
+                        <Trash2 className="size-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex h-full min-h-48 flex-col items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground">
+                  <Archive className="size-5" />
+                  <span>{stashQuery ? "No stashed prompts match" : "Typed and dictated prompts will appear here"}</span>
+                </div>
+              )
+            ) : showSkeleton ? (
+              <div className="animate-pulse space-y-1" aria-hidden>
+                {Array.from({ length: 6 }).map((_, index) => (
+                  <div key={index} className="flex items-center gap-2.5 px-2 py-2.5">
+                    <div className="size-7 shrink-0 rounded-lg bg-muted" />
+                    <div className="min-w-0 flex-1 space-y-1.5">
+                      <div className="h-3 w-1/2 rounded bg-muted" />
+                      <div className="h-2.5 w-3/4 rounded bg-muted/60" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : items.length === 0 ? (
+              <div className="flex h-full min-h-48 flex-col items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground">
+                <RotateCcw className="size-5" />
+                <span>{filtersActive ? "No sessions match" : "No recent sessions to resume"}</span>
+                {filtersActive ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSearch("");
+                      setAgent("all");
+                      setProject("all");
+                    }}
+                    className="rounded-full border border-border px-3 py-1 text-xs font-medium text-foreground"
+                  >
+                    Clear filters
+                  </button>
+                ) : null}
+              </div>
+            ) : (
+              <>
+                <div className={cn("space-y-0.5 transition-opacity", loading && "opacity-60")}>
+                  {items.map((session) => (
+                    <button
+                      key={session.sessionId}
+                      type="button"
+                      onClick={() => onPick(session)}
+                      className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left transition hover:bg-muted active:scale-[0.99]"
+                    >
+                      <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted">
+                        <img
+                          src={agentIconSrc(session.agent)}
+                          alt={agentIconAlt(session.agent)}
+                          className="size-4"
+                        />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium">{session.title}</span>
+                        <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                          {session.lastUserText ? (
+                            <>
+                              <span className="max-w-[60%] truncate">{session.lastUserText}</span>
+                              <span>·</span>
+                            </>
+                          ) : null}
+                          <span className="truncate">{session.project}</span>
+                          <span>·</span>
+                          <span className="shrink-0 tabular-nums">{timeAgo(session.lastActivityAt)}</span>
+                        </span>
+                      </span>
+                      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/60" />
+                    </button>
+                  ))}
+                </div>
+                {hasMore ? (
+                  <button
+                    type="button"
+                    onClick={() => fetchPage(false)}
+                    disabled={loadingMore}
+                    className="mt-1 flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-xs font-medium text-muted-foreground transition hover:bg-muted disabled:opacity-60"
+                  >
+                    {loadingMore ? (
+                      <>
+                        <Loader2 className="size-3.5 animate-spin" /> Loading…
+                      </>
+                    ) : (
+                      `Load ${Math.min(PAGE, total - items.length)} more`
+                    )}
+                  </button>
+                ) : null}
+              </>
+            )}
+          </div>
         </div>
-      </div>
-    </div>,
-    document.body,
+      </DrawerContent>
+    </Drawer>
   );
 }
 
