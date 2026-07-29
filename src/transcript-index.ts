@@ -219,8 +219,8 @@ export function indexArtifactMessage(path: string, sessionId: string, artifact: 
         "DELETE FROM transcript_messages_fts WHERE rowid IN (SELECT rowid FROM transcript_messages WHERE id = ?)",
       ).run(existing.id);
       d.query(FTS_MIRROR_INSERT).run(existing.id);
-      pageTotalCache.delete(existing.path);
-      pageTotalCache.delete(path);
+      invalidatePageTotalCache(existing.path);
+      invalidatePageTotalCache(path);
       return 0;
     }
 
@@ -246,7 +246,7 @@ export function indexArtifactMessage(path: string, sessionId: string, artifact: 
     const inserted = Number(result.changes ?? 0);
     if (inserted) {
       d.query(FTS_MIRROR_INSERT).run(rowId);
-      pageTotalCache.delete(path);
+      invalidatePageTotalCache(path);
     }
     return inserted;
   }).immediate();
@@ -820,7 +820,7 @@ export function transcriptIndexCurrent(path: string): boolean {
 
 export function deleteTranscriptIndexForPath(path: string): void {
   init();
-  pageTotalCache.delete(path);
+  invalidatePageTotalCache(path);
   const d = database();
   d.transaction(() => {
     d.query("DELETE FROM transcript_messages_fts WHERE rowid IN (SELECT rowid FROM transcript_messages WHERE path = ?)")
@@ -966,7 +966,7 @@ export function indexSessionMessagesDirect(sessionId: string, messages: SessionM
     }
     return insertedRows;
   }).immediate(rows);
-  if (inserted) pageTotalCache.delete(key);
+  if (inserted) invalidatePageTotalCache(key);
   traceLog("transcript_index_direct", {
     sessionId,
     path: key,
@@ -1039,7 +1039,7 @@ export function reindexFileHistoryUnderSessionKey(
     return n;
   }).immediate(src);
   directNextOffset.set(key, seq);
-  pageTotalCache.delete(key);
+  invalidatePageTotalCache(key);
   return inserted;
 }
 
@@ -1280,10 +1280,19 @@ export function enqueueTranscriptIndex(path: string, sessionId: string): void {
 // through an unchanged transcript reuses the cached count instead of re-scanning.
 const pageTotalCache = new Map<string, { offset: number; total: number }>();
 
+function invalidatePageTotalCache(path: string): void {
+  pageTotalCache.delete(`${path}\0all`);
+  pageTotalCache.delete(`${path}\0conversation`);
+}
+
+export function isConversationTranscriptMessage(message: { kind: string }): boolean {
+  return message.kind !== "tool_use" && message.kind !== "tool_result";
+}
+
 export async function indexedMessagePage(
   path: string,
   sessionId: string,
-  opts: { before?: number | null; limit?: number } = {},
+  opts: { before?: number | null; limit?: number; conversationOnly?: boolean } = {},
 ): Promise<{
   messages: SessionMsg[];
   nextBefore: number | null;
@@ -1296,6 +1305,9 @@ export async function indexedMessagePage(
   const cursor = cursorFor(path);
   const limit = Math.max(1, Math.min(20_000, opts.limit ?? 220));
   const before = Math.max(0, opts.before ?? Number.MAX_SAFE_INTEGER);
+  const conversationFilter = opts.conversationOnly
+    ? "AND m.kind NOT IN ('tool_use', 'tool_result')"
+    : "";
   const rows = d
     .query<IndexedMessageRow, [string, number, number]>(`
         SELECT ${ARTIFACT_MESSAGE_SELECT}
@@ -1311,6 +1323,7 @@ export async function indexedMessagePage(
             OR m.message_id NOT LIKE 'artifact-%'
             OR a.id IS NOT NULL
           )
+          ${conversationFilter}
         ORDER BY m.order_seq DESC, m.rowid DESC
         LIMIT ?
       `)
@@ -1339,7 +1352,8 @@ export async function indexedMessagePage(
         )
         .get(path)?.max_offset ?? 0)
     : (cursor?.offset ?? 0);
-  const cachedTotal = pageTotalCache.get(path);
+  const totalCacheKey = `${path}\0${opts.conversationOnly ? "conversation" : "all"}`;
+  const cachedTotal = pageTotalCache.get(totalCacheKey);
   const total =
     cachedTotal && cachedTotal.offset === totalKey
       ? cachedTotal.total
@@ -1347,10 +1361,13 @@ export async function indexedMessagePage(
           const n =
             d
               .query<{ count: number }, [string]>(
-                "SELECT count(*) AS count FROM transcript_messages WHERE path = ?",
+                `SELECT count(*) AS count
+                   FROM transcript_messages m
+                  WHERE m.path = ?
+                    ${conversationFilter}`,
               )
               .get(path)?.count ?? rows.length;
-          pageTotalCache.set(path, { offset: totalKey, total: n });
+          pageTotalCache.set(totalCacheKey, { offset: totalKey, total: n });
           return n;
         })();
   traceLog("transcript_page", {

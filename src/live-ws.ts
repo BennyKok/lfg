@@ -13,6 +13,7 @@ import { listSessionsCached, noteListSessionsClientActivity } from "./session-ca
 import {
   indexedMessagePage,
   indexedMessagesAfterRowid,
+  isConversationTranscriptMessage,
   isSessionIndexKey,
   subscribeIndexedArtifactMessages,
 } from "./transcript-index.ts";
@@ -176,7 +177,7 @@ function normalizeMediaIdentity<T extends { kind: string; id?: string | null; ar
 }
 
 function visibleTranscriptMessages<T extends { kind: string }>(messages: T[]): T[] {
-  return messages.filter((message) => message.kind !== "tool_result");
+  return messages.filter(isConversationTranscriptMessage);
 }
 
 function withImageArtifacts<T extends { role: string; kind: string; text: string; ts?: number | null; id?: string | null }>(
@@ -635,7 +636,10 @@ export function createLiveWsSupport(opts: {
 
   const readBacklog = async (sid: string, tp: string) => {
     const backlogT0 = performance.now();
-    const page = await indexedMessagePage(tp, sid, { limit: BACKLOG_LIMIT });
+    const page = await indexedMessagePage(tp, sid, {
+      limit: BACKLOG_LIMIT,
+      conversationOnly: true,
+    });
     const messages = page.messages;
     const readMs = performance.now() - backlogT0;
     const renderT0 = performance.now();
@@ -846,7 +850,11 @@ export function createLiveWsSupport(opts: {
       }
       await ensureChatTranscriptCaughtUp(tp, sid, "ws-backfill");
       const bounded = Math.max(1, Math.min(200, limit || 80));
-      const page = await indexedMessagePage(tp, sid, { before, limit: bounded });
+      const page = await indexedMessagePage(tp, sid, {
+        before,
+        limit: bounded,
+        conversationOnly: true,
+      });
       const messages = transcriptMessagesForClient(sid, page.messages).map(msgWithHtml);
       safeSend(state.ws, stamp(transcriptChannel(sid), {
         t: "page",

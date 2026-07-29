@@ -104,6 +104,7 @@ import {
   enqueueTranscriptIndex,
   indexedRecentMessages,
   indexedMessagePage,
+  isConversationTranscriptMessage,
   indexArtifactMessage,
   indexedArtifactPlacement,
   indexTranscript,
@@ -1315,7 +1316,7 @@ function msgWithHtml<T extends HtmlMessage>(m: T) {
 }
 
 function visibleTranscriptMessages<T extends { kind: string }>(messages: T[]): T[] {
-  return messages.filter((message) => message.kind !== "tool_result");
+  return messages.filter(isConversationTranscriptMessage);
 }
 
 function withImageArtifacts<T extends { role: string; kind: string; text: string; ts?: number | null; id?: string | null }>(
@@ -5351,6 +5352,7 @@ export async function cmdServe() {
             const page = await indexedMessagePage(tp, m[1], {
               before,
               limit: Number.isFinite(rawLimit) ? rawLimit : 220,
+              conversationOnly: true,
             });
             return json({
               id: m[1],
@@ -5364,7 +5366,10 @@ export async function cmdServe() {
           const lim = full
             ? Math.max(0, Math.min(20000, Number.isFinite(rawLimit) ? rawLimit : 0))
             : Math.min(200, Math.max(1, Number.isFinite(rawLimit) ? rawLimit : 30));
-          const page = await indexedMessagePage(tp, m[1], { limit: full && lim === 0 ? 20_000 : lim });
+          const page = await indexedMessagePage(tp, m[1], {
+            limit: full && lim === 0 ? 20_000 : lim,
+            conversationOnly: true,
+          });
           return json({
             id: m[1],
             total: page.total,
@@ -5992,7 +5997,10 @@ export async function cmdServe() {
                   }
                   await ensureChatTranscriptCaughtUp(p.tp, p.sid, "sse-backlog");
                   const backlogT0 = performance.now();
-                  const page = await indexedMessagePage(p.tp, p.sid, { limit: 40 });
+                  const page = await indexedMessagePage(p.tp, p.sid, {
+                    limit: 40,
+                    conversationOnly: true,
+                  });
                   const readMs = performance.now() - backlogT0;
                   const renderT0 = performance.now();
                   const msgs = transcriptMessagesForClient(p.sid, page.messages).map(msgWithHtml);
@@ -6145,7 +6153,10 @@ export async function cmdServe() {
               // backlog, then tail
               (async () => {
                 await ensureChatTranscriptCaughtUp(tp, sid, "sse-single-backlog");
-                const page = await indexedMessagePage(tp, sid, { limit: 40 });
+                const page = await indexedMessagePage(tp, sid, {
+                  limit: 40,
+                  conversationOnly: true,
+                });
                 const msgs = transcriptMessagesForClient(
                   sid,
                   page.messages,
