@@ -13,6 +13,12 @@ type ClaudeCreds = { claudeAiOauth?: { accessToken?: string } };
 let cached: { token: string | null; at: number } | null = null;
 const TTL_MS = 60_000;
 
+export const CLAUDE_PLATFORM_ENV_KEYS = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_BASE_URL",
+] as const;
+
 function readCredsFile(): ClaudeCreds | null {
   try {
     return JSON.parse(
@@ -54,4 +60,24 @@ export function claudeOauthToken(): string | null {
   const token = creds?.claudeAiOauth?.accessToken ?? null;
   cached = { token, at: Date.now() };
   return token;
+}
+
+/**
+ * Build the full environment for a Claude subprocess owned by a connected
+ * Claude account. The Agent SDK treats `env` as a complete replacement, so
+ * preserve every unrelated variable while removing the platform proxy/auth
+ * variables that otherwise override ~/.claude/.credentials.json.
+ */
+export function claudeAccountEnv(
+  source: NodeJS.ProcessEnv = process.env,
+  accountConnected = claudeOauthToken() !== null,
+): Record<string, string> | undefined {
+  if (!accountConnected) return undefined;
+  const blocked = new Set<string>(CLAUDE_PLATFORM_ENV_KEYS);
+  return Object.fromEntries(
+    Object.entries(source).filter(
+      (entry): entry is [string, string] =>
+        entry[1] !== undefined && !blocked.has(entry[0]),
+    ),
+  );
 }

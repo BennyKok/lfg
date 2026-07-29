@@ -5,7 +5,10 @@ import { readFileSync, writeFileSync, existsSync, realpathSync, mkdirSync } from
 import { homedir } from "node:os";
 import { reposRoot } from "./projects";
 import { LFG_CAPABILITY_VERSION, withLfgRuntimeContract } from "./lfg-capabilities.ts";
-import { claudeOauthToken } from "./claude-creds.ts";
+import {
+  CLAUDE_PLATFORM_ENV_KEYS,
+  claudeOauthToken,
+} from "./claude-creds.ts";
 
 // Known-good Claude model alias to launch with when a caller doesn't specify
 // one. Never launch a managed `claude` bare — see spawnManagedSession. Opus is
@@ -148,12 +151,6 @@ export function claudeBin(): string {
   }
   return (_claudeBin = "claude"); // last resort: let the failure surface
 }
-
-const CLAUDE_PLATFORM_ENV_KEYS = [
-  "ANTHROPIC_API_KEY",
-  "ANTHROPIC_AUTH_TOKEN",
-  "ANTHROPIC_BASE_URL",
-] as const;
 
 /**
  * A connected Claude account must be the only auth source visible to Claude.

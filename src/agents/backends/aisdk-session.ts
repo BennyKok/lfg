@@ -38,6 +38,7 @@ import {
 } from "../../transcript-index.ts";
 import { makeDraftPublisher } from "./draft.ts";
 import { readFileSync, statSync } from "node:fs";
+import { claudeAccountEnv } from "../../claude-creds.ts";
 
 function arg(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(name);
@@ -164,6 +165,7 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
   } catch {}
 
   const claudePath = resolveClaudePath();
+  const accountEnv = claudeAccountEnv();
   const { query } = await import("@anthropic-ai/claude-agent-sdk");
 
   // Control-plane registry entry — the moment this exists (and our pid is alive),
@@ -234,9 +236,12 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
       includePartialMessages: true,
       ...(effort ? { effort } : {}),
       // env is a FULL replacement for the subprocess environment when set —
-      // omitting it inherits all of process.env (PATH/HOME/LFG_*/ANTHROPIC_*),
-      // which is exactly what we want. (The old Vercel provider's sanitizing
+      // without a connected account, inherit process.env so the platform proxy
+      // remains available. With a connected account, keep the full environment
+      // except the three platform Anthropic variables that override the user's
+      // ~/.claude/.credentials.json. (The old Vercel provider's sanitizing
       // allowlist dropped LFG_* and orphaned every lfg_create_subagent child.)
+      ...(accountEnv ? { env: accountEnv } : {}),
       ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),
     },
   });
