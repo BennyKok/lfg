@@ -188,6 +188,7 @@ import {
 import { fetchBootstrap } from "./bootstrap";
 import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
+import { DoubleConfirmAction } from "@/components/ui/double-confirm-action";
 import {
   Dialog,
   DialogContent,
@@ -9175,6 +9176,7 @@ function RailStage({
       <RailSessionContextMenu
         key={sid}
         session={session}
+        busy={!!busyBySid[sid]}
         users={users}
         onRefresh={onRefresh}
         onRemove={onRemove}
@@ -11108,7 +11110,6 @@ function useSessionActions({
   onRemove: (sid: string) => void;
   onError: (error: string | null) => void;
 }) {
-  const appDialog = useAppDialog();
   const [forkOpen, setForkOpen] = useState(false);
   const sid = session.sessionId;
   const assignee = users.find((user) => user.email === session.assignedUser);
@@ -11151,13 +11152,6 @@ function useSessionActions({
 
   async function close() {
     if (!sid) return;
-    const confirmed = await appDialog.confirm({
-      title: `End ${titleForSession(session)}?`,
-      description: "The session will stop and disappear from the live view.",
-      confirmLabel: "End session",
-      destructive: true,
-    });
-    if (!confirmed) return;
     onError(null);
     onRemove(sid); // drop the card now; the tombstone survives the next poll
     try {
@@ -11185,6 +11179,7 @@ function useSessionActions({
 
 function SessionActionsMenu({
   session,
+  busy,
   users,
   onRefresh,
   onRemove,
@@ -11195,6 +11190,7 @@ function SessionActionsMenu({
   onTogglePin,
 }: {
   session: Session;
+  busy: boolean;
   users: User[];
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
@@ -11318,14 +11314,21 @@ function SessionActionsMenu({
           {canDriveSession(session) ? (
             <>
               <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => void interrupt()}>
-                <Pause className="size-4" />
-                Stop
-              </DropdownMenuItem>
-              <DropdownMenuItem variant="destructive" onClick={() => void close()}>
-                <X className="size-4" />
-                End session
-              </DropdownMenuItem>
+              {busy ? (
+                <DropdownMenuItem onClick={() => void interrupt()}>
+                  <Pause className="size-4" />
+                  Stop
+                </DropdownMenuItem>
+              ) : null}
+              <DoubleConfirmAction
+                render={<DropdownMenuItem variant="destructive" />}
+                label="Archive session"
+                confirmLabel="Confirm archive"
+                pendingLabel="Archiving…"
+                icon={<Archive className="size-4" />}
+                onConfirm={close}
+                resetKey={sid}
+              />
             </>
           ) : null}
         </DropdownMenuContent>
@@ -11338,6 +11341,7 @@ function SessionActionsMenu({
 // ⋯ control on the row.
 function RailSessionContextMenu({
   session,
+  busy,
   users,
   onRefresh,
   onRemove,
@@ -11350,6 +11354,7 @@ function RailSessionContextMenu({
   children,
 }: {
   session: Session;
+  busy: boolean;
   users: User[];
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
@@ -11480,14 +11485,21 @@ function RailSessionContextMenu({
           {canDriveSession(session) ? (
             <>
               <ContextMenuSeparator />
-              <ContextMenuItem onClick={() => void interrupt()}>
-                <Pause className="size-4" />
-                Stop
-              </ContextMenuItem>
-              <ContextMenuItem variant="destructive" onClick={() => void close()}>
-                <X className="size-4" />
-                End session
-              </ContextMenuItem>
+              {busy ? (
+                <ContextMenuItem onClick={() => void interrupt()}>
+                  <Pause className="size-4" />
+                  Stop
+                </ContextMenuItem>
+              ) : null}
+              <DoubleConfirmAction
+                render={<ContextMenuItem variant="destructive" />}
+                label="Archive session"
+                confirmLabel="Confirm archive"
+                pendingLabel="Archiving…"
+                icon={<Archive className="size-4" />}
+                onConfirm={close}
+                resetKey={sid}
+              />
             </>
           ) : null}
         </ContextMenuContent>
@@ -12036,6 +12048,7 @@ function SessionTitleSheet({
           ) : null}
           <SessionActionsMenu
             session={session}
+            busy={busy}
             users={users}
             onRefresh={onRefresh}
             onRemove={onRemove}
@@ -12920,6 +12933,7 @@ const onTouchStart = (e: ReactTouchEvent) => {
         {!collapsedView && (
           <SessionActionsMenu
             session={session}
+            busy={busy}
             users={users}
             onRefresh={onRefresh}
             onRemove={onRemove}
