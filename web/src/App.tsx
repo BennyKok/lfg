@@ -5667,6 +5667,8 @@ export function App() {
               onOpenAsk={embedded ? undefined : () => setTab("ask")}
               onOpenShipped={embedded ? undefined : openShipped}
               onOpenRecentShipped={embedded ? undefined : openRecentShipped}
+              repos={repos}
+              onReposChanged={loadCore}
               messagesBySid={liveStream.messagesBySid}
               busyBySid={liveStream.busyBySid}
               promptsBySid={liveStream.promptsBySid}
@@ -7777,6 +7779,8 @@ function LiveView({
   onOpenRecentShipped,
   onManageSessions,
   onClearIdle,
+  repos = [],
+  onReposChanged,
   hosted = false,
   focus,
 }: {
@@ -7794,6 +7798,8 @@ function LiveView({
   onOpenRecentShipped?: (post: ShipPost) => void;
   onManageSessions: (template: ManageSessionPromptTemplate) => void;
   onClearIdle: () => void;
+  repos?: Repo[];
+  onReposChanged?: () => Promise<void>;
   hosted?: boolean;
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
@@ -8051,6 +8057,8 @@ function LiveView({
         onOpenRecentShipped={onOpenRecentShipped}
         onManageSessions={onManageSessions}
         onClearIdle={onClearIdle}
+        repos={repos}
+        onReposChanged={onReposChanged}
         hosted={hosted}
         focus={focus}
         topPinned={topPinned}
@@ -8175,6 +8183,8 @@ function RailStage({
   onOpenRecentShipped,
   onManageSessions,
   onClearIdle,
+  repos = [],
+  onReposChanged,
   hosted = false,
   focus,
   topPinned,
@@ -8193,6 +8203,8 @@ function RailStage({
   onOpenRecentShipped?: (post: ShipPost) => void;
   onManageSessions?: (template: ManageSessionPromptTemplate) => void;
   onClearIdle?: () => void;
+  repos?: Repo[];
+  onReposChanged?: () => Promise<void>;
   hosted?: boolean;
   focus?: { sid: string; n: number } | null;
   topPinned: string[];
@@ -8250,6 +8262,18 @@ function RailStage({
   );
   // Keyboard cursor (highlighted rail row) + the shortcuts cheatsheet overlay.
   const [cursor, setCursor] = useState<string | null>(null);
+  // The desktop rail uses the same polished project sheet and folder browser as
+  // the composer, replacing the cramped native-style project dropdown.
+  const [projectSheetOpen, setProjectSheetOpen] = useState(false);
+  const [folderBrowserOpen, setFolderBrowserOpen] = useState(false);
+  const [folderBrowserCreate, setFolderBrowserCreate] = useState(false);
+  const canUseProjectSheet = repos.length > 0 && !!onProjectChange;
+  const filterRepo = repos.find((repo) => repoProject(repo) === projectFilter);
+  const openFolderBrowserFromSheet = (create: boolean) => {
+    setProjectSheetOpen(false);
+    setFolderBrowserCreate(create);
+    window.setTimeout(() => setFolderBrowserOpen(true), 180);
+  };
 
   useEffect(() => {
     if (!onOpenRecentShipped) return;
@@ -9170,7 +9194,27 @@ function RailStage({
                 scope to the action row so the lockup always has room. */}
             <div className="flex items-center gap-1.5">
               <ProductBrand hosted={hosted} />
-              {!hosted && onProjectChange ? (
+              {!hosted && canUseProjectSheet ? (
+                <button
+                  type="button"
+                  onClick={() => setProjectSheetOpen(true)}
+                  aria-label="Choose project"
+                  title={projectFilter !== "__all" ? shortProject(projectFilter) : "All projects"}
+                  className={cn(
+                    "inline-flex h-8 min-w-0 shrink items-center justify-center gap-1 rounded-full border transition",
+                    projectFilter !== "__all"
+                      ? "max-w-[9rem] border-primary/30 bg-primary/10 px-2.5 text-primary"
+                      : "size-8 border-border bg-muted/70 text-muted-foreground",
+                  )}
+                >
+                  <Folder className="size-3.5 shrink-0" />
+                  {projectFilter !== "__all" ? (
+                    <span className="truncate text-xs font-medium">
+                      {shortProject(projectFilter)}
+                    </span>
+                  ) : null}
+                </button>
+              ) : !hosted && onProjectChange ? (
                 <ProjectFilterMenu
                   value={projectFilter}
                   projects={projectOptions}
@@ -9206,7 +9250,27 @@ function RailStage({
               </div>
             </div>
             <div className="flex items-center gap-1.5">
-              {hosted && onProjectChange ? (
+              {hosted && canUseProjectSheet ? (
+                <button
+                  type="button"
+                  onClick={() => setProjectSheetOpen(true)}
+                  aria-label="Choose project"
+                  title={projectFilter !== "__all" ? shortProject(projectFilter) : "All projects"}
+                  className={cn(
+                    "inline-flex h-8 min-w-0 shrink items-center justify-center gap-1 rounded-full border transition",
+                    projectFilter !== "__all"
+                      ? "max-w-[9rem] border-primary/30 bg-primary/10 px-2.5 text-primary"
+                      : "size-8 border-border bg-muted/70 text-muted-foreground",
+                  )}
+                >
+                  <Folder className="size-3.5 shrink-0" />
+                  {projectFilter !== "__all" ? (
+                    <span className="truncate text-xs font-medium">
+                      {shortProject(projectFilter)}
+                    </span>
+                  ) : null}
+                </button>
+              ) : hosted && onProjectChange ? (
                 <ProjectFilterMenu
                   value={projectFilter}
                   projects={projectOptions}
@@ -9376,6 +9440,38 @@ function RailStage({
       </div>
 
       {showHelp ? <ShortcutsHelp onClose={() => setShowHelp(false)} /> : null}
+
+      {canUseProjectSheet ? (
+        <>
+          <ComposerProjectSheet
+            open={projectSheetOpen}
+            repos={repos}
+            selected={filterRepo?.cwd ?? ""}
+            onOpenChange={setProjectSheetOpen}
+            onSelect={(repo) => {
+              onProjectChange?.(repoProject(repo));
+              setProjectSheetOpen(false);
+            }}
+            onBrowse={() => openFolderBrowserFromSheet(false)}
+            onCreate={() => openFolderBrowserFromSheet(true)}
+            allSelected={projectFilter === "__all"}
+            onSelectAll={() => {
+              onProjectChange?.("__all");
+              setProjectSheetOpen(false);
+            }}
+          />
+          <ProjectFolderBrowser
+            open={folderBrowserOpen}
+            initialPath={filterRepo?.cwd || undefined}
+            startCreating={folderBrowserCreate}
+            onOpenChange={setFolderBrowserOpen}
+            onSelected={async (repo) => {
+              onProjectChange?.(repoProject(repo));
+              await onReposChanged?.();
+            }}
+          />
+        </>
+      ) : null}
     </div>
   );
 }
@@ -14164,6 +14260,8 @@ function ComposerProjectSheet({
   onSelect,
   onBrowse,
   onCreate,
+  allSelected = false,
+  onSelectAll,
 }: {
   open: boolean;
   repos: Repo[];
@@ -14172,6 +14270,8 @@ function ComposerProjectSheet({
   onSelect: (repo: Repo) => void;
   onBrowse: () => void;
   onCreate: () => void;
+  allSelected?: boolean;
+  onSelectAll?: () => void;
 }) {
   return (
     <Drawer open={open} onOpenChange={onOpenChange} shouldScaleBackground={false}>
@@ -14188,6 +14288,28 @@ function ComposerProjectSheet({
             </button>
           </div>
           <div className="max-h-[20dvh] min-h-0 overflow-y-auto rounded-2xl border border-border bg-muted/25">
+            {onSelectAll ? (
+              <button
+                type="button"
+                onClick={onSelectAll}
+                className="flex w-full items-center gap-3 border-b border-border px-3 py-3 text-left active:bg-muted"
+              >
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+                  <Folder className="size-4" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">All projects</span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    Show every session
+                  </span>
+                </span>
+                {allSelected ? (
+                  <Check className="size-4 text-emerald-500" />
+                ) : (
+                  <ChevronRight className="size-4 text-muted-foreground" />
+                )}
+              </button>
+            ) : null}
             {repos.map((repo) => (
               <button
                 key={repo.cwd}
