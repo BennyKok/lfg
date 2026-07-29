@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Connected Claude sessions (v0.1.84)
+
+- Hosted Computers now launch Claude Code with the user's connected Claude
+  account instead of letting omg's built-in Anthropic proxy override it, so a
+  successful sign-in can immediately start real sessions.
+- Computers without a connected Claude account keep using the existing
+  platform runtime unchanged.
+
 ## July 29, 2026 - Personal agent connections (v0.1.83)
 
 - Hosted Computers now distinguish omg's built-in runtime access from a
