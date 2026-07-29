@@ -5434,8 +5434,19 @@ export function App() {
           Settings button on the right — mirroring the bottom nav's
           gradient-bordered pill so the whole chrome reads as one matched set.
           Auto + extension tabs now live inside the Settings page. */}
-      {/* Embed (omg Computer iframe): host owns settings/user chrome — no LFG header. */}
-      {embedded || liveDesktopWorkspace ? null : (
+      {/* Embed keeps product branding but leaves settings/user chrome to omg. */}
+      {embedded && isMobile ? (
+        <header className="mobile-scroll-header-fade z-40 flex shrink-0 items-center px-3 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))]">
+          <NavIsland className="shrink-0">
+            <div
+              className="flex size-11 items-center justify-center rounded-full bg-background/80 backdrop-blur-xl"
+              aria-label="omg.dev"
+            >
+              <ProductBrand hosted compact />
+            </div>
+          </NavIsland>
+        </header>
+      ) : embedded || liveDesktopWorkspace ? null : (
       <header
         className={cn(
           "relative z-40 flex shrink-0 items-center justify-between gap-2 px-2 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))] md:px-3",
@@ -5452,7 +5463,7 @@ export function App() {
                 aria-current={tab === "live" ? "page" : undefined}
                 className="flex items-center rounded-full px-1.5 transition-transform active:scale-[0.96]"
               >
-                <img src={lfgAssetUrl("/icon.svg")} alt="lfg" className="mx-1 size-6 shrink-0" />
+                <ProductBrand compact />
               </button>
             ) : (
               <button
@@ -5568,6 +5579,7 @@ export function App() {
               }
               onManageSessions={(template) => void launchManageSessions(template)}
               onClearIdle={() => void clearIdleSessions()}
+              hosted={embedded}
               findings={projectScopedFindings}
               autoAgents={projectScopedAutoAgents}
               onOpenFinding={setOpenFinding}
@@ -6177,6 +6189,62 @@ function NavIsland({
     >
       {children}
     </div>
+  );
+}
+
+// Standalone keeps LFG's identity. Only the omg-hosted surface swaps that mark:
+// a full omg.dev lockup on desktop and the compact gasp mark on mobile.
+function OmgBrandMark({ className }: { className?: string }) {
+  const maskId = useId();
+  return (
+    <svg
+      viewBox="0 0 100 100"
+      className={cn("size-6 shrink-0", className)}
+      aria-hidden
+    >
+      <mask id={maskId}>
+        <rect width="100" height="100" fill="white" />
+        <circle cx="71" cy="29" r="14" fill="black" />
+      </mask>
+      <circle
+        cx="50"
+        cy="50"
+        r="44"
+        fill="#ff5530"
+        mask={`url(#${maskId})`}
+      />
+    </svg>
+  );
+}
+
+function ProductBrand({
+  hosted = false,
+  compact = false,
+}: {
+  hosted?: boolean;
+  compact?: boolean;
+}) {
+  if (!hosted) {
+    return (
+      <img
+        src={lfgAssetUrl("/icon.svg")}
+        alt="lfg"
+        className="mx-1 size-6 shrink-0 rounded-md"
+      />
+    );
+  }
+
+  if (compact) {
+    return <OmgBrandMark />;
+  }
+
+  return (
+    <span className="mx-1 inline-flex shrink-0 items-center gap-1.5 text-[#ff5530]">
+      <OmgBrandMark className="size-5" />
+      <span className="whitespace-nowrap text-[15px] font-bold leading-none tracking-[-0.045em]">
+        omg.dev
+      </span>
+    </span>
   );
 }
 
@@ -7607,6 +7675,7 @@ function LiveView({
   onOpenShipped,
   onManageSessions,
   onClearIdle,
+  hosted = false,
   focus,
 }: {
   sessions: Session[];
@@ -7622,6 +7691,7 @@ function LiveView({
   onOpenShipped?: () => void;
   onManageSessions: (template: ManageSessionPromptTemplate) => void;
   onClearIdle: () => void;
+  hosted?: boolean;
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
@@ -7877,6 +7947,7 @@ function LiveView({
         onOpenShipped={onOpenShipped}
         onManageSessions={onManageSessions}
         onClearIdle={onClearIdle}
+        hosted={hosted}
         focus={focus}
         topPinned={topPinned}
         onToggleTopPin={toggleTopPin}
@@ -7999,6 +8070,7 @@ function RailStage({
   onOpenShipped,
   onManageSessions,
   onClearIdle,
+  hosted = false,
   focus,
   topPinned,
   onToggleTopPin,
@@ -8015,6 +8087,7 @@ function RailStage({
   onOpenShipped?: () => void;
   onManageSessions?: (template: ManageSessionPromptTemplate) => void;
   onClearIdle?: () => void;
+  hosted?: boolean;
   focus?: { sid: string; n: number } | null;
   topPinned: string[];
   onToggleTopPin: (sid: string) => void;
@@ -8951,13 +9024,11 @@ function RailStage({
           </div>
         ) : (
           <div className="flex shrink-0 flex-col gap-2 border-b border-border px-2 py-2">
-            {/* Fresh header: the lfg mark + project folder (same
-                ProjectFilterMenu as mobile) lead, the user avatar anchors the
-                right edge with Ask/Settings beside it. No "Sessions" label —
-                the list below speaks for itself. */}
+            {/* Hosted replaces the LFG mark with omg.dev and moves project
+                scope to the action row so the lockup always has room. */}
             <div className="flex items-center gap-1.5">
-              <img src={lfgAssetUrl("/icon.svg")} alt="lfg" className="size-6 shrink-0 rounded-md" />
-              {onProjectChange ? (
+              <ProductBrand hosted={hosted} />
+              {!hosted && onProjectChange ? (
                 <ProjectFilterMenu
                   value={projectFilter}
                   projects={projectOptions}
@@ -8993,6 +9064,14 @@ function RailStage({
               </div>
             </div>
             <div className="flex items-center gap-1.5">
+              {hosted && onProjectChange ? (
+                <ProjectFilterMenu
+                  value={projectFilter}
+                  projects={projectOptions}
+                  onChange={onProjectChange}
+                  solidSurface
+                />
+              ) : null}
               <button
                 type="button"
                 onClick={onNew}
