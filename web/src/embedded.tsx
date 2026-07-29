@@ -12,6 +12,14 @@ import { AppDialogProvider } from "./components/ui/app-dialog";
 import { configureLfgTransport } from "./lib/lfg-client";
 import { createLfgRouter } from "./router";
 
+export { createGrantTransport } from "@lfg-dev/client";
+export type {
+  CreateGrantTransportOptions,
+  LfgGrant,
+  LfgSocket,
+  LfgTransport,
+} from "@lfg-dev/client";
+
 export interface LfgAppSurfaceProps {
   transport: LfgTransport;
   assetBaseUrl?: string;

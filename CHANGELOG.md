@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Single app dependency (v0.1.94)
+
+- `@lfg-dev/app` now exports its signed transport factory and public transport
+  types, so React hosts install one application package instead of declaring
+  the app's nested client dependency a second time.
+
 ## July 29, 2026 - Full application package (v0.1.93)
 
 - LFG now publishes its exact standalone application as `@lfg-dev/app`, so
