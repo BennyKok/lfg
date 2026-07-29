@@ -5,18 +5,24 @@ export type CodingAgentTransport = "tmux" | "command-file";
 export type CodingAgentAdapter = {
   transport: CodingAgentTransport;
   managedLaunch: true;
+  /**
+   * durable: a dead agent process can be relaunched from persisted history.
+   * process-bound: LFG can rediscover the live process after serve restarts,
+   * but cannot recreate the provider conversation after that process dies.
+   */
+  recovery: "durable" | "process-bound";
 };
 
 export const CODING_AGENT_ADAPTERS = {
-  claude: { transport: "tmux", managedLaunch: true },
-  codex: { transport: "tmux", managedLaunch: true },
-  grok: { transport: "tmux", managedLaunch: true },
-  cursor: { transport: "tmux", managedLaunch: true },
-  copilot: { transport: "tmux", managedLaunch: true },
-  aisdk: { transport: "command-file", managedLaunch: true },
-  "codex-aisdk": { transport: "command-file", managedLaunch: true },
-  opencode: { transport: "command-file", managedLaunch: true },
-  pi: { transport: "command-file", managedLaunch: true },
+  claude: { transport: "tmux", managedLaunch: true, recovery: "durable" },
+  codex: { transport: "tmux", managedLaunch: true, recovery: "durable" },
+  grok: { transport: "tmux", managedLaunch: true, recovery: "durable" },
+  cursor: { transport: "tmux", managedLaunch: true, recovery: "durable" },
+  copilot: { transport: "tmux", managedLaunch: true, recovery: "process-bound" },
+  aisdk: { transport: "command-file", managedLaunch: true, recovery: "durable" },
+  "codex-aisdk": { transport: "command-file", managedLaunch: true, recovery: "durable" },
+  opencode: { transport: "command-file", managedLaunch: true, recovery: "durable" },
+  pi: { transport: "command-file", managedLaunch: true, recovery: "durable" },
 } as const satisfies Record<Exclude<CodingAgentKind, "hermes">, CodingAgentAdapter>;
 
 export const SESSION_AGENT_KINDS = [
@@ -45,6 +51,10 @@ export const COMMAND_FILE_AGENT_KINDS = [
   "opencode",
   "pi",
 ] as const satisfies readonly CodingAgentKind[];
+
+export const DURABLE_RECOVERY_AGENT_KINDS = SESSION_AGENT_KINDS.filter(
+  (agent) => CODING_AGENT_ADAPTERS[agent].recovery === "durable",
+);
 
 export function isCommandFileAgent(agent: string | null | undefined): agent is (typeof COMMAND_FILE_AGENT_KINDS)[number] {
   return !!agent && COMMAND_FILE_AGENT_KINDS.includes(agent as (typeof COMMAND_FILE_AGENT_KINDS)[number]);
