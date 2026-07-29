@@ -1,6 +1,6 @@
 import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { PATHS } from "../config.ts";
+import { PATHS, localServeHost } from "../config.ts";
 
 // lfg connect — generic remote-access relay client.
 //
@@ -175,7 +175,7 @@ const CREDENTIALS_PATH = join(PATHS.data, "relay-credentials.json");
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 30_000;
 const LOCAL_PORT = Number(process.env.LFG_PORT ?? process.env.PORT ?? 8766);
-const LOCAL_HOST = process.env.LFG_HOST ?? "127.0.0.1";
+const LOCAL_HOST = localServeHost();
 
 interface RelayCredentials {
   relayUrl: string;

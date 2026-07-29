@@ -7,6 +7,7 @@ import {
   thinkingLevelsForAgent,
   type ModelCatalogItem,
 } from "../agent-catalog.ts";
+import { localServeBaseUrl } from "../config.ts";
 import { refreshModelCatalog } from "../model-discovery.ts";
 
 const HELP = `lfg subagent — spawn managed worker sessions across harnesses
@@ -87,13 +88,6 @@ export async function cmdSubagent(args: string[]) {
   }
 }
 
-function baseUrl(): string {
-  if (process.env.LFG_BASE) return process.env.LFG_BASE.replace(/\/$/, "");
-  const host = process.env.LFG_HOST || "127.0.0.1";
-  const port = process.env.LFG_PORT || process.env.PORT || "8766";
-  return `http://${host}:${port}`;
-}
-
 function hasFlag(args: string[], flag: string): boolean {
   return args.includes(flag);
 }
@@ -108,7 +102,7 @@ function option(args: string[], name: string): string | undefined {
 }
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${baseUrl()}${path}`, init);
+  const res = await fetch(`${localServeBaseUrl()}${path}`, init);
   const data = (await res.json().catch(() => ({}))) as { error?: string };
   if (!res.ok) throw new Error(data.error || `${res.status} ${res.statusText}`);
   return data as T;
