@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Connected Claude SDK sessions (v0.1.86)
+
+- The default embedded Claude session now uses the connected Claude Code
+  account, instead of allowing omg's built-in proxy variables to override it.
+- Computers without a connected Claude account continue using the existing
+  platform runtime unchanged.
+
 ## July 29, 2026 - Prompt Stash recovery (v0.1.85)
 
 - Typed and dictated prompts are now saved automatically in a browser-local
