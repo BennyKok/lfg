@@ -1033,6 +1033,8 @@ function putSessionTitle(sid: string, title: string) {
   });
 }
 
+type RenameSession = (sid: string, title: string) => Promise<void>;
+
 type CloseAllResult = {
   closed?: string[];
   failed?: { sessionId: string; reason: string }[];
@@ -3938,6 +3940,25 @@ export function App() {
   );
   const [setupChecks, setSetupChecks] = useState<SetupCheckGroup[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
+  // Rename is optimistic: the visible title changes before the request starts.
+  // Polls that began before persistence completed must not flash the old title
+  // back into the UI, so pending titles mask fetched rows until a fetch that
+  // definitely started after the PUT confirms the server state.
+  const pendingSessionTitlesRef = useRef(
+    new Map<
+      string,
+      {
+        revision: number;
+        title: string;
+        persistedAfterFetch: number | null;
+        confirmedAt: number | null;
+      }
+    >(),
+  );
+  const sessionTitleRevisionRef = useRef(0);
+  const sessionTitleQueuesRef = useRef(new Map<string, Promise<void>>());
+  const sessionsFetchRevisionRef = useRef(0);
+  const sessionsAppliedFetchRevisionRef = useRef(0);
   const [users, setUsers] = useState<User[]>([]);
   // Server-side first-run state (profiles/steps/completion) + whether the
   // full-screen onboarding flow is showing. See loadCore for the gate.
@@ -4367,10 +4388,34 @@ export function App() {
   }, [hideToastedFinding, showToastedFinding]);
 
   const refreshSessions = useCallback(async (_opts?: { retireLaunchId?: string }) => {
+    const fetchRevision = ++sessionsFetchRevisionRef.current;
     const payload = await api<{ sessions: Session[] }>("/api/sessions");
     // Guard to [] — `sessions` is consumed by `.filter()`/`.map()` on render
     // (allLiveSessions) and just below, so a missing field must not crash.
-    const sessionList = payload.sessions ?? [];
+    if (fetchRevision < sessionsAppliedFetchRevisionRef.current) return;
+    sessionsAppliedFetchRevisionRef.current = fetchRevision;
+    const pending = pendingSessionTitlesRef.current;
+    const sessionList = (payload.sessions ?? []).map((session) => {
+      const sid = session.sessionId;
+      const rename = sid ? pending.get(sid) : undefined;
+      if (!sid || !rename) return session;
+      if (
+        rename.persistedAfterFetch !== null &&
+        fetchRevision > rename.persistedAfterFetch
+      ) {
+        // The REST read confirms persistence, but keep masking live-status
+        // events briefly: an event queued before the PUT can arrive after this
+        // response and otherwise flash the old title. The live stream clears
+        // the fence as soon as it reports the new value; this timeout is only
+        // for transports without live title updates.
+        rename.confirmedAt ??= Date.now();
+        if (Date.now() - rename.confirmedAt >= 10_000) {
+          pending.delete(sid);
+          return session;
+        }
+      }
+      return { ...session, title: rename.title };
+    });
     setSessions(sessionList);
     setError((current) => (current === "not found" ? null : current));
     // Prune tombstones the server has finally forgotten, so the set can't grow
@@ -4382,6 +4427,54 @@ export function App() {
       return next.size === prev.size ? prev : next;
     });
   }, []);
+
+  const renameSession = useCallback<RenameSession>(
+    async (sid, nextTitle) => {
+      const title = nextTitle.trim().slice(0, 200);
+      const revision = ++sessionTitleRevisionRef.current;
+      pendingSessionTitlesRef.current.set(sid, {
+        revision,
+        title,
+        persistedAfterFetch: null,
+        confirmedAt: null,
+      });
+      setSessions((current) =>
+        current.map((session) =>
+          session.sessionId === sid ? { ...session, title } : session,
+        ),
+      );
+
+      // Keep writes for one session in user-action order. Without this queue,
+      // two slow PUTs can finish in reverse order and persist the older name.
+      const previous =
+        sessionTitleQueuesRef.current.get(sid) ?? Promise.resolve();
+      const operation = previous.catch(() => {}).then(async () => {
+        await putSessionTitle(sid, title);
+        const pending = pendingSessionTitlesRef.current.get(sid);
+        if (pending?.revision !== revision) return;
+        pending.persistedAfterFetch = sessionsFetchRevisionRef.current;
+        await refreshSessions();
+      });
+      sessionTitleQueuesRef.current.set(sid, operation);
+
+      try {
+        await operation;
+      } catch (error) {
+        const pending = pendingSessionTitlesRef.current.get(sid);
+        // A newer rename already superseded this request, so let that queued
+        // intent decide the visible/final title instead of rolling it back.
+        if (pending?.revision !== revision) return;
+        pendingSessionTitlesRef.current.delete(sid);
+        await refreshSessions().catch(() => {});
+        throw error;
+      } finally {
+        if (sessionTitleQueuesRef.current.get(sid) === operation) {
+          sessionTitleQueuesRef.current.delete(sid);
+        }
+      }
+    },
+    [refreshSessions],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -4728,7 +4821,23 @@ export function App() {
         const sid = session.sessionId;
         const patch = sid ? bySid.get(sid) : undefined;
         if (!patch) return session;
-        const merged = { ...session, ...patch };
+        const pendingRename = sid
+          ? pendingSessionTitlesRef.current.get(sid)
+          : undefined;
+        const liveTitleConfirmed =
+          pendingRename &&
+          patch.title === pendingRename.title;
+        if (sid && liveTitleConfirmed) {
+          pendingSessionTitlesRef.current.delete(sid);
+        }
+        const pendingTitle = liveTitleConfirmed
+          ? undefined
+          : pendingRename?.title;
+        const merged = {
+          ...session,
+          ...patch,
+          ...(pendingTitle !== undefined ? { title: pendingTitle } : {}),
+        };
         let rowChanged = false;
         for (const key of Object.keys(patch) as Array<keyof typeof patch>) {
           if (session[key] !== merged[key]) {
@@ -5734,6 +5843,7 @@ export function App() {
               onStreamSummary={useWsLive ? wsLiveStream.streamSummary : undefined}
               onSubscribeTranscript={useWsLive ? wsLiveStream.subscribeTranscript : undefined}
               onRefresh={refreshSessions}
+              onRenameSession={renameSession}
               onRemove={removeSession}
               onNew={() =>
                 isMobile ? setComposerFocusNonce((n) => n + 1) : setNewOpen(true)
@@ -7845,6 +7955,7 @@ function LiveView({
   onStreamSummary,
   onSubscribeTranscript,
   onRefresh,
+  onRenameSession,
   onRemove,
   onNew,
   findings = [],
@@ -7889,6 +8000,7 @@ function LiveView({
   onStreamSummary?: StreamSummary;
   onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
+  onRenameSession: RenameSession;
   onRemove: (sid: string) => void;
   onNew: () => void;
   findings: AutoFinding[];
@@ -8051,6 +8163,7 @@ function LiveView({
           onStreamSummary={onStreamSummary}
           onSubscribeTranscript={onSubscribeTranscript}
           onRefresh={onRefresh}
+          onRenameSession={onRenameSession}
           onRemove={onRemove}
           onOpenSheet={(sid, origin) => setSheet({ sid, origin })}
           entering={recentlyCreatedSids.has(session.sessionId ?? "")}
@@ -8129,6 +8242,7 @@ function LiveView({
         onStreamSummary={onStreamSummary}
         onSubscribeTranscript={onSubscribeTranscript}
         onRefresh={onRefresh}
+        onRenameSession={onRenameSession}
         onRemove={onRemove}
         findings={findings}
         nameFor={nameFor}
@@ -8236,6 +8350,7 @@ function LiveView({
         onSwitch={(nextSid) => setSheet((s) => (s ? { ...s, sid: nextSid } : s))}
         onSubscribeTranscript={onSubscribeTranscript}
         onRefresh={onRefresh}
+        onRenameSession={onRenameSession}
         onRemove={onRemove}
         pinned={pinnedSet.has(sheet.sid)}
         onTogglePin={sheetSession.shippedReview ? undefined : toggleTopPin}
@@ -8262,6 +8377,7 @@ function RailStage({
   onStreamSummary,
   onSubscribeTranscript,
   onRefresh,
+  onRenameSession,
   onRemove,
   findings = [],
   nameFor,
@@ -8310,6 +8426,7 @@ function RailStage({
   onStreamSummary?: StreamSummary;
   onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
+  onRenameSession: RenameSession;
   onRemove: (sid: string) => void;
   findings: AutoFinding[];
   nameFor: (id: string) => string;
@@ -9201,6 +9318,7 @@ function RailStage({
             onStreamSummary={onStreamSummary}
             onSubscribeTranscript={onSubscribeTranscript}
             onRefresh={onRefresh}
+            onRenameSession={onRenameSession}
             onRemove={onRemove}
             variant="stage"
             onClose={onCloseColumn}
@@ -10856,111 +10974,8 @@ function SessionChat({
   );
 }
 
-// ── rename session ──────────────────────────────────────────────────────────
-// Desktop: double-click the card title for an inline editor.
-// Mobile: same action opens a bottom-sheet drawer (the title tap already opens
-// the full session sheet, so rename also lives on the ⋮ menu).
-function RenameSessionDrawer({
-  open,
-  session,
-  onOpenChange,
-  onSaved,
-  onError,
-}: {
-  open: boolean;
-  session: Session;
-  onOpenChange: (open: boolean) => void;
-  onSaved: () => Promise<void>;
-  onError: (msg: string | null) => void;
-}) {
-  const [draft, setDraft] = useState("");
-  const [saving, setSaving] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    setDraft(session.title?.trim() || titleForSession(session));
-    const id = window.setTimeout(() => {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }, 50);
-    return () => window.clearTimeout(id);
-  }, [open, session]);
-
-  async function submit(e?: FormEvent) {
-    e?.preventDefault();
-    const sid = session.sessionId;
-    if (!sid || saving) return;
-    setSaving(true);
-    onError(null);
-    try {
-      await putSessionTitle(sid, draft);
-      await onSaved();
-      onOpenChange(false);
-      toast.success("Session renamed");
-    } catch (err) {
-      onError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  return (
-    <Drawer
-      open={open}
-      repositionInputs={false}
-      onOpenChange={(next) => {
-        if (!next && saving) return;
-        onOpenChange(next);
-      }}
-    >
-      <DrawerContent
-        // Above the mobile SessionTitleSheet (z-90) and other full-screen
-        // surfaces so rename stays usable from the sheet header / ⋮ menu.
-        overlayClassName="z-[100]"
-        className="z-[100] mx-auto max-w-lg"
-      >
-        <DrawerTitle className="px-1 pb-2">Rename session</DrawerTitle>
-        <form
-          onSubmit={(e) => void submit(e)}
-          className="flex flex-col gap-3 px-1 pb-1"
-        >
-          <Input
-            ref={inputRef}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            maxLength={200}
-            placeholder="Session name"
-            aria-label="Session name"
-            disabled={saving}
-            autoComplete="off"
-            autoCorrect="off"
-            spellCheck={false}
-          />
-          <p className="text-[12px] text-muted-foreground">
-            Leave blank to clear the custom name.
-          </p>
-          <div className="flex justify-end gap-2">
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => onOpenChange(false)}
-              disabled={saving}
-            >
-              Cancel
-            </Button>
-            <Button type="submit" disabled={saving}>
-              {saving ? "Saving…" : "Save"}
-            </Button>
-          </div>
-        </form>
-      </DrawerContent>
-    </Drawer>
-  );
-}
-
-// Inline title field used on desktop after a double-click. Escape cancels;
-// Enter / blur commits. Empty string clears the override.
+// Inline title field used by both the card and mobile detail-sheet header.
+// Escape cancels; Enter / blur commits. Empty string clears the override.
 function SessionTitleInlineEditor({
   initial,
   onCommit,
@@ -11495,6 +11510,7 @@ function SessionTitleSheet({
   onSwitch,
   onSubscribeTranscript,
   onRefresh,
+  onRenameSession,
   onRemove,
   pinned,
   onTogglePin,
@@ -11514,14 +11530,14 @@ function SessionTitleSheet({
   onSwitch: (sid: string) => void;
   onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
+  onRenameSession: RenameSession;
   onRemove: (sid: string) => void;
   pinned: boolean;
   onTogglePin?: (sid: string) => void;
   onClose: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
-  // Mobile rename lives in a drawer stacked above this full-screen sheet.
-  const [renameOpen, setRenameOpen] = useState(false);
+  const [renamingInline, setRenamingInline] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
   const backdropRef = useRef<HTMLButtonElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -11558,8 +11574,24 @@ function SessionTitleSheet({
   // A stale composer error from the previous session shouldn't bleed across.
   useLayoutEffect(() => {
     setError(null);
-    setRenameOpen(false);
+    setRenamingInline(false);
   }, [sid]);
+
+  const commitInlineRename = useCallback(
+    async (next: string) => {
+      setError(null);
+      setRenamingInline(false);
+      try {
+        await onRenameSession(sid, next);
+        toast.success("Session renamed");
+      } catch (error) {
+        setError(error instanceof Error ? error.message : String(error));
+        setRenamingInline(true);
+        throw error;
+      }
+    },
+    [onRenameSession, sid],
+  );
 
   // Force each session we view into the shared transcript stream so the chat's
   // useChat subscription receives idle-time updates. This uses the in-memory
@@ -11903,15 +11935,14 @@ function SessionTitleSheet({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        // Rename drawer owns Escape while open; don't dismiss the sheet under it.
-        if (renameOpen) return;
+        if (renamingInline) return;
         requestClose();
         return;
       }
       // Don't hijack arrows while the user is typing in the composer / rename field.
       const t = e.target as HTMLElement | null;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      if (renameOpen) return;
+      if (renamingInline) return;
       if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
         e.preventDefault();
         go(prevSid);
@@ -11927,7 +11958,7 @@ function SessionTitleSheet({
       document.removeEventListener("keydown", onKey);
       document.body.style.overflow = prevOverflow;
     };
-  }, [requestClose, go, prevSid, nextSid, renameOpen]);
+  }, [requestClose, go, prevSid, nextSid, renamingInline]);
 
   const title = titleForSession(session);
 
@@ -11973,19 +12004,27 @@ function SessionTitleSheet({
             title={session.agentLabel || undefined}
             className="size-7 shrink-0 rounded-lg"
           />
-          <button
-            type="button"
-            className="flex min-w-0 flex-1 items-center text-left outline-none"
-            title={session.shippedReview ? undefined : "Rename session"}
-            aria-label={session.shippedReview ? title : `Rename ${title}`}
-            onClick={() => {
-              if (session.shippedReview) return;
-              haptic("selection");
-              setRenameOpen(true);
-            }}
-          >
-            <SessionTitleLine title={title} />
-          </button>
+          {renamingInline ? (
+            <SessionTitleInlineEditor
+              initial={session.title?.trim() || title}
+              onCommit={commitInlineRename}
+              onCancel={() => setRenamingInline(false)}
+            />
+          ) : (
+            <button
+              type="button"
+              className="flex min-w-0 flex-1 items-center text-left outline-none"
+              title={session.shippedReview ? undefined : "Rename session"}
+              aria-label={session.shippedReview ? title : `Rename ${title}`}
+              onClick={() => {
+                if (session.shippedReview) return;
+                haptic("selection");
+                setRenamingInline(true);
+              }}
+            >
+              <SessionTitleLine title={title} />
+            </button>
+          )}
           {session.shippedReview ? (
             <span className="shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
               Shipped
@@ -12004,19 +12043,14 @@ function SessionTitleSheet({
             onRefresh={onRefresh}
             onRemove={onRemove}
             onError={setError}
-            onRename={session.shippedReview ? undefined : () => setRenameOpen(true)}
+            onRename={
+              session.shippedReview ? undefined : () => setRenamingInline(true)
+            }
             triggerClassName="size-9"
             pinned={pinned}
             onTogglePin={onTogglePin}
           />
         </div>
-        <RenameSessionDrawer
-          open={renameOpen}
-          session={session}
-          onOpenChange={setRenameOpen}
-          onSaved={onRefresh}
-          onError={setError}
-        />
         <div ref={bodyRef} className="flex min-h-0 flex-1 flex-col">
           <SessionChat
             session={session}
@@ -12271,6 +12305,7 @@ const SessionCard = memo(function SessionCard({
   onStreamSummary,
   onSubscribeTranscript,
   onRefresh,
+  onRenameSession,
   onRemove,
   onOpenSheet,
   variant = "grid",
@@ -12288,6 +12323,7 @@ const SessionCard = memo(function SessionCard({
   onStreamSummary?: StreamSummary;
   onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
+  onRenameSession: RenameSession;
   onRemove: (sid: string) => void;
   // Tapping the title asks the parent to open the full-height detail sheet
   // for this sid, anchored to the title's rect. The sheet lives at the parent so
@@ -12313,35 +12349,33 @@ const SessionCard = memo(function SessionCard({
   const isMobile = useIsMobile();
   const [error, setError] = useState<string | null>(null);
   const [summarizing, setSummarizing] = useState(false);
-  // Desktop: double-click title → inline editor. Mobile: menu / sheet → drawer.
+  // Desktop double-click and the actions menu on every viewport edit in place.
   const [renamingInline, setRenamingInline] = useState(false);
-  const [renameDrawerOpen, setRenameDrawerOpen] = useState(false);
 
   const sid = session.sessionId;
 
   const startRename = useCallback(() => {
     if (!sid) return;
     haptic("selection");
-    if (isMobile) setRenameDrawerOpen(true);
-    else setRenamingInline(true);
-  }, [isMobile, sid]);
+    setRenamingInline(true);
+  }, [sid]);
 
   const commitInlineRename = useCallback(
     async (next: string) => {
       if (!sid) return;
       setError(null);
+      setRenamingInline(false);
       try {
-        await putSessionTitle(sid, next);
-        setRenamingInline(false);
-        await onRefresh();
+        await onRenameSession(sid, next);
         toast.success("Session renamed");
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         setError(msg);
+        setRenamingInline(true);
         throw e;
       }
     },
-    [onRefresh, sid],
+    [onRenameSession, sid],
   );
 
   async function changeModel(model: string) {
@@ -12773,7 +12807,7 @@ const onTouchStart = (e: ReactTouchEvent) => {
               )}
             />
           </button>
-          {renamingInline && !isMobile ? (
+          {renamingInline ? (
             <SessionTitleInlineEditor
               initial={session.title?.trim() || titleForSession(session)}
               onCommit={commitInlineRename}
@@ -12784,8 +12818,8 @@ const onTouchStart = (e: ReactTouchEvent) => {
               type="button"
               onClick={onHeaderTap}
               onDoubleClick={(e) => {
-                // Desktop: double-click renames in place. Mobile uses the drawer
-                // (tap still opens the session sheet; rename is in the ⋮ menu).
+                // Mobile tap still opens the session sheet; its ⋮ menu starts the
+                // same in-place editor without changing the title-tap gesture.
                 if (isMobile || session.shippedReview) return;
                 e.preventDefault();
                 e.stopPropagation();
@@ -12909,14 +12943,6 @@ const onTouchStart = (e: ReactTouchEvent) => {
           </button>
         ) : null}
       </div>
-
-      <RenameSessionDrawer
-        open={renameDrawerOpen}
-        session={session}
-        onOpenChange={setRenameDrawerOpen}
-        onSaved={onRefresh}
-        onError={setError}
-      />
 
       {!collapsedView && (
         <SessionChat
