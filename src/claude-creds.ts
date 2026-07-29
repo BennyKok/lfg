@@ -16,7 +16,10 @@ const TTL_MS = 60_000;
 function readCredsFile(): ClaudeCreds | null {
   try {
     return JSON.parse(
-      readFileSync(join(homedir(), ".claude", ".credentials.json"), "utf8"),
+      readFileSync(
+        join(process.env.HOME ?? homedir(), ".claude", ".credentials.json"),
+        "utf8",
+      ),
     ) as ClaudeCreds;
   } catch {
     return null;
@@ -39,8 +42,15 @@ function readCredsKeychain(): ClaudeCreds | null {
 
 /** Claude subscription OAuth access token, or null when not signed in. */
 export function claudeOauthToken(): string | null {
+  // The Linux credentials file is cheap to read and can appear while LFG is
+  // running after a browser login. Read it before the Keychain cache so a
+  // completed first-run connection is visible on the very next status poll.
+  const fileToken = readCredsFile()?.claudeAiOauth?.accessToken ?? null;
+  if (fileToken) return fileToken;
+  if (process.platform !== "darwin") return null;
+
   if (cached && Date.now() - cached.at < TTL_MS) return cached.token;
-  const creds = readCredsFile() ?? readCredsKeychain();
+  const creds = readCredsKeychain();
   const token = creds?.claudeAiOauth?.accessToken ?? null;
   cached = { token, at: Date.now() };
   return token;

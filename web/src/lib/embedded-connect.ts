@@ -15,6 +15,8 @@ export type ConnectAgentInfo = {
   label: string;
   status: {
     configured: boolean;
+    /** User-owned browser/CLI login. Runtime API keys do not satisfy this. */
+    accountConnected?: boolean;
     canAutoSetup: boolean;
     checks: { label: string; ok: boolean; detail?: string }[];
   };
@@ -41,15 +43,12 @@ export type ConnectOption = {
  *  surface cannot show. */
 const GATE_PROVIDERS: {
   provider: "claude" | "codex";
-  /** Kind the gate drives install/login with. */
-  kind: string;
   label: string;
-  /** Every kind that shares this provider's credentials — a login through
-   *  either CLI configures its ai-sdk sibling too. */
+  /** Actual roster keys that can drive this provider's install/login flow. */
   kinds: string[];
 }[] = [
-  { provider: "claude", kind: "claude", label: "Claude Code", kinds: ["claude", "aisdk"] },
-  { provider: "codex", kind: "codex", label: "Codex", kinds: ["codex", "codex-aisdk"] },
+  { provider: "claude", label: "Claude Code", kinds: ["claude", "aisdk"] },
+  { provider: "codex", label: "Codex", kinds: ["codex", "codex-aisdk"] },
 ];
 
 const GATE_PROVIDER_KINDS = new Set(GATE_PROVIDERS.flatMap((entry) => entry.kinds));
@@ -73,7 +72,9 @@ function binaryInstalled(agent: ConnectAgentInfo): boolean {
  * providers takes the gate's skip link instead.
  */
 export function hasConnectedGateProvider(agents: ConnectAgentInfo[]): boolean {
-  return agents.some((agent) => GATE_PROVIDER_KINDS.has(agent.key) && agent.status.configured);
+  return agents.some(
+    (agent) => GATE_PROVIDER_KINDS.has(agent.key) && agent.status.accountConnected === true,
+  );
 }
 
 /**
@@ -97,17 +98,19 @@ export function shouldShowEmbeddedConnectGate(input: {
 export function embeddedConnectOptions(agents: ConnectAgentInfo[]): ConnectOption[] {
   const options: ConnectOption[] = [];
   for (const entry of GATE_PROVIDERS) {
-    const agent = agents.find((item) => item.key === entry.kind);
+    const agent = entry.kinds
+      .map((kind) => agents.find((item) => item.key === kind))
+      .find((item) => item !== undefined);
     if (!agent) continue;
     options.push({
       provider: entry.provider,
-      kind: entry.kind,
+      kind: agent.key,
       label: entry.label,
       installed: binaryInstalled(agent),
-      // Credentials are per provider: the ai-sdk sibling reports the same
-      // login, so either kind being configured means this row is connected.
+      // Runtime API keys make the agent usable, but only a user-owned account
+      // login completes this first-run connection step.
       configured: agents.some(
-        (item) => entry.kinds.includes(item.key) && item.status.configured,
+        (item) => entry.kinds.includes(item.key) && item.status.accountConnected === true,
       ),
       canAutoSetup: agent.status.canAutoSetup,
     });

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -74,7 +74,7 @@ describe("coding agent browser auth output", () => {
   });
 });
 
-describe("copilot auth detection", () => {
+describe("coding agent auth detection", () => {
   // Isolate the home + env this suite touches so we neither trip on the
   // maintainer's real login state nor leak into other suites.
   const savedEnv: Record<string, string | undefined> = {};
@@ -123,5 +123,19 @@ describe("copilot auth detection", () => {
     mkdirSync(join(home, ".copilot"), { recursive: true });
     writeFileSync(join(home, ".copilot", "hosts.yml"), "github.com: {}\n");
     expect(await copilotAuthOk()).toBe(true);
+  });
+
+  test("a platform OpenAI key makes Codex runnable without claiming the account is connected", async () => {
+    const home = useTmpHome();
+    const codex = join(home, "codex");
+    writeFileSync(codex, "#!/bin/sh\nexit 1\n");
+    chmodSync(codex, 0o755);
+    setEnv("LFG_CODEX_PATH", codex);
+    setEnv("OPENAI_API_KEY", "platform_test_key");
+
+    const agents = await listCodingAgents();
+    const codexAgent = agents.find((agent) => agent.key === "codex-aisdk");
+    expect(codexAgent?.status.configured).toBe(true);
+    expect(codexAgent?.status.accountConnected).toBe(false);
   });
 });

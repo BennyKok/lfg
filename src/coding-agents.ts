@@ -35,6 +35,9 @@ export type CodingAgentCheck = {
 
 export type CodingAgentStatus = {
   configured: boolean;
+  /** True only when the user connected this provider's account. Platform API
+   *  keys can make an agent runnable, but they are not a user login. */
+  accountConnected: boolean;
   lfgCapabilityAccess: "mcp" | "contract-only";
   checks: CodingAgentCheck[];
   instructions: string[];
@@ -300,26 +303,34 @@ function copilotPath(): string | null {
   ]);
 }
 
-function hasClaudeAuth(): boolean {
+function hasClaudeAccountAuth(): boolean {
   // claudeOauthToken covers both the Linux credentials file and macOS Keychain.
-  return !!process.env.ANTHROPIC_API_KEY || claudeOauthToken() !== null;
+  return claudeOauthToken() !== null;
 }
 
-function hasCodexAuth(): boolean {
+function hasCodexAccountAuth(): boolean {
   const home = userHome();
-  return (
-    !!process.env.OPENAI_API_KEY ||
-    existsSync(`${home}/.codex/auth.json`) ||
-    !!(codexPath() && commandOutput([codexPath()!, "login", "status"]).ok)
-  );
+  if (existsSync(`${home}/.codex/auth.json`)) return true;
+  const codex = codexPath();
+  if (!codex) return false;
+
+  // `codex login status` can treat OPENAI_API_KEY as sufficient runtime auth.
+  // Remove the platform key so this check answers the narrower question:
+  // did the user connect their ChatGPT account?
+  const env = { ...process.env };
+  delete env.OPENAI_API_KEY;
+  return commandOutput([codex, "login", "status"], env).ok;
 }
 
-function commandOutput(argv: string[]): { ok: boolean; text: string } {
+function commandOutput(
+  argv: string[],
+  env: Record<string, string | undefined> = process.env,
+): { ok: boolean; text: string } {
   try {
     const proc = Bun.spawnSync(argv, {
       stdout: "pipe",
       stderr: "pipe",
-      env: { ...process.env },
+      env,
     });
     const text = `${new TextDecoder().decode(proc.stdout)}${new TextDecoder().decode(proc.stderr)}`;
     return { ok: proc.exitCode === 0, text };
@@ -628,6 +639,7 @@ function statusFor(kind: CodingAgentKind): CodingAgentStatus {
   const instructions: string[] = [];
   let canAutoSetup = true;
   let canLoginInTerminal = true;
+  let accountConnected = false;
 
   const addBinary = (label: string, path: string | null) => {
     checks.push({ label, ok: !!path, detail: path ?? "not found" });
@@ -637,12 +649,22 @@ function statusFor(kind: CodingAgentKind): CodingAgentStatus {
   };
 
   if (kind === "claude" || kind === "aisdk") {
+    accountConnected = hasClaudeAccountAuth();
     addBinary("Claude CLI", claudePath());
-    addAuth("Claude auth", hasClaudeAuth(), "use Login below or set ANTHROPIC_API_KEY");
+    addAuth(
+      "Claude auth",
+      accountConnected || !!process.env.ANTHROPIC_API_KEY,
+      "use Login below or set ANTHROPIC_API_KEY",
+    );
     instructions.push("Use Login to sign in with Claude in your browser, or set ANTHROPIC_API_KEY.");
   } else if (kind === "codex" || kind === "codex-aisdk") {
+    accountConnected = hasCodexAccountAuth();
     addBinary("Codex CLI", codexPath());
-    addAuth("Codex auth", hasCodexAuth(), "use Login below or set OPENAI_API_KEY");
+    addAuth(
+      "Codex auth",
+      accountConnected || !!process.env.OPENAI_API_KEY,
+      "use Login below or set OPENAI_API_KEY",
+    );
     instructions.push("Use Login to connect ChatGPT in your browser, or set OPENAI_API_KEY.");
   } else if (kind === "opencode") {
     addBinary("OpenCode CLI", opencodePath());
@@ -677,6 +699,7 @@ function statusFor(kind: CodingAgentKind): CodingAgentStatus {
 
   return {
     configured: checks.every((c) => c.ok),
+    accountConnected,
     lfgCapabilityAccess: lfgCapabilityAccess(kind),
     checks,
     instructions,

@@ -266,6 +266,7 @@ type CodingAgentInfo = {
   visible: boolean;
   status: {
     configured: boolean;
+    accountConnected: boolean;
     lfgCapabilityAccess: "mcp" | "contract-only";
     setupRunning: boolean;
     setupProgress?: { percent: number; label: string };

@@ -15,16 +15,23 @@ import {
 
 function agent(
   key: string,
-  opts: { installed?: boolean; authed?: boolean; canAutoSetup?: boolean } = {},
+  opts: {
+    installed?: boolean;
+    authed?: boolean;
+    runtimeAuthed?: boolean;
+    canAutoSetup?: boolean;
+  } = {},
 ): ConnectAgentInfo {
   const installed = opts.installed !== false;
   const authed = opts.authed === true;
-  const label = key === "codex" ? "Codex" : "Claude";
+  const runtimeAuthed = opts.runtimeAuthed ?? authed;
+  const label = key.includes("codex") ? "Codex" : "Claude";
   return {
     key,
     label,
     status: {
-      configured: installed && authed,
+      configured: installed && runtimeAuthed,
+      accountConnected: authed,
       canAutoSetup: opts.canAutoSetup !== false,
       checks: [
         { label: `${label} CLI`, ok: installed },
@@ -34,7 +41,7 @@ function agent(
   };
 }
 
-const FRESH_BOX = [agent("claude"), agent("codex")];
+const FRESH_BOX = [agent("aisdk"), agent("codex-aisdk")];
 
 describe("embedded connect gate visibility", () => {
   test("opens on a framed box with nothing authenticated", () => {
@@ -57,10 +64,22 @@ describe("embedded connect gate visibility", () => {
   });
 
   test("a login reported only on the ai-sdk sibling also closes it", () => {
-    // `claude auth login` configures both the CLI kind and aisdk; either
-    // reporting configured means the provider is connected.
+    // Production exposes the ai-sdk roster key, and its explicit account
+    // signal closes the gate after browser login.
     const connected = [agent("claude"), agent("aisdk", { authed: true }), agent("codex")];
     expect(shouldShowEmbeddedConnectGate({ embedded: true, agents: connected })).toBe(false);
+  });
+
+  test("platform API keys make agents runnable but do not impersonate a user connection", () => {
+    const platformConfigured = [
+      agent("aisdk", { runtimeAuthed: true }),
+      agent("codex-aisdk", { runtimeAuthed: true }),
+    ];
+    expect(platformConfigured.every((item) => item.status.configured)).toBe(true);
+    expect(hasConnectedGateProvider(platformConfigured)).toBe(false);
+    expect(
+      shouldShowEmbeddedConnectGate({ embedded: true, agents: platformConfigured }),
+    ).toBe(true);
   });
 
   test("bundled pi / OpenCode must NOT satisfy the gate on a fresh image", () => {
@@ -102,7 +121,7 @@ describe("embedded connect gate visibility", () => {
 describe("embedded connect options", () => {
   test("offers exactly Claude Code and Codex, in order", () => {
     const options = embeddedConnectOptions(FRESH_BOX);
-    expect(options.map((o) => o.kind)).toEqual(["claude", "codex"]);
+    expect(options.map((o) => o.kind)).toEqual(["aisdk", "codex-aisdk"]);
     expect(options.map((o) => o.label)).toEqual(["Claude Code", "Codex"]);
     expect(options.map((o) => o.provider)).toEqual(["claude", "codex"]);
   });
@@ -126,6 +145,12 @@ describe("embedded connect options", () => {
   test("skips providers the server does not list", () => {
     expect(embeddedConnectOptions([agent("codex")]).map((o) => o.kind)).toEqual(["codex"]);
     expect(embeddedConnectOptions([])).toEqual([]);
+  });
+
+  test("uses the installed ai-sdk roster key to drive the existing login endpoint", () => {
+    expect(embeddedConnectOptions([agent("aisdk")])).toEqual([
+      expect.objectContaining({ provider: "claude", kind: "aisdk" }),
+    ]);
   });
 });
 
