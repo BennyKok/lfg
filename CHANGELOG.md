@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Installable release bundles (v0.1.110)
+
+- Hosted Computer template builds can install LFG release bundles again; the
+  bundle now carries a runtime-only manifest and matching production lockfile
+  instead of referencing source workspaces that are intentionally not shipped.
+
 ## July 29, 2026 - Full-width mobile chat (v0.1.109)
 
 - The mobile Live chat page now uses the full available width without an extra
