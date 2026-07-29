@@ -5654,9 +5654,11 @@ export function App() {
           isMobile &&
             // Narrow layout scrolls behind the floating chrome, so the box is
             // pinned to the shell rather than living in the flex flow. It stops
-            // at the host inset (see mainBottomPadding) and keeps a real gutter
-            // so card corners/shadows aren't sheared off by the viewport edge.
-            "absolute inset-x-0 bottom-[var(--lfg-host-bottom-inset)] top-0 px-2 pt-[calc(var(--lfg-mobile-header-height)+var(--lfg-mobile-header-fade-height))] [scroll-padding-top:calc(var(--lfg-mobile-header-height)+var(--lfg-mobile-header-fade-height))]",
+            // at the host inset (see mainBottomPadding).
+            "absolute inset-x-0 bottom-[var(--lfg-host-bottom-inset)] top-0 pt-[calc(var(--lfg-mobile-header-height)+var(--lfg-mobile-header-fade-height))] [scroll-padding-top:calc(var(--lfg-mobile-header-height)+var(--lfg-mobile-header-fade-height))]",
+          // The Live/chat page is intentionally full-width; its cards own any
+          // spacing they need. Keep the page gutter on the gallery-style tabs.
+          isMobile && tab !== "live" && "px-2",
           liveDesktopWorkspace ? "overflow-hidden pb-3" : `overflow-y-auto ${mainBottomPadding}`,
         )}
       >
