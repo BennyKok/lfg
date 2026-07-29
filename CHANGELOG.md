@@ -4,6 +4,8 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Shipped review in Live (v0.1.106)
+
 - Finished sessions now open inside the normal Live workspace on desktop and in
   the standard session sheet on mobile, while remaining read-only until the
   first message resumes them.
