@@ -82,6 +82,9 @@ else
   say "SKIP_INSTALL=1 - reusing existing node_modules + web/dist."
 fi
 
+say "Building public packages..."
+bash scripts/pack-packages.sh
+
 [ -f web/dist/index.html ] || die "web/dist missing - run without SKIP_INSTALL."
 
 # Stage exactly what the runtime needs. Public deps are intentionally not
@@ -134,10 +137,12 @@ command -v gh >/dev/null || die "gh not found - needed to publish."
 say "Publishing ${VERSION} to ${REPO_SLUG}..."
 if gh release view "$VERSION" --repo "$REPO_SLUG" >/dev/null 2>&1; then
   gh release upload "$VERSION" \
-    "$OUT_DIR/$ASSET" "$OUT_DIR/$ASSET.sha256" --repo "$REPO_SLUG" --clobber
+    "$OUT_DIR/$ASSET" "$OUT_DIR/$ASSET.sha256" \
+    "$OUT_DIR"/lfg-dev-*.tgz \
+    --repo "$REPO_SLUG" --clobber
 else
   gh release create "$VERSION" \
-    "$OUT_DIR/$ASSET" "$OUT_DIR/$ASSET.sha256" \
+    "$OUT_DIR/$ASSET" "$OUT_DIR/$ASSET.sha256" "$OUT_DIR"/lfg-dev-*.tgz \
     --repo "$REPO_SLUG" --title "$VERSION" --generate-notes
 fi
 say "Done. Latest-release install URL:"

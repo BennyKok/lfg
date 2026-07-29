@@ -1,0 +1,25 @@
+{
+  "name": "@lfg-dev/protocol",
+  "version": "0.1.84",
+  "description": "Typed public protocol for LFG sessions and live streams.",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && bun x tsc -p tsconfig.build.json"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BennyKok/lfg.git",
+    "directory": "packages/protocol"
+  }
+}

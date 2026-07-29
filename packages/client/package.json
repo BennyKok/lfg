@@ -1,0 +1,28 @@
+{
+  "name": "@lfg-dev/client",
+  "version": "0.1.84",
+  "description": "Transport-agnostic LFG API client and multiplexed live connection.",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "rm -rf dist && bun x tsc -p tsconfig.build.json"
+  },
+  "dependencies": {
+    "@lfg-dev/protocol": "workspace:*"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BennyKok/lfg.git",
+    "directory": "packages/client"
+  }
+}
