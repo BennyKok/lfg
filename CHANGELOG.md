@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Remembered project folders (v0.1.120)
+
+- Hosted LFG workspaces now reopen on the last selected project instead of
+  resetting to All projects and showing sessions from every folder.
+
 ## July 29, 2026 - Crisp mobile LFG mark (v0.1.119)
 
 - The self-hosted mobile header now keeps its LFG logo outside the backdrop-blur
