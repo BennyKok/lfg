@@ -123,7 +123,7 @@ describe("mobile overlay scroll contract", () => {
     expect(css).toMatch(
       /--lfg-mobile-header-height:\s*calc\(3\.5rem\s*\+\s*env\(safe-area-inset-top,\s*0px\)\)/,
     );
-    expect(css).toMatch(/--lfg-mobile-header-fade-height:\s*2\.5rem/);
+    expect(css).toMatch(/--lfg-mobile-header-fade-height:\s*1\.25rem/);
   });
 
   test("composer pages reserve chrome while the fade overlays content", () => {
@@ -140,6 +140,6 @@ describe("mobile overlay scroll contract", () => {
     expect(app).toContain(
       "mobile-scroll-composer-fade pointer-events-auto relative z-[55] mt-auto",
     );
-    expect(css).toMatch(/--lfg-mobile-composer-fade-height:\s*6rem/);
+    expect(css).toMatch(/--lfg-mobile-composer-fade-height:\s*4rem/);
   });
 });

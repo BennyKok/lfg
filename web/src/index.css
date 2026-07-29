@@ -74,12 +74,12 @@
   --lfg-inline-composer-height: var(--lfg-composer-clear);
   --lfg-orb-stack-bottom: calc(var(--lfg-composer-clear) + 0.5rem);
   --lfg-above-orb: var(--lfg-composer-clear);
-  /* Narrow screens scroll edge-to-edge behind overlay chrome. These shared
-     measurements keep the visual fades and the scrollable safe padding in
-     lockstep so the first/last item can always clear the controls. */
+  /* Narrow screens scroll behind overlay chrome. The chrome height reserves
+     real layout space; the shorter fade heights only soften content passing
+     beneath those edges. */
   --lfg-mobile-header-height: calc(3.5rem + env(safe-area-inset-top, 0px));
-  --lfg-mobile-header-fade-height: 2.5rem;
-  --lfg-mobile-composer-fade-height: 6rem;
+  --lfg-mobile-header-fade-height: 1.25rem;
+  --lfg-mobile-composer-fade-height: 4rem;
 }
 
 /* Framed inside omg Computer (`?embed=1` / iframe): cancel the device
