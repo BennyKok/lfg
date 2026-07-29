@@ -112,6 +112,21 @@ describe("host bottom inset contract", () => {
 });
 
 describe("mobile overlay scroll contract", () => {
+  test("hosted surfaces keep LFG page navigation", () => {
+    const app = require("node:fs").readFileSync("web/src/App.tsx", "utf8") as string;
+
+    expect(app).toContain("embedded && isMobile");
+    expect(app).toContain('tab === "shipped"');
+    expect(app).toContain('"__artifacts"');
+    expect(app).toContain("projects={projectOptions}");
+    expect(app).toContain("onChange={changeProjectFilter}");
+    expect(app).toContain("onOpenShipped={openShipped}");
+    expect(app).toContain("onOpenRecentShipped={openShippedSession}");
+    expect(app).not.toContain(
+      "onOpenShipped={embedded ? undefined : openShipped}",
+    );
+  });
+
   test("every mobile page scrolls behind the shared top chrome", () => {
     const app = require("node:fs").readFileSync("web/src/App.tsx", "utf8") as string;
     const css = require("node:fs").readFileSync("web/src/index.css", "utf8") as string;

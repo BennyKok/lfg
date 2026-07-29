@@ -5576,13 +5576,28 @@ export function App() {
         )}
       >
       {embedded && isMobile ? (
-        <header className="z-40 flex shrink-0 items-center px-3 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))]">
+        <header className="z-40 flex shrink-0 items-center justify-between gap-2 px-3 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))]">
           <NavIsland className="shrink-0">
             <div
               className="flex size-11 items-center justify-center rounded-full bg-background/80 backdrop-blur-xl"
               aria-label="omg.dev"
             >
               <ProductBrand hosted compact />
+            </div>
+          </NavIsland>
+          <NavIsland className="shrink-0">
+            <div className="flex h-11 items-center rounded-full bg-background/80 px-1.5 backdrop-blur-xl">
+              <ProjectFilterMenu
+                value={
+                  tab === "shipped"
+                    ? "__shipped"
+                    : tab === "artifacts"
+                      ? "__artifacts"
+                      : projectFilter
+                }
+                projects={projectOptions}
+                onChange={changeProjectFilter}
+              />
             </div>
           </NavIsland>
         </header>
@@ -5704,12 +5719,13 @@ export function App() {
               // the LFG workspace's project scope.
               onProjectChange={changeProjectFilter}
               // Embed: host owns identity/settings — no user picker, settings,
-              // ask, or shipped chrome inside the iframe.
+              // or ask chrome inside the iframe. LFG still owns its Live,
+              // Shipped, and Artifacts pages, so their navigation remains.
               onUserChange={embedded ? undefined : changeUserFilter}
               onOpenSettings={embedded ? undefined : () => setTab("settings")}
               onOpenAsk={embedded ? undefined : () => setTab("ask")}
-              onOpenShipped={embedded ? undefined : openShipped}
-              onOpenRecentShipped={embedded ? undefined : openShippedSession}
+              onOpenShipped={openShipped}
+              onOpenRecentShipped={openShippedSession}
               repos={repos}
               onReposChanged={loadCore}
               messagesBySid={liveStream.messagesBySid}

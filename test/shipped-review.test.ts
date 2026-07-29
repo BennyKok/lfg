@@ -6,7 +6,7 @@ describe("shipped session review flow", () => {
 
   test("recent shipped shortcuts open inside the live workspace without resuming", () => {
     expect(app).toContain(
-      "onOpenRecentShipped={embedded ? undefined : openShippedSession}",
+      "onOpenRecentShipped={openShippedSession}",
     );
     expect(app).toContain("shippedReview={shippedReview}");
     expect(app).toContain('setTab("live")');
