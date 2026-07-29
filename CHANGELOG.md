@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Balanced mobile chat edges (v0.1.111)
+
+- Mobile Live pages keep their side gutter for card corners and shadows while
+  removing the oversized blank bands above the list and behind the composer
+  fade.
+
 ## July 29, 2026 - Installable release bundles (v0.1.110)
 
 - Hosted Computer template builds can install LFG release bundles again; the
