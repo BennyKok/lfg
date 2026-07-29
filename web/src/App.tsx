@@ -15,6 +15,7 @@ import {
 } from "./lib/embedded-connect";
 import { emitSessionCreatedToHost } from "./lib/embed-host-signal";
 import { api, lfgAssetUrl, lfgFetch } from "./lib/lfg-client";
+import { cacheProjectFilter, readCachedProjectFilter } from "./lib/project-filter";
 import { uploadFile as uploadFileThroughTransport } from "./lib/upload";
 import { EmbeddedConnectGate } from "./components/embedded-connect-gate";
 import {
@@ -4105,9 +4106,7 @@ export function App() {
     if (saved && saved !== "__all") return saved;
     return localStorage.getItem("lfg_user") || "__all";
   });
-  const [projectFilter, setProjectFilter] = useState(
-    () => localStorage.getItem("lfg_v2_project_filter") || "__all",
-  );
+  const [projectFilter, setProjectFilter] = useState(readCachedProjectFilter);
   const didDefaultFilter = useRef(false);
   // The active profile for this browser ("who are you"). Null until chosen —
   // when null (and a roster exists) we gate the app behind the picker on start.
@@ -4607,9 +4606,11 @@ export function App() {
   }, [userFilter, embedded]);
 
   useEffect(() => {
-    if (embedded) return;
-    localStorage.setItem("lfg_v2_project_filter", projectFilter);
-  }, [projectFilter, embedded]);
+    // Project scope belongs to the LFG workspace even when the app is hosted
+    // inside omg, so remember it on every surface. Otherwise an embedded
+    // reload silently jumps back to "All projects" and exposes every folder.
+    cacheProjectFilter(projectFilter);
+  }, [projectFilter]);
 
   const changeUserFilter = useCallback((value: string) => {
     setUserFilter(value);
