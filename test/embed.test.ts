@@ -117,7 +117,7 @@ describe("mobile overlay scroll contract", () => {
     const css = require("node:fs").readFileSync("web/src/index.css", "utf8") as string;
 
     expect(app).toContain(
-      'isMobile &&\n            "absolute inset-0 pt-[calc(var(--lfg-mobile-header-height)+var(--lfg-mobile-header-fade-height))]',
+      '"absolute inset-x-0 bottom-[var(--lfg-host-bottom-inset)] top-0 px-2 pt-[calc(var(--lfg-mobile-header-height)+var(--lfg-mobile-header-fade-height))]',
     );
     expect(app).toContain('isMobile && "mobile-scroll-header-fade"');
     expect(css).toMatch(
@@ -132,7 +132,7 @@ describe("mobile overlay scroll contract", () => {
 
     expect(app).toContain('tab === "live" || tab === "shipped" || tab === "artifacts"');
     expect(app).toContain(
-      "pb-[calc(var(--lfg-inline-composer-height,var(--lfg-composer-clear))+var(--lfg-mobile-composer-fade-height)+var(--lfg-host-bottom-inset))]",
+      "pb-[calc(var(--lfg-inline-composer-height,var(--lfg-composer-clear))+var(--lfg-mobile-composer-fade-height))]",
     );
     expect(app).toContain(
       "mobile-scroll-composer-fade pointer-events-auto relative z-[55] mt-auto",

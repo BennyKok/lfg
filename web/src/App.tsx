@@ -88,6 +88,7 @@ import { findingReference } from "./lib/finding-reference";
 import { setThemePreference, THEME_CHANGE_EVENT } from "./lib/theme";
 import { startsInBottomSystemGestureZone } from "./lib/touch-gestures";
 import { retainLivePinnedSessions } from "./lib/pinned-sessions";
+import { pendingLiveFocusRequest } from "./lib/live-focus";
 import { latestDistinctShippedSessions } from "./lib/recent-shipped";
 import { ConnectionStatusToasts } from "./ConnectionStatus";
 import type {
@@ -8278,6 +8279,10 @@ function RailStage({
   const [focusGlow, setFocusGlow] = useState<{ sid: string; n: number } | null>(null);
   // Range-select anchor for shift-click / shift-arrow.
   const anchorRef = useRef<string | null>(null);
+  // External focus is an event, not durable selection state. Remember the last
+  // request we consumed so polling a fresh sessions array cannot replay it and
+  // steal the stage back after the user has opened another row.
+  const handledFocusRef = useRef<string | null>(null);
 
   const bySid = useMemo(() => {
     const m = new Map<string, Session>();
@@ -8300,9 +8305,10 @@ function RailStage({
   // External focus request (Shipped post tap): put the session on stage as the
   // preview column, cursor it, glow it, and scroll its rail row into view.
   useEffect(() => {
-    if (!focus) return;
-    const sid = focus.sid;
-    if (!bySid.has(sid)) return;
+    const pending = pendingLiveFocusRequest(focus, handledFocusRef.current, bySid);
+    if (!pending) return;
+    const { sid, token } = pending;
+    handledFocusRef.current = token;
     setPreview(sid);
     setCursor(sid);
     pulseStage(sid);
