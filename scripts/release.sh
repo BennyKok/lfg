@@ -100,6 +100,7 @@ cp -r \
   .env.example README.md CHANGELOG.md LICENSE SECURITY.md CONTRIBUTING.md \
   "$STAGE/lfg/"
 cp -r web/dist "$STAGE/lfg/web/dist"
+bun run scripts/prepare-release-manifest.ts "$STAGE/lfg/package.json"
 
 VENDOR_PACKAGES="${LFG_VENDOR_PACKAGES:-}"
 VENDOR_PACKAGES="${VENDOR_PACKAGES//,/ }"
@@ -118,6 +119,12 @@ if [ -n "$VENDOR_PACKAGES" ]; then
 else
   rmdir "$STAGE/lfg/vendor"
 fi
+
+# The source lockfile also records workspaces that are intentionally absent from
+# the runtime bundle. Generate a bundle-owned production lockfile from the
+# staged manifest so target installs cannot resolve an impossible workspace.
+rm "$STAGE/lfg/bun.lock"
+( cd "$STAGE/lfg" && unset CI && bun install --production --lockfile-only )
 
 mkdir -p "$OUT_DIR"
 say "Packing ${ASSET}..."
