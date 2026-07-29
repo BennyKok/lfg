@@ -15,6 +15,7 @@ import {
 } from "./lib/embedded-connect";
 import { emitSessionCreatedToHost } from "./lib/embed-host-signal";
 import { api, lfgAssetUrl, lfgFetch } from "./lib/lfg-client";
+import { uploadFile as uploadFileThroughTransport } from "./lib/upload";
 import { EmbeddedConnectGate } from "./components/embedded-connect-gate";
 import {
   isComputerHostResumeMessage,
@@ -984,52 +985,13 @@ function uploadFile<T>(
   contentType: string,
   onProgress: (progress: number) => void,
 ): Promise<T> {
-  const chunkSize = 8 * 1024 * 1024;
-  const uploadId = crypto.randomUUID();
-
-  const sendChunk = (chunk: Blob, offset: number): Promise<T> => new Promise((resolve, reject) => {
-    const separator = path.includes("?") ? "&" : "?";
-    const request = new XMLHttpRequest();
-    request.open(
-      "POST",
-      `${path}${separator}uploadId=${encodeURIComponent(uploadId)}&offset=${offset}&total=${file.size}`,
-    );
-    request.setRequestHeader("Content-Type", contentType || "application/octet-stream");
-    request.upload.addEventListener("progress", (event) => {
-      if (file.size > 0) {
-        onProgress(Math.min(100, Math.round(((offset + event.loaded) / file.size) * 100)));
-      }
-    });
-    request.addEventListener("load", () => {
-      let data: unknown = {};
-      try {
-        data = request.responseText ? JSON.parse(request.responseText) : {};
-      } catch {
-        // Keep the HTTP status error below useful even if a proxy returns HTML.
-      }
-      if (request.status >= 200 && request.status < 300) {
-        onProgress(Math.min(100, Math.round(((offset + chunk.size) / file.size) * 100)));
-        resolve(data as T);
-        return;
-      }
-      const message =
-        typeof data === "object" && data && "error" in data && typeof data.error === "string"
-          ? data.error
-          : `${request.status} ${request.statusText}`;
-      reject(new Error(message));
-    });
-    request.addEventListener("error", () => reject(new Error("Upload failed due to a network error")));
-    request.addEventListener("abort", () => reject(new Error("Upload cancelled")));
-    request.send(chunk);
-  });
-
-  return (async () => {
-    let response: T | undefined;
-    for (let offset = 0; offset < file.size; offset += chunkSize) {
-      response = await sendChunk(file.slice(offset, Math.min(file.size, offset + chunkSize)), offset);
-    }
-    return response as T;
-  })();
+  return uploadFileThroughTransport(
+    lfgFetch,
+    path,
+    file,
+    contentType,
+    onProgress,
+  );
 }
 
 function closeSessionRequest(sid: string, source: string) {
