@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Embedded artifact images (v0.1.107)
+
+- Artifact images in hosted Computer sessions now load through the authenticated
+  session transport, so live transcripts, Shipped posts, zoom, and full-screen
+  viewing no longer show broken image placeholders.
+
 ## July 29, 2026 - Shipped review in Live (v0.1.106)
 
 - Finished sessions now open inside the normal Live workspace on desktop and in
