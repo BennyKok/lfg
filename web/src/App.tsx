@@ -397,6 +397,10 @@ type Session = {
   // holding open a transcript stream — the stream only overrides this while the
   // card is expanded. Polled every 5s with the rest of the list.
   busy?: boolean;
+  // Client-only preview of a finished Shipped session. It renders in the
+  // normal Live workspace, but its first composer send must resume the session
+  // instead of posting to the inactive transport.
+  shippedReview?: boolean;
 };
 
 type User = { email: string; name?: string; avatar?: string };
@@ -977,7 +981,10 @@ function isHarnessAgent(agent?: string | null): boolean {
   return agent === "aisdk" || agent === "codex-aisdk" || agent === "opencode";
 }
 
-function canDriveSession(session: Pick<Session, "agent" | "tmuxTarget">): boolean {
+function canDriveSession(
+  session: Pick<Session, "agent" | "tmuxTarget" | "shippedReview">,
+): boolean {
+  if (session.shippedReview) return false;
   return !!session.tmuxTarget || isHarnessAgent(session.agent);
 }
 
@@ -3793,9 +3800,10 @@ export function App() {
   // A "jump to this session" request for the Live view (from Shipped posts).
   // The nonce lets the same session be requested twice in a row.
   const [liveFocus, setLiveFocus] = useState<{ sid: string; n: number } | null>(null);
-  // A desktop rail shortcut can open a specific finished session in Shipped.
-  // Like liveFocus, the nonce makes repeat taps on the same post actionable.
-  const [shippedFocus, setShippedFocus] = useState<{ post: ShipPost; n: number } | null>(null);
+  // A finished session can occupy the normal Live stage/sheet without joining
+  // the live fleet. Its first new message resumes it and replaces this preview
+  // with the real live row.
+  const [shippedReview, setShippedReview] = useState<Session | null>(null);
   // Deep link: `/?session=<id>` (the URL the server hands out as
   // `publicSessionUrl`) focuses that session on load. Read once, at the top of
   // the component, because several filter effects below have to know a link is
@@ -3958,13 +3966,7 @@ export function App() {
     [navigate],
   );
   const extNavTabs = useExtensionNavTabs();
-  const openShipped = useCallback(
-    (post?: ShipPost) => {
-      if (post) setShippedFocus({ post, n: Date.now() });
-      setTab("shipped");
-    },
-    [setTab],
-  );
+  const openShipped = useCallback(() => setTab("shipped"), [setTab]);
   // Keep the session list + Shipped/Artifacts mounted after first visit so
   // tab switches don't remount, re-fetch, or reboot gallery iframes. Hidden
   // pages set `active=false` to pause polling. First paint of Shipped/Artifacts
@@ -4626,6 +4628,51 @@ export function App() {
     () => allLiveSessions.map((s) => s.sessionId).filter((id): id is string => !!id),
     [allLiveSessions],
   );
+  const openShippedSession = useCallback(
+    (post: ShipPost) => {
+      if (!post.sessionId) return;
+      const live = allLiveSessions.find(
+        (session) =>
+          session.sessionId === post.sessionId ||
+          session.nativeSessionId === post.sessionId,
+      );
+      setTab("live");
+      if (live?.sessionId) {
+        setShippedReview(null);
+        setLiveFocus({ sid: live.sessionId, n: Date.now() });
+        return;
+      }
+      setShippedReview({
+        agent: post.agent,
+        project: post.project,
+        title: post.sessionTitle || post.title,
+        sessionId: post.sessionId,
+        startedAt: post.firstTs,
+        lastActivityAt: post.ts,
+        assignedUser: identity || null,
+        shippedReview: true,
+      });
+      setLiveFocus({ sid: post.sessionId, n: Date.now() });
+    },
+    [allLiveSessions, identity, setTab],
+  );
+
+  // Once a reviewed session appears in the live fleet, swap the historical
+  // preview for the real row. Claude may resume under a new visible id, while
+  // other backends keep the shipped id as their live/native id.
+  useEffect(() => {
+    const reviewedId = shippedReview?.sessionId;
+    if (!reviewedId) return;
+    const live = allLiveSessions.find(
+      (session) =>
+        session.sessionId === reviewedId ||
+        session.nativeSessionId === reviewedId,
+    );
+    if (!live?.sessionId) return;
+    setShippedReview(null);
+    setLiveFocus({ sid: live.sessionId, n: Date.now() });
+  }, [allLiveSessions, shippedReview]);
+
   const liveStatusKey = liveStatusIds.join(",");
   const liveTransport = useMemo(() => liveTransportMode(), []);
   const useWsLive = liveTransport === "ws";
@@ -5613,6 +5660,7 @@ export function App() {
           >
             <LiveView
               sessions={liveSessions}
+              shippedReview={shippedReview}
               liveSessionIds={liveStatusIds}
               users={users}
               userFilter={userFilter}
@@ -5629,7 +5677,7 @@ export function App() {
               onOpenSettings={embedded ? undefined : () => setTab("settings")}
               onOpenAsk={embedded ? undefined : () => setTab("ask")}
               onOpenShipped={embedded ? undefined : openShipped}
-              onOpenRecentShipped={embedded ? undefined : openShipped}
+              onOpenRecentShipped={embedded ? undefined : openShippedSession}
               repos={repos}
               onReposChanged={loadCore}
               messagesBySid={liveStream.messagesBySid}
@@ -5679,7 +5727,6 @@ export function App() {
           <div className={tab === "shipped" ? undefined : "hidden"} aria-hidden={tab !== "shipped"}>
             <ShippedPage
               active={tab === "shipped"}
-              focusPost={shippedFocus}
               liveSessionIds={
                 new Set(
                   liveSessions.flatMap((s) =>
@@ -5691,19 +5738,7 @@ export function App() {
                 setTab("live");
                 setLiveFocus({ sid, n: Date.now() });
               }}
-              onResumeSession={async (sid, prompt) => {
-                const resumed = await api<{ sessionId?: string }>("/api/sessions/resume", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    sessionId: sid,
-                    prompt,
-                    user: identity || undefined,
-                  }),
-                });
-                await refreshSessions();
-                return resumed.sessionId || sid;
-              }}
+              onReviewSession={openShippedSession}
               onFollowUpCreated={async (sid) => {
                 await refreshSessions();
                 setTab("live");
@@ -7751,6 +7786,7 @@ function LiveView({
   // layer already guards these to [], but default here too so any future caller
   // passing `undefined` degrades to an empty render instead of crashing the view.
   sessions = [],
+  shippedReview,
   liveSessionIds,
   users,
   userFilter,
@@ -7782,6 +7818,7 @@ function LiveView({
   focus,
 }: {
   sessions: Session[];
+  shippedReview?: Session | null;
   liveSessionIds: string[];
   users: User[];
   userFilter: string;
@@ -7857,9 +7894,13 @@ function LiveView({
       return next;
     });
     setSheet((current) =>
-      current && !liveSessionIds.includes(current.sid) ? null : current,
+      current &&
+      !liveSessionIds.includes(current.sid) &&
+      shippedReview?.sessionId !== current.sid
+        ? null
+        : current,
     );
-  }, [liveSessionIds]);
+  }, [liveSessionIds, shippedReview?.sessionId]);
 
   const toggleTopPin = useCallback((sid: string) => {
     const current = topPinnedRef.current;
@@ -7923,7 +7964,7 @@ function LiveView({
   // back to the same input.
   // Keep this return AFTER all hooks so the hook order remains stable as the
   // live list empties and refills.
-  if (!isWide && !sessions.length && !findings.length) {
+  if (!isWide && !sessions.length && !findings.length && !shippedReview) {
     return (
       <div className="flex min-h-[60dvh] flex-col items-center justify-center gap-3 text-center">
         <MessageSquare className="size-8 text-muted-foreground/45" aria-hidden />
@@ -8031,6 +8072,7 @@ function LiveView({
     return (
       <RailStage
         sessions={sessions}
+        shippedReview={shippedReview}
         users={users}
         projectFilter={projectFilter}
         messagesBySid={messagesBySid}
@@ -8065,8 +8107,14 @@ function LiveView({
   }
 
   // Sheet navigation follows the same on-screen order.
-  const sheetOrder = screenOrder;
-  const sheetSession = sheet ? sessions.find((s) => s.sessionId === sheet.sid) : null;
+  const sheetOrder =
+    shippedReview?.sessionId && !screenOrder.includes(shippedReview.sessionId)
+      ? [...screenOrder, shippedReview.sessionId]
+      : screenOrder;
+  const sheetSession = sheet
+    ? sessions.find((s) => s.sessionId === sheet.sid) ??
+      (shippedReview?.sessionId === sheet.sid ? shippedReview : null)
+    : null;
 
   return (
     <>
@@ -8142,7 +8190,7 @@ function LiveView({
         onRefresh={onRefresh}
         onRemove={onRemove}
         pinned={pinnedSet.has(sheet.sid)}
-        onTogglePin={toggleTopPin}
+        onTogglePin={sheetSession.shippedReview ? undefined : toggleTopPin}
         onClose={() => setSheet(null)}
       />
     ) : null}
@@ -8157,6 +8205,7 @@ function LiveView({
 // is confined to the small status dot in the rail. Up to 4 columns.
 function RailStage({
   sessions = [],
+  shippedReview,
   users,
   projectFilter,
   messagesBySid,
@@ -8188,6 +8237,7 @@ function RailStage({
   onToggleTopPin,
 }: {
   sessions: Session[];
+  shippedReview?: Session | null;
   users: User[];
   projectFilter: string;
   userFilter?: string;
@@ -8308,8 +8358,9 @@ function RailStage({
   const bySid = useMemo(() => {
     const m = new Map<string, Session>();
     for (const s of sessions) if (s.sessionId) m.set(s.sessionId, s);
+    if (shippedReview?.sessionId) m.set(shippedReview.sessionId, shippedReview);
     return m;
-  }, [sessions]);
+  }, [sessions, shippedReview]);
 
   // Soft primary glow on the stage column for the given sid so multi-pane
   // layouts make the just-selected window obvious.
@@ -8566,6 +8617,7 @@ function RailStage({
   );
   const togglePin = useCallback(
     (sid: string) => {
+      if (shippedReview?.sessionId === sid) return;
       if (validPinned.includes(sid)) {
         setPinned((prev) => prev.filter((x) => x !== sid));
         return;
@@ -8577,7 +8629,7 @@ function RailStage({
       setPinned([...validPinned, sid]);
       setPreview((p) => (p === sid ? null : p));
     },
-    [validPinned],
+    [validPinned, shippedReview?.sessionId],
   );
   const closeColumn = useCallback((sid: string) => {
     setPinned((prev) => prev.filter((x) => x !== sid));
@@ -9055,23 +9107,25 @@ function RailStage({
   const stageColumns = useMemo(() => {
     return columnIds
       .map((sourceSid) => {
+        if (shippedReview?.sessionId === sourceSid) {
+          return { sid: sourceSid, session: shippedReview };
+        }
         const node = railTree.nodeForSessionId(sourceSid);
         const sid = node?.session.sessionId ?? sourceSid;
         if (!node || !sid) return null;
-        return { sid, node };
+        return { sid, session: node.session };
       })
       .filter(
         (
           column,
-        ): column is { sid: string; node: SessionTreeNode } => !!column,
+        ): column is { sid: string; session: Session } => !!column,
       );
-  }, [columnIds, railTree]);
+  }, [columnIds, railTree, shippedReview]);
 
   const renderStageCard = (
-    node: SessionTreeNode,
+    session: Session,
     onCloseColumn?: () => void,
   ) => {
-    const session = node.session;
     const sid = session.sessionId ?? "";
     return (
       <div
@@ -9104,8 +9158,8 @@ function RailStage({
             onClose={onCloseColumn}
             entering={recentlyCreatedSids.has(sid)}
             focusGlow={focusGlow?.sid === sid ? focusGlow.n : 0}
-            pinned={topPinnedSet.has(sid)}
-            onTogglePin={onToggleTopPin}
+            pinned={!session.shippedReview && topPinnedSet.has(sid)}
+            onTogglePin={session.shippedReview ? undefined : onToggleTopPin}
           />
         </ErrorBoundary>
       </div>
@@ -9372,7 +9426,7 @@ function RailStage({
         )}
       >
         {stageColumns.length ? (
-          stageColumns.map(({ sid, node }) => {
+          stageColumns.map(({ sid, session }) => {
             return (
               <div
                 key={sid}
@@ -9382,8 +9436,10 @@ function RailStage({
                 {/* A lone pane has nothing to "close back to" — hide the X
                     until a second column exists. */}
                 {renderStageCard(
-                  node,
-                  stageColumns.length > 1 ? () => closeColumn(sid) : undefined,
+                  session,
+                  stageColumns.length > 1 || session.shippedReview
+                    ? () => closeColumn(sid)
+                    : undefined,
                 )}
               </div>
             );
@@ -10298,6 +10354,7 @@ function SessionChat({
   onDictatingChange?: (recording: boolean) => void;
 }) {
   const sid = session.sessionId;
+  const reviewingShipped = !!session.shippedReview;
   const stashContext = sid ? `session:${sid}` : "session:missing";
   const [messageText, setMessageTextState] = useState(
     () => readPromptDraft(stashContext)?.text ?? "",
@@ -10312,7 +10369,11 @@ function SessionChat({
   // use): eager uploads, drag & drop, paste, annotate.
   const files = useComposerAttachments({
     endpoint: (att) =>
-      sid ? `/api/sessions/${sid}/upload?filename=${encodeURIComponent(att.name)}` : null,
+      sid
+        ? reviewingShipped
+          ? `/api/uploads?filename=${encodeURIComponent(att.name)}`
+          : `/api/sessions/${sid}/upload?filename=${encodeURIComponent(att.name)}`
+        : null,
     disabled: sending,
   });
   const {
@@ -10510,7 +10571,7 @@ function SessionChat({
     try {
       // Audio mode: this session becomes the one we speak, and gets primed once
       // to stay conversational + delegate heavy work to a subagent.
-      if (isAudioModeEnabled()) {
+      if (!reviewingShipped && isAudioModeEnabled()) {
         setAudioActiveSid(sid);
         if (takePrimeToken(sid)) {
           await api(`/api/sessions/${sid}/send`, {
@@ -10527,6 +10588,26 @@ function SessionChat({
       // Pulse the composer so the send visibly launches into the transcript.
       setLaunching(true);
       window.setTimeout(() => setLaunching(false), 480);
+      if (reviewingShipped) {
+        await api<{ sessionId?: string }>("/api/sessions/resume", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sessionId: sid,
+            prompt: outgoingText,
+            user: session.assignedUser || undefined,
+          }),
+        });
+        setPromptStashStatus(stashed?.id, "sent");
+        for (const att of files) {
+          if (att.previewUrl) URL.revokeObjectURL(att.previewUrl);
+        }
+        setAttachments([]);
+        forgetAllUploads();
+        toast.success("Session resumed");
+        await onRefresh();
+        return;
+      }
       void sendChatMessage(
         {
           text: outgoingText,
@@ -10595,7 +10676,7 @@ function SessionChat({
         <div className="border-t border-border/70 px-3 py-1.5 text-xs text-destructive">{error}</div>
       ) : null}
 
-      {canDriveSession(session) ? (
+      {canDriveSession(session) || reviewingShipped ? (
         <form
           onSubmit={sendMessage}
           {...files.dropZoneProps}
@@ -10646,7 +10727,13 @@ function SessionChat({
                     e.currentTarget.form?.requestSubmit();
                   }
                 }}
-                placeholder={attachments.length ? "Add a note" : "Message"}
+                placeholder={
+                  attachments.length
+                    ? "Add a note"
+                    : reviewingShipped
+                      ? "Message to resume"
+                      : "Message"
+                }
                 disabled={sending}
                 rows={1}
                 className={cn(
@@ -10709,6 +10796,11 @@ function SessionChat({
               onCancel={(base) => setMessageText(base)}
             />
           </div>
+          {reviewingShipped ? (
+            <p className="mt-1.5 px-12 text-[11px] text-muted-foreground">
+              Sending resumes this session.
+            </p>
+          ) : null}
         </form>
       ) : null}
       {files.annotator}
@@ -11088,59 +11180,61 @@ function SessionActionsMenu({
           <MoreVertical className="size-4" />
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-48">
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger disabled={!sid}>
-              <UserRound className="size-4" />
-              <span className="flex-1">Assign to</span>
-              {session.assignedUser ? (
-                assignee?.avatar ? (
-                  <img
-                    src={assignee.avatar}
-                    alt=""
-                    className="size-5 shrink-0 rounded-full object-cover"
-                  />
-                ) : (
-                  <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted">
-                    <UserRound className="size-3" />
-                  </span>
-                )
-              ) : null}
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent align="start" className="min-w-48">
-              <DropdownMenuRadioGroup
-                value={session.assignedUser ?? ""}
-                onValueChange={(value) =>
-                  void assign(typeof value === "string" ? value : "")
-                }
-              >
-                <DropdownMenuLabel>Assign to</DropdownMenuLabel>
-                <DropdownMenuRadioItem value="">
-                  <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted">
-                    <UserRound className="size-3" />
-                  </span>
-                  Unassigned
-                </DropdownMenuRadioItem>
-                {users.map((user) => (
-                  <DropdownMenuRadioItem key={user.email} value={user.email}>
-                    {user.avatar ? (
-                      <img
-                        src={user.avatar}
-                        alt=""
-                        className="size-5 shrink-0 rounded-full object-cover"
-                      />
-                    ) : (
-                      <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted">
-                        <UserRound className="size-3" />
-                      </span>
-                    )}
-                    <span className="truncate capitalize">
-                      {user.name ?? shortUser(user.email)}
+          {!session.shippedReview ? (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger disabled={!sid}>
+                <UserRound className="size-4" />
+                <span className="flex-1">Assign to</span>
+                {session.assignedUser ? (
+                  assignee?.avatar ? (
+                    <img
+                      src={assignee.avatar}
+                      alt=""
+                      className="size-5 shrink-0 rounded-full object-cover"
+                    />
+                  ) : (
+                    <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted">
+                      <UserRound className="size-3" />
                     </span>
+                  )
+                ) : null}
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent align="start" className="min-w-48">
+                <DropdownMenuRadioGroup
+                  value={session.assignedUser ?? ""}
+                  onValueChange={(value) =>
+                    void assign(typeof value === "string" ? value : "")
+                  }
+                >
+                  <DropdownMenuLabel>Assign to</DropdownMenuLabel>
+                  <DropdownMenuRadioItem value="">
+                    <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted">
+                      <UserRound className="size-3" />
+                    </span>
+                    Unassigned
                   </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
+                  {users.map((user) => (
+                    <DropdownMenuRadioItem key={user.email} value={user.email}>
+                      {user.avatar ? (
+                        <img
+                          src={user.avatar}
+                          alt=""
+                          className="size-5 shrink-0 rounded-full object-cover"
+                        />
+                      ) : (
+                        <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted">
+                          <UserRound className="size-3" />
+                        </span>
+                      )}
+                      <span className="truncate capitalize">
+                        {user.name ?? shortUser(user.email)}
+                      </span>
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          ) : null}
           {onTogglePin ? (
             <DropdownMenuItem disabled={!sid} onClick={() => sid && onTogglePin(sid)}>
               <Pin className="size-4" fill={pinned ? "currentColor" : "none"} />
@@ -11374,7 +11468,7 @@ function SessionTitleSheet({
   onRefresh: () => Promise<void>;
   onRemove: (sid: string) => void;
   pinned: boolean;
-  onTogglePin: (sid: string) => void;
+  onTogglePin?: (sid: string) => void;
   onClose: () => void;
 }) {
   const [error, setError] = useState<string | null>(null);
@@ -11834,15 +11928,21 @@ function SessionTitleSheet({
           <button
             type="button"
             className="flex min-w-0 flex-1 items-center text-left outline-none"
-            title="Rename session"
-            aria-label={`Rename ${title}`}
+            title={session.shippedReview ? undefined : "Rename session"}
+            aria-label={session.shippedReview ? title : `Rename ${title}`}
             onClick={() => {
+              if (session.shippedReview) return;
               haptic("selection");
               setRenameOpen(true);
             }}
           >
             <SessionTitleLine title={title} />
           </button>
+          {session.shippedReview ? (
+            <span className="shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+              Shipped
+            </span>
+          ) : null}
           {order.length > 1 ? (
             // Switching is gesture-driven (swipe the input bar) + arrow keys, so
             // the header just shows position — no chevron buttons.
@@ -11856,7 +11956,7 @@ function SessionTitleSheet({
             onRefresh={onRefresh}
             onRemove={onRemove}
             onError={setError}
-            onRename={() => setRenameOpen(true)}
+            onRename={session.shippedReview ? undefined : () => setRenameOpen(true)}
             triggerClassName="size-9"
             pinned={pinned}
             onTogglePin={onTogglePin}
@@ -12638,7 +12738,7 @@ const onTouchStart = (e: ReactTouchEvent) => {
               onDoubleClick={(e) => {
                 // Desktop: double-click renames in place. Mobile uses the drawer
                 // (tap still opens the session sheet; rename is in the ⋮ menu).
-                if (isMobile) return;
+                if (isMobile || session.shippedReview) return;
                 e.preventDefault();
                 e.stopPropagation();
                 startRename();
@@ -12650,10 +12750,16 @@ const onTouchStart = (e: ReactTouchEvent) => {
               onDragStart={(e) => e.preventDefault()}
               onSelect={(e) => e.preventDefault()}
               onContextMenu={(e) => e.preventDefault()}
-              title={isMobile ? undefined : "Double-click to rename"}
+              title={
+                isMobile || session.shippedReview
+                  ? undefined
+                  : "Double-click to rename"
+              }
               className={cn(
                 "flex min-w-0 flex-1 touch-manipulation select-none items-center gap-2 text-left outline-none [-webkit-touch-callout:none] [-webkit-user-drag:none] [-webkit-user-select:none] [user-select:none]",
-                !isMobile && "cursor-text rounded-md hover:bg-muted/50",
+                !isMobile &&
+                  !session.shippedReview &&
+                  "cursor-text rounded-md hover:bg-muted/50",
               )}
             >
               <div className="flex min-w-0 flex-1 flex-col">
@@ -12725,7 +12831,13 @@ const onTouchStart = (e: ReactTouchEvent) => {
         {/* Redundant on wide screens: the rail row for this session already
             carries the same dot on its avatar, so only the narrow (no-rail)
             grid layout needs it here. */}
-        <SessionStatusDot busy={busy} className="lg:hidden" />
+        {session.shippedReview ? (
+          <span className="shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
+            Shipped
+          </span>
+        ) : (
+          <SessionStatusDot busy={busy} className="lg:hidden" />
+        )}
         {!collapsedView && (
           <SessionActionsMenu
             session={session}
@@ -12733,9 +12845,9 @@ const onTouchStart = (e: ReactTouchEvent) => {
             onRefresh={onRefresh}
             onRemove={onRemove}
             onError={setError}
-            onRename={startRename}
+            onRename={session.shippedReview ? undefined : startRename}
             pinned={pinned}
-            onTogglePin={onTogglePin}
+            onTogglePin={session.shippedReview ? undefined : onTogglePin}
           />
         )}
         {variant === "stage" && onClose ? (
@@ -18157,163 +18269,6 @@ function ShipMedia({
   );
 }
 
-// A shipped session uses the exact same transcript renderer as a live session.
-// Opening it is read-only; writing a new message resumes the session and sends
-// that message as its first new turn.
-function ShipTranscriptSheet({
-  post,
-  onClose,
-  onResume,
-}: {
-  post: ShipPost;
-  onClose: () => void;
-  onResume: (sessionId: string, prompt: string) => Promise<void>;
-}) {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [nextBefore, setNextBefore] = useState<number | null>(null);
-  const [draft, setDraft] = useState("");
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let alive = true;
-    setMessages([]);
-    setNextBefore(null);
-    setDraft("");
-    setSending(false);
-    setLoading(true);
-    setError(null);
-    (async () => {
-      try {
-        const data = await api<{ messages: Message[]; nextBefore?: number | null }>(
-          `/api/sessions/${encodeURIComponent(post.sessionId ?? "")}/messages?limit=80`,
-          { cache: "no-store" },
-        );
-        if (!alive) return;
-        setMessages(Array.isArray(data.messages) ? data.messages : []);
-        setNextBefore(data.nextBefore ?? null);
-      } catch (e) {
-        if (alive) setError(e instanceof Error ? e.message : "Couldn't load the transcript");
-      } finally {
-        if (alive) setLoading(false);
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, [post.sessionId]);
-
-  const loadOlderMessages = useCallback<LoadOlderMessages>(
-    async (sid) => {
-      const before = nextBefore;
-      if (before == null) return false;
-      const page = await api<{ messages: Message[]; nextBefore?: number | null }>(
-        `/api/sessions/${encodeURIComponent(sid)}/messages?page=backward&before=${before}&limit=80`,
-        { cache: "no-store" },
-      );
-      const older = Array.isArray(page.messages) ? page.messages : [];
-      setMessages((current) => {
-        const seen = new Set(current.map((message) => message.id).filter(Boolean));
-        const prepend = older.filter((message) => !message.id || !seen.has(message.id));
-        return prepend.length ? [...prepend, ...current] : current;
-      });
-      const next = page.nextBefore ?? null;
-      setNextBefore(next);
-      return next !== null;
-    },
-    [nextBefore],
-  );
-
-  const send = async (event: FormEvent) => {
-    event.preventDefault();
-    const prompt = draft.trim();
-    if (!post.sessionId || !prompt || sending) return;
-    setSending(true);
-    setError(null);
-    feedback.send();
-    try {
-      await onResume(post.sessionId, prompt);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't send the message");
-      setSending(false);
-    }
-  };
-
-  return (
-    <div
-      className="fixed inset-0 z-[140] flex items-end justify-center bg-black/50 backdrop-blur-sm sm:items-center"
-      onClick={onClose}
-    >
-      <div
-        className="flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-t-2xl border border-border bg-background shadow-xl sm:rounded-2xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold">
-              {post.sessionTitle ?? post.title}
-            </div>
-            <div className="text-[11px] text-muted-foreground">
-              Shipped · viewing history
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="flex size-8 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-foreground/[0.05] hover:text-foreground"
-          >
-            <X className="size-4" />
-          </button>
-        </div>
-        {error ? <div className="border-b border-border/70 px-3 py-1.5 text-xs text-destructive">{error}</div> : null}
-        <ChatStream
-          sid={post.sessionId ?? null}
-          messages={messages}
-          busy={false}
-          loading={loading}
-          onLoadOlderMessages={loadOlderMessages}
-        />
-        <form
-          onSubmit={(event) => void send(event)}
-          className="border-t border-border bg-background px-3 py-3"
-        >
-          <div className="flex items-end gap-2">
-            <SkillTextarea
-              value={draft}
-              onValueChange={setDraft}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && !event.shiftKey) {
-                  event.preventDefault();
-                  event.currentTarget.form?.requestSubmit();
-                }
-              }}
-              placeholder="Message to resume"
-              disabled={sending}
-              rows={1}
-              className="lfg-gfield min-h-11 max-h-32 min-w-0 flex-1 resize-none overflow-y-auto rounded-2xl border-transparent px-4 py-3 text-base leading-5 shadow-sm [field-sizing:fixed] md:min-h-9 md:rounded-[1.125rem] md:px-3.5 md:py-2 md:text-sm"
-            />
-            <Button
-              size="icon"
-              type="submit"
-              disabled={!post.sessionId || !draft.trim() || sending}
-              aria-label="Send and resume session"
-              title="Send and resume session"
-              className="size-11 rounded-full md:size-9"
-            >
-              {sending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
-            </Button>
-          </div>
-          <p className="mt-1.5 px-1 text-[11px] text-muted-foreground">
-            Sending resumes this session.
-          </p>
-        </form>
-      </div>
-    </div>
-  );
-}
-
 // Page sizes for the Shipped feed and the artifacts gallery: both load one
 // page up front and grow via "load more" instead of fetching everything.
 const FEED_PAGE = 15;
@@ -18329,18 +18284,16 @@ const GALLERY_PAGE = 24;
 // free, and revalidate once when it becomes active again.
 function ShippedPage({
   onOpenSession,
-  onResumeSession,
+  onReviewSession,
   onFollowUpCreated,
   liveSessionIds,
-  focusPost,
   artifactsOnly = false,
   active = true,
 }: {
   onOpenSession: (sessionId: string) => void;
-  onResumeSession?: (sessionId: string, prompt: string) => Promise<string>;
+  onReviewSession?: (post: ShipPost) => void;
   onFollowUpCreated?: (sessionId: string) => Promise<void>;
   liveSessionIds: Set<string>;
-  focusPost?: { post: ShipPost; n: number } | null;
   artifactsOnly?: boolean;
   active?: boolean;
 }) {
@@ -18354,8 +18307,6 @@ function ShippedPage({
   const [postsTotal, setPostsTotal] = useState(() => cachedPosts?.total ?? 0);
   const [postsBusy, setPostsBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // Post whose (ended) session transcript is open read-only.
-  const [viewing, setViewing] = useState<ShipPost | null>(null);
   // A follow-up is a fresh session with the shipped transcript as context,
   // leaving the original finished session untouched.
   const [followingUp, setFollowingUp] = useState<ShipPost | null>(null);
@@ -18373,34 +18324,6 @@ function ShippedPage({
   const postsLen = useRef(Math.max(FEED_PAGE, cachedPosts?.items.length ?? 0));
   const openArtifact = useContext(ArtifactViewerContext);
   const appDialog = useAppDialog();
-  const handledFocus = useRef<number | null>(null);
-
-  const resumeShippedSession = async (sessionId: string, prompt: string) => {
-    if (!onResumeSession) throw new Error("Session resume is unavailable");
-    const liveSessionId = await onResumeSession(sessionId, prompt);
-    setViewing(null);
-    onOpenSession(liveSessionId);
-  };
-
-  useEffect(() => {
-    if (
-      view !== "feed" ||
-      !active ||
-      !focusPost ||
-      handledFocus.current === focusPost.n
-    ) {
-      return;
-    }
-    const post = focusPost.post;
-    if (!post?.sessionId) return;
-    handledFocus.current = focusPost.n;
-    if (liveSessionIds.has(post.sessionId)) {
-      onOpenSession(post.sessionId);
-    } else {
-      setViewing(post);
-    }
-  }, [active, focusPost, liveSessionIds, onOpenSession, view]);
-
   useEffect(() => {
     if (view !== "artifacts") return;
     let alive = true;
@@ -18734,8 +18657,8 @@ function ShippedPage({
                   type="button"
                   onClick={() => {
                     if (!post.sessionId) return;
-                    if (live) onOpenSession(post.sessionId);
-                    else setViewing(post);
+                    if (onReviewSession) onReviewSession(post);
+                    else if (live) onOpenSession(post.sessionId);
                   }}
                   className="flex w-full items-start gap-3 px-4 pt-3 text-left transition-colors hover:bg-foreground/[0.02]"
                 >
@@ -18821,13 +18744,6 @@ function ShippedPage({
       ) : null}
         </>
       )}
-      {viewing ? (
-        <ShipTranscriptSheet
-          post={viewing}
-          onClose={() => setViewing(null)}
-          onResume={resumeShippedSession}
-        />
-      ) : null}
       {followingUp?.sessionId ? (
         <ForkSessionDialog
           mode="follow-up"

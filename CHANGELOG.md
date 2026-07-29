@@ -4,6 +4,10 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+- Finished sessions now open inside the normal Live workspace on desktop and in
+  the standard session sheet on mobile, while remaining read-only until the
+  first message resumes them.
+
 ## July 29, 2026 - Review-first shipped sessions (v0.1.105)
 
 - Opening a finished session from Recently Shipped now shows its transcript
