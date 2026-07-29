@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Session rail polish (v0.1.87)
+
+- The desktop session list now fades softly at the top and bottom of its scroll
+  view, making overflow feel intentional while keeping every row interactive.
+
 ## July 29, 2026 - Connected Claude SDK sessions (v0.1.86)
 
 - The default embedded Claude session now uses the connected Claude Code
