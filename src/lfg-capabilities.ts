@@ -3,14 +3,14 @@ import type { CodingAgentKind } from "./coding-agents.ts";
 // Bump whenever an agent-facing LFG capability or its operating guidance
 // changes. Managed sessions persist the value they launched with, which lets
 // the UI identify long-lived sessions whose MCP/tool catalog predates a ship.
-export const LFG_CAPABILITY_VERSION = "2026-07-29.2";
+export const LFG_CAPABILITY_VERSION = "2026-07-29.3";
 
 export const LFG_CAPABILITIES = [
   {
     tool: "lfg_output",
     useWhen: "Anything you send to the human — running narration, inline evidence, or a verified completion. This is the tell verb; use it continuously so a session never goes dark.",
     guidance:
-      "Narrate decisions/progress with to:'thread' (the originating channel, e.g. iMessage). Show evidence inline with to:'session' (media or self-contained html). When the assigned task reaches a successful terminal outcome, post its result with to:'shipped' only as the final action; this closes the session and leaves it resumable. The adapter owns transport/identity — never request phone numbers or credentials.",
+      "Narrate decisions/progress with to:'thread' (the originating channel, e.g. iMessage). Show evidence inline with to:'session' (media or self-contained html). Publish verified results with to:'shipped', and explicitly choose closeSession: true only when the conversation is genuinely finished; use false for quick chats or likely follow-up. The adapter owns transport/identity — never request phone numbers or credentials.",
   },
   {
     tool: "lfg_input",
@@ -61,7 +61,8 @@ export function lfgRuntimeContract(): string {
     "- The whole agent<->human channel is TWO verbs: `lfg_output` (tell the human) and `lfg_input` (ask the human). Reach for these first.",
     "- NARRATE as you work: keep the human posted through `lfg_output` with `to:'thread'` at each meaningful decision or step. Do not go dark — a silent session is a failed session. This is a duty, not an option.",
     "- Show evidence with `lfg_output` `to:'session'` — attach screenshots/recordings as `media`, or publish a self-contained report/dashboard as `html` (re-use `id` to update in place).",
-    "- SHIP IS TERMINAL: when the assigned task reaches a successful terminal outcome (including a completed fix/feature, docs or analysis, a verified no-op, or work already completed elsewhere), make `lfg_output` `to:'shipped'` your final action with a concise headline + tweet-length result and the strongest evidence. A successful ship automatically closes this session into the resumable finished-session roster. Put the result in that ship post; do not continue working or send another message afterward. Do not ship planning, diagnosis-in-progress, partial work, or blocked work.",
+    "- SHIP, THEN DECIDE: publish a verified result with `lfg_output` `to:'shipped'`, a concise headline, tweet-length result, strongest evidence, and an explicit `closeSession` decision. Use `closeSession:true` only when the assigned task and conversation are genuinely finished; that successful call closes the session into the resumable roster and must be your final action. Use `closeSession:false` for quick chats, when immediate follow-up is likely, or whenever the session should remain live, and you may continue working afterward. Never ship planning, diagnosis-in-progress, partial work, or blocked work.",
+    "- SHIPPED IS NOT DEPLOYED: a Shipped post records a verified result but does not itself prove a production deployment. Never say work is deployed or use `closeSession:true` when the user's requested deployment has not been verified; narrate what remains and keep the session open.",
     "- SOURCE CHANGES MUST LAND FIRST: when working in LFG's repository, commit the intended changes and run `scripts/land-session.sh` from the session worktree before shipping. It serializes the branch onto current `origin/main`, syncs/builds the local main checkout, and restarts LFG. Shipping is rejected while changes are uncommitted, unmerged, or not deployed at the current main revision.",
     "- DECIDE, don't park: make the reasonable call yourself and narrate it. Use `lfg_input` (`from:'user'`) ONLY for a genuinely irreversible, risky, or ambiguous decision — never to check in or report progress. It is fire-and-forget: do not poll or block; the answer arrives later. Use `from:'advisor'` to consult LFG's advisor.",
     "- The channel adapter owns transport identity and credentials; never request phone numbers or channel credentials.",

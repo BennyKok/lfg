@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+- Agents now explicitly decide whether a Shipped result should close its source
+  session, so quick chats and likely follow-ups can stay live.
+- Shipped results no longer imply production deployment, and sessions stay open
+  when a requested deployment has not been verified.
+
 ## July 29, 2026 - Recent shipped sessions (v0.1.100)
 
 - The desktop sidebar now shows the five most recently shipped sessions for

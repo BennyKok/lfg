@@ -1065,7 +1065,7 @@ async function runConnectLoop(explicitComputerUrl?: string): Promise<void> {
     const timer = setInterval(() => void pollSessionEvents(seen, () => currentWs), EVENTS_POLL_MS);
     timer.unref?.();
     // Shipped-post watcher — same opt-in, same cadence, same best-effort
-    // posture. A ship (lfg_ship / POST /api/shipped) is an explicit terminal
+    // posture. A ship (lfg_ship / POST /api/shipped) is an explicit verified
     // result, so it's forwarded as its own `ship.posted` frame with the summary.
     const shipState = { seenShips: new Map<string, number>(), seeded: false };
     const shipTimer = setInterval(() => void pollShipEvents(shipState, () => currentWs), EVENTS_POLL_MS);

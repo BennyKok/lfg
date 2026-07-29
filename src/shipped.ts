@@ -1,6 +1,7 @@
-// The "Shipped" channel: the finished-session feed agents post to when an
-// assigned task reaches a successful terminal outcome — title, a short result,
-// and optional rich media. Media
+// The "Shipped" channel: the verified-results feed agents post to when an
+// assigned task reaches a successful outcome — title, a short result, and
+// optional rich media. Publishing and closing the source session are separate
+// lifecycle decisions. Media
 // entries are ordinary artifacts (image / video / html), so the feed reuses
 // the artifact store, serving, and sandboxing wholesale.
 //

@@ -12,6 +12,7 @@ import {
   LFG_MCP_INSTRUCTIONS,
   SHORT_SESSION_ID_LENGTH,
 } from "../lfg-capabilities.ts";
+import { shippedCloseDecision } from "../shipped-lifecycle.ts";
 
 type Repo = { name: string; cwd: string; project?: string };
 type SessionRow = {
@@ -931,7 +932,7 @@ export async function cmdMcp() {
     {
       title: "Post To The LFG Shipped Channel",
       description:
-        "TERMINAL ACTION: post the assigned task's successful final result in the LFG Shipped/Finished channel, then automatically close this source session into the resumable finished-session roster. This includes completed changes, docs/analysis, verified no-ops, and work found already complete; never use it for planning, partial, blocked, or still-unverified work. Call it only after all work is complete, and do not continue after it succeeds. Write it like a launch tweet: a punchy headline + at most 1-2 short sentences on the outcome and why it matters. NOT a changelog — no bullet lists, no headings, no implementation detail, no file names; the session transcript already holds all of that. Attach the strongest evidence when available. To UPDATE an earlier post after a resumed follow-up, pass its id — the post revises in place and the session closes again.",
+        "Post a verified result in the LFG Shipped feed, then explicitly decide whether its source session should close. A Shipped post does not itself prove production deployment. Set closeSession true only when the requested outcome (including deployment when requested) and conversation are genuinely finished; that call is terminal and leaves the session resumable. Set it false for quick chats or likely follow-up, and the session stays live. Never use this for planning, partial, blocked, or still-unverified work. Write it like a launch tweet: a punchy headline + at most 1-2 short sentences on the outcome and why it matters. To update an earlier post, pass its id.",
       inputSchema: {
         title: z.string().min(1).describe("Short headline for what shipped (e.g. 'WhatsApp reconnect loop fixed')."),
         id: z.string().optional().describe("Existing ship post id to update in place (returned when the post was created)."),
@@ -948,18 +949,31 @@ export async function cmdMcp() {
         artifactIds: z.array(z.string()).optional().describe("Existing artifact ids to embed (e.g. a published html dashboard)."),
         project: z.string().optional().describe("Project label shown on the post."),
         sessionId: z.string().optional().describe("Source LFG session id. Defaults to LFG_SESSION_ID."),
+        closeSession: z
+          .boolean()
+          .describe("Explicit lifecycle decision: true closes this genuinely finished conversation after posting; false keeps it live for chat or follow-up."),
       },
     },
-    async ({ title, id, summary, mediaPaths, artifactIds, project, sessionId }) => {
+    async ({ title, id, summary, mediaPaths, artifactIds, project, sessionId, closeSession }) => {
       const sid = await activeSessionId(sessionId);
+      const shouldClose = shippedCloseDecision(closeSession, { required: true });
       const data = await api<{
         ok: boolean;
         post: unknown;
-        session?: { status: "closing"; resumable: boolean };
+        session?: { status: "active" | "closing"; resumable: boolean };
       }>("/api/shipped", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, id, summary, mediaPaths, artifactIds, project, sessionId: sid }),
+        body: JSON.stringify({
+          title,
+          id,
+          summary,
+          mediaPaths,
+          artifactIds,
+          project,
+          sessionId: sid,
+          closeSession: shouldClose,
+        }),
       });
       return result({ shipped: true, post: data.post, session: data.session });
     },
@@ -1120,12 +1134,12 @@ export async function cmdMcp() {
         "The single verb for everything you send to the human. NARRATE your decisions and progress here as you work — do not go dark. `to` picks the destination: " +
         "'thread' delivers text and/or media back to the channel that launched this session (e.g. iMessage) — this is your default running narration; " +
         "'session' shows evidence inline in the LFG transcript (a screenshot/recording via `media`, or a self-contained HTML report/dashboard via `html`); " +
-        "'shipped' is terminal: it posts a finished, verified result to the Shipped feed (`title` + tweet-length `text`, plus the strongest `media`), then automatically closes the source session so it can be resumed later. Use it only as your final action and do not continue after success. " +
+        "'shipped' posts a verified result to the Shipped feed (`title` + tweet-length `text`, plus the strongest `media`) and requires an explicit closeSession decision. Publishing does not itself prove production deployment. Choose true only for a genuinely finished conversation (the call is then terminal), or false to keep quick chats and likely follow-ups live. " +
         "Attach local files with `media` (images/videos by absolute path) and/or existing artifacts with `artifactIds`. Re-use `id` to update an artifact or ship post in place. This is non-blocking — never wait after calling it.",
       inputSchema: {
         to: z
           .enum(["thread", "session", "shipped"])
-          .describe("Destination: 'thread' (originating channel / iMessage — your running narration), 'session' (inline transcript evidence), 'shipped' (terminal verified completion: post result, close source session, remain resumable)."),
+          .describe("Destination: 'thread' (originating channel / iMessage — running narration), 'session' (inline evidence), or 'shipped' (publish a verified result, with closeSession deciding whether the source remains live)."),
         text: z
           .string()
           .max(4_000)
@@ -1143,23 +1157,37 @@ export async function cmdMcp() {
         caption: z.string().optional().describe("Short caption for a single 'session' media/artifact card."),
         project: z.string().optional().describe("For 'shipped': project label shown on the post."),
         sessionId: z.string().optional().describe("Owning LFG session id. Defaults to LFG_SESSION_ID."),
+        closeSession: z
+          .boolean()
+          .optional()
+          .describe("Required for 'shipped': true closes a genuinely finished conversation after posting; false keeps it live for quick chat or follow-up."),
       },
     },
-    async ({ to, text, title, media, artifactIds, html, id, caption, project, sessionId }) => {
+    async ({ to, text, title, media, artifactIds, html, id, caption, project, sessionId, closeSession }) => {
       const mediaPaths = media?.map((m) => m.path);
       if (to === "thread") {
         return result(await sendToOrigin({ text, mediaPaths, artifactIds, sessionId }));
       }
       if (to === "shipped") {
         const sid = await activeSessionId(sessionId);
+        const shouldClose = shippedCloseDecision(closeSession, { required: true });
         const data = await api<{
           ok: boolean;
           post: unknown;
-          session?: { status: "closing"; resumable: boolean };
+          session?: { status: "active" | "closing"; resumable: boolean };
         }>("/api/shipped", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ title, id, summary: text, mediaPaths: media, artifactIds, project, sessionId: sid }),
+          body: JSON.stringify({
+            title,
+            id,
+            summary: text,
+            mediaPaths: media,
+            artifactIds,
+            project,
+            sessionId: sid,
+            closeSession: shouldClose,
+          }),
         });
         return result({ shipped: true, post: data.post, session: data.session });
       }

@@ -260,6 +260,7 @@ import {
 } from "../origin-deliveries.ts";
 import { deleteImagePreview, getOrCreateImagePreview } from "../artifact-previews.ts";
 import { addShipPost, listShipPosts } from "../shipped.ts";
+import { shippedCloseDecision } from "../shipped-lifecycle.ts";
 import { verifySelfRepoLanding } from "../session-landing.ts";
 import {
   artifactRefreshManager,
@@ -1182,11 +1183,10 @@ async function closeLiveSession(
   return { ok: true, mode };
 }
 
-// Shipping is a terminal lifecycle transition, but the POST response has to
-// reach the calling agent before its tmux session disappears. Persist the
-// resumable record synchronously at the call site, then close from a short
-// deferred task. This is the same response-flush grace period used for terminal
-// subagent reports below.
+// When an agent explicitly chooses to close after publishing, the POST response
+// has to reach it before its tmux session disappears. Persist the resumable
+// record synchronously at the call site, then close from a short deferred task.
+// Publishing without that decision leaves the live session untouched.
 const SHIPPED_CLOSE_DELAY_MS = 1_500;
 
 function scheduleShippedSessionClose(sessionId: string): void {
@@ -5126,6 +5126,7 @@ export async function cmdServe() {
             project?: string;
             mediaPaths?: Array<{ path: string; caption?: string }>;
             artifactIds?: string[];
+            closeSession?: boolean;
           } | null;
           const shipTitle = body?.title?.trim();
           if (!body || !shipTitle) return err(400, "title required");
@@ -5159,7 +5160,8 @@ export async function cmdServe() {
                     session.nativeSessionId === body.sessionId,
                 )
               : undefined;
-            if (sourceSession && body.sessionId) {
+            const closeSession = shippedCloseDecision(body.closeSession);
+            if (sourceSession && body.sessionId && closeSession) {
               // Make the resumable row durable before acknowledging the ship.
               // The deferred close repeats this defensively, but doing it now
               // guarantees the finished session is recoverable even if serve
@@ -5176,7 +5178,10 @@ export async function cmdServe() {
               ok: true,
               post,
               session: sourceSession
-                ? { status: "closing", resumable: true }
+                ? {
+                    status: closeSession ? "closing" : "active",
+                    resumable: closeSession,
+                  }
                 : undefined,
             });
           } catch (e) {

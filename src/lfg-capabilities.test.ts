@@ -14,8 +14,10 @@ describe("LFG runtime capabilities", () => {
     expect(prompt).toContain("lfg_input");
     expect(prompt).toContain("to:'thread'");
     expect(prompt).toContain("to:'shipped'");
-    expect(prompt).toContain("SHIP IS TERMINAL");
-    expect(prompt).toContain("automatically closes this session");
+    expect(prompt).toContain("SHIP, THEN DECIDE");
+    expect(prompt).toContain("SHIPPED IS NOT DEPLOYED");
+    expect(prompt).toContain("closeSession:true");
+    expect(prompt).toContain("quick chats");
     expect(prompt).toContain("scripts/land-session.sh");
     expect(prompt).toContain("uncommitted, unmerged, or not deployed");
     expect(prompt).toContain("lfg_find_sessions");

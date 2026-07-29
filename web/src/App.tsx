@@ -18537,7 +18537,7 @@ function ShippedPage({
 
       {posts !== null && posts.length === 0 ? (
         <div className="rounded-2xl border border-border bg-card/40 px-4 py-10 text-center text-sm text-muted-foreground">
-          Nothing finished yet — agents post their final result here before the session closes.
+          Nothing shipped yet — agents post verified results here and decide whether the session should stay live.
         </div>
       ) : null}
 
