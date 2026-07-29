@@ -581,6 +581,13 @@
     border-radius: 0;
     flex: 0 0 auto;
     overflow-x: auto;
+    scrollbar-width: none;
+    scroll-snap-type: x proximity;
+  }
+
+  .lfgc-sessions::-webkit-scrollbar,
+  .lfgc-skeleton-sidebar::-webkit-scrollbar {
+    display: none;
   }
 
   .lfgc-sessions-heading {
@@ -597,6 +604,7 @@
     background: rgba(255, 255, 255, 0.56);
     flex: 0 0 min(70vw, 15rem);
     padding: 0.55rem 0.65rem;
+    scroll-snap-align: start;
   }
 
   .lfgc-thread,
