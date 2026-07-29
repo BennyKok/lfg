@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Hosted galleries (v0.1.114)
+
+- Hosted LFG surfaces now keep Shipped and Artifacts navigation available on
+  mobile and restore shipped shortcuts on desktop.
+
 ## July 29, 2026 - Scroll-aware mobile header fade (v0.1.113)
 
 - The mobile header wash now stays transparent at the top of the page so section
