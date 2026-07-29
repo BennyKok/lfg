@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Prompt Stash recovery (v0.1.85)
+
+- Typed and dictated prompts are now saved automatically in a browser-local
+  Stash, so refreshing, navigating away, or a failed send no longer loses the
+  text.
+- Resume now combines Stash history and resumable sessions in a compact desktop
+  dialog and a discoverable mobile drawer.
+
 ## July 29, 2026 - Connected Claude sessions (v0.1.84)
 
 - Hosted Computers now launch Claude Code with the user's connected Claude
