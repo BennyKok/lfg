@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Deterministic rename settling (v0.1.117)
+
+- Session renames now remain stable through delayed live-status snapshots,
+  even when slow browser networks deliver updates out of order.
+
 ## July 29, 2026 - Instant session renaming (v0.1.116)
 
 - Mobile session names now edit directly in the card or session header instead
