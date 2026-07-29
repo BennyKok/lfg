@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useLayoutEffect, useState } from "react";
 import {
   RouterProvider,
   createMemoryHistory,
@@ -37,16 +37,16 @@ export function LfgAppSurface({
   sessionId,
   className,
 }: LfgAppSurfaceProps) {
-  const [releaseTransport] = useState(() =>
-    configureLfgTransport(transport, { assetBaseUrl }),
-  );
+  // A full LFG app is the sole owner of its runtime transport. Install it
+  // synchronously so child effects cannot race the host boundary; there is no
+  // cleanup that can revert another Strict Mode mount back to same-origin.
+  configureLfgTransport(transport, { assetBaseUrl });
   const [router] = useState<AnyRouter>(() =>
     createLfgRouter(
       createMemoryHistory({ initialEntries: [initialPath(sessionId)] }),
     ),
   );
 
-  useEffect(() => releaseTransport, [releaseTransport]);
   useLayoutEffect(() => {
     document.documentElement.dataset.lfgAppSurface = "";
     return () => {

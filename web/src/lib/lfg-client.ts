@@ -17,16 +17,9 @@ let lfgAssetBaseUrl = "";
 export function configureLfgTransport(
   transport: LfgTransport,
   options: { assetBaseUrl?: string } = {},
-): () => void {
-  const previous = lfgTransport;
-  const previousAssetBaseUrl = lfgAssetBaseUrl;
+): void {
   lfgTransport = transport;
   lfgAssetBaseUrl = options.assetBaseUrl?.replace(/\/+$/, "") ?? "";
-  return () => {
-    if (lfgTransport !== transport) return;
-    lfgTransport = previous;
-    lfgAssetBaseUrl = previousAssetBaseUrl;
-  };
 }
 
 export function api<T>(path: string, init?: RequestInit): Promise<T> {
