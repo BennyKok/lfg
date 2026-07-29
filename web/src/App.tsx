@@ -6676,11 +6676,13 @@ function ProjectFilterMenu({
   projects,
   onChange,
   solidSurface = false,
+  onOpen,
 }: {
   value: string;
   projects: string[];
   onChange: (value: string) => void;
   solidSurface?: boolean;
+  onOpen?: () => void;
 }) {
   const active = value !== "__all";
   // Shipped and Artifacts are virtual pages in this menu.
@@ -6696,21 +6698,60 @@ function ProjectFilterMenu({
     onChange(cycleProjectFilter(options, value, dir));
   };
 
+  const triggerClassName = cn(
+    "relative inline-flex h-8 shrink-0 touch-none select-none items-center justify-center gap-1 rounded-full border transition",
+    active ? "max-w-[45vw] px-2.5 sm:max-w-[12rem]" : "size-8",
+    solidSurface
+      ? active
+        ? "lfg-gborder border-transparent bg-background text-foreground shadow-sm"
+        : "lfg-gborder border-transparent bg-background text-muted-foreground shadow-sm"
+      : active
+        ? "border-primary/30 bg-primary/10 text-primary"
+        : "border-border bg-muted/70 text-muted-foreground",
+  );
+  const triggerTitle = shipped
+    ? "Shipped"
+    : artifacts
+      ? "Artifacts"
+      : active
+        ? shortProject(value)
+        : "All projects";
+  const triggerContent = (
+    <>
+      {shipped ? (
+        <Megaphone className="size-3.5 shrink-0" />
+      ) : artifacts ? (
+        <LayoutDashboard className="size-3.5 shrink-0" />
+      ) : (
+        <Folder className="size-3.5 shrink-0" />
+      )}
+      {active ? (
+        <span className="truncate text-xs font-medium">
+          {shipped ? "Shipped" : artifacts ? "Artifacts" : shortProject(value)}
+        </span>
+      ) : null}
+    </>
+  );
+
+  if (onOpen) {
+    return (
+      <button
+        type="button"
+        className={triggerClassName}
+        aria-label="Choose project"
+        title={triggerTitle}
+        onClick={onOpen}
+      >
+        {triggerContent}
+      </button>
+    );
+  }
+
   return (
     <label
-      className={cn(
-        "relative inline-flex h-8 shrink-0 touch-none select-none items-center justify-center gap-1 rounded-full border transition",
-        active ? "max-w-[45vw] px-2.5 sm:max-w-[12rem]" : "size-8",
-        solidSurface
-          ? active
-            ? "lfg-gborder border-transparent bg-background text-foreground shadow-sm"
-            : "lfg-gborder border-transparent bg-background text-muted-foreground shadow-sm"
-          : active
-            ? "border-primary/30 bg-primary/10 text-primary"
-            : "border-border bg-muted/70 text-muted-foreground",
-      )}
+      className={triggerClassName}
       aria-label="Filter live sessions by project"
-      title={shipped ? "Shipped" : artifacts ? "Artifacts" : active ? shortProject(value) : "All projects"}
+      title={triggerTitle}
       onTouchStart={(event) => {
         touchStartY.current = event.touches[0]?.clientY ?? null;
         didSwipe.current = false;
@@ -6729,18 +6770,7 @@ function ProjectFilterMenu({
         touchStartY.current = null;
       }}
     >
-      {shipped ? (
-        <Megaphone className="size-3.5 shrink-0" />
-      ) : artifacts ? (
-        <LayoutDashboard className="size-3.5 shrink-0" />
-      ) : (
-        <Folder className="size-3.5 shrink-0" />
-      )}
-      {active ? (
-        <span className="truncate text-xs font-medium">
-          {shipped ? "Shipped" : artifacts ? "Artifacts" : shortProject(value)}
-        </span>
-      ) : null}
+      {triggerContent}
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
@@ -9195,25 +9225,13 @@ function RailStage({
             <div className="flex items-center gap-1.5">
               <ProductBrand hosted={hosted} />
               {!hosted && canUseProjectSheet ? (
-                <button
-                  type="button"
-                  onClick={() => setProjectSheetOpen(true)}
-                  aria-label="Choose project"
-                  title={projectFilter !== "__all" ? shortProject(projectFilter) : "All projects"}
-                  className={cn(
-                    "inline-flex h-8 min-w-0 shrink items-center justify-center gap-1 rounded-full border transition",
-                    projectFilter !== "__all"
-                      ? "max-w-[9rem] border-primary/30 bg-primary/10 px-2.5 text-primary"
-                      : "size-8 border-border bg-muted/70 text-muted-foreground",
-                  )}
-                >
-                  <Folder className="size-3.5 shrink-0" />
-                  {projectFilter !== "__all" ? (
-                    <span className="truncate text-xs font-medium">
-                      {shortProject(projectFilter)}
-                    </span>
-                  ) : null}
-                </button>
+                <ProjectFilterMenu
+                  value={projectFilter}
+                  projects={projectOptions}
+                  onChange={onProjectChange}
+                  solidSurface
+                  onOpen={() => setProjectSheetOpen(true)}
+                />
               ) : !hosted && onProjectChange ? (
                 <ProjectFilterMenu
                   value={projectFilter}
@@ -9251,25 +9269,13 @@ function RailStage({
             </div>
             <div className="flex items-center gap-1.5">
               {hosted && canUseProjectSheet ? (
-                <button
-                  type="button"
-                  onClick={() => setProjectSheetOpen(true)}
-                  aria-label="Choose project"
-                  title={projectFilter !== "__all" ? shortProject(projectFilter) : "All projects"}
-                  className={cn(
-                    "inline-flex h-8 min-w-0 shrink items-center justify-center gap-1 rounded-full border transition",
-                    projectFilter !== "__all"
-                      ? "max-w-[9rem] border-primary/30 bg-primary/10 px-2.5 text-primary"
-                      : "size-8 border-border bg-muted/70 text-muted-foreground",
-                  )}
-                >
-                  <Folder className="size-3.5 shrink-0" />
-                  {projectFilter !== "__all" ? (
-                    <span className="truncate text-xs font-medium">
-                      {shortProject(projectFilter)}
-                    </span>
-                  ) : null}
-                </button>
+                <ProjectFilterMenu
+                  value={projectFilter}
+                  projects={projectOptions}
+                  onChange={onProjectChange}
+                  solidSurface
+                  onOpen={() => setProjectSheetOpen(true)}
+                />
               ) : hosted && onProjectChange ? (
                 <ProjectFilterMenu
                   value={projectFilter}
