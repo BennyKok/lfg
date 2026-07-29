@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Scroll-aware mobile header fade (v0.1.113)
+
+- The mobile header wash now stays transparent at the top of the page so section
+  labels remain crisp, then eases in across the first 24px of scrolling.
+
 ## July 29, 2026 - Shorter mobile edge fades (v0.1.112)
 
 - Mobile Live content now stays clearer near the floating header and composer,
