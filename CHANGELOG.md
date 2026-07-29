@@ -4,6 +4,16 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Safe concurrent delivery (v0.1.99)
+
+- Every LFG coding session now works in its own isolated checkout, including
+  sessions changing LFG itself, so concurrent agents cannot overwrite one
+  another in the live deployment tree.
+- Session changes land on current main through a repository-wide lock, then
+  rebuild and restart the local service at that exact revision.
+- Shipped completion now stays open and reports what remains whenever work is
+  uncommitted, missing from main, or not yet deployed locally.
+
 ## July 29, 2026 - omg.dev hosted branding (v0.1.98)
 
 - Hosted Computer sessions now replace the LFG mark with the coral omg mark
