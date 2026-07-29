@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Crisp mobile LFG mark (v0.1.119)
+
+- The self-hosted mobile header now keeps its LFG logo outside the backdrop-blur
+  layer, preserving the pixel-art mark's sharp edges on iOS.
+
 ## July 29, 2026 - Safer self-hosting and Claude skills (v0.1.118)
 
 - Containerized LFG clients now dial wildcard-bound local servers through the
