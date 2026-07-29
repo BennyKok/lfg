@@ -5646,6 +5646,15 @@ export function App() {
                 setTab("live");
                 setLiveFocus({ sid, n: Date.now() });
               }}
+              onResumeSession={async (sid) => {
+                const resumed = await api<{ sessionId?: string }>("/api/sessions/resume", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ sessionId: sid, user: identity || undefined }),
+                });
+                await refreshSessions();
+                return resumed.sessionId || sid;
+              }}
             />
           </div>
         ) : null}
@@ -17809,24 +17818,43 @@ function ShipMedia({
   );
 }
 
-// Read-only transcript view for a ship post whose session is no longer live:
-// clicking the post can't drop you into a running chat, so show what the agent
-// did instead. Live sessions skip this entirely and jump into the session.
-function ShipTranscriptSheet({ post, onClose }: { post: ShipPost; onClose: () => void }) {
-  const [messages, setMessages] = useState<Message[] | null>(null);
+// A shipped session uses the exact same transcript renderer as a live session.
+// The only different chrome is lifecycle-aware: it is read-only while closed
+// and offers a single Resume action that returns it to the live fleet.
+function ShipTranscriptSheet({
+  post,
+  onClose,
+  onResume,
+}: {
+  post: ShipPost;
+  onClose: () => void;
+  onResume: (sessionId: string) => Promise<void>;
+}) {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [nextBefore, setNextBefore] = useState<number | null>(null);
+  const [resuming, setResuming] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
+    setMessages([]);
+    setNextBefore(null);
+    setLoading(true);
+    setError(null);
     (async () => {
       try {
-        const data = await api<{ messages: Message[] }>(
-          `/api/sessions/${post.sessionId}/messages?limit=60`,
+        const data = await api<{ messages: Message[]; nextBefore?: number | null }>(
+          `/api/sessions/${encodeURIComponent(post.sessionId ?? "")}/messages?limit=80`,
           { cache: "no-store" },
         );
-        if (alive) setMessages(data.messages);
+        if (!alive) return;
+        setMessages(Array.isArray(data.messages) ? data.messages : []);
+        setNextBefore(data.nextBefore ?? null);
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : "Couldn't load the transcript");
+      } finally {
+        if (alive) setLoading(false);
       }
     })();
     return () => {
@@ -17834,13 +17862,42 @@ function ShipTranscriptSheet({ post, onClose }: { post: ShipPost; onClose: () =>
     };
   }, [post.sessionId]);
 
-  const visible = (messages ?? []).filter(
-    (m) => m.kind === "text" || m.kind === "image" || m.kind === "video" || m.kind === "html",
+  const loadOlderMessages = useCallback<LoadOlderMessages>(
+    async (sid) => {
+      const before = nextBefore;
+      if (before == null) return false;
+      const page = await api<{ messages: Message[]; nextBefore?: number | null }>(
+        `/api/sessions/${encodeURIComponent(sid)}/messages?page=backward&before=${before}&limit=80`,
+        { cache: "no-store" },
+      );
+      const older = Array.isArray(page.messages) ? page.messages : [];
+      setMessages((current) => {
+        const seen = new Set(current.map((message) => message.id).filter(Boolean));
+        const prepend = older.filter((message) => !message.id || !seen.has(message.id));
+        return prepend.length ? [...prepend, ...current] : current;
+      });
+      const next = page.nextBefore ?? null;
+      setNextBefore(next);
+      return next !== null;
+    },
+    [nextBefore],
   );
+
+  const resume = async () => {
+    if (!post.sessionId || resuming) return;
+    setResuming(true);
+    setError(null);
+    try {
+      await onResume(post.sessionId);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Couldn't resume the session");
+      setResuming(false);
+    }
+  };
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 backdrop-blur-sm sm:items-center"
+      className="fixed inset-0 z-[140] flex items-end justify-center bg-black/50 backdrop-blur-sm sm:items-center"
       onClick={onClose}
     >
       <div
@@ -17853,9 +17910,20 @@ function ShipTranscriptSheet({ post, onClose }: { post: ShipPost; onClose: () =>
               {post.sessionTitle ?? post.title}
             </div>
             <div className="text-[11px] text-muted-foreground">
-              Session ended · read-only transcript
+              Shipped · ready to resume
             </div>
           </div>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            disabled={!post.sessionId || resuming}
+            onClick={() => void resume()}
+            className="h-8 rounded-full"
+          >
+            {resuming ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCcw className="size-3.5" />}
+            {resuming ? "Resuming…" : "Resume"}
+          </Button>
           <button
             type="button"
             onClick={onClose}
@@ -17865,53 +17933,14 @@ function ShipTranscriptSheet({ post, onClose }: { post: ShipPost; onClose: () =>
             <X className="size-4" />
           </button>
         </div>
-        <div className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4">
-          {error ? <div className="text-sm text-destructive">{error}</div> : null}
-          {messages === null && !error ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">Loading…</div>
-          ) : null}
-          {messages !== null && visible.length === 0 ? (
-            <div className="py-8 text-center text-sm text-muted-foreground">
-              No transcript available for this session.
-            </div>
-          ) : null}
-          {visible.map((m, i) => {
-            if ((m.kind === "image" || m.kind === "video") && m.url) {
-              return m.kind === "video" ? (
-                <video key={m.id ?? i} src={m.url} controls playsInline preload="metadata" className="max-h-60 rounded-lg" />
-              ) : (
-                <ZoomableImage key={m.id ?? i} src={m.url} alt={m.alt || m.name || "media"} className="max-h-60 rounded-lg border border-border/60" />
-              );
-            }
-            if (m.kind === "html" && m.url) {
-              return (
-                <a
-                  key={m.id ?? i}
-                  href={m.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1.5 rounded-full border border-border px-3 py-1 text-xs text-primary hover:bg-foreground/[0.03]"
-                >
-                  <LayoutDashboard className="size-3.5" />
-                  {m.title || m.caption || m.name || "Artifact"}
-                </a>
-              );
-            }
-            const isUser = m.role === "user";
-            return (
-              <div key={m.id ?? i} className={cn("flex", isUser && "justify-end")}>
-                <div
-                  className={cn(
-                    "max-w-[85%] rounded-2xl px-3 py-2 text-[13px] leading-relaxed",
-                    isUser ? "bg-primary/10" : "bg-card/60 border border-border/60",
-                  )}
-                >
-                  <MessageResponse>{m.text ?? ""}</MessageResponse>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        {error ? <div className="border-b border-border/70 px-3 py-1.5 text-xs text-destructive">{error}</div> : null}
+        <ChatStream
+          sid={post.sessionId ?? null}
+          messages={messages}
+          busy={false}
+          loading={loading}
+          onLoadOlderMessages={loadOlderMessages}
+        />
       </div>
     </div>
   );
@@ -17932,11 +17961,13 @@ const GALLERY_PAGE = 24;
 // free, and revalidate once when it becomes active again.
 function ShippedPage({
   onOpenSession,
+  onResumeSession,
   liveSessionIds,
   artifactsOnly = false,
   active = true,
 }: {
   onOpenSession: (sessionId: string) => void;
+  onResumeSession?: (sessionId: string) => Promise<string>;
   liveSessionIds: Set<string>;
   artifactsOnly?: boolean;
   active?: boolean;
@@ -17967,6 +17998,13 @@ function ShippedPage({
   const postsLen = useRef(Math.max(FEED_PAGE, cachedPosts?.items.length ?? 0));
   const openArtifact = useContext(ArtifactViewerContext);
   const appDialog = useAppDialog();
+
+  const resumeShippedSession = async (sessionId: string) => {
+    if (!onResumeSession) throw new Error("Session resume is unavailable");
+    const liveSessionId = await onResumeSession(sessionId);
+    setViewing(null);
+    onOpenSession(liveSessionId);
+  };
 
   useEffect(() => {
     if (view !== "artifacts") return;
@@ -18173,7 +18211,9 @@ function ShippedPage({
           </h1>
           {artifactsOnly ? (
             <p className="mt-0.5 text-xs text-muted-foreground">Interactive reports and live dashboards</p>
-          ) : null}
+          ) : (
+            <p className="mt-0.5 text-xs text-muted-foreground">Finished sessions · review or resume anytime</p>
+          )}
         </div>
       </div>
 
@@ -18279,8 +18319,7 @@ function ShippedPage({
 
       {posts !== null && posts.length === 0 ? (
         <div className="rounded-2xl border border-border bg-card/40 px-4 py-10 text-center text-sm text-muted-foreground">
-          Nothing shipped yet — agents post here (via <code>lfg_ship</code>) when they finish
-          something worth showing.
+          Nothing finished yet — agents post their final result here before the session closes.
         </div>
       ) : null}
 
@@ -18294,8 +18333,8 @@ function ShippedPage({
             return (
               <article key={post.id} className="border-b border-border/50 pb-3 last:border-b-0">
                 {/* Tapping the post opens the conversation: straight into the
-                    live session when it's still running, read-only transcript
-                    when not. */}
+                    live session when it's still running, the same shared chat
+                    renderer plus Resume when it has shipped and closed. */}
                 <button
                   type="button"
                   onClick={() => {
@@ -18375,7 +18414,13 @@ function ShippedPage({
       ) : null}
         </>
       )}
-      {viewing ? <ShipTranscriptSheet post={viewing} onClose={() => setViewing(null)} /> : null}
+      {viewing ? (
+        <ShipTranscriptSheet
+          post={viewing}
+          onClose={() => setViewing(null)}
+          onResume={resumeShippedSession}
+        />
+      ) : null}
     </div>
   );
 }
