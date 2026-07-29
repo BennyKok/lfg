@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Project-scoped shipped sessions (v0.1.102)
+
+- Recent Shipped items from project-scoped sessions now open through the normal
+  transcript route instead of being misread as folder identifiers.
+
 ## July 29, 2026 - Reliable mobile layout and session completion (v0.1.101)
 
 - Mobile lists now reserve the full header, banner, and hosted navigation space,
