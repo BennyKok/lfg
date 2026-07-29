@@ -4,6 +4,16 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Native Computer surfaces (v0.1.88)
+
+- LFG now ships versioned protocol, client, and React packages so trusted
+  hosts can render sessions directly without booting the full app in an iframe.
+- The embeddable client owns one shared live connection with batched
+  subscriptions and reconnect resume, while the standalone LFG app uses the
+  same request transport.
+- A stable Computer shell and matching session, transcript, status, and
+  composer surfaces are available immediately while runtime data loads.
+
 ## July 29, 2026 - Session rail polish (v0.1.87)
 
 - The desktop session list now fades softly at the top and bottom of its scroll
