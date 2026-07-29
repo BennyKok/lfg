@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Safer session actions (v0.1.121)
+
+- Idle sessions no longer show a Stop action that cannot do anything.
+- Ending a live session is now labeled Archive session and confirms with a
+  second animated click inside the menu instead of opening a dialog.
+
 ## July 29, 2026 - Remembered project folders (v0.1.120)
 
 - Hosted LFG workspaces now reopen on the last selected project instead of
