@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - omg.dev hosted branding (v0.1.98)
+
+- Hosted Computer sessions now replace the LFG mark with the coral omg mark
+  and omg.dev wordmark on desktop, while mobile keeps a compact mark-only
+  header.
+- The hosted desktop project selector now uses the same neutral outlined folder
+  treatment as the mobile composer without changing standalone LFG branding.
+
 ## July 29, 2026 - Shipped follow-ups (v0.1.97)
 
 - Finished work in the Shipped feed now has a **Follow up** action that starts
