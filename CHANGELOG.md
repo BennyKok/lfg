@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Reliable mobile layout and session completion (v0.1.101)
+
+- Mobile lists now reserve the full header, banner, and hosted navigation space,
+  keep cards clear of the floating composer, and restore consistent horizontal
+  padding so content is no longer clipped or overlapped.
 - Agents now explicitly decide whether a Shipped result should close its source
   session, so quick chats and likely follow-ups can stay live.
 - Shipped results no longer imply production deployment, and sessions stay open
