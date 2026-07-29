@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Authenticated embedded artifacts (v0.1.108)
+
+- HTML dashboards and videos in hosted Computer sessions now load through the
+  authenticated session transport, so transcript cards, the Artifacts gallery,
+  Shipped posts, and full-screen viewing render the artifact instead of the
+  surrounding Vibes app.
+
 ## July 29, 2026 - Embedded artifact images (v0.1.107)
 
 - Artifact images in hosted Computer sessions now load through the authenticated
