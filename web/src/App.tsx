@@ -9043,7 +9043,7 @@ function RailStage({
             </div>
           </div>
         )}
-        <div className="min-h-0 flex-1 overflow-y-auto px-1.5 py-2">
+        <div className="session-list-scroll min-h-0 flex-1 overflow-y-auto px-1.5 py-2">
           {topPinnedSessions.length ? (
             <RailGroup
               label="Pinned"
