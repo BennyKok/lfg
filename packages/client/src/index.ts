@@ -57,12 +57,48 @@ export interface CreateGrantTransportOptions {
 const SOCKET_OPEN = 1;
 const GRANT_REFRESH_SKEW_MS = 30_000;
 
-function apiError(status: number, statusText: string, data: unknown): Error {
-  const message =
-    data && typeof data === "object" && "error" in data && typeof data.error === "string"
-      ? data.error
-      : `${status} ${statusText}`;
-  return new Error(message);
+/**
+ * Read the body ONCE, then decide whether it was JSON. `response.json()` on a
+ * non-JSON error consumed the body and left us with nothing to report, which is
+ * how an intermediary's plain-text failure reached the UI as a bare number.
+ */
+async function readBody(response: Response): Promise<{ data: unknown; text: string }> {
+  const text = await response.text().catch(() => "");
+  if (!text) return { data: {}, text: "" };
+  try {
+    return { data: JSON.parse(text) as unknown, text };
+  } catch {
+    return { data: {}, text };
+  }
+}
+
+function apiError(
+  response: Response,
+  method: string,
+  path: string,
+  data: unknown,
+  text: string,
+): Error {
+  // lfg's own routes answer with { error }, and that copy is written for the
+  // person reading it — pass it through untouched.
+  if (data && typeof data === "object" && "error" in data && typeof data.error === "string") {
+    return new Error(data.error);
+  }
+  // Anything else failed somewhere between here and lfg — a proxy, an edge, a
+  // tunnel. `${status} ${statusText}` used to be the whole message, and HTTP/2
+  // never sends statusText, so it rendered as a naked "405" with no way to tell
+  // which request produced it. Name the request and quote whatever body came
+  // back so the next one identifies itself.
+  const detail = [response.statusText.trim(), text.trim().replace(/\s+/g, " ").slice(0, 200)]
+    .filter(Boolean)
+    .join(": ");
+  return new Error(
+    `${method} ${path} failed (${response.status}${detail ? ` ${detail}` : ""})`,
+  );
+}
+
+function requestMethod(init: RequestInit | undefined): string {
+  return (init?.method ?? "GET").toUpperCase();
 }
 
 function normalizeBaseUrl(baseUrl: string): string {
@@ -89,8 +125,8 @@ export function createSameOriginTransport(
     },
     async request<T>(path: string, init?: RequestInit): Promise<T> {
       const response = await fetchImpl(path, init);
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw apiError(response.status, response.statusText, data);
+      const { data, text } = await readBody(response);
+      if (!response.ok) throw apiError(response, requestMethod(init), path, data, text);
       return data as T;
     },
     async openLiveSocket(): Promise<LfgSocket> {
@@ -142,8 +178,8 @@ export function createGrantTransport(options: CreateGrantTransportOptions): LfgT
     fetch: authenticatedFetch,
     async request<T>(path: string, init: RequestInit = {}): Promise<T> {
       const response = await authenticatedFetch(path, init);
-      const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw apiError(response.status, response.statusText, data);
+      const { data, text } = await readBody(response);
+      if (!response.ok) throw apiError(response, requestMethod(init), path, data, text);
       return data as T;
     },
     async openLiveSocket(): Promise<LfgSocket> {
