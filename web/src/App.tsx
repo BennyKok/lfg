@@ -17,7 +17,11 @@ import { emitSessionCreatedToHost } from "./lib/embed-host-signal";
 import { api, lfgAssetUrl, lfgFetch } from "./lib/lfg-client";
 import { uploadFile as uploadFileThroughTransport } from "./lib/upload";
 import { EmbeddedConnectGate } from "./components/embedded-connect-gate";
-import { AuthenticatedArtifactImage } from "./components/authenticated-artifact";
+import {
+  AuthenticatedArtifactFrame,
+  AuthenticatedArtifactImage,
+  AuthenticatedArtifactVideo,
+} from "./components/authenticated-artifact";
 import {
   isComputerHostResumeMessage,
   restartContinuousAnimations,
@@ -825,9 +829,6 @@ function ArtifactViewerPage({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   const label = artifact.title || artifact.caption || artifact.name || "Artifact";
-  const src = artifact.kind === "html"
-    ? `${artifact.url}?v=${artifact.cacheKey ?? artifact.version ?? 0}`
-    : artifact.url;
   // z-[100] sits above the mobile bottom composer (z-55), ask-center (z-60),
   // and floating audio chrome (z-75) so the full-page viewer is not clipped
   // by home-shell overlays. Dialogs/drawers remain higher (z-150+).
@@ -855,15 +856,20 @@ function ArtifactViewerPage({
       </header>
       <div className="min-h-0 flex-1 pb-[var(--lfg-safe-bottom)]">
         {artifact.kind === "html" ? (
-          <iframe
-            src={src}
-            sandbox="allow-scripts"
+          <AuthenticatedArtifactFrame
+            path={artifact.url}
+            cacheKey={artifact.cacheKey ?? artifact.version ?? 0}
             title={label}
             className="block h-full w-full border-0 bg-background"
           />
         ) : artifact.kind === "video" ? (
           <div className="flex h-full items-center justify-center bg-black">
-            <video src={src} controls autoPlay playsInline className="max-h-full max-w-full" />
+            <AuthenticatedArtifactVideo
+              path={artifact.url}
+              label={label}
+              autoPlay
+              className="max-h-full max-w-full"
+            />
           </div>
         ) : (
           <div className="flex h-full items-center justify-center overflow-auto bg-background p-4">
@@ -882,13 +888,15 @@ function ArtifactViewerPage({
 // Sandboxed artifact iframe that sizes itself to the document: the served
 // artifact html carries an injected reporter that postMessages its height.
 function AutoHeightArtifactFrame({
-  src,
+  path,
+  cacheKey,
   title,
   minHeight = 200,
   maxHeight = 560,
   className,
 }: {
-  src: string;
+  path: string;
+  cacheKey?: string | number;
   title?: string;
   minHeight?: number;
   maxHeight?: number;
@@ -909,10 +917,10 @@ function AutoHeightArtifactFrame({
     return () => window.removeEventListener("message", onMessage);
   }, [minHeight, maxHeight]);
   return (
-    <iframe
-      ref={frameRef}
-      src={src}
-      sandbox="allow-scripts"
+    <AuthenticatedArtifactFrame
+      frameRef={frameRef}
+      path={path}
+      cacheKey={cacheKey}
       title={title}
       style={{ height: height ?? minHeight }}
       className={cn(
@@ -13672,9 +13680,6 @@ function MessageBubble({
 
   if (message.kind === "html" && message.url) {
     const label = message.title || message.caption || message.text || message.name || "Artifact";
-    // updatedAt/ts busts the iframe for authored publishes and data-only
-    // refreshes. The visible revision remains unchanged for scheduled data.
-    const src = `${message.url}?v=${message.ts ?? message.version ?? 0}`;
     return (
       <AiMessage className={cn("msg", entering && "lfg-msg-in")} from="assistant">
         <MessageContent className="not-prose w-full max-w-[min(42rem,92vw)] overflow-hidden rounded-lg border border-border bg-card p-0 shadow-sm">
@@ -13727,7 +13732,14 @@ function MessageBubble({
           {/* Sandboxed: scripts may run for chart rendering, but no same-origin
               access, no network (CSP on the artifact response), no top-nav.
               Height follows the document via the injected reporter. */}
-          <AutoHeightArtifactFrame key={src} src={src} title={label} minHeight={200} maxHeight={560} />
+          <AutoHeightArtifactFrame
+            key={`${message.url}:${message.ts ?? message.version ?? 0}`}
+            path={message.url}
+            cacheKey={message.ts ?? message.version ?? 0}
+            title={label}
+            minHeight={200}
+            maxHeight={560}
+          />
           {message.caption && message.caption !== label ? (
             <div className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
               {message.caption}
@@ -13747,12 +13759,9 @@ function MessageBubble({
         <MessageContent className="not-prose inline-flex w-fit max-w-[min(34rem,92vw)] flex-col items-start overflow-hidden rounded-lg border border-border bg-card p-0 shadow-sm">
           {/* Media renders inline in-app — no navigation away to the raw URL. */}
           {isVideo ? (
-            <video
-              src={message.url}
-              controls
-              playsInline
-              preload="metadata"
-              aria-label={message.alt || label}
+            <AuthenticatedArtifactVideo
+              path={message.url}
+              label={message.alt || label}
               className="block max-h-[24rem] w-auto max-w-full self-center bg-black object-contain"
             />
           ) : (
@@ -18148,11 +18157,13 @@ type ShipPost = {
 // Once a tile has been shown it stays mounted: scrolling back should not re-run
 // a dashboard's scripts (and re-fetch it, since HTML artifacts are `no-store`).
 function GalleryTilePreview({
-  src,
+  path,
+  cacheKey,
   title,
   children,
 }: {
-  src: string;
+  path: string;
+  cacheKey?: string | number;
   title: string;
   children?: React.ReactNode;
 }) {
@@ -18184,13 +18195,11 @@ function GalleryTilePreview({
   return (
     <div ref={ref} className="relative h-32 w-full overflow-hidden bg-background">
       {mounted ? (
-        <iframe
-          src={src}
+        <AuthenticatedArtifactFrame
+          path={path}
+          cacheKey={cacheKey}
+          thumbnail
           title={title}
-          sandbox="allow-scripts"
-          loading="lazy"
-          tabIndex={-1}
-          scrolling="no"
           className="pointer-events-none h-[200%] w-[200%] origin-top-left scale-50 select-none border-0"
         />
       ) : null}
@@ -18212,11 +18221,9 @@ function ShipMedia({
 }) {
   if (item.kind === "video") {
     return (
-      <video
-        src={item.url}
-        controls
-        playsInline
-        preload="metadata"
+      <AuthenticatedArtifactVideo
+        path={item.url}
+        label={item.caption || item.name}
         className={cn(
           "block w-full bg-black",
           tile ? "h-44 object-cover" : "max-h-[20rem] object-contain",
@@ -18572,7 +18579,8 @@ function ShippedPage({
                     className="block w-full text-left active:scale-[0.99]"
                   >
                     <GalleryTilePreview
-                      src={`${a.url}?v=${a.ts}&thumb=1`}
+                      path={a.url}
+                      cacheKey={a.ts}
                       title={a.title || a.caption || a.name}
                     >
                       {(a.version ?? 1) > 1 ? (
