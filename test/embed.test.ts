@@ -157,6 +157,8 @@ describe("mobile overlay scroll contract", () => {
     expect(app).toContain(
       "mobile-scroll-composer-fade pointer-events-auto relative z-[55] mt-auto",
     );
-    expect(css).toMatch(/--lfg-mobile-composer-fade-height:\s*4rem/);
+    expect(css).toMatch(
+      /--lfg-mobile-composer-fade-height:\s*var\(--lfg-mobile-header-fade-height\)/,
+    );
   });
 });

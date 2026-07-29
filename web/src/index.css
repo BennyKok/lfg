@@ -79,7 +79,7 @@
      beneath those edges. */
   --lfg-mobile-header-height: calc(3.5rem + env(safe-area-inset-top, 0px));
   --lfg-mobile-header-fade-height: 1.25rem;
-  --lfg-mobile-composer-fade-height: 4rem;
+  --lfg-mobile-composer-fade-height: var(--lfg-mobile-header-fade-height);
 }
 
 /* Framed inside omg Computer (`?embed=1` / iframe): cancel the device
