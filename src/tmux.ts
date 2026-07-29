@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync, existsSync, realpathSync, mkdirSync } from
 import { homedir } from "node:os";
 import { reposRoot } from "./projects";
 import { LFG_CAPABILITY_VERSION, withLfgRuntimeContract } from "./lfg-capabilities.ts";
+import { claudeOauthToken } from "./claude-creds.ts";
 
 // Known-good Claude model alias to launch with when a caller doesn't specify
 // one. Never launch a managed `claude` bare — see spawnManagedSession. Opus is
@@ -146,6 +147,40 @@ export function claudeBin(): string {
     if (existsSync(p)) return (_claudeBin = p);
   }
   return (_claudeBin = "claude"); // last resort: let the failure surface
+}
+
+const CLAUDE_PLATFORM_ENV_KEYS = [
+  "ANTHROPIC_API_KEY",
+  "ANTHROPIC_AUTH_TOKEN",
+  "ANTHROPIC_BASE_URL",
+] as const;
+
+/**
+ * A connected Claude account must be the only auth source visible to Claude.
+ *
+ * Cloud Computers also carry the platform Anthropic proxy environment for
+ * agents that have not connected an account. Claude Code gives those variables
+ * precedence over ~/.claude/.credentials.json, so merely detecting the
+ * credentials is not enough: the launched process would still use the platform
+ * proxy and can return its billing errors instead of using the user's
+ * subscription.
+ *
+ * Keep the choice at the launch boundary. When no account is connected, the
+ * inherited platform environment remains untouched. When one is connected,
+ * /usr/bin/env removes every competing Anthropic source for this Claude process
+ * and its descendants only.
+ */
+export function claudeAccountLaunchCommand(
+  command: string[],
+  accountConnected = claudeOauthToken() !== null,
+): string[] {
+  if (!accountConnected) return command;
+  const envBin = Bun.which("env") ?? "/usr/bin/env";
+  return [
+    envBin,
+    ...CLAUDE_PLATFORM_ENV_KEYS.flatMap((key) => ["-u", key]),
+    ...command,
+  ];
 }
 
 let _codexBin: string | null = null;
@@ -399,15 +434,17 @@ export function spawnAgentSession(opts: {
     opts.name,
     "-c",
     opts.cwd,
-    claudeBin(),
-    "--dangerously-skip-permissions",
-    "--add-dir",
-    reposRoot(),
-    // `--` terminates option parsing: --add-dir is variadic and otherwise
-    // greedily swallows the positional prompt as a second directory, leaving
-    // the TUI at an empty composer (the brief never gets submitted).
-    "--",
-    `Read the task brief at ${opts.briefPath} and carry it out end-to-end.`,
+    ...claudeAccountLaunchCommand([
+      claudeBin(),
+      "--dangerously-skip-permissions",
+      "--add-dir",
+      reposRoot(),
+      // `--` terminates option parsing: --add-dir is variadic and otherwise
+      // greedily swallows the positional prompt as a second directory, leaving
+      // the TUI at an empty composer (the brief never gets submitted).
+      "--",
+      `Read the task brief at ${opts.briefPath} and carry it out end-to-end.`,
+    ]),
   ]);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -451,28 +488,42 @@ export function spawnManagedSession(opts: {
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   ensureFolderTrusted(opts.cwd);
-  const argv = ["tmux", "new-session", "-d", "-s", opts.name, "-c", opts.cwd,
-    claudeBin(), "--dangerously-skip-permissions", "--add-dir", reposRoot()];
+  const claudeArgv = [
+    claudeBin(),
+    "--dangerously-skip-permissions",
+    "--add-dir",
+    reposRoot(),
+  ];
   // Resume the prior conversation when asked. Placed before --model so the flags
   // read like relaunchSessionWithModel's argv; order is irrelevant to claude.
-  if (opts.resume && opts.resume.trim()) argv.push("--resume", opts.resume.trim());
+  if (opts.resume && opts.resume.trim()) claudeArgv.push("--resume", opts.resume.trim());
   // ALWAYS pin a model. A bare `claude` inherits Claude Code's saved global
   // default, which can silently rot — when Anthropic retires/disables that
   // model (e.g. the Fable off-switch), every inheriting session boots straight
   // into "model unavailable" and freezes, replaying the error on every turn.
   // An explicit --model is the only thing that overrides it. DEFAULT_MODEL is a
   // known-good fallback when the caller didn't pick one.
-  argv.push("--model", opts.model || DEFAULT_MODEL);
+  claudeArgv.push("--model", opts.model || DEFAULT_MODEL);
   // Pin the reasoning effort when the caller asked for one (thinking mode). The
   // claude CLI exposes this as `--effort <level>`; map our shared thinking-level
   // vocabulary onto it (see claudeEffortFor). Omitted → CLI default effort.
   const effort = claudeEffortFor(opts.thinkingLevel);
-  if (effort) argv.push("--effort", effort);
+  if (effort) claudeArgv.push("--effort", effort);
   // `--` terminates option parsing so the variadic --add-dir can't swallow the
   // positional prompt as a second directory (which strands the new session at
   // an empty composer — the first message never gets submitted).
   const prompt = withLfgRuntimeContract(opts.prompt);
-  if (prompt?.trim()) argv.push("--", prompt);
+  if (prompt?.trim()) claudeArgv.push("--", prompt);
+  const argv = [
+    "tmux",
+    "new-session",
+    "-d",
+    "-s",
+    opts.name,
+    "-c",
+    opts.cwd,
+    ...claudeAccountLaunchCommand(claudeArgv),
+  ];
   addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
   containTmuxCommand(argv, claudeBin(), opts.containInAgentSlice, opts);
   const create = Bun.spawnSync(argv);
@@ -501,8 +552,10 @@ export function relaunchSessionWithModel(opts: {
   ensureFolderTrusted(opts.cwd);
   const r = Bun.spawnSync([
     "tmux", "respawn-pane", "-k", "-c", opts.cwd, "-t", opts.tmuxTarget,
-    claudeBin(), "--dangerously-skip-permissions", "--add-dir", reposRoot(),
-    "--resume", opts.sessionId, "--model", opts.model,
+    ...claudeAccountLaunchCommand([
+      claudeBin(), "--dangerously-skip-permissions", "--add-dir", reposRoot(),
+      "--resume", opts.sessionId, "--model", opts.model,
+    ]),
   ]);
   if (r.exitCode !== 0)
     return { ok: false, error: dec.decode(r.stderr) || "respawn-pane failed" };
