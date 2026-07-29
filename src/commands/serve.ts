@@ -260,6 +260,7 @@ import {
 } from "../origin-deliveries.ts";
 import { deleteImagePreview, getOrCreateImagePreview } from "../artifact-previews.ts";
 import { addShipPost, listShipPosts } from "../shipped.ts";
+import { verifySelfRepoLanding } from "../session-landing.ts";
 import {
   artifactRefreshManager,
   prepareArtifactRefreshConfig,
@@ -5129,14 +5130,27 @@ export async function cmdServe() {
           const shipTitle = body?.title?.trim();
           if (!body || !shipTitle) return err(400, "title required");
           try {
+            const sourceManaged = body.sessionId
+              ? listManaged().find(
+                  (session) =>
+                    session.sessionId === body.sessionId ||
+                    session.nativeSessionId === body.sessionId,
+                )
+              : undefined;
+            const landing = verifySelfRepoLanding(sourceManaged, SELF_REPO);
+            if (!landing.ok) {
+              evlog("shipped_session_landing_rejected", {
+                sessionId: body.sessionId,
+                reason: landing.error,
+                cwd: sourceManaged?.cwd,
+                branch: sourceManaged?.worktreeBranch,
+              });
+              return err(409, landing.error);
+            }
             // Stamp the posting session's agent kind at write time so the feed
             // byline survives registry pruning; the GET hydration still prefers
             // the live registry when the session is known.
-            const sourceAgent = body.sessionId
-              ? listManaged().find(
-                  (s) => s.sessionId === body.sessionId || s.nativeSessionId === body.sessionId,
-                )?.agent
-              : undefined;
+            const sourceAgent = sourceManaged?.agent;
             const post = await addShipPost({ ...body, agent: body.agent ?? sourceAgent, title: shipTitle });
             const sourceSession = body.sessionId
               ? (await listSessions()).find(

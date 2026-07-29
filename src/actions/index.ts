@@ -167,6 +167,7 @@ ${reportContext ? `# Full report for context\n${reportContext.slice(0, 12000)}` 
     cwd,
     createdAt: Date.now(),
     agent: "aisdk",
+    sessionId,
     repoRoot: worktree?.repoRoot,
     worktreeBranch: worktree?.branch,
   });
@@ -335,6 +336,7 @@ ${reportContext ? `# Full report for context\n${reportContext.slice(0, 12000)}` 
     cwd,
     createdAt: Date.now(),
     agent: "aisdk",
+    sessionId,
     repoRoot: worktree?.repoRoot,
     worktreeBranch: worktree?.branch,
   });
@@ -396,8 +398,8 @@ function sanitize(s: string): string {
 // This dispatches an agent INTO the lfg checkout with the exact failure
 // context (the message, the error, a live capture of the stuck pane) so it can
 // reproduce, fix the root cause, and report. Unlike the report-action agent it
-// works in lfg's single live checkout (no worktree/PR ceremony) and the serve
-// process must be restarted to pick up a fix.
+// works in an isolated LFG worktree and lands through the same serialized
+// build/restart path as every other self-repo session.
 export async function dispatchSendFixAgent(opts: {
   failSessionId: string;
   failTarget: string | null;
@@ -408,6 +410,11 @@ export async function dispatchSendFixAgent(opts: {
   msgAttempts: number;
 }): Promise<ActionResult> {
   const session = `debug_send_${opts.msgId.slice(0, 6)}`;
+  const cwdResolved = resolveSessionCwd(SELF_REPO, session);
+  if (!cwdResolved.ok) {
+    return { ok: false, summary: `failed to prepare worktree: ${cwdResolved.error}` };
+  }
+  const { cwd, worktree } = cwdResolved;
 
   // Snapshot the stuck pane so the agent sees the TUI state the send gave up
   // against (overlay up? text stranded in the composer? a selector open?).
@@ -448,11 +455,10 @@ ${pane ? "```\n" + pane.slice(-3000) + "\n```" : "(pane could not be captured �
 ${convo || "(unavailable)"}
 
 # How to operate
-- You are in the lfg repo at ${SELF_REPO} (this is lfg's own single live checkout — work in it directly, do NOT create a worktree).
+- You are in the dedicated LFG worktree at ${cwd}. Never edit the shared main checkout directly.
 - The send path is \`src/sendq.ts\` (the confirmed-delivery queue: type → confirm text appears → Enter → confirm text leaves the box → retry) and \`src/tmux.ts\` (the low-level send-keys/capture primitives, prompt + rating-overlay detection, \`inputBoxText\`). Read both first.
 - Diagnose the ROOT CAUSE from the error + pane capture above. Common culprits: an overlay/selector shape \`feedbackPromptOpen\`/\`parsePrompt\` doesn't recognize (so Enter gets swallowed), \`inputBoxText\` failing to find the composer (so the needle check never confirms), a cold/busy TUI dropping typed keys, or the message containing characters that break \`tmux send-keys -l\`.
-- If it's a genuine lfg bug, fix it minimally in keeping with the file's existing style and comments. Then apply the fix: \`systemctl --user restart lfg.service\` (the serve process is long-lived — a code change has NO effect until it restarts). Confirm it comes back up: \`systemctl --user is-active lfg.service\`.
-- After verifying, commit and push (this repo commits to main directly): \`git -C ${SELF_REPO} add -A && git -C ${SELF_REPO} commit -m "..." && git -C ${SELF_REPO} push\`.
+- If it's a genuine lfg bug, fix it minimally in keeping with the file's existing style and comments. After verification, commit the worktree and run \`scripts/land-session.sh\`; it serializes the change onto current main, rebuilds, and restarts the service.
 - If the failure was transient (a one-off swallowed key, the target session had since exited) and there is no code bug to fix, do NOT invent a change — explain what happened and stop.
 - On the LAST line of your output, print a one-line result starting with \`RESULT:\` summarizing the root cause and what you changed (or why no change was needed).`;
 
@@ -461,7 +467,7 @@ ${convo || "(unavailable)"}
   const sessionId = randomUUID();
   const spawned = spawnManagedAisdkSession({
     name: session,
-    cwd: SELF_REPO,
+    cwd,
     prompt,
     model: "opus",
     sessionId,
@@ -469,7 +475,15 @@ ${convo || "(unavailable)"}
   if (!spawned.ok) {
     return { ok: false, summary: `failed to start debug session: ${spawned.error ?? "unknown"}` };
   }
-  addManaged({ tmuxName: session, cwd: SELF_REPO, createdAt: Date.now(), agent: "aisdk" });
+  addManaged({
+    tmuxName: session,
+    cwd,
+    createdAt: Date.now(),
+    agent: "aisdk",
+    sessionId,
+    repoRoot: worktree?.repoRoot,
+    worktreeBranch: worktree?.branch,
+  });
   assignUser(session, AGENT_OWNER);
 
   for (let i = 0; i < 20 && !readAisdkEntry(sessionId); i++) await Bun.sleep(250);

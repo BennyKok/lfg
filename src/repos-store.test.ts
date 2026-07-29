@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PATHS } from "./config.ts";
 import { createProjectFolder, useProjectFolder } from "./repos-store.ts";
-import { prepareSessionWorktree, resolveSessionCwd, WORKTREE_ROOT } from "./worktree.ts";
+import {
+  prepareSessionWorktree,
+  resolveSessionCwd,
+  shouldAutoWorktree,
+  WORKTREE_ROOT,
+} from "./worktree.ts";
 
 function git(cwd: string, ...args: string[]): string {
   const result = Bun.spawnSync(["git", "-C", cwd, ...args], {
@@ -50,6 +55,27 @@ describe("project creation", () => {
     expect(worktree.ok).toBe(true);
     if (!worktree.ok) return;
     expect(git(worktree.worktree.path, "rev-parse", "HEAD")).toBe(git(repo.cwd, "rev-parse", "HEAD"));
+  });
+
+  test("isolates LFG's own repository instead of honoring the old self-repo skip", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lfg-self-worktree-"));
+    roots.push(root);
+    git(root, "init", "-b", "main");
+    git(root, "config", "user.email", "test@example.com");
+    git(root, "config", "user.name", "Test");
+    writeFileSync(join(root, "README.md"), "self repo\n");
+    git(root, "add", "README.md");
+    git(root, "commit", "-m", "initial");
+
+    expect(shouldAutoWorktree(root, { selfRepo: root })).toBe(true);
+    expect(shouldAutoWorktree(root, { selfRepo: root, worktree: false })).toBe(true);
+    const session = `self-${crypto.randomUUID().slice(0, 8)}`;
+    worktreeSessions.push({ repo: root, session });
+    const resolved = resolveSessionCwd(root, session, { selfRepo: root });
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.cwd).toBe(join(WORKTREE_ROOT, session));
+    expect(resolved.worktree?.repoRoot).toBe(root);
   });
 
   test("removes the project directory when registration fails", async () => {

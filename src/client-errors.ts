@@ -25,9 +25,10 @@ import { notifyAll } from "./push.ts";
 import { spawnManagedAisdkSession } from "./tmux.ts";
 import { addManaged } from "./managed.ts";
 import { USERS, assignUser } from "./users.ts";
+import { resolveSessionCwd } from "./worktree.ts";
 
-// lfg's own single live checkout — where web/src lives and where the fix agent
-// works. The serve process runs from here.
+// LFG's deployed main checkout. Fix agents branch from it into isolated
+// worktrees and only update it through scripts/land-session.sh.
 const SELF_REPO = PATHS.root;
 // A synthetic auto-agent id so client errors slot into the existing findings
 // feed (and its dedup-by-title) without inventing a parallel UI.
@@ -232,7 +233,7 @@ async function maybeDispatchFix(e: ClientError): Promise<{ dispatched: boolean; 
   }
 }
 
-function buildPrompt(e: ClientError): string {
+function buildPrompt(e: ClientError, cwd: string): string {
   return `You are a debugging agent dispatched by lfg because the **web frontend threw an uncaught error in a shipped build**. Your job: find the root cause in the React frontend, fix it minimally, rebuild, and ship the fix.
 
 # The error
@@ -254,13 +255,12 @@ ${(e.componentStack || "(not a render error / unavailable)").slice(0, 2000)}
 \`\`\`
 
 # How to operate
-- You are in the lfg repo at ${SELF_REPO} (lfg's single live checkout — work in it directly, do NOT create a worktree).
+- You are in the dedicated LFG worktree at ${cwd}. Never edit the shared main checkout directly.
 - The frontend is React 19 + TypeScript + Vite under \`web/src\` (entry \`web/src/main.tsx\`, the bulk lives in \`web/src/App.tsx\` and \`web/src/components\`, \`web/src/lib\`).
 - LOCATE the bug: the message + React component stack usually name the failing component — grep \`web/src\` for it. The runtime stack frames point at hashed bundle files; source maps are emitted to \`web/dist/assets/*.js.map\` if you need to map a minified frame back to source, but the original source in \`web/src\` is what you edit.
 - DIAGNOSE the root cause (e.g. reading a property off undefined, an unguarded API shape, a bad effect dependency, an unhandled rejection). Fix it MINIMALLY and defensively, matching the file's existing style and comments.
-- REBUILD the frontend: \`npm --prefix web run build\` (this runs \`tsc --noEmit\` then \`vite build\`). The build output is served live from disk by lfg-serve — NO server restart is needed for a frontend change, and open PWAs auto-reload when the hashed entry chunk changes. The build MUST pass (typecheck + bundle) before you ship.
-- If you changed backend code too (you usually should NOT for a frontend error), restart with \`systemctl --user restart lfg-serve.service\` and confirm \`systemctl --user is-active lfg-serve.service\`.
-- COMMIT and push to main: \`git -C ${SELF_REPO} add -A && git -C ${SELF_REPO} commit -m "fix(web): ..." && git -C ${SELF_REPO} push\`.
+- REBUILD the frontend in the worktree with \`npm --prefix web run build\` (this runs \`tsc --noEmit\` then \`vite build\`). The build MUST pass.
+- Commit the fix, then run \`scripts/land-session.sh\`. It serializes the branch onto current main, rebuilds the deployed checkout, and restarts LFG.
 - If the error is transient or external (a browser extension, a one-off network failure, a ResizeObserver loop, a user offline) with no real bug in our code, do NOT invent a change — explain why and stop.
 - On the LAST line of your output, print a one-line result starting with \`RESULT:\` summarizing the root cause and what you changed (or why no change was needed).`;
 }
@@ -272,11 +272,17 @@ async function dispatchFixAgent(
   // Derive a short, stable, tmux-safe session name from the signature.
   const tag = Buffer.from(sig).toString("hex").slice(0, 6);
   const session = `fix_clienterr_${tag}`;
+  const cwdResolved = resolveSessionCwd(SELF_REPO, session);
+  if (!cwdResolved.ok) {
+    console.error(`[client-error] failed to prepare worktree: ${cwdResolved.error}`);
+    return null;
+  }
+  const { cwd, worktree } = cwdResolved;
   const sessionId = randomUUID();
   const spawned = spawnManagedAisdkSession({
     name: session,
-    cwd: SELF_REPO,
-    prompt: buildPrompt(e),
+    cwd,
+    prompt: buildPrompt(e, cwd),
     model: "opus",
     sessionId,
   });
@@ -284,7 +290,15 @@ async function dispatchFixAgent(
     console.error(`[client-error] failed to spawn fix agent: ${spawned.error ?? "unknown"}`);
     return null;
   }
-  addManaged({ tmuxName: session, cwd: SELF_REPO, createdAt: Date.now(), agent: "aisdk" });
+  addManaged({
+    tmuxName: session,
+    cwd,
+    createdAt: Date.now(),
+    agent: "aisdk",
+    sessionId,
+    repoRoot: worktree?.repoRoot,
+    worktreeBranch: worktree?.branch,
+  });
   assignUser(session, AGENT_OWNER);
   console.log(`[client-error] dispatched auto-fix agent ${session} for: ${e.message.slice(0, 80)}`);
   return { session, sessionId };

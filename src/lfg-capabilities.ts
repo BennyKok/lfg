@@ -3,7 +3,7 @@ import type { CodingAgentKind } from "./coding-agents.ts";
 // Bump whenever an agent-facing LFG capability or its operating guidance
 // changes. Managed sessions persist the value they launched with, which lets
 // the UI identify long-lived sessions whose MCP/tool catalog predates a ship.
-export const LFG_CAPABILITY_VERSION = "2026-07-29.1";
+export const LFG_CAPABILITY_VERSION = "2026-07-29.2";
 
 export const LFG_CAPABILITIES = [
   {
@@ -62,6 +62,7 @@ export function lfgRuntimeContract(): string {
     "- NARRATE as you work: keep the human posted through `lfg_output` with `to:'thread'` at each meaningful decision or step. Do not go dark — a silent session is a failed session. This is a duty, not an option.",
     "- Show evidence with `lfg_output` `to:'session'` — attach screenshots/recordings as `media`, or publish a self-contained report/dashboard as `html` (re-use `id` to update in place).",
     "- SHIP IS TERMINAL: when the assigned task reaches a successful terminal outcome (including a completed fix/feature, docs or analysis, a verified no-op, or work already completed elsewhere), make `lfg_output` `to:'shipped'` your final action with a concise headline + tweet-length result and the strongest evidence. A successful ship automatically closes this session into the resumable finished-session roster. Put the result in that ship post; do not continue working or send another message afterward. Do not ship planning, diagnosis-in-progress, partial work, or blocked work.",
+    "- SOURCE CHANGES MUST LAND FIRST: when working in LFG's repository, commit the intended changes and run `scripts/land-session.sh` from the session worktree before shipping. It serializes the branch onto current `origin/main`, syncs/builds the local main checkout, and restarts LFG. Shipping is rejected while changes are uncommitted, unmerged, or not deployed at the current main revision.",
     "- DECIDE, don't park: make the reasonable call yourself and narrate it. Use `lfg_input` (`from:'user'`) ONLY for a genuinely irreversible, risky, or ambiguous decision — never to check in or report progress. It is fire-and-forget: do not poll or block; the answer arrives later. Use `from:'advisor'` to consult LFG's advisor.",
     "- The channel adapter owns transport identity and credentials; never request phone numbers or channel credentials.",
     "- Use `lfg_find_sessions` to locate ended or historical sessions by id, owner, project, text, or last-activity range; use `lfg_list_sessions` for the live fleet.",

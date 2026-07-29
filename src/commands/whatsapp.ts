@@ -13,7 +13,7 @@ import qrcode from "qrcode-terminal";
 import { randomBytes } from "node:crypto";
 import { PATHS } from "../config.ts";
 import { resolveSessionCwd } from "../worktree.ts";
-import { addManaged, removeManaged } from "../managed.ts";
+import { addManaged, patchManaged, removeManaged } from "../managed.ts";
 import { enqueueMessage } from "../sendq.ts";
 import { listSessions, resolveTranscript, sessionIdForPid } from "../sessions.ts";
 import { enqueueTranscriptIndex, indexedRecentMessages } from "../transcript-index.ts";
@@ -470,6 +470,7 @@ async function getOrCreateGroupSession(sock: WASocket, groupJid: string): Promis
     }
   }
   if (!sessionId) throw new Error("managed session started but no sessionId was discovered");
+  patchManaged(tmuxName, { sessionId });
 
   const rec: SavedGroupSession = {
     groupJid,
