@@ -15,6 +15,62 @@ say() {
   printf '==> %s\n' "$*"
 }
 
+# A web build that emits index.html but loses its asset chunks still leaves a
+# checkout that looks deployable: the service starts, `/` answers 200, and the
+# marker below would certify the revision as live while every visitor gets a
+# blank page. That has happened (an interrupted/concurrent `vite build` left
+# web/dist/assets empty), so refuse to certify a dist whose own entry document
+# points at files that are not on disk.
+assert_web_bundle_complete() {
+  local dist="$MAIN_ROOT/web/dist"
+  local index="$dist/index.html"
+  [ -f "$index" ] || die "web build produced no $index"
+
+  local missing=0 ref
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    [ -f "$dist/$ref" ] || {
+      printf '[x] missing build output: web/dist/%s\n' "$ref" >&2
+      missing=1
+    }
+  done < <(grep -oE '(src|href)="/[^"?#]+"' "$index" | sed -E 's/^[a-z]+="\/(.*)"$/\1/' | sort -u)
+
+  [ "$missing" = "0" ] \
+    || die "web/dist is incomplete; rerun the web build (a concurrent or interrupted build can empty web/dist/assets)"
+}
+
+# Starting is not serving. Ask the restarted service for the exact entry chunk
+# the document loads, so a half-written dist or a stale service can never be
+# recorded as the deployed revision.
+assert_service_serves_bundle() {
+  command -v curl >/dev/null 2>&1 || {
+    say "curl unavailable; skipping the served-bundle probe"
+    return 0
+  }
+
+  local entry
+  entry="$(grep -oE 'src="/assets/[^"]+\.js"' "$MAIN_ROOT/web/dist/index.html" | head -1 | sed -E 's/^src="(.*)"$/\1/')"
+  [ -n "$entry" ] || die "could not find the entry script in web/dist/index.html"
+
+  local port="${LFG_PORT:-}"
+  if [ -z "$port" ] && [ -f "$MAIN_ROOT/.env" ]; then
+    port="$(sed -nE 's/^[[:space:]]*LFG_PORT=[[:space:]]*"?([0-9]+)"?.*/\1/p' "$MAIN_ROOT/.env" | tail -1)"
+  fi
+  port="${port:-8766}"
+  local base="${LFG_LAND_PROBE_URL:-http://127.0.0.1:$port}"
+
+  local attempt code
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    code="$(curl -s -o /dev/null -m 5 -w '%{http_code}' "$base$entry" || true)"
+    [ "$code" = "200" ] && {
+      say "Served bundle verified at $base$entry"
+      return 0
+    }
+    sleep 1
+  done
+  die "the restarted service does not serve $entry (last status ${code:-none}); the deployment is not live"
+}
+
 SESSION_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" \
   || die "run this from an LFG session worktree"
 COMMON_DIR="$(git -C "$SESSION_ROOT" rev-parse --git-common-dir)"
@@ -73,6 +129,10 @@ if [ "${LFG_LAND_SKIP_BUILD:-0}" != "1" ]; then
   (cd "$MAIN_ROOT/web" && bun run build)
 fi
 
+# Checked even when the build is skipped: reusing an existing web/dist is
+# exactly the case where the on-disk bundle can already be gutted.
+assert_web_bundle_complete
+
 deployed_head="$(git -C "$MAIN_ROOT" rev-parse HEAD)"
 if [ "${LFG_LAND_SKIP_RESTART:-0}" != "1" ]; then
   service_name="${LFG_SERVICE_NAME:-lfg.service}"
@@ -80,6 +140,7 @@ if [ "${LFG_LAND_SKIP_RESTART:-0}" != "1" ]; then
   systemctl --user restart "$service_name"
   systemctl --user is-active --quiet "$service_name" \
     || die "$service_name did not become active"
+  assert_service_serves_bundle
 fi
 
 marker="$COMMON_DIR/lfg-deployed-head"
