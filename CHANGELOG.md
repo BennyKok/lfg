@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Personal agent connections (v0.1.83)
+
+- Hosted Computers now distinguish omg's built-in runtime access from a
+  user's own Claude Code or Codex account, so every new user sees the connect
+  step until they personally sign in.
+- A completed Claude Code sign-in is recognized on the next status check,
+  letting the Computer open immediately without waiting for a credential cache.
+
 ## July 28, 2026 - Embedded Computer agent connection (v0.1.82)
 
 - A fresh hosted Computer now offers Claude Code and Codex sign-in directly
