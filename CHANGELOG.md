@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Clean workspace builds (v0.1.90)
+
+- Release runners now compile the shared workspace packages before the
+  standalone frontend, so a clean checkout builds without cached output.
+
 ## July 29, 2026 - Deterministic package releases (v0.1.89)
 
 - Version tags now have one release publisher, preventing local and hosted
