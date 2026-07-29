@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Hosted attachment uploads (v0.1.96)
+
+- File attachments now use the host application's authenticated LFG transport,
+  so uploads from embedded Computer sessions reach the connected runtime
+  instead of failing against the dashboard origin.
+
 ## July 29, 2026 - Edge-to-edge mobile scrolling (v0.1.95)
 
 - Every mobile page now scrolls edge-to-edge behind the floating navigation,
