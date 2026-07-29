@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Shorter mobile edge fades (v0.1.112)
+
+- Mobile Live content now stays clearer near the floating header and composer,
+  with a 20px top wash and the restored 64px bottom fade.
+
 ## July 29, 2026 - Balanced mobile chat edges (v0.1.111)
 
 - Mobile Live pages keep their side gutter for card corners and shadows while
