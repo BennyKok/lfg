@@ -76,6 +76,8 @@ fs.writeFileSync(manifest, JSON.stringify(json, null, 2) + "\n");
 if [ "${SKIP_INSTALL:-}" != "1" ]; then
   say "Installing dependencies (uses your configured registry)..."
   bun install
+  say "Building public packages..."
+  bun run build:packages
   say "Building the web UI..."
   bun run --cwd web build
 else

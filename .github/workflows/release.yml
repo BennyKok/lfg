@@ -53,6 +53,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Build public packages
+        run: bun run build:packages
+
       - name: Build the web UI
         run: bun run --cwd web build
 
