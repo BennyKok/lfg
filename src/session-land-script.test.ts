@@ -35,7 +35,14 @@ describe("serialized session landing script", () => {
     mkdirSync(join(main, "web"));
     mkdirSync(fakeBin);
     const fakeBun = join(fakeBin, "bun");
-    writeFileSync(fakeBun, "#!/bin/sh\nprintf '%s\\n' \"$PWD\" >> \"$LFG_TEST_BUN_LOG\"\n");
+    writeFileSync(
+      fakeBun,
+      "#!/bin/sh\n" +
+        "printf '%s\\n' \"$PWD\" >> \"$LFG_TEST_BUN_LOG\"\n" +
+        "case \"$PWD\" in\n" +
+        "  */web) mkdir -p dist; printf '<!doctype html><html></html>\\n' > dist/index.html ;;\n" +
+        "esac\n",
+    );
     chmodSync(fakeBun, 0o755);
     git(root, "init", "--bare", remote);
     git(main, "init", "-b", "main");
@@ -43,8 +50,9 @@ describe("serialized session landing script", () => {
     git(main, "config", "user.name", "Test");
     git(main, "remote", "add", "origin", remote);
     writeFileSync(join(main, "base.txt"), "base\n");
+    writeFileSync(join(main, ".gitignore"), "web/dist/\n");
     writeFileSync(join(main, "web", ".keep"), "\n");
-    git(main, "add", "base.txt", "web/.keep");
+    git(main, "add", ".gitignore", "base.txt", "web/.keep");
     git(main, "commit", "-m", "base");
     git(main, "push", "-u", "origin", "main");
     git(main, "worktree", "add", "-b", "session_first", first, "main");
