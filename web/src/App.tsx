@@ -5472,7 +5472,7 @@ export function App() {
       {embedded || liveDesktopWorkspace ? null : (
       <header
         className={cn(
-          "relative z-40 flex shrink-0 items-center justify-between gap-2 px-3 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))]",
+          "relative z-40 flex shrink-0 items-center justify-between gap-2 px-2 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))] md:px-3",
           isMobile &&
             (tab === "live" || tab === "shipped" || tab === "artifacts") &&
             "mobile-scroll-header-fade",
@@ -5558,7 +5558,7 @@ export function App() {
       <main
         ref={mainRef}
         className={cn(
-          "min-h-0 flex-1 px-3 pt-3",
+          "min-h-0 flex-1 px-2 pt-3 md:px-3",
           liveDesktopWorkspace ? "overflow-hidden pb-3" : `overflow-y-auto ${mainBottomPadding}`,
         )}
       >
