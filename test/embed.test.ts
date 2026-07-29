@@ -110,3 +110,33 @@ describe("host bottom inset contract", () => {
     );
   });
 });
+
+describe("mobile overlay scroll contract", () => {
+  test("every mobile page scrolls behind the shared top chrome", () => {
+    const app = require("node:fs").readFileSync("web/src/App.tsx", "utf8") as string;
+    const css = require("node:fs").readFileSync("web/src/index.css", "utf8") as string;
+
+    expect(app).toContain(
+      'isMobile &&\n            "absolute inset-0 pt-[calc(var(--lfg-mobile-header-height)+var(--lfg-mobile-header-fade-height))]',
+    );
+    expect(app).toContain('isMobile && "mobile-scroll-header-fade"');
+    expect(css).toMatch(
+      /--lfg-mobile-header-height:\s*calc\(3\.5rem\s*\+\s*env\(safe-area-inset-top,\s*0px\)\)/,
+    );
+    expect(css).toMatch(/--lfg-mobile-header-fade-height:\s*2\.5rem/);
+  });
+
+  test("composer pages reserve the overlay and fade depth inside the scroller", () => {
+    const app = require("node:fs").readFileSync("web/src/App.tsx", "utf8") as string;
+    const css = require("node:fs").readFileSync("web/src/index.css", "utf8") as string;
+
+    expect(app).toContain('tab === "live" || tab === "shipped" || tab === "artifacts"');
+    expect(app).toContain(
+      "pb-[calc(var(--lfg-inline-composer-height,var(--lfg-composer-clear))+var(--lfg-mobile-composer-fade-height)+var(--lfg-host-bottom-inset))]",
+    );
+    expect(app).toContain(
+      "mobile-scroll-composer-fade pointer-events-auto relative z-[55] mt-auto",
+    );
+    expect(css).toMatch(/--lfg-mobile-composer-fade-height:\s*6rem/);
+  });
+});

@@ -3019,7 +3019,7 @@ function ComposerSendButton({
   );
 }
 
-const APP_SHELL_CLASS = "flex h-dvh flex-col overflow-hidden bg-background text-foreground";
+const APP_SHELL_CLASS = "relative flex h-dvh flex-col overflow-hidden bg-background text-foreground";
 
 function AppShellSkeleton() {
   return (
@@ -5436,13 +5436,17 @@ export function App() {
     );
   }
 
-  const mainBottomPadding =
-    tab === "live"
-      ? isMobile
-        ? "pb-3"
-        : keyboardOpen
-          ? "pb-[calc(var(--lfg-inline-composer-height,var(--lfg-composer-clear))+0.75rem)] md:pb-3"
-          : "pb-[var(--lfg-above-orb)] md:pb-3"
+  const mobileComposerVisible =
+    isMobile &&
+    !callOpen &&
+    !viewerArtifact &&
+    (tab === "live" || tab === "shipped" || tab === "artifacts");
+  const mainBottomPadding = mobileComposerVisible
+    ? "pb-[calc(var(--lfg-inline-composer-height,var(--lfg-composer-clear))+var(--lfg-mobile-composer-fade-height)+var(--lfg-host-bottom-inset))] [scroll-padding-bottom:calc(var(--lfg-inline-composer-height,var(--lfg-composer-clear))+var(--lfg-mobile-composer-fade-height)+var(--lfg-host-bottom-inset))]"
+    : tab === "live"
+      ? keyboardOpen
+        ? "pb-[calc(var(--lfg-inline-composer-height,var(--lfg-composer-clear))+0.75rem)] md:pb-3"
+        : "pb-[var(--lfg-above-orb)] md:pb-3"
       : "pb-3";
   const liveDesktopWorkspace = tab === "live" && isWide;
 
@@ -5473,9 +5477,7 @@ export function App() {
       <header
         className={cn(
           "relative z-40 flex shrink-0 items-center justify-between gap-2 px-2 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))] md:px-3",
-          isMobile &&
-            (tab === "live" || tab === "shipped" || tab === "artifacts") &&
-            "mobile-scroll-header-fade",
+          isMobile && "mobile-scroll-header-fade",
         )}
       >
         <NavIsland className="shrink-0">
@@ -5558,7 +5560,9 @@ export function App() {
       <main
         ref={mainRef}
         className={cn(
-          "min-h-0 flex-1 px-2 pt-3 md:px-3",
+          "min-h-0 px-0 md:flex-1 md:px-3 md:pt-3",
+          isMobile &&
+            "absolute inset-0 pt-[calc(var(--lfg-mobile-header-height)+var(--lfg-mobile-header-fade-height))] [scroll-padding-top:calc(var(--lfg-mobile-header-height)+var(--lfg-mobile-header-fade-height))]",
           liveDesktopWorkspace ? "overflow-hidden pb-3" : `overflow-y-auto ${mainBottomPadding}`,
         )}
       >
@@ -15056,7 +15060,7 @@ function NewSessionDialog({
       <div
         ref={inlineBarRef}
         aria-busy={launching}
-        className="mobile-scroll-composer-fade pointer-events-auto relative z-[55] shrink-0 overflow-x-clip bg-background/95 pt-4 shadow-[0_-8px_24px_rgba(0,0,0,0.12)] backdrop-blur-xl"
+        className="mobile-scroll-composer-fade pointer-events-auto relative z-[55] mt-auto shrink-0 overflow-x-clip bg-background/95 pt-4 shadow-[0_-8px_24px_rgba(0,0,0,0.12)] backdrop-blur-xl"
       >
         <div ref={inlineShellRef} className="mx-auto max-w-lg will-change-transform">
           {formBody}
