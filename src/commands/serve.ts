@@ -1181,6 +1181,50 @@ async function closeLiveSession(
   return { ok: true, mode };
 }
 
+// Shipping is a terminal lifecycle transition, but the POST response has to
+// reach the calling agent before its tmux session disappears. Persist the
+// resumable record synchronously at the call site, then close from a short
+// deferred task. This is the same response-flush grace period used for terminal
+// subagent reports below.
+const SHIPPED_CLOSE_DELAY_MS = 1_500;
+
+function scheduleShippedSessionClose(sessionId: string): void {
+  setTimeout(() => {
+    void (async () => {
+      const sess = (await listSessions()).find(
+        (session) =>
+          session.sessionId === sessionId || session.nativeSessionId === sessionId,
+      );
+      if (!sess) {
+        evlog("shipped_session_close_skipped", {
+          sessionId,
+          source: "shipped_terminal_state",
+          reason: "not_live",
+        });
+        return;
+      }
+      const outcome = await closeLiveSession(sess, sess.sessionId ?? sessionId, {
+        sessionId: sess.sessionId ?? sessionId,
+        source: "shipped_terminal_state",
+      });
+      if (!outcome.ok) {
+        evlog("shipped_session_close_failed", {
+          sessionId: sess.sessionId ?? sessionId,
+          source: "shipped_terminal_state",
+          reason: outcome.reason,
+          status: outcome.status,
+        });
+      }
+    })().catch((error) => {
+      evlog("shipped_session_close_failed", {
+        sessionId,
+        source: "shipped_terminal_state",
+        reason: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, SHIPPED_CLOSE_DELAY_MS);
+}
+
 type ParentableSession = {
   sessionId?: string | null;
   nativeSessionId?: string | null;
@@ -5094,7 +5138,33 @@ export async function cmdServe() {
                 )?.agent
               : undefined;
             const post = await addShipPost({ ...body, agent: body.agent ?? sourceAgent, title: shipTitle });
-            return json({ ok: true, post });
+            const sourceSession = body.sessionId
+              ? (await listSessions()).find(
+                  (session) =>
+                    session.sessionId === body.sessionId ||
+                    session.nativeSessionId === body.sessionId,
+                )
+              : undefined;
+            if (sourceSession && body.sessionId) {
+              // Make the resumable row durable before acknowledging the ship.
+              // The deferred close repeats this defensively, but doing it now
+              // guarantees the finished session is recoverable even if serve
+              // restarts during the response-flush grace period.
+              persistManagedResume(sourceSession);
+              scheduleShippedSessionClose(body.sessionId);
+              evlog("shipped_session_close_scheduled", {
+                sessionId: sourceSession.sessionId ?? body.sessionId,
+                source: "shipped_terminal_state",
+                delayMs: SHIPPED_CLOSE_DELAY_MS,
+              });
+            }
+            return json({
+              ok: true,
+              post,
+              session: sourceSession
+                ? { status: "closing", resumable: true }
+                : undefined,
+            });
           } catch (e) {
             return err(400, e instanceof Error ? e.message : "could not add shipped post");
           }
