@@ -68,9 +68,9 @@ say "Syncing and building the local main checkout"
 git -C "$MAIN_ROOT" fetch --quiet origin main
 git -C "$MAIN_ROOT" merge --ff-only origin/main
 if [ "${LFG_LAND_SKIP_BUILD:-0}" != "1" ]; then
-  bun --cwd "$MAIN_ROOT" install --frozen-lockfile
-  bun --cwd "$MAIN_ROOT/web" install --frozen-lockfile
-  bun --cwd "$MAIN_ROOT/web" run build
+  (cd "$MAIN_ROOT" && bun install --frozen-lockfile)
+  (cd "$MAIN_ROOT/web" && bun install --frozen-lockfile)
+  (cd "$MAIN_ROOT/web" && bun run build)
 fi
 
 deployed_head="$(git -C "$MAIN_ROOT" rev-parse HEAD)"

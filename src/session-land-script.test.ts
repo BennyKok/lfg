@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deployedHeadPath } from "./session-landing.ts";
@@ -29,14 +29,22 @@ describe("serialized session landing script", () => {
     const main = join(root, "main");
     const first = join(root, "first");
     const second = join(root, "second");
+    const fakeBin = join(root, "bin");
+    const bunLog = join(root, "bun-cwds.log");
     mkdirSync(main);
+    mkdirSync(join(main, "web"));
+    mkdirSync(fakeBin);
+    const fakeBun = join(fakeBin, "bun");
+    writeFileSync(fakeBun, "#!/bin/sh\nprintf '%s\\n' \"$PWD\" >> \"$LFG_TEST_BUN_LOG\"\n");
+    chmodSync(fakeBun, 0o755);
     git(root, "init", "--bare", remote);
     git(main, "init", "-b", "main");
     git(main, "config", "user.email", "test@example.com");
     git(main, "config", "user.name", "Test");
     git(main, "remote", "add", "origin", remote);
     writeFileSync(join(main, "base.txt"), "base\n");
-    git(main, "add", "base.txt");
+    writeFileSync(join(main, "web", ".keep"), "\n");
+    git(main, "add", "base.txt", "web/.keep");
     git(main, "commit", "-m", "base");
     git(main, "push", "-u", "origin", "main");
     git(main, "worktree", "add", "-b", "session_first", first, "main");
@@ -51,8 +59,9 @@ describe("serialized session landing script", () => {
 
     const env = {
       ...process.env,
-      LFG_LAND_SKIP_BUILD: "1",
       LFG_LAND_SKIP_RESTART: "1",
+      LFG_TEST_BUN_LOG: bunLog,
+      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
     };
     const one = Bun.spawn(["bash", SCRIPT], { cwd: first, env, stdout: "pipe", stderr: "pipe" });
     const two = Bun.spawn(["bash", SCRIPT], { cwd: second, env, stdout: "pipe", stderr: "pipe" });
@@ -73,5 +82,9 @@ describe("serialized session landing script", () => {
     expect(Bun.file(deployedHeadPath(main)!).text()).resolves.toBe(
       `${git(main, "rev-parse", "origin/main")}\n`,
     );
+    const buildCwds = (await Bun.file(bunLog).text()).trim().split("\n");
+    expect(buildCwds).toHaveLength(6);
+    expect(buildCwds.filter((cwd) => cwd === main)).toHaveLength(2);
+    expect(buildCwds.filter((cwd) => cwd === join(main, "web"))).toHaveLength(4);
   });
 });
