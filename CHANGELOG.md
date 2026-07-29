@@ -4,6 +4,17 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Safer self-hosting and Claude skills (v0.1.118)
+
+- Containerized LFG clients now dial wildcard-bound local servers through the
+  correct loopback address, including IPv6-safe URL handling.
+- Release self-updates now work with the BSD tar shipped by macOS, and injected
+  platform checks correctly recognize the OMG supervisor restart path.
+- Skills installed by Claude Code plugins now appear in the skills catalog with
+  stable plugin-qualified names.
+- Cloud deployment docs now make clear that the shared Dockerfile builds the
+  checked-out source directly and does not require a release bundle first.
+
 ## July 29, 2026 - Deterministic rename settling (v0.1.117)
 
 - Session renames now remain stable through delayed live-status snapshots,
