@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Deterministic package releases (v0.1.89)
+
+- Version tags now have one release publisher, preventing local and hosted
+  release jobs from racing to write the same assets.
+- Package archives are cleaned before each build, so a release can contain
+  only the protocol, client, and React packages for its own version.
+
 ## July 29, 2026 - Native Computer surfaces (v0.1.88)
 
 - LFG now ships versioned protocol, client, and React packages so trusted
