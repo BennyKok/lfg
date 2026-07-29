@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Edge-to-edge mobile scrolling (v0.1.95)
+
+- Every mobile page now scrolls edge-to-edge behind the floating navigation,
+  with a soft blur and fade instead of a hard content boundary.
+- Live, Shipped, and Artifacts also scroll behind the persistent composer while
+  matching top and bottom padding keeps every item fully reachable.
+
 ## July 29, 2026 - Single app dependency (v0.1.94)
 
 - `@lfg-dev/app` now exports its signed transport factory and public transport
