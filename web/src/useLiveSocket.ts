@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { visibilityRecoveryAction } from "./live-visibility";
+import { api } from "./lib/lfg-client";
 
 type Session = {
   agent?: string;
@@ -155,13 +156,6 @@ function evlog(event: string, fields: Record<string, unknown> = {}) {
       keepalive: true,
     }).catch(() => {});
   } catch {}
-}
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, init);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data?.error || `${res.status} ${res.statusText}`);
-  return data as T;
 }
 
 function parseJson<T>(data: string): T | null {

@@ -14,6 +14,7 @@ import {
   shouldShowEmbeddedConnectGate,
 } from "./lib/embedded-connect";
 import { emitSessionCreatedToHost } from "./lib/embed-host-signal";
+import { api } from "./lib/lfg-client";
 import { EmbeddedConnectGate } from "./components/embedded-connect-gate";
 import {
   isComputerHostResumeMessage,
@@ -975,15 +976,6 @@ function isHarnessAgent(agent?: string | null): boolean {
 
 function canDriveSession(session: Pick<Session, "agent" | "tmuxTarget">): boolean {
   return !!session.tmuxTarget || isHarnessAgent(session.agent);
-}
-
-async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, init);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data?.error || `${res.status} ${res.statusText}`);
-  }
-  return data as T;
 }
 
 function uploadFile<T>(
