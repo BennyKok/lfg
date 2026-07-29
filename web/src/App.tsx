@@ -5471,7 +5471,12 @@ export function App() {
       {/* Embed (omg Computer iframe): host owns settings/user chrome — no LFG header. */}
       {embedded || liveDesktopWorkspace ? null : (
       <header
-        className="z-40 flex shrink-0 items-center justify-between gap-2 px-3 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))]"
+        className={cn(
+          "relative z-40 flex shrink-0 items-center justify-between gap-2 px-3 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))]",
+          isMobile &&
+            (tab === "live" || tab === "shipped" || tab === "artifacts") &&
+            "mobile-scroll-header-fade",
+        )}
       >
         <NavIsland className="shrink-0">
           <div className="flex h-11 items-center rounded-full bg-background/80 px-1.5 backdrop-blur-xl">
@@ -15051,7 +15056,7 @@ function NewSessionDialog({
       <div
         ref={inlineBarRef}
         aria-busy={launching}
-        className="pointer-events-auto relative z-[55] shrink-0 overflow-x-clip bg-background/95 pt-4 shadow-[0_-8px_24px_rgba(0,0,0,0.12)] backdrop-blur-xl"
+        className="mobile-scroll-composer-fade pointer-events-auto relative z-[55] shrink-0 overflow-x-clip bg-background/95 pt-4 shadow-[0_-8px_24px_rgba(0,0,0,0.12)] backdrop-blur-xl"
       >
         <div ref={inlineShellRef} className="mx-auto max-w-lg will-change-transform">
           {formBody}

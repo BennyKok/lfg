@@ -671,6 +671,44 @@ html.lfg-keyboard-open {
     );
   }
 
+  /* On the narrow layout the page itself is the scroll surface, framed by the
+     floating nav islands and persistent composer. Extend each chrome surface
+     with a real background→transparent wash so rows and transcript content
+     dissolve at those boundaries instead of ending on a hard clipping line.
+     These are overlays rather than masks: the page background stays opaque,
+     while only the passing content is visually softened. */
+  @media (max-width: 767px) {
+    .mobile-scroll-header-fade::after,
+    .mobile-scroll-composer-fade::before {
+      position: absolute;
+      inset-inline: 0;
+      pointer-events: none;
+      content: "";
+    }
+
+    .mobile-scroll-header-fade::after {
+      top: 100%;
+      height: 2.5rem;
+      background: linear-gradient(
+        to bottom,
+        var(--background) 0,
+        color-mix(in srgb, var(--background) 82%, transparent) 34%,
+        transparent 100%
+      );
+    }
+
+    .mobile-scroll-composer-fade::before {
+      bottom: 100%;
+      height: 4rem;
+      background: linear-gradient(
+        to top,
+        var(--background) 0,
+        color-mix(in srgb, var(--background) 82%, transparent) 38%,
+        transparent 100%
+      );
+    }
+  }
+
   .chat-stream {
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
