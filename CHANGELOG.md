@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Native session rail polish (v0.1.91)
+
+- The native Computer session rail now swipes cleanly on mobile with subtle
+  item snapping and no exposed browser scrollbar.
+
 ## July 29, 2026 - Clean workspace builds (v0.1.90)
 
 - Release runners now compile the shared workspace packages before the
