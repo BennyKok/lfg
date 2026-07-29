@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Full-width mobile chat (v0.1.109)
+
+- The mobile Live chat page now uses the full available width without an extra
+  outer gutter, while gallery-style pages keep their existing spacing.
+
 ## July 29, 2026 - Authenticated embedded artifacts (v0.1.108)
 
 - HTML dashboards and videos in hosted Computer sessions now load through the
