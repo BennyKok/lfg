@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Balanced mobile fade heights (v0.1.115)
+
+- The mobile composer fade now matches the compact 20px header fade, removing
+  the oversized dark wash above the message field.
+
 ## July 29, 2026 - Hosted galleries (v0.1.114)
 
 - Hosted LFG surfaces now keep Shipped and Artifacts navigation available on
