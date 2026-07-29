@@ -4,6 +4,17 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Full application package (v0.1.93)
+
+- LFG now publishes its exact standalone application as `@lfg-dev/app`, so
+  React hosts render the same desktop rail, mobile cards, session sheets, and
+  composers without an iframe or a second visual implementation.
+- The full application accepts one host-owned signed transport for every HTTP
+  request and live WebSocket, keeps its navigation in memory, and scopes its
+  stylesheet to the mounted host surface.
+- Release packaging now produces the application tarball once and includes it
+  alongside the protocol, client, and smaller React surface packages.
+
 ## July 29, 2026 - Finished sessions (v0.1.92)
 
 - Successful agent work now posts its final result, leaves the live fleet
