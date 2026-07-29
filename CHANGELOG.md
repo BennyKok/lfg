@@ -4,6 +4,10 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+- Opening a finished session from Recently Shipped now shows its transcript
+  without resuming it; sending a new message resumes the session automatically
+  and delivers that message as the first follow-up.
+
 ## July 29, 2026 - Unified project picker (v0.1.104)
 
 - The desktop project control now uses the same polished folder pill and icon

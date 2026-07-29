@@ -4626,43 +4626,6 @@ export function App() {
     () => allLiveSessions.map((s) => s.sessionId).filter((id): id is string => !!id),
     [allLiveSessions],
   );
-  const openRecentShipped = useCallback(
-    async (post: ShipPost) => {
-      if (!post.sessionId) return;
-      setTab("live");
-
-      const live = allLiveSessions.find(
-        (session) =>
-          session.sessionId === post.sessionId ||
-          session.nativeSessionId === post.sessionId,
-      );
-      if (live?.sessionId) {
-        setLiveFocus({ sid: live.sessionId, n: Date.now() });
-        return;
-      }
-
-      toast.message("Resuming shipped session…");
-      try {
-        const resumed = await api<{ sessionId?: string }>("/api/sessions/resume", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            sessionId: post.sessionId,
-            user: identity || undefined,
-          }),
-        });
-        const sid = resumed.sessionId || post.sessionId;
-        await refreshSessions();
-        setLiveFocus({ sid, n: Date.now() });
-        toast.success("Session resumed");
-      } catch (error) {
-        toast.error(
-          error instanceof Error ? error.message : "Couldn't resume shipped session",
-        );
-      }
-    },
-    [allLiveSessions, identity, refreshSessions, setTab],
-  );
   const liveStatusKey = liveStatusIds.join(",");
   const liveTransport = useMemo(() => liveTransportMode(), []);
   const useWsLive = liveTransport === "ws";
@@ -5666,7 +5629,7 @@ export function App() {
               onOpenSettings={embedded ? undefined : () => setTab("settings")}
               onOpenAsk={embedded ? undefined : () => setTab("ask")}
               onOpenShipped={embedded ? undefined : openShipped}
-              onOpenRecentShipped={embedded ? undefined : openRecentShipped}
+              onOpenRecentShipped={embedded ? undefined : openShipped}
               repos={repos}
               onReposChanged={loadCore}
               messagesBySid={liveStream.messagesBySid}
@@ -5728,11 +5691,15 @@ export function App() {
                 setTab("live");
                 setLiveFocus({ sid, n: Date.now() });
               }}
-              onResumeSession={async (sid) => {
+              onResumeSession={async (sid, prompt) => {
                 const resumed = await api<{ sessionId?: string }>("/api/sessions/resume", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ sessionId: sid, user: identity || undefined }),
+                  body: JSON.stringify({
+                    sessionId: sid,
+                    prompt,
+                    user: identity || undefined,
+                  }),
                 });
                 await refreshSessions();
                 return resumed.sessionId || sid;
@@ -18191,8 +18158,8 @@ function ShipMedia({
 }
 
 // A shipped session uses the exact same transcript renderer as a live session.
-// The only different chrome is lifecycle-aware: it is read-only while closed
-// and offers a single Resume action that returns it to the live fleet.
+// Opening it is read-only; writing a new message resumes the session and sends
+// that message as its first new turn.
 function ShipTranscriptSheet({
   post,
   onClose,
@@ -18200,18 +18167,21 @@ function ShipTranscriptSheet({
 }: {
   post: ShipPost;
   onClose: () => void;
-  onResume: (sessionId: string) => Promise<void>;
+  onResume: (sessionId: string, prompt: string) => Promise<void>;
 }) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [nextBefore, setNextBefore] = useState<number | null>(null);
-  const [resuming, setResuming] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
     setMessages([]);
     setNextBefore(null);
+    setDraft("");
+    setSending(false);
     setLoading(true);
     setError(null);
     (async () => {
@@ -18255,15 +18225,18 @@ function ShipTranscriptSheet({
     [nextBefore],
   );
 
-  const resume = async () => {
-    if (!post.sessionId || resuming) return;
-    setResuming(true);
+  const send = async (event: FormEvent) => {
+    event.preventDefault();
+    const prompt = draft.trim();
+    if (!post.sessionId || !prompt || sending) return;
+    setSending(true);
     setError(null);
+    feedback.send();
     try {
-      await onResume(post.sessionId);
+      await onResume(post.sessionId, prompt);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't resume the session");
-      setResuming(false);
+      setError(e instanceof Error ? e.message : "Couldn't send the message");
+      setSending(false);
     }
   };
 
@@ -18282,20 +18255,9 @@ function ShipTranscriptSheet({
               {post.sessionTitle ?? post.title}
             </div>
             <div className="text-[11px] text-muted-foreground">
-              Shipped · ready to resume
+              Shipped · viewing history
             </div>
           </div>
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            disabled={!post.sessionId || resuming}
-            onClick={() => void resume()}
-            className="h-8 rounded-full"
-          >
-            {resuming ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCcw className="size-3.5" />}
-            {resuming ? "Resuming…" : "Resume"}
-          </Button>
           <button
             type="button"
             onClick={onClose}
@@ -18313,6 +18275,40 @@ function ShipTranscriptSheet({
           loading={loading}
           onLoadOlderMessages={loadOlderMessages}
         />
+        <form
+          onSubmit={(event) => void send(event)}
+          className="border-t border-border bg-background px-3 py-3"
+        >
+          <div className="flex items-end gap-2">
+            <SkillTextarea
+              value={draft}
+              onValueChange={setDraft}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+              placeholder="Message to resume"
+              disabled={sending}
+              rows={1}
+              className="lfg-gfield min-h-11 max-h-32 min-w-0 flex-1 resize-none overflow-y-auto rounded-2xl border-transparent px-4 py-3 text-base leading-5 shadow-sm [field-sizing:fixed] md:min-h-9 md:rounded-[1.125rem] md:px-3.5 md:py-2 md:text-sm"
+            />
+            <Button
+              size="icon"
+              type="submit"
+              disabled={!post.sessionId || !draft.trim() || sending}
+              aria-label="Send and resume session"
+              title="Send and resume session"
+              className="size-11 rounded-full md:size-9"
+            >
+              {sending ? <Loader2 className="size-4 animate-spin" /> : <Send className="size-4" />}
+            </Button>
+          </div>
+          <p className="mt-1.5 px-1 text-[11px] text-muted-foreground">
+            Sending resumes this session.
+          </p>
+        </form>
       </div>
     </div>
   );
@@ -18341,7 +18337,7 @@ function ShippedPage({
   active = true,
 }: {
   onOpenSession: (sessionId: string) => void;
-  onResumeSession?: (sessionId: string) => Promise<string>;
+  onResumeSession?: (sessionId: string, prompt: string) => Promise<string>;
   onFollowUpCreated?: (sessionId: string) => Promise<void>;
   liveSessionIds: Set<string>;
   focusPost?: { post: ShipPost; n: number } | null;
@@ -18379,9 +18375,9 @@ function ShippedPage({
   const appDialog = useAppDialog();
   const handledFocus = useRef<number | null>(null);
 
-  const resumeShippedSession = async (sessionId: string) => {
+  const resumeShippedSession = async (sessionId: string, prompt: string) => {
     if (!onResumeSession) throw new Error("Session resume is unavailable");
-    const liveSessionId = await onResumeSession(sessionId);
+    const liveSessionId = await onResumeSession(sessionId, prompt);
     setViewing(null);
     onOpenSession(liveSessionId);
   };
