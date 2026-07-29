@@ -88,6 +88,7 @@ import { findingReference } from "./lib/finding-reference";
 import { setThemePreference, THEME_CHANGE_EVENT } from "./lib/theme";
 import { startsInBottomSystemGestureZone } from "./lib/touch-gestures";
 import { retainLivePinnedSessions } from "./lib/pinned-sessions";
+import { latestDistinctShippedSessions } from "./lib/recent-shipped";
 import { ConnectionStatusToasts } from "./ConnectionStatus";
 import type {
   ClipboardEvent,
@@ -3791,6 +3792,9 @@ export function App() {
   // A "jump to this session" request for the Live view (from Shipped posts).
   // The nonce lets the same session be requested twice in a row.
   const [liveFocus, setLiveFocus] = useState<{ sid: string; n: number } | null>(null);
+  // A desktop rail shortcut can open a specific finished session in Shipped.
+  // Like liveFocus, the nonce makes repeat taps on the same post actionable.
+  const [shippedFocus, setShippedFocus] = useState<{ post: ShipPost; n: number } | null>(null);
   // Deep link: `/?session=<id>` (the URL the server hands out as
   // `publicSessionUrl`) focuses that session on load. Read once, at the top of
   // the component, because several filter effects below have to know a link is
@@ -3920,6 +3924,13 @@ export function App() {
     [navigate],
   );
   const extNavTabs = useExtensionNavTabs();
+  const openShipped = useCallback(
+    (post?: ShipPost) => {
+      if (post) setShippedFocus({ post, n: Date.now() });
+      setTab("shipped");
+    },
+    [setTab],
+  );
   // Keep the session list + Shipped/Artifacts mounted after first visit so
   // tab switches don't remount, re-fetch, or reboot gallery iframes. Hidden
   // pages set `active=false` to pause polling. First paint of Shipped/Artifacts
@@ -5566,7 +5577,7 @@ export function App() {
               onUserChange={embedded ? undefined : changeUserFilter}
               onOpenSettings={embedded ? undefined : () => setTab("settings")}
               onOpenAsk={embedded ? undefined : () => setTab("ask")}
-              onOpenShipped={embedded ? undefined : () => setTab("shipped")}
+              onOpenShipped={embedded ? undefined : openShipped}
               messagesBySid={liveStream.messagesBySid}
               busyBySid={liveStream.busyBySid}
               promptsBySid={liveStream.promptsBySid}
@@ -5614,6 +5625,7 @@ export function App() {
           <div className={tab === "shipped" ? undefined : "hidden"} aria-hidden={tab !== "shipped"}>
             <ShippedPage
               active={tab === "shipped"}
+              focusPost={shippedFocus}
               liveSessionIds={
                 new Set(
                   liveSessions.flatMap((s) =>
@@ -7688,7 +7700,7 @@ function LiveView({
   onUserChange?: (v: string) => void;
   onOpenSettings?: () => void;
   onOpenAsk?: () => void;
-  onOpenShipped?: () => void;
+  onOpenShipped?: (post?: ShipPost) => void;
   onManageSessions: (template: ManageSessionPromptTemplate) => void;
   onClearIdle: () => void;
   hosted?: boolean;
@@ -8084,7 +8096,7 @@ function RailStage({
   onUserChange?: (v: string) => void;
   onOpenSettings?: () => void;
   onOpenAsk?: () => void;
-  onOpenShipped?: () => void;
+  onOpenShipped?: (post?: ShipPost) => void;
   onManageSessions?: (template: ManageSessionPromptTemplate) => void;
   onClearIdle?: () => void;
   hosted?: boolean;
@@ -8134,8 +8146,35 @@ function RailStage({
   const [pinned, setPinned] = useState<string[]>(readPinned);
   const [preview, setPreview] = useState<string | null>(null);
   const [railCollapsed, setRailCollapsed] = useState<boolean>(readRailCollapsed);
+  const cachedShipped = readFeedCache<ShipPost>(SHIPPED_FEED_KEY);
+  const [recentShipped, setRecentShipped] = useState<ShipPost[]>(() =>
+    latestDistinctShippedSessions(cachedShipped?.items ?? []),
+  );
   // Keyboard cursor (highlighted rail row) + the shortcuts cheatsheet overlay.
   const [cursor, setCursor] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!onOpenShipped) return;
+    let alive = true;
+    const load = async () => {
+      try {
+        // Scan beyond five posts so revisions or multiple posts from one
+        // session still produce five distinct finished sessions.
+        const data = await api<{ posts: ShipPost[] }>("/api/shipped?limit=25", {
+          cache: "no-store",
+        });
+        if (alive) setRecentShipped(latestDistinctShippedSessions(data.posts));
+      } catch {
+        // Keep the last cached paint; the Shipped page remains the fallback.
+      }
+    };
+    void load();
+    const interval = window.setInterval(() => void load(), 15_000);
+    return () => {
+      alive = false;
+      window.clearInterval(interval);
+    };
+  }, [onOpenShipped]);
   const [showHelp, setShowHelp] = useState(false);
   // One-shot glow token for the stage pane just chosen from the rail. `n`
   // increments so re-selecting the same sid restarts the animation.
@@ -9013,7 +9052,7 @@ function RailStage({
             {onOpenShipped ? (
               <button
                 type="button"
-                onClick={onOpenShipped}
+                onClick={() => onOpenShipped()}
                 aria-label="Shipped"
                 title="Shipped"
                 className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
@@ -9134,6 +9173,50 @@ function RailStage({
               ) : null}
             </>
           )}
+          {!railCollapsed && onOpenShipped && recentShipped.length ? (
+            <RailGroup
+              label="Recently shipped"
+              count={recentShipped.length}
+              collapsed={false}
+            >
+              {recentShipped.map((post) => (
+                <button
+                  key={post.id}
+                  type="button"
+                  onClick={() => onOpenShipped(post)}
+                  title={`Open shipped session: ${post.title}`}
+                  className="group flex w-full items-center gap-2 rounded-xl border border-transparent px-2 py-1.5 text-left outline-none transition-colors hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/60"
+                >
+                  <span className="relative flex size-6 shrink-0 items-center justify-center">
+                    <img
+                      src={agentIconSrc(post.agent)}
+                      alt={agentIconAlt(post.agent)}
+                      className="size-6 rounded-md"
+                    />
+                    <span
+                      aria-hidden
+                      className="absolute -bottom-0.5 -right-0.5 flex size-2.5 items-center justify-center rounded-full bg-emerald-500 ring-2 ring-card"
+                    >
+                      <Check className="size-1.5 text-white" strokeWidth={3} />
+                    </span>
+                  </span>
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="flex items-baseline gap-1.5">
+                      <span className="min-w-0 flex-1 truncate text-[13px] font-medium leading-tight">
+                        {post.title}
+                      </span>
+                      <span className="shrink-0 text-[10px] leading-tight tabular-nums text-muted-foreground/70">
+                        {timeAgo(post.ts)}
+                      </span>
+                    </span>
+                    <span className="truncate text-[11px] leading-tight text-muted-foreground">
+                      {post.project ? shortProject(post.project) : post.sessionTitle || "Finished session"}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </RailGroup>
+          ) : null}
         </div>
       </aside>
 
@@ -18022,6 +18105,7 @@ function ShippedPage({
   onResumeSession,
   onFollowUpCreated,
   liveSessionIds,
+  focusPost,
   artifactsOnly = false,
   active = true,
 }: {
@@ -18029,6 +18113,7 @@ function ShippedPage({
   onResumeSession?: (sessionId: string) => Promise<string>;
   onFollowUpCreated?: (sessionId: string) => Promise<void>;
   liveSessionIds: Set<string>;
+  focusPost?: { post: ShipPost; n: number } | null;
   artifactsOnly?: boolean;
   active?: boolean;
 }) {
@@ -18061,6 +18146,7 @@ function ShippedPage({
   const postsLen = useRef(Math.max(FEED_PAGE, cachedPosts?.items.length ?? 0));
   const openArtifact = useContext(ArtifactViewerContext);
   const appDialog = useAppDialog();
+  const handledFocus = useRef<number | null>(null);
 
   const resumeShippedSession = async (sessionId: string) => {
     if (!onResumeSession) throw new Error("Session resume is unavailable");
@@ -18068,6 +18154,25 @@ function ShippedPage({
     setViewing(null);
     onOpenSession(liveSessionId);
   };
+
+  useEffect(() => {
+    if (
+      view !== "feed" ||
+      !active ||
+      !focusPost ||
+      handledFocus.current === focusPost.n
+    ) {
+      return;
+    }
+    const post = focusPost.post;
+    if (!post?.sessionId) return;
+    handledFocus.current = focusPost.n;
+    if (liveSessionIds.has(post.sessionId)) {
+      onOpenSession(post.sessionId);
+    } else {
+      setViewing(post);
+    }
+  }, [active, focusPost, liveSessionIds, onOpenSession, view]);
 
   useEffect(() => {
     if (view !== "artifacts") return;
