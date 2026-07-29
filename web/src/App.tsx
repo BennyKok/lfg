@@ -5622,6 +5622,11 @@ export function App() {
                 await refreshSessions();
                 return resumed.sessionId || sid;
               }}
+              onFollowUpCreated={async (sid) => {
+                await refreshSessions();
+                setTab("live");
+                setLiveFocus({ sid, n: Date.now() });
+              }}
             />
           </div>
         ) : null}
@@ -11562,10 +11567,12 @@ function ForkSessionDialog({
   session,
   onClose,
   onCreated,
+  mode = "fork",
 }: {
   session: Session;
   onClose: () => void;
-  onCreated: () => Promise<void>;
+  onCreated: (created?: { sessionId?: string }) => Promise<void>;
+  mode?: "fork" | "follow-up";
 }) {
   const catalog = useAgentModelCatalog();
   const codingAgents = useContext(CodingAgentsContext);
@@ -11628,7 +11635,7 @@ function ForkSessionDialog({
           ? await Promise.all(attached.map(files.resolveUpload))
           : [];
         const composedPrompt = composeAttachmentMessage(text, uploaded);
-        return api(`/api/sessions/${sid}/fork`, {
+        return api<{ sessionId?: string }>(`/api/sessions/${sid}/fork`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -11639,17 +11646,20 @@ function ForkSessionDialog({
             thinkingLevel: agentSupportsThinking(agent) ? thinkingLevel : undefined,
           }),
         });
-      })().then(() => onCreated()),
+      })().then((created) => onCreated(created)),
       {
-        loading: "Forking session...",
-        success: "Session forked",
+        loading: mode === "follow-up" ? "Starting follow-up..." : "Forking session...",
+        success: mode === "follow-up" ? "Follow-up session started" : "Session forked",
         error: (err) => (err instanceof Error ? err.message : "Couldn't open session"),
       },
     );
   }
 
   return (
-    <BottomSheet onClose={onClose} title="Fork session">
+    <BottomSheet
+      onClose={onClose}
+      title={mode === "follow-up" ? "Start a follow-up" : "Fork session"}
+    >
       <form
         onSubmit={submit}
         {...files.dropZoneProps}
@@ -11661,7 +11671,9 @@ function ForkSessionDialog({
         <div className="mb-3 flex items-center gap-2">
           <GitFork className="size-4 text-muted-foreground" />
           <div className="min-w-0">
-            <div className="text-[15px] font-semibold">Fork session</div>
+            <div className="text-[15px] font-semibold">
+              {mode === "follow-up" ? "New session from this context" : "Fork session"}
+            </div>
             <div className="truncate text-xs text-muted-foreground">
               {titleForSession(session)}
             </div>
@@ -11754,7 +11766,7 @@ function ForkSessionDialog({
             </Button>
             <Button type="submit" variant="brand" disabled={!sid}>
               <GitFork className="size-4" />
-              Open
+              {mode === "follow-up" ? "Start follow-up" : "Open"}
             </Button>
           </div>
         </div>
@@ -17929,12 +17941,14 @@ const GALLERY_PAGE = 24;
 function ShippedPage({
   onOpenSession,
   onResumeSession,
+  onFollowUpCreated,
   liveSessionIds,
   artifactsOnly = false,
   active = true,
 }: {
   onOpenSession: (sessionId: string) => void;
   onResumeSession?: (sessionId: string) => Promise<string>;
+  onFollowUpCreated?: (sessionId: string) => Promise<void>;
   liveSessionIds: Set<string>;
   artifactsOnly?: boolean;
   active?: boolean;
@@ -17951,6 +17965,9 @@ function ShippedPage({
   const [error, setError] = useState<string | null>(null);
   // Post whose (ended) session transcript is open read-only.
   const [viewing, setViewing] = useState<ShipPost | null>(null);
+  // A follow-up is a fresh session with the shipped transcript as context,
+  // leaving the original finished session untouched.
+  const [followingUp, setFollowingUp] = useState<ShipPost | null>(null);
   const [gallery, setGallery] = useState<GalleryArtifact[] | null>(() => cachedGallery?.items ?? null);
   const [galleryTotal, setGalleryTotal] = useState(() => cachedGallery?.total ?? 0);
   const [galleryBusy, setGalleryBusy] = useState(false);
@@ -18364,6 +18381,18 @@ function ShippedPage({
                     ))}
                   </div>
                 ) : null}
+                {post.sessionId ? (
+                  <div className="ml-[3.75rem] mr-4 mt-2">
+                    <button
+                      type="button"
+                      onClick={() => setFollowingUp(post)}
+                      className="inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-foreground/[0.05] hover:text-foreground"
+                    >
+                      <GitFork className="size-3.5" />
+                      Follow up
+                    </button>
+                  </div>
+                ) : null}
               </article>
             );
           })}
@@ -18386,6 +18415,27 @@ function ShippedPage({
           post={viewing}
           onClose={() => setViewing(null)}
           onResume={resumeShippedSession}
+        />
+      ) : null}
+      {followingUp?.sessionId ? (
+        <ForkSessionDialog
+          mode="follow-up"
+          session={{
+            sessionId: followingUp.sessionId,
+            title: followingUp.sessionTitle ?? followingUp.title,
+            project: followingUp.project,
+            agent: followingUp.agent,
+          }}
+          onClose={() => setFollowingUp(null)}
+          onCreated={async (created) => {
+            setFollowingUp(null);
+            if (!created?.sessionId) return;
+            if (onFollowUpCreated) {
+              await onFollowUpCreated(created.sessionId);
+            } else {
+              onOpenSession(created.sessionId);
+            }
+          }}
         />
       ) : null}
     </div>
