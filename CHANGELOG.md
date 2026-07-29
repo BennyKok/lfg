@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Unified project picker (v0.1.104)
+
+- The desktop project control now uses the same polished folder pill and icon
+  everywhere, while opening the richer project picker with all-projects,
+  browse, and new-folder actions.
+
 ## July 29, 2026 - Stable session selection and deploy checks (v0.1.103)
 
 - Choosing a different live session after opening a recent Shipped item now
