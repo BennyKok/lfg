@@ -17,6 +17,7 @@ import { emitSessionCreatedToHost } from "./lib/embed-host-signal";
 import { api, lfgAssetUrl, lfgFetch } from "./lib/lfg-client";
 import { uploadFile as uploadFileThroughTransport } from "./lib/upload";
 import { EmbeddedConnectGate } from "./components/embedded-connect-gate";
+import { AuthenticatedArtifactImage } from "./components/authenticated-artifact";
 import {
   isComputerHostResumeMessage,
   restartContinuousAnimations,
@@ -203,7 +204,6 @@ const VoiceCall = lazyWithReload("VoiceCall", () =>
 const BrowserProfiles = lazyWithReload("BrowserProfiles", () => import("./BrowserProfiles"));
 import { Badge } from "@/components/ui/badge";
 import { ImageAnnotator } from "@/components/ImageAnnotator";
-import { ZoomableImage } from "@/components/ImageLightbox";
 import { SessionDiffBar } from "@/components/SessionDiffView";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
@@ -867,7 +867,11 @@ function ArtifactViewerPage({
           </div>
         ) : (
           <div className="flex h-full items-center justify-center overflow-auto bg-background p-4">
-            <img src={src} alt={artifact.caption || label} className="max-h-full max-w-full object-contain" />
+            <AuthenticatedArtifactImage
+              path={artifact.url}
+              alt={artifact.caption || label}
+              className="max-h-full max-w-full object-contain"
+            />
           </div>
         )}
       </div>
@@ -13752,9 +13756,10 @@ function MessageBubble({
               className="block max-h-[24rem] w-auto max-w-full self-center bg-black object-contain"
             />
           ) : (
-            <ZoomableImage
-              src={message.url}
+            <AuthenticatedArtifactImage
+              path={message.url}
               alt={message.alt || label}
+              zoomable
               className="block max-h-[24rem] w-auto max-w-full self-center bg-muted object-contain"
             />
           )}
@@ -18258,9 +18263,10 @@ function ShipMedia({
     );
   }
   return (
-    <ZoomableImage
-      src={item.url}
+    <AuthenticatedArtifactImage
+      path={item.url}
       alt={item.caption || item.name}
+      zoomable
       className={cn(
         "block w-full bg-muted object-cover",
         tile ? "h-44" : "max-h-[20rem]",

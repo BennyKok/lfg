@@ -294,7 +294,14 @@ export function ZoomableImage({
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const previewSrc = src.includes("?") ? `${src}&preview=1` : `${src}?preview=1`;
+  // Authenticated artifact images are already local blob URLs. Querying those
+  // produces a different, invalid object URL; only server paths support the
+  // generated-preview flag.
+  const previewSrc = src.startsWith("blob:")
+    ? src
+    : src.includes("?")
+      ? `${src}&preview=1`
+      : `${src}?preview=1`;
   return (
     <>
       <img
