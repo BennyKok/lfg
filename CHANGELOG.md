@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Shipped follow-ups (v0.1.97)
+
+- Finished work in the Shipped feed now has a **Follow up** action that starts
+  a separate session with the original transcript as context, preserving the
+  completed source session while carrying the work forward.
+- The follow-up composer supports agent, model, reasoning, prompt, and file
+  choices, then opens the newly created session directly in Live.
+
 ## July 29, 2026 - Hosted attachment uploads (v0.1.96)
 
 - File attachments now use the host application's authenticated LFG transport,
