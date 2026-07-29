@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Finished sessions (v0.1.92)
+
+- Successful agent work now posts its final result, leaves the live fleet
+  automatically, and remains available to resume whenever follow-up is needed.
+- Finished conversations now use the same transcript rendering as live
+  sessions, with full history and a one-tap Resume action.
+
 ## July 29, 2026 - Native session rail polish (v0.1.91)
 
 - The native Computer session rail now swipes cleanly on mobile with subtle
