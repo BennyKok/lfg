@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Recent shipped sessions (v0.1.100)
+
+- The desktop sidebar now shows the five most recently shipped sessions for
+  quick access without leaving the active workspace.
+- Repeated ship-post updates collapse to one entry per session, and selecting
+  an item opens that exact shipped transcript ready for review or follow-up.
+
 ## July 29, 2026 - Safe concurrent delivery (v0.1.99)
 
 - Every LFG coding session now works in its own isolated checkout, including
