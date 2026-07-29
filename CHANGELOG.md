@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 29, 2026 - Stable session selection and deploy checks (v0.1.103)
+
+- Choosing a different live session after opening a recent Shipped item now
+  stays put instead of jumping back during background session refreshes.
+- LFG now verifies both the built web assets and the exact entry bundle served
+  after restart before reporting a local deployment as successful.
+
 ## July 29, 2026 - Project-scoped shipped sessions (v0.1.102)
 
 - Recent Shipped items from project-scoped sessions now open through the normal
