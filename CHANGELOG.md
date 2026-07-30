@@ -4,6 +4,21 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - A real crash screen, and crashes that report themselves (v0.1.142)
+
+- Replaces the raw error strip a render crash used to fall through to — a bare
+  "Something went wrong!" headline over a red monospace box — with a proper
+  screen: what broke, Retry, Reload, a one-tap Copy of the full details, and the
+  stack tucked behind a disclosure instead of shouted at you.
+- A crash caused by a stale build now says so ("New version available") and
+  leads with Reload, because that is the actual fix.
+- Render crashes are reported again. The app's own router boundary was catching
+  them before any error boundary could, so nothing was recorded — a crash could
+  hit a hosted user and leave no trace anywhere. It now files the report itself,
+  and only claims "Reported to lfg" when a report really went out.
+- Embedded surfaces can be given a central error sink by their host, so a crash
+  still gets recorded when the workspace behind the connection is asleep.
+
 ## July 30, 2026 - PWA icon cache refresh (v0.1.141)
 
 - Forces one safe service-worker takeover to remove the stale app shell that
