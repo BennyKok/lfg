@@ -3914,19 +3914,52 @@ export function App() {
   useEffect(() => {
     const main = mainRef.current;
     const chrome = mobileChromeEl;
-    if (!isMobile || !main || !chrome) return;
+    const root = rootRef.current;
+    if (!isMobile || !main || !chrome || !root) return;
     // At the natural top there is nothing passing beneath the floating header,
     // so leave the wash transparent and keep the first category label crisp.
-    // Ease it in over the first 24px of travel, then hold at full strength.
-    const syncFade = () => {
-      const opacity = Math.min(1, Math.max(0, main.scrollTop) / 24);
-      chrome.style.setProperty("--lfg-mobile-header-fade-opacity", String(opacity));
+    // The composer edge mirrors that behavior at the other end: transparent
+    // when the user reaches the bottom, easing in over the preceding 24px.
+    let frame = 0;
+    const syncFades = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        const topOpacity = Math.min(1, Math.max(0, main.scrollTop) / 24);
+        const remaining = Math.max(
+          0,
+          main.scrollHeight - main.clientHeight - main.scrollTop,
+        );
+        const bottomOpacity = Math.min(1, remaining / 24);
+        chrome.style.setProperty(
+          "--lfg-mobile-header-fade-opacity",
+          String(topOpacity),
+        );
+        root.style.setProperty(
+          "--lfg-mobile-composer-fade-opacity",
+          String(bottomOpacity),
+        );
+      });
     };
-    syncFade();
-    main.addEventListener("scroll", syncFade, { passive: true });
+    syncFades();
+    main.addEventListener("scroll", syncFades, { passive: true });
+    window.addEventListener("resize", syncFades);
+    const ro = new ResizeObserver(syncFades);
+    ro.observe(main);
+    for (const child of main.children) ro.observe(child);
+    const mo = new MutationObserver(() => {
+      for (const child of main.children) ro.observe(child);
+      syncFades();
+    });
+    mo.observe(main, { childList: true, subtree: true, characterData: true });
     return () => {
-      main.removeEventListener("scroll", syncFade);
+      main.removeEventListener("scroll", syncFades);
+      window.removeEventListener("resize", syncFades);
+      ro.disconnect();
+      mo.disconnect();
+      if (frame) cancelAnimationFrame(frame);
       chrome.style.removeProperty("--lfg-mobile-header-fade-opacity");
+      root.style.removeProperty("--lfg-mobile-composer-fade-opacity");
     };
   }, [isMobile, mobileChromeEl]);
   const [keyboardOpen, setKeyboardOpen] = useState(false);

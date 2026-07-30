@@ -169,5 +169,12 @@ describe("mobile overlay scroll contract", () => {
     expect(css).toMatch(
       /--lfg-mobile-composer-fade-height:\s*var\(--lfg-mobile-header-fade-height\)/,
     );
+    expect(css).toMatch(
+      /opacity:\s*var\(--lfg-mobile-composer-fade-opacity,\s*0\)/,
+    );
+    expect(app).toContain(
+      "main.scrollHeight - main.clientHeight - main.scrollTop",
+    );
+    expect(app).toContain("Math.min(1, remaining / 24)");
   });
 });
