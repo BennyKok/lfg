@@ -43,16 +43,21 @@ describe("authenticated artifacts", () => {
       "web/src/components/ImageLightbox.tsx",
       "utf8",
     );
-    expect(component).toContain("lfgFetch(requestPath");
+    const native = readFileSync("web/src/components/native-artifact.tsx", "utf8");
     expect(component).toContain("lfgFetch(path");
     expect(component).toContain("URL.createObjectURL");
     expect(component).toContain("URL.revokeObjectURL(objectUrl)");
     expect(lightbox).toContain('src.startsWith("blob:")');
-    expect(app).toContain("<AuthenticatedArtifactFrame");
     expect(app).toContain("<AuthenticatedArtifactImage");
     expect(app).toContain("<AuthenticatedArtifactVideo");
-    expect(app).not.toContain("<AutoHeightArtifactFrame key={src} src={src}");
+    // HTML artifacts render through the native renderer, which fetches through
+    // the transport itself (asserted in native-artifact.test.ts).
+    expect(native).toContain("lfgFetch(requestPath");
+    expect(app).toMatch(/<NativeArtifact(Embed|Thumbnail)?\b/);
+    // The failure this guards: an artifact rendered from a raw URL instead of
+    // the transport shows the surrounding Vibes app instead of the artifact.
     expect(app).not.toContain("src={message.url}");
     expect(app).not.toContain("src={item.url}");
+    expect(app).not.toContain("srcDoc={");
   });
 });

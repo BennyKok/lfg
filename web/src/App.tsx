@@ -19,7 +19,6 @@ import { cacheProjectFilter, readCachedProjectFilter } from "./lib/project-filte
 import { uploadFile as uploadFileThroughTransport } from "./lib/upload";
 import { EmbeddedConnectGate } from "./components/embedded-connect-gate";
 import {
-  AuthenticatedArtifactFrame,
   AuthenticatedArtifactImage,
   AuthenticatedArtifactVideo,
 } from "./components/authenticated-artifact";
@@ -862,13 +861,12 @@ function ArtifactViewerPage({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
-  // `hasScripts` is discovered by the parser, not declared by the artifact, so it
-  // arrives after the first paint. `runIsolated` stays false until the user asks.
-  const [hasScripts, setHasScripts] = useState(false);
-  const [runIsolated, setRunIsolated] = useState(false);
+  // Whether this artifact is scripted (and therefore framed) is discovered by the
+  // parser, so it arrives after first paint. Only used to drop the host's scroll
+  // container, which a framed document owns for itself.
+  const [framed, setFramed] = useState(false);
   useEffect(() => {
-    setHasScripts(false);
-    setRunIsolated(false);
+    setFramed(false);
   }, [artifact.url, artifact.cacheKey]);
   const label = artifact.title || artifact.caption || artifact.name || "Artifact";
   // z-[100] sits above the mobile bottom composer (z-55), ask-center (z-60),
@@ -888,21 +886,6 @@ function ArtifactViewerPage({
         </button>
         <div className="min-w-0 flex-1 truncate text-center text-sm font-semibold">{label}</div>
         <div className="flex shrink-0 items-center justify-end gap-1.5 pr-1">
-          {/* Only artifacts that actually script get this, and only after the
-              parser has told us so — the other ~95% never see it. Clicking it
-              trades the native render for the old sandboxed frame, which is the
-              one place artifact JS is allowed to run. */}
-          {artifact.kind === "html" && hasScripts && !runIsolated ? (
-            <button
-              type="button"
-              onClick={() => setRunIsolated(true)}
-              title="This artifact contains scripts. Run it in an isolated sandbox."
-              className="flex items-center gap-1 rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-            >
-              <Play className="size-2.5" />
-              Interactive
-            </button>
-          ) : null}
           {artifact.kind === "html" && (artifact.version ?? 1) > 1 ? (
             <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
               <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" />
@@ -913,26 +896,24 @@ function ArtifactViewerPage({
       </header>
       <div className="min-h-0 flex-1 pb-[var(--lfg-safe-bottom)]">
         {artifact.kind === "html" ? (
-          runIsolated ? (
-            <AuthenticatedArtifactFrame
+          // Natively this is real DOM, so the host owns the scroll and text
+          // selection, find-in-page and momentum behave like the rest of the app.
+          // A scripted artifact is framed instead and scrolls itself, so the
+          // wrapper must not add a second scroll region around it.
+          <div
+            className={cn(
+              "h-full bg-white",
+              framed ? "overflow-hidden" : "overflow-y-auto overscroll-contain",
+            )}
+          >
+            <NativeArtifact
               path={artifact.url}
               cacheKey={artifact.cacheKey ?? artifact.version ?? 0}
               title={label}
-              className="block h-full w-full border-0 bg-background"
+              onNeedsFrame={setFramed}
+              className={cn("block w-full", framed && "h-full")}
             />
-          ) : (
-            // Real DOM in this document: the host owns the scroll, so text
-            // selection, find-in-page, and momentum all behave like the rest of
-            // the app instead of being trapped in a nested browsing context.
-            <div className="h-full overflow-y-auto overscroll-contain bg-white">
-              <NativeArtifact
-                path={artifact.url}
-                cacheKey={artifact.cacheKey ?? artifact.version ?? 0}
-                onScriptsDetected={setHasScripts}
-                className="block w-full"
-              />
-            </div>
-          )
+          </div>
         ) : artifact.kind === "video" ? (
           <div className="flex h-full items-center justify-center bg-black">
             <AuthenticatedArtifactVideo
@@ -14126,6 +14107,7 @@ function MessageBubble({
           <NativeArtifactEmbed
             path={message.url}
             cacheKey={message.ts ?? message.version ?? 0}
+            title={label}
             maxHeight={560}
             className="px-3 pb-2"
           />

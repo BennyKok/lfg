@@ -1,11 +1,6 @@
-import {
-  useEffect,
-  useState,
-  type CSSProperties,
-  type RefObject,
-} from "react";
+import { useEffect, useState } from "react";
 
-import { artifactRequestPath, secureArtifactDocument } from "../lib/artifact-document";
+import { artifactRequestPath } from "../lib/artifact-document";
 import { lfgFetch } from "../lib/lfg-client";
 import { cn } from "../lib/utils";
 import { ImageLightbox } from "./ImageLightbox";
@@ -14,41 +9,6 @@ type ArtifactLoad<T> =
   | { status: "loading"; value: null }
   | { status: "ready"; value: T }
   | { status: "error"; value: null };
-
-function useArtifactHtml(
-  path: string,
-  query?: Record<string, string | number | undefined>,
-): ArtifactLoad<string> {
-  const requestPath = artifactRequestPath(path, query);
-  const [state, setState] = useState<ArtifactLoad<string>>({
-    status: "loading",
-    value: null,
-  });
-
-  useEffect(() => {
-    const controller = new AbortController();
-    setState({ status: "loading", value: null });
-    void lfgFetch(requestPath, {
-      cache: "no-store",
-      signal: controller.signal,
-    })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`artifact ${response.status}`);
-        const html = secureArtifactDocument(await response.text());
-        if (!controller.signal.aborted) {
-          setState({ status: "ready", value: html });
-        }
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) {
-          setState({ status: "error", value: null });
-        }
-      });
-    return () => controller.abort();
-  }, [requestPath]);
-
-  return state;
-}
 
 /** @param path `null` defers the fetch entirely (used to load full-size bytes only on zoom). */
 function useArtifactBlobUrl(path: string | null): ArtifactLoad<string> {
@@ -106,44 +66,6 @@ function ArtifactLoading({ className }: { className?: string }) {
     <div
       aria-hidden
       className={cn("min-h-28 min-w-40 animate-pulse bg-muted/35", className)}
-    />
-  );
-}
-
-export function AuthenticatedArtifactFrame({
-  path,
-  cacheKey,
-  thumbnail = false,
-  title,
-  frameRef,
-  style,
-  className,
-}: {
-  path: string;
-  cacheKey?: string | number;
-  thumbnail?: boolean;
-  title?: string;
-  frameRef?: RefObject<HTMLIFrameElement | null>;
-  style?: CSSProperties;
-  className?: string;
-}) {
-  const document = useArtifactHtml(path, {
-    v: cacheKey,
-    thumb: thumbnail ? 1 : undefined,
-  });
-
-  if (document.status === "error") {
-    return <ArtifactLoadError className={className} />;
-  }
-
-  return (
-    <iframe
-      ref={frameRef}
-      srcDoc={document.value ?? undefined}
-      sandbox="allow-scripts"
-      title={title}
-      style={style}
-      className={className}
     />
   );
 }

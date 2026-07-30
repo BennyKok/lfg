@@ -117,6 +117,38 @@ describe("parseNativeArtifact sanitizing", () => {
   });
 });
 
+// The renderer choice is not a preference, it is a correctness property: a
+// document whose content is drawn by scripts renders hollow in a shadow root.
+describe("renderer selection", () => {
+  const source = readFileSync("web/src/components/native-artifact.tsx", "utf8");
+
+  test("a scripted artifact is framed automatically, with no user action", () => {
+    // `hasScripts` from the parser is what selects the frame.
+    expect(source).toMatch(/needsFrame\s*=\s*load\.status === "ready" && load\.value\.parsed\.hasScripts/);
+    expect(source).toMatch(/if \(needsFrame && interactive\)/);
+    expect(source).toContain('sandbox="allow-scripts"');
+    // No opt-in control anywhere: the old behaviour made the user click first.
+    expect(source).not.toMatch(/runIsolated|Run interactive|onClick=\{\(\) => set\w*Isolated/);
+  });
+
+  test("the frame reuses the fetched source instead of refetching", () => {
+    expect(source).toContain("srcDoc={secureArtifactDocument(load.value.source)}");
+  });
+
+  test("thumbnails never frame, however scripted the artifact", () => {
+    // A browsing context per tile is exactly what the native path exists to
+    // avoid, so a gallery preview stays native and is badged instead.
+    expect(source).toMatch(/interactive=\{false\}/);
+    expect(source).toContain("Interactive");
+  });
+
+  test("a framed embed gets an explicit height", () => {
+    // An <iframe> is 150px tall regardless of its document, so the
+    // grow-to-content path cannot apply to it.
+    expect(source).toMatch(/framed \? \{ height: maxHeight \}/);
+  });
+});
+
 describe("the base stylesheet", () => {
   test("gives artifacts the white canvas the iframe used to provide", () => {
     // Artifacts routinely set `color:#111` and no background, relying on the
