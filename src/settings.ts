@@ -11,7 +11,12 @@ export type GlobalSettings = {
   // Drain switch: when true, refuse to activate any new agent (create / cold
   // resume / fork). In-flight agents keep running and can still be messaged.
   agentsPaused: boolean;
+  // Global transcript rendering preference. The focused mode is experimental
+  // and projects the loaded transcript down to user turns + lfg_output.
+  transcriptView: TranscriptView;
 };
+
+export type TranscriptView = "full" | "user-lfg-output";
 
 // A soft admission ceiling backed by the systemd slice's hard memory bound.
 export const MAX_LIVE_AGENTS_LIMIT = 64;
@@ -37,6 +42,10 @@ export function validTimeZone(timeZone: string): boolean {
   }
 }
 
+export function validTranscriptView(value: unknown): value is TranscriptView {
+  return value === "full" || value === "user-lfg-output";
+}
+
 function sanitize(input: Partial<GlobalSettings> | null | undefined): GlobalSettings {
   const timeZone = typeof input?.timeZone === "string" && validTimeZone(input.timeZone)
     ? input.timeZone
@@ -46,7 +55,10 @@ function sanitize(input: Partial<GlobalSettings> | null | undefined): GlobalSett
     ? Math.min(requestedLive, MAX_LIVE_AGENTS_LIMIT)
     : DEFAULT_MAX_LIVE_AGENTS;
   const agentsPaused = input?.agentsPaused === true;
-  return { timeZone, maxLiveAgents, agentsPaused };
+  const transcriptView = validTranscriptView(input?.transcriptView)
+    ? input.transcriptView
+    : "full";
+  return { timeZone, maxLiveAgents, agentsPaused, transcriptView };
 }
 
 function settingsDb(): Database {
@@ -86,6 +98,7 @@ function settingsDb(): Database {
       write.run("timeZone", JSON.stringify(initial.timeZone), now);
       write.run("maxLiveAgents", JSON.stringify(initial.maxLiveAgents), now);
       write.run("agentsPaused", JSON.stringify(initial.agentsPaused), now);
+      write.run("transcriptView", JSON.stringify(initial.transcriptView), now);
       opened
         .query("INSERT INTO settings_migrations (name, applied_at) VALUES (?, ?)")
         .run("legacy-settings-json-v1", now);
@@ -130,6 +143,7 @@ export async function setGlobalSettings(patch: Partial<GlobalSettings>): Promise
     write.run("timeZone", JSON.stringify(next.timeZone), now);
     write.run("maxLiveAgents", JSON.stringify(next.maxLiveAgents), now);
     write.run("agentsPaused", JSON.stringify(next.agentsPaused), now);
+    write.run("transcriptView", JSON.stringify(next.transcriptView), now);
   })();
   return next;
 }

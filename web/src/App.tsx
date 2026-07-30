@@ -181,6 +181,10 @@ import { reportError } from "./lib/report-error";
 import { lazyWithReload } from "./lib/lazy-with-reload";
 import { buildChatRenderItems, toolGroupLabel } from "./lib/chat-render-items";
 import {
+  messagesForTranscriptView,
+  type TranscriptView,
+} from "./lib/transcript-view";
+import {
   ensureVoiceConfigured,
   showVoiceSetup,
   VoiceSetupDialog,
@@ -549,7 +553,18 @@ type GlobalSettings = {
   // Cap on total LIVE agents (0 = unlimited) + a manual drain switch.
   maxLiveAgents: number;
   agentsPaused: boolean;
+  transcriptView: TranscriptView;
 };
+
+type TranscriptViewPreference = {
+  value: TranscriptView;
+  onChange: (value: TranscriptView) => Promise<void>;
+};
+
+const TranscriptViewContext = createContext<TranscriptViewPreference>({
+  value: "full",
+  onChange: async () => {},
+});
 
 type ServerStats = {
   agents: {
@@ -4116,6 +4131,7 @@ export function App() {
     timeZone: DEFAULT_SCHED_TZ,
     maxLiveAgents: 16,
     agentsPaused: false,
+    transcriptView: "full",
   });
   const [schedTz, setSchedTz] = useState<string>(DEFAULT_SCHED_TZ);
   const [findings, setFindings] = useState<AutoFinding[]>([]);
@@ -4298,6 +4314,7 @@ export function App() {
       timeZone: payload.auto?.tz ?? DEFAULT_SCHED_TZ,
       maxLiveAgents: 16,
       agentsPaused: false,
+      transcriptView: "full",
     });
     // Guard sessions to [] — it feeds `allLiveSessions`/`liveSessions` which
     // call `.filter()` unconditionally on render, so a malformed/empty payload
@@ -5427,6 +5444,10 @@ export function App() {
     setSettings(payload.settings);
     setSchedTz(payload.settings.timeZone);
   }, []);
+  const transcriptViewPreference = useMemo<TranscriptViewPreference>(() => ({
+    value: settings.transcriptView,
+    onChange: (value) => updateSettings({ transcriptView: value }),
+  }), [settings.transcriptView, updateSettings]);
 
   const refreshCodingAgents = useCallback(async (opts: { refreshModels?: boolean } = {}) => {
     const agentsPath = opts.refreshModels ? "/api/coding-agents?refreshModels=1" : "/api/coding-agents";
@@ -5684,6 +5705,7 @@ export function App() {
     <CodingAgentsContext.Provider value={codingAgents}>
     <AgentModelCatalogContext.Provider value={modelCatalog}>
     <AskProvider>
+    <TranscriptViewContext.Provider value={transcriptViewPreference}>
     <ArtifactViewerContext.Provider value={openArtifactViewer}>
     <div
       ref={rootRef}
@@ -6172,6 +6194,7 @@ export function App() {
       <Toaster position="bottom-center" />
     </div>
     </ArtifactViewerContext.Provider>
+    </TranscriptViewContext.Provider>
     </AskProvider>
     </AgentModelCatalogContext.Provider>
     </CodingAgentsContext.Provider>
@@ -11243,6 +11266,7 @@ function SessionActionsMenu({
     copyReference,
     close,
   } = useSessionActions({ session, users, onRefresh, onRemove, onError });
+  const transcriptView = useContext(TranscriptViewContext);
 
   return (
     <>
@@ -11324,6 +11348,34 @@ function SessionActionsMenu({
               </DropdownMenuSubContent>
             </DropdownMenuSub>
           ) : null}
+          <DropdownMenuSub>
+            <DropdownMenuSubTrigger>
+              <MessageSquare className="size-4" />
+              <span className="flex-1">Message view</span>
+              <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-primary">
+                Experimental
+              </span>
+            </DropdownMenuSubTrigger>
+            <DropdownMenuSubContent align="start" className="min-w-56">
+              <DropdownMenuRadioGroup
+                value={transcriptView.value}
+                onValueChange={(value) => {
+                  if (value !== "full" && value !== "user-lfg-output") return;
+                  void transcriptView.onChange(value).catch((error) => {
+                    toast.error(error instanceof Error ? error.message : "Couldn’t change message view");
+                  });
+                }}
+              >
+                <DropdownMenuLabel>Global message view</DropdownMenuLabel>
+                <DropdownMenuRadioItem value="full">
+                  Full transcript
+                </DropdownMenuRadioItem>
+                <DropdownMenuRadioItem value="user-lfg-output">
+                  User + LFG output
+                </DropdownMenuRadioItem>
+              </DropdownMenuRadioGroup>
+            </DropdownMenuSubContent>
+          </DropdownMenuSub>
           {onTogglePin ? (
             <DropdownMenuItem disabled={!sid} onClick={() => sid && onTogglePin(sid)}>
               <Pin className="size-4" fill={pinned ? "currentColor" : "none"} />
@@ -11417,6 +11469,7 @@ function RailSessionContextMenu({
       if (error) toast.error(error);
     },
   });
+  const transcriptView = useContext(TranscriptViewContext);
 
   return (
     <>
@@ -11498,6 +11551,34 @@ function RailSessionContextMenu({
                     </span>
                   </ContextMenuRadioItem>
                 ))}
+              </ContextMenuRadioGroup>
+            </ContextMenuSubContent>
+          </ContextMenuSub>
+          <ContextMenuSub>
+            <ContextMenuSubTrigger>
+              <MessageSquare className="size-4" />
+              <span className="flex-1">Message view</span>
+              <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-primary">
+                Experimental
+              </span>
+            </ContextMenuSubTrigger>
+            <ContextMenuSubContent className="min-w-56">
+              <ContextMenuRadioGroup
+                value={transcriptView.value}
+                onValueChange={(value) => {
+                  if (value !== "full" && value !== "user-lfg-output") return;
+                  void transcriptView.onChange(value).catch((error) => {
+                    toast.error(error instanceof Error ? error.message : "Couldn’t change message view");
+                  });
+                }}
+              >
+                <ContextMenuLabel>Global message view</ContextMenuLabel>
+                <ContextMenuRadioItem value="full">
+                  Full transcript
+                </ContextMenuRadioItem>
+                <ContextMenuRadioItem value="user-lfg-output">
+                  User + LFG output
+                </ContextMenuRadioItem>
               </ContextMenuRadioGroup>
             </ContextMenuSubContent>
           </ContextMenuSub>
@@ -13019,12 +13100,20 @@ const ChatStream = memo(function ChatStream({
   onLoadOlderMessages: LoadOlderMessages;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const transcriptView = useContext(TranscriptViewContext);
   const [stick, setStick] = useState(true);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [hasOlder, setHasOlder] = useState(true);
   const [diffBarVisible, setDiffBarVisible] = useState(false);
   const preserveScrollRef = useRef<{ height: number; top: number } | null>(null);
-  const visibleMessages = useMemo(() => messages.filter((message) => !message.seed), [messages]);
+  const transcriptMessages = useMemo(
+    () => messages.filter((message) => !message.seed),
+    [messages],
+  );
+  const visibleMessages = useMemo(
+    () => messagesForTranscriptView(transcriptMessages, transcriptView.value),
+    [transcriptMessages, transcriptView.value],
+  );
   const items = useMemo(() => buildChatRenderItems(visibleMessages), [visibleMessages]);
   // Historical reasoning can remain in the transcript after its turn is done.
   // Only let reasoning at the active tail replace the typing dots; otherwise an
@@ -13164,7 +13253,13 @@ const ChatStream = memo(function ChatStream({
           <span>Loading transcript</span>
         </ConversationEmptyState>
       ) : (
-        <ConversationEmptyState title="No transcript messages yet" />
+        <ConversationEmptyState
+          title={
+            transcriptView.value === "user-lfg-output"
+              ? "No user or LFG output messages yet"
+              : "No transcript messages yet"
+          }
+        />
       )}
     </Conversation>
     {/* Floating jump-to-latest control: appears once the user scrolls away

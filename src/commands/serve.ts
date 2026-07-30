@@ -236,6 +236,7 @@ import {
   MAX_LIVE_AGENTS_LIMIT,
   setGlobalSettings,
   validTimeZone,
+  validTranscriptView,
   type GlobalSettings,
 } from "../settings.ts";
 import { listSkillCatalog } from "../skills-catalog.ts";
@@ -2590,6 +2591,11 @@ export async function cmdServe() {
             if (typeof b.agentsPaused !== "boolean")
               return err(400, "agentsPaused must be a boolean");
             patch.agentsPaused = b.agentsPaused;
+          }
+          if (b?.transcriptView !== undefined) {
+            if (!validTranscriptView(b.transcriptView))
+              return err(400, "transcriptView must be full or user-lfg-output");
+            patch.transcriptView = b.transcriptView;
           }
           const settings = await setGlobalSettings(patch);
           return json({ settings });
