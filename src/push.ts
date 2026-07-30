@@ -31,6 +31,17 @@ export type PushSubscription = {
   endpoint: string;
   keys?: { p256dh?: string; auth?: string };
   user?: string | null;
+  // Payload-less pushes still need to identify event-specific notifications.
+  // Queue those server-side per subscription; the service worker consumes one
+  // after each wake through /api/push/pending.
+  pendingNotifications?: PushNotification[];
+};
+
+export type PushNotification = {
+  title: string;
+  body?: string;
+  url?: string;
+  tag?: string;
 };
 
 type VapidFile = {
@@ -130,8 +141,14 @@ async function writeSubscriptions(rows: PushSubscription[]): Promise<void> {
 export async function saveSubscription(sub: PushSubscription): Promise<void> {
   if (!sub?.endpoint) return;
   const rows = await listSubscriptions();
+  const existing = rows.find((r) => r.endpoint === sub.endpoint);
   const next = rows.filter((r) => r.endpoint !== sub.endpoint);
-  next.push({ endpoint: sub.endpoint, keys: sub.keys, user: sub.user ?? null });
+  next.push({
+    endpoint: sub.endpoint,
+    keys: sub.keys,
+    user: sub.user ?? null,
+    pendingNotifications: existing?.pendingNotifications,
+  });
   await writeSubscriptions(next);
 }
 
@@ -144,6 +161,44 @@ export async function removeSubscription(endpoint: string): Promise<void> {
 export async function subscriptionUser(endpoint: string): Promise<string | null> {
   const rows = await listSubscriptions();
   return rows.find((r) => r.endpoint === endpoint)?.user ?? null;
+}
+
+const MAX_PENDING_NOTIFICATIONS = 20;
+
+/** Queue an event-specific notification for the subscriptions this push targets. */
+export async function queuePushNotification(
+  notification: PushNotification,
+  opts: { user?: string | null } = {},
+): Promise<void> {
+  const rows = await listSubscriptions();
+  let changed = false;
+  const next = rows.map((row) => {
+    if (opts.user && row.user !== opts.user) return row;
+    changed = true;
+    return {
+      ...row,
+      pendingNotifications: [...(row.pendingNotifications ?? []), notification].slice(
+        -MAX_PENDING_NOTIFICATIONS,
+      ),
+    };
+  });
+  if (changed) await writeSubscriptions(next);
+}
+
+/** Consume the oldest event-specific notification queued for one device. */
+export async function takePushNotification(endpoint: string): Promise<PushNotification | null> {
+  const rows = await listSubscriptions();
+  const index = rows.findIndex((row) => row.endpoint === endpoint);
+  const pending = index >= 0 ? rows[index].pendingNotifications ?? [] : [];
+  const notification = pending[0];
+  if (!notification) return null;
+  const next = [...rows];
+  next[index] = {
+    ...next[index],
+    pendingNotifications: pending.length > 1 ? pending.slice(1) : undefined,
+  };
+  await writeSubscriptions(next);
+  return notification;
 }
 
 // ---------- sending ----------
@@ -170,12 +225,17 @@ async function sendOne(sub: PushSubscription): Promise<{ gone: boolean }> {
  * tagged to a given user). Prunes dead subscriptions. Never throws — push is
  * best-effort and must not block the caller (a finding write).
  */
-export async function notifyAll(opts: { user?: string | null } = {}): Promise<void> {
+export async function notifyAll(
+  opts: { user?: string | null; notification?: PushNotification } = {},
+): Promise<void> {
   let rows = await listSubscriptions();
   // Targeted notification → ONLY devices bound to that user. A device with no
   // bound user does NOT catch another user's pushes (that was the leak).
   if (opts.user) rows = rows.filter((r) => r.user === opts.user);
   if (!rows.length) return;
+  if (opts.notification) {
+    await queuePushNotification(opts.notification, { user: opts.user });
+  }
   const dead: string[] = [];
   await Promise.all(
     rows.map(async (sub) => {

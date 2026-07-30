@@ -64,9 +64,10 @@ import {
   saveSubscription,
   removeSubscription,
   subscriptionUser,
+  takePushNotification,
+  notifyAll,
   type PushSubscription,
 } from "../push.ts";
-import { notifyAll } from "../push.ts";
 import {
   listQuestions,
   getQuestion,
@@ -3178,12 +3179,13 @@ export async function cmdServe() {
       if (path === "/api/push/pending" && req.method === "GET") {
         const endpoint = url.searchParams.get("endpoint");
         const me = endpoint ? await subscriptionUser(endpoint) : null;
+        const notification = endpoint ? await takePushNotification(endpoint) : null;
         await sweepExpiredQuestions();
         const openQs = await listQuestions("open");
         const questions = me ? openQs.filter((q) => q.user === me) : openQs;
         // Findings are global (not user-private), so they pass through as-is.
         const findings = await listFindings("open");
-        return json({ user: me, questions, findings });
+        return json({ user: me, notification, questions, findings });
       }
 
       // ── Ask-user (human-in-the-loop for headless agents) ──────────────────
@@ -5194,6 +5196,20 @@ export async function cmdServe() {
                 )
               : undefined;
             const closeSession = shippedCloseDecision(body.closeSession);
+            const notificationUser =
+              sourceSession?.assignedUser ??
+              (body.sessionId ? getCachedResumableSession(body.sessionId)?.assignedUser : undefined);
+            void notifyAll({
+              user: notificationUser,
+              notification: {
+                title: `Shipped: ${post.title}`,
+                body: post.summary || "Tap to review the finished session.",
+                url: post.sessionId
+                  ? `/?session=${encodeURIComponent(post.sessionId)}`
+                  : "/?tab=shipped",
+                tag: `shipped-${post.id}-${post.rev}`,
+              },
+            }).catch(() => {});
             if (sourceSession && body.sessionId && closeSession) {
               // Make the resumable row durable before acknowledging the ship.
               // The deferred close repeats this defensively, but doing it now

@@ -101,9 +101,9 @@ async function networkFirst(request) {
 
 // ── Web Push ────────────────────────────────────────────────────────────────
 // Pushes are payload-less: when one arrives we fetch what's pending (same data
-// the UI polls) and raise a notification. A pending agent QUESTION wins over a
-// finding — it's interactive and needs a human reply. If a future push ever
-// carries a JSON payload we honour that first.
+// the UI polls) and raise a notification. Event-specific notices queued by the
+// backend win, then a pending agent QUESTION, then a finding. If a future push
+// ever carries a JSON payload we honour that first.
 async function fetchJson(url) {
   try {
     const res = await fetch(url, { cache: "no-store" });
@@ -137,8 +137,23 @@ async function showLatest(payload) {
     // no subscription handle — fall back to the unscoped list
   }
 
-  // Prefer an open question over a finding.
+  // A server-queued notice identifies the exact event that caused this
+  // payload-less wake (for example, a shipped result and its session link).
   const asked = await fetchJson(feedUrl);
+  const notification = asked?.notification || null;
+  if (notification?.title) {
+    await self.registration.showNotification(notification.title, {
+      body: notification.body || "",
+      icon: "/icon.svg",
+      badge: "/icon-maskable.svg",
+      tag: notification.tag || "lfg",
+      renotify: true,
+      data: { url: notification.url || "/" },
+    });
+    return;
+  }
+
+  // Prefer an open question over a finding.
   const q = (asked?.questions || [])[0] || null;
   if (q) {
     const opts = Array.isArray(q.options) && q.options.length ? ` — ${q.options.join(" / ")}` : "";
@@ -189,6 +204,7 @@ self.addEventListener("notificationclick", (event) => {
       const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       const client = all.find((c) => "focus" in c);
       if (client) {
+        if ("navigate" in client) await client.navigate(target);
         await client.focus();
         return;
       }
