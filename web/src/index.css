@@ -684,6 +684,14 @@ html.lfg-keyboard-open {
     );
   }
 
+  /* Host slots are opt-in: an unfilled one must cost nothing. The host portals
+     into the node after we render it, so we cannot know at render time whether
+     it will be used — :empty answers that continuously instead, and collapses
+     the slot the moment the host unmounts its content. */
+  [data-lfg-host-slot]:empty {
+    display: none;
+  }
+
   /* On the narrow layout the page itself is the scroll surface, framed by the
      floating nav islands and persistent composer. Extend each chrome surface
      with a real background→transparent wash so rows and transcript content
