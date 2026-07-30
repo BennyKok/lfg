@@ -15909,7 +15909,7 @@ function NewSessionDialog({
       <div
         ref={inlineBarRef}
         aria-busy={launching}
-        className="mobile-scroll-composer-fade pointer-events-auto relative z-[55] mt-auto shrink-0 overflow-x-clip bg-background/95 pt-4 shadow-[0_-8px_24px_rgba(0,0,0,0.12)] backdrop-blur-xl"
+        className="mobile-scroll-composer-fade pointer-events-auto relative z-[55] mt-auto shrink-0 overflow-x-clip bg-background/95 shadow-[0_-8px_24px_rgba(0,0,0,0.12)] backdrop-blur-xl"
       >
         <div ref={inlineShellRef} className="mx-auto max-w-lg will-change-transform">
           {formBody}

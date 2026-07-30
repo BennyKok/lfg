@@ -166,6 +166,9 @@ describe("mobile overlay scroll contract", () => {
     expect(app).toContain(
       "mobile-scroll-composer-fade pointer-events-auto relative z-[55] mt-auto",
     );
+    expect(app).not.toContain(
+      "overflow-x-clip bg-background/95 pt-4 shadow-[0_-8px_24px_rgba(0,0,0,0.12)]",
+    );
     expect(css).toMatch(
       /--lfg-mobile-composer-fade-height:\s*var\(--lfg-mobile-header-fade-height\)/,
     );
