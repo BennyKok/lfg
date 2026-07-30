@@ -36,6 +36,22 @@ describe("shipped session review flow", () => {
     expect(liveView).toContain("mobile");
   });
 
+  test("scoped recently shipped rows show session context, not the project", () => {
+    const row = app.slice(
+      app.indexOf("function RecentShippedRow("),
+      app.indexOf("function LiveView("),
+    );
+
+    expect(row).toContain('{post.sessionTitle || "Finished session"}');
+    expect(row).not.toContain("shortProject(post.project)");
+  });
+
+  test("mobile session headers match the recently shipped row height", () => {
+    expect(app).toContain(
+      'className="flex min-h-[3.75rem] min-w-0 items-center gap-2 border-b border-border px-3 py-2"',
+    );
+  });
+
   test("the first new message is included in the resume request", () => {
     expect(app).toContain('await api<{ sessionId?: string }>("/api/sessions/resume"');
     expect(app).toContain("sessionId: sid,\n            prompt: outgoingText,");

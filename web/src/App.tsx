@@ -8108,9 +8108,7 @@ function RecentShippedRow({
             mobile ? "mt-0.5 text-xs" : "text-[11px]",
           )}
         >
-          {post.project
-            ? shortProject(post.project)
-            : post.sessionTitle || "Finished session"}
+          {post.sessionTitle || "Finished session"}
         </span>
       </span>
     </button>
@@ -13067,7 +13065,7 @@ const onTouchStart = (e: ReactTouchEvent) => {
       >
         <div
           ref={headRef}
-          className="flex min-w-0 items-center gap-2 border-b border-border px-3 py-2"
+          className="flex min-h-[3.75rem] min-w-0 items-center gap-2 border-b border-border px-3 py-2"
         >
           <button
             type="button"
