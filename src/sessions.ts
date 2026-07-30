@@ -39,6 +39,7 @@ import {
   sessionIndexKey,
   isSessionIndexKey,
 } from "./transcript-index";
+import { isProviderAuthError } from "./provider-auth-error";
 
 const HOME = process.env.HOME ?? homedir();
 const PROJECTS_DIR = join(HOME, ".claude", "projects");
@@ -313,6 +314,13 @@ function computeStatus(
   // credit or model errors (its summary quotes "credit balance is too low" or
   // "Claude … is currently unavailable") from tripping a false "build paused".
   if (text && last?.apiError) {
+    if (isProviderAuthError(text)) {
+      return {
+        status: "blocked",
+        statusReason: "provider_auth",
+        statusDetail: "Your coding-agent sign-in expired",
+      };
+    }
     // Model retired / disabled / no access — the freeze the user sees. Match the
     // verbatim Claude Code error ("There's an issue with the selected model (X).
     // It may not exist or you may not have access to it. Run /model…") and the

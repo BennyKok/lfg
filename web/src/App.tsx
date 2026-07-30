@@ -318,6 +318,18 @@ type CodingAgentAuthSession = {
   error?: string;
 };
 
+type CodingAgentAuthFlow = {
+  session: CodingAgentAuthSession | null;
+  inlineSid: string | null;
+  completedSid: string | null;
+  start: (kind: AgentKind, inlineSid?: string) => Promise<void>;
+  setSession: (session: CodingAgentAuthSession | null) => void;
+  clear: () => void | Promise<void>;
+  complete: () => Promise<void>;
+};
+
+const CodingAgentAuthContext = createContext<CodingAgentAuthFlow | null>(null);
+
 type SetupCheckGroup = {
   key: string;
   label: string;
@@ -3981,6 +3993,12 @@ export function App() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [codingAgents, setCodingAgents] = useState<CodingAgentInfo[]>([]);
   const [codingAgentAuth, setCodingAgentAuth] = useState<CodingAgentAuthSession | null>(null);
+  // Auth started from a blocked session stays inside that session's transcript
+  // instead of opening the global settings dialog. completedSid lets the
+  // banner acknowledge success while the failed turn remains the transcript
+  // tail (and therefore still classifies as blocked until the user retries).
+  const [codingAgentAuthInlineSid, setCodingAgentAuthInlineSid] = useState<string | null>(null);
+  const [codingAgentAuthCompletedSid, setCodingAgentAuthCompletedSid] = useState<string | null>(null);
   // Embed-only first-run gate: which provider row has an in-flight click, and
   // whether the user chose to look past the gate for this app load.
   const [connectPendingKind, setConnectPendingKind] = useState<AgentKind | null>(null);
@@ -5533,7 +5551,7 @@ export function App() {
     );
   }
 
-  async function loginCodingAgent(kind: AgentKind) {
+  async function loginCodingAgent(kind: AgentKind, inlineSid?: string) {
     const browserAuth = kind === "aisdk" || kind === "claude" || kind === "codex" || kind === "codex-aisdk";
     if (!browserAuth) {
       toast.promise(
@@ -5551,6 +5569,8 @@ export function App() {
       );
       return;
     }
+    setCodingAgentAuthInlineSid(inlineSid ?? null);
+    if (inlineSid) setCodingAgentAuthCompletedSid(null);
     const authWindow = window.open("about:blank", "_blank");
     try {
       const session = await api<CodingAgentAuthSession>(`/api/coding-agents/${kind}/auth`, {
@@ -5560,6 +5580,8 @@ export function App() {
       if (session.status === "complete") {
         authWindow?.close();
         toast.success(`${session.provider === "claude" ? "Claude" : "Codex"} connected`);
+        setCodingAgentAuthInlineSid(null);
+        if (inlineSid) setCodingAgentAuthCompletedSid(inlineSid);
         await refreshCodingAgents({ refreshModels: true });
         return;
       }
@@ -5572,9 +5594,34 @@ export function App() {
       }
     } catch (e) {
       authWindow?.close();
+      setCodingAgentAuthInlineSid(null);
       toast.error(e instanceof Error ? e.message : "Couldn't start login");
     }
   }
+
+  async function completeCodingAgentAuth() {
+    const inlineSid = codingAgentAuthInlineSid;
+    setCodingAgentAuth(null);
+    setCodingAgentAuthInlineSid(null);
+    if (inlineSid) setCodingAgentAuthCompletedSid(inlineSid);
+    await refreshCodingAgents({ refreshModels: true });
+  }
+
+  const codingAgentAuthFlow: CodingAgentAuthFlow = {
+    session: codingAgentAuth,
+    inlineSid: codingAgentAuthInlineSid,
+    completedSid: codingAgentAuthCompletedSid,
+    start: loginCodingAgent,
+    setSession: setCodingAgentAuth,
+    clear: async () => {
+      if (codingAgentAuth && codingAgentAuth.status !== "complete") {
+        await api(`/api/coding-agents/auth/${codingAgentAuth.id}`, { method: "DELETE" }).catch(() => {});
+      }
+      setCodingAgentAuth(null);
+      setCodingAgentAuthInlineSid(null);
+    },
+    complete: completeCodingAgentAuth,
+  };
 
   // Embedded fresh box: onboarding and settings are hidden under a host, so
   // the gate below is the only place a framed user can connect a coding agent.
@@ -5621,10 +5668,7 @@ export function App() {
         <CodingAgentAuthDialog
           session={codingAgentAuth}
           onSessionChange={setCodingAgentAuth}
-          onComplete={async () => {
-            setCodingAgentAuth(null);
-            await refreshCodingAgents({ refreshModels: true });
-          }}
+          onComplete={completeCodingAgentAuth}
         />
         <Toaster position="bottom-center" />
       </>
@@ -5703,6 +5747,7 @@ export function App() {
 
   return (
     <CodingAgentsContext.Provider value={codingAgents}>
+    <CodingAgentAuthContext.Provider value={codingAgentAuthFlow}>
     <AgentModelCatalogContext.Provider value={modelCatalog}>
     <AskProvider>
     <TranscriptViewContext.Provider value={transcriptViewPreference}>
@@ -6142,12 +6187,9 @@ export function App() {
       />
 
       <CodingAgentAuthDialog
-        session={codingAgentAuth}
+        session={codingAgentAuthInlineSid ? null : codingAgentAuth}
         onSessionChange={setCodingAgentAuth}
-        onComplete={async () => {
-          setCodingAgentAuth(null);
-          await refreshCodingAgents({ refreshModels: true });
-        }}
+        onComplete={completeCodingAgentAuth}
       />
 
       {useWsLive ? (
@@ -6197,6 +6239,7 @@ export function App() {
     </TranscriptViewContext.Provider>
     </AskProvider>
     </AgentModelCatalogContext.Provider>
+    </CodingAgentAuthContext.Provider>
     </CodingAgentsContext.Provider>
   );
 }
@@ -10317,11 +10360,25 @@ function PausedBanner({
   session: Session;
   onRefresh: () => Promise<void>;
 }) {
+  const authFlow = useContext(CodingAgentAuthContext);
   const [working, setWorking] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   if (session.status !== "blocked") return null;
   const sid = session.sessionId;
   const reason = session.statusReason;
+  const reconnectKind =
+    reason === "provider_auth" &&
+    (session.agent === "claude" ||
+      session.agent === "aisdk" ||
+      session.agent === "codex" ||
+      session.agent === "codex-aisdk")
+      ? session.agent
+      : null;
+  const reconnectLabel =
+    reconnectKind === "codex" || reconnectKind === "codex-aisdk" ? "Codex" : "Claude";
+  const inlineAuth =
+    sid && authFlow?.inlineSid === sid ? authFlow.session : null;
+  const reconnected = !!sid && authFlow?.completedSid === sid;
   const canSwitchClaude =
     reason === "model_unavailable" && session.agent === "claude" && !!session.tmuxTarget && !!sid;
   const canSwitchOpencode =
@@ -10347,11 +10404,26 @@ function PausedBanner({
     }
   }
 
+  async function reconnectProvider() {
+    if (!sid || !reconnectKind || !authFlow) return;
+    setWorking(true);
+    setErr(null);
+    try {
+      await authFlow.start(reconnectKind as AgentKind, sid);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setWorking(false);
+    }
+  }
+
   const title =
     reason === "out_of_credits"
       ? "Build paused — out of credits"
       : reason === "provider_auth"
-        ? "Build paused — provider rejected the model"
+        ? reconnectKind
+          ? `${reconnectLabel} sign-in expired`
+          : "Build paused — provider rejected the model"
         : reason === "provider_error"
           ? "Build paused — provider error"
           : "Build paused";
@@ -10359,7 +10431,11 @@ function PausedBanner({
     reason === "out_of_credits"
       ? "This app's build agent ran out of AI credits. Top up the wallet to resume the build."
       : reason === "provider_auth"
-        ? `${session.statusDetail || "The selected provider rejected the request."} Check the OpenCode provider key or switch models.`
+        ? reconnectKind
+          ? reconnected
+            ? `${reconnectLabel} is connected again. Send your message again to resume this session.`
+            : `${session.statusDetail || `Your ${reconnectLabel} login is no longer valid.`} Sign in again here, then retry your message.`
+          : `${session.statusDetail || "The selected provider rejected the request."} Check the OpenCode provider key or switch models.`
         : reason === "provider_error"
           ? `${session.statusDetail || "The selected provider failed the request."} Check the OpenCode provider logs or switch models.`
       : `${session.statusDetail || "The selected model isn't available."} Switch to a working model to pick the build back up.`;
@@ -10392,7 +10468,35 @@ function PausedBanner({
             {working ? "Switching…" : "Use Big Pickle"}
           </button>
         ) : null}
+        {reconnectKind && !inlineAuth && !reconnected ? (
+          <button
+            type="button"
+            onClick={() => void reconnectProvider()}
+            disabled={working || !authFlow}
+            className="shrink-0 rounded-lg bg-warning px-3 py-1.5 font-medium text-white disabled:opacity-50"
+          >
+            {working ? "Opening…" : `Sign in to ${reconnectLabel}`}
+          </button>
+        ) : null}
+        {reconnected ? (
+          <span className="flex shrink-0 items-center gap-1.5 rounded-lg bg-emerald-500/15 px-3 py-1.5 font-medium text-emerald-700 dark:text-emerald-300">
+            <Check className="size-3.5" />
+            Connected
+          </span>
+        ) : null}
       </div>
+      {inlineAuth && authFlow ? (
+        <CodingAgentAuthPanel
+          session={inlineAuth}
+          inline
+          onSessionChange={authFlow.setSession}
+          onDismiss={authFlow.clear}
+          onComplete={async () => {
+            await authFlow.complete();
+            await onRefresh();
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -17859,14 +17963,18 @@ function ServerPerformancePanel({ stats }: { stats: ServerStats | null }) {
   );
 }
 
-function CodingAgentAuthDialog({
+function CodingAgentAuthPanel({
   session,
   onSessionChange,
   onComplete,
+  onDismiss,
+  inline = false,
 }: {
-  session: CodingAgentAuthSession | null;
+  session: CodingAgentAuthSession;
   onSessionChange: (session: CodingAgentAuthSession | null) => void;
   onComplete: () => void | Promise<void>;
+  onDismiss: () => void | Promise<void>;
+  inline?: boolean;
 }) {
   const [code, setCode] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -17877,7 +17985,7 @@ function CodingAgentAuthDialog({
   }, [session?.id]);
 
   useEffect(() => {
-    if (!session || session.status === "complete" || session.status === "error") return;
+    if (session.status === "complete" || session.status === "error") return;
     let stopped = false;
     const poll = async () => {
       try {
@@ -17900,18 +18008,15 @@ function CodingAgentAuthDialog({
       stopped = true;
       window.clearInterval(timer);
     };
-  }, [session?.id, session?.status, onComplete, onSessionChange]);
+  }, [session.id, session.status, onComplete, onSessionChange]);
 
   async function close() {
-    if (session && session.status !== "complete") {
-      await api(`/api/coding-agents/auth/${session.id}`, { method: "DELETE" }).catch(() => {});
-    }
-    onSessionChange(null);
+    await onDismiss();
   }
 
   async function submitCode(event: FormEvent) {
     event.preventDefault();
-    if (!session || !code.trim() || submitting) return;
+    if (!code.trim() || submitting) return;
     setSubmitting(true);
     try {
       const next = await api<CodingAgentAuthSession>(`/api/coding-agents/auth/${session.id}/code`, {
@@ -17927,7 +18032,95 @@ function CodingAgentAuthDialog({
     }
   }
 
+  const providerLabel = session.provider === "claude" ? "Claude" : "Codex";
+  return (
+    <div className={cn("space-y-4", inline && "mt-3 rounded-xl border border-warning/25 bg-background/70 p-3")}>
+      {session.status === "error" ? (
+        <div className="space-y-3">
+          <p className="rounded-2xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
+            {session.error || "Login failed. Please try again."}
+          </p>
+          <Button variant="outline" className="w-full" onClick={() => void close()}>Close</Button>
+        </div>
+      ) : (
+        <>
+          {session.userCode ? (
+            <div className="rounded-2xl bg-muted px-4 py-4 text-center">
+              <p className="mb-2 text-xs text-muted-foreground">Enter this one-time code</p>
+              <button
+                type="button"
+                onClick={() => {
+                  void navigator.clipboard.writeText(session.userCode!);
+                  toast.success("Code copied");
+                }}
+                className="inline-flex items-center gap-2 font-mono text-2xl font-semibold tracking-[0.15em]"
+              >
+                {session.userCode}
+                <Copy className="size-4 text-muted-foreground" />
+              </button>
+            </div>
+          ) : null}
+
+          {session.authorizationUrl ? (
+            <Button
+              variant="brand"
+              className="w-full"
+              onClick={() => window.open(session.authorizationUrl, "_blank", "noopener,noreferrer")}
+            >
+              <ExternalLink className="size-4" />
+              Open {providerLabel} sign in
+            </Button>
+          ) : null}
+
+          {session.provider === "claude" && session.needsCode ? (
+            <form className="space-y-2" onSubmit={(event) => void submitCode(event)}>
+              <label className="block text-xs font-medium text-muted-foreground" htmlFor={`claude-auth-code-${inline ? "inline" : "dialog"}`}>
+                Paste the code Claude shows after approval
+              </label>
+              <div className="flex gap-2">
+                <input
+                  id={`claude-auth-code-${inline ? "inline" : "dialog"}`}
+                  value={code}
+                  onChange={(event) => setCode(event.target.value)}
+                  autoComplete="off"
+                  autoCapitalize="none"
+                  spellCheck={false}
+                  placeholder="Authorization code"
+                  className="min-w-0 flex-1 rounded-2xl border border-border bg-input/30 px-3 py-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
+                />
+                <Button type="submit" disabled={!code.trim() || submitting}>
+                  {submitting ? <Loader2 className="size-4 animate-spin" /> : "Continue"}
+                </Button>
+              </div>
+            </form>
+          ) : (
+            <div className="flex items-center justify-center gap-2 py-1 text-xs text-muted-foreground">
+              <Loader2 className="size-3.5 animate-spin" />
+              Waiting for approval…
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function CodingAgentAuthDialog({
+  session,
+  onSessionChange,
+  onComplete,
+}: {
+  session: CodingAgentAuthSession | null;
+  onSessionChange: (session: CodingAgentAuthSession | null) => void;
+  onComplete: () => void | Promise<void>;
+}) {
   const providerLabel = session?.provider === "claude" ? "Claude" : "Codex";
+  async function close() {
+    if (session && session.status !== "complete") {
+      await api(`/api/coding-agents/auth/${session.id}`, { method: "DELETE" }).catch(() => {});
+    }
+    onSessionChange(null);
+  }
   return (
     <Dialog open={!!session} onOpenChange={(open) => { if (!open) void close(); }}>
       <DialogContent>
@@ -17937,72 +18130,13 @@ function CodingAgentAuthDialog({
             Finish signing in in the browser. LFG will detect approval automatically.
           </DialogDescription>
         </DialogHeader>
-
-        {session?.status === "error" ? (
-          <div className="space-y-3">
-            <p className="rounded-2xl bg-destructive/10 px-4 py-3 text-sm text-destructive">
-              {session.error || "Login failed. Please try again."}
-            </p>
-            <Button variant="outline" className="w-full" onClick={() => void close()}>Close</Button>
-          </div>
-        ) : session ? (
-          <div className="space-y-4">
-            {session.userCode ? (
-              <div className="rounded-2xl bg-muted px-4 py-4 text-center">
-                <p className="mb-2 text-xs text-muted-foreground">Enter this one-time code</p>
-                <button
-                  type="button"
-                  onClick={() => {
-                    void navigator.clipboard.writeText(session.userCode!);
-                    toast.success("Code copied");
-                  }}
-                  className="inline-flex items-center gap-2 font-mono text-2xl font-semibold tracking-[0.15em]"
-                >
-                  {session.userCode}
-                  <Copy className="size-4 text-muted-foreground" />
-                </button>
-              </div>
-            ) : null}
-
-            {session.authorizationUrl ? (
-              <Button
-                variant="brand"
-                className="w-full"
-                onClick={() => window.open(session.authorizationUrl, "_blank", "noopener,noreferrer")}
-              >
-                <ExternalLink className="size-4" />
-                Open {providerLabel} sign in
-              </Button>
-            ) : null}
-
-            {session.provider === "claude" && session.needsCode ? (
-              <form className="space-y-2" onSubmit={(event) => void submitCode(event)}>
-                <label className="block text-xs font-medium text-muted-foreground" htmlFor="claude-auth-code">
-                  Paste the code Claude shows after approval
-                </label>
-                <div className="flex gap-2">
-                  <input
-                    id="claude-auth-code"
-                    value={code}
-                    onChange={(event) => setCode(event.target.value)}
-                    autoComplete="off"
-                    autoCapitalize="none"
-                    spellCheck={false}
-                    placeholder="Authorization code"
-                    className="min-w-0 flex-1 rounded-2xl border border-border bg-input/30 px-3 py-2 text-sm outline-none focus:border-ring focus:ring-2 focus:ring-ring/30"
-                  />
-                  <Button type="submit" disabled={!code.trim() || submitting}>
-                    {submitting ? <Loader2 className="size-4 animate-spin" /> : "Continue"}
-                  </Button>
-                </div>
-              </form>
-            ) : (
-              <div className="flex items-center justify-center gap-2 py-1 text-xs text-muted-foreground">
-                <Loader2 className="size-3.5 animate-spin" />
-                Waiting for approval…
-              </div>
-            )}
-          </div>
+        {session ? (
+          <CodingAgentAuthPanel
+            session={session}
+            onSessionChange={onSessionChange}
+            onComplete={onComplete}
+            onDismiss={() => void close()}
+          />
         ) : null}
       </DialogContent>
     </Dialog>
