@@ -23,6 +23,19 @@ describe("shipped session review flow", () => {
     );
   });
 
+  test("mobile live view shows the shared recently shipped list", () => {
+    const liveView = app.slice(
+      app.indexOf("function LiveView("),
+      app.indexOf("function RailStage("),
+    );
+
+    expect(liveView).toContain("useRecentShippedSessions(");
+    expect(liveView).toContain('<section data-recent-shipped="true">');
+    expect(liveView).toContain('label="Recently shipped"');
+    expect(liveView).toContain("onOpen={onOpenRecentShipped}");
+    expect(liveView).toContain("mobile");
+  });
+
   test("the first new message is included in the resume request", () => {
     expect(app).toContain('await api<{ sessionId?: string }>("/api/sessions/resume"');
     expect(app).toContain("sessionId: sid,\n            prompt: outgoingText,");

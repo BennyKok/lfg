@@ -7992,6 +7992,111 @@ function buildSessionTree(
   return { roots, effectiveBusy, flatten, nodeForSessionId, rootForSessionId };
 }
 
+function useRecentShippedSessions(
+  projectFilter: string,
+  enabled: boolean,
+): ShipPost[] {
+  const [posts, setPosts] = useState<ShipPost[]>(
+    () => readFeedCache<ShipPost>(SHIPPED_FEED_KEY)?.items ?? [],
+  );
+
+  useEffect(() => {
+    if (!enabled) return;
+    let alive = true;
+    const load = async () => {
+      try {
+        // Scan beyond five posts so revisions or multiple posts from one
+        // session still produce five distinct finished sessions.
+        const data = await api<{ posts: ShipPost[] }>("/api/shipped?limit=25", {
+          cache: "no-store",
+        });
+        if (alive) setPosts(data.posts);
+      } catch {
+        // Keep the last cached paint; the Shipped page remains the fallback.
+      }
+    };
+    void load();
+    const interval = window.setInterval(() => void load(), 15_000);
+    return () => {
+      alive = false;
+      window.clearInterval(interval);
+    };
+  }, [enabled]);
+
+  return useMemo(
+    () => latestDistinctShippedSessions(posts, 5, projectFilter),
+    [posts, projectFilter],
+  );
+}
+
+function RecentShippedRow({
+  post,
+  onOpen,
+  mobile = false,
+}: {
+  post: ShipPost;
+  onOpen: (post: ShipPost) => void;
+  mobile?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen(post)}
+      title={`Open shipped session: ${post.title}`}
+      className={cn(
+        "group flex w-full items-center text-left outline-none transition-[transform,background-color] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/60",
+        mobile
+          ? "live-pane lfg-gborder gap-3 rounded-xl border border-transparent bg-card px-3 py-2.5 active:scale-[0.99]"
+          : "gap-2 rounded-xl border border-transparent px-2 py-1.5 hover:bg-muted/70",
+      )}
+    >
+      <span
+        className={cn(
+          "relative flex shrink-0 items-center justify-center",
+          mobile ? "size-8" : "size-6",
+        )}
+      >
+        <img
+          src={agentIconSrc(post.agent)}
+          alt={agentIconAlt(post.agent)}
+          className={cn("rounded-md", mobile ? "size-8" : "size-6")}
+        />
+        <span
+          aria-hidden
+          className="absolute -bottom-0.5 -right-0.5 flex size-2.5 items-center justify-center rounded-full bg-emerald-500 ring-2 ring-card"
+        >
+          <Check className="size-1.5 text-white" strokeWidth={3} />
+        </span>
+      </span>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="flex items-baseline gap-1.5">
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate font-medium leading-tight",
+              mobile ? "text-sm" : "text-[13px]",
+            )}
+          >
+            {post.title}
+          </span>
+          <span className="shrink-0 text-[10px] leading-tight tabular-nums text-muted-foreground/70">
+            {timeAgo(post.ts)}
+          </span>
+        </span>
+        <span
+          className={cn(
+            "truncate leading-tight text-muted-foreground",
+            mobile ? "mt-0.5 text-xs" : "text-[11px]",
+          )}
+        >
+          {post.project
+            ? shortProject(post.project)
+            : post.sessionTitle || "Finished session"}
+        </span>
+      </span>
+    </button>
+  );
+}
+
 function LiveView({
   // Defense-in-depth: `sessions`/`findings`/`autoAgents` are read via `.length`
   // unconditionally below (the original `findings.length` crash site). The fetch
@@ -8065,6 +8170,10 @@ function LiveView({
   focus?: { sid: string; n: number } | null;
 }) {
   const isWide = useIsWide();
+  const recentShipped = useRecentShippedSessions(
+    projectFilter,
+    !!onOpenRecentShipped,
+  );
   // Full-height detail sheet (mobile tap). Held here, above every card,
   // so it can switch which session it shows without unmounting. `origin` anchors
   // the open/close morph to the title the user tapped.
@@ -8178,7 +8287,13 @@ function LiveView({
   // back to the same input.
   // Keep this return AFTER all hooks so the hook order remains stable as the
   // live list empties and refills.
-  if (!isWide && !sessions.length && !findings.length && !shippedReview) {
+  if (
+    !isWide &&
+    !sessions.length &&
+    !findings.length &&
+    !shippedReview &&
+    !recentShipped.length
+  ) {
     return (
       <div className="flex min-h-[60dvh] flex-col items-center justify-center gap-3 text-center">
         <MessageSquare className="size-8 text-muted-foreground/45" aria-hidden />
@@ -8318,6 +8433,7 @@ function LiveView({
         focus={focus}
         topPinned={topPinned}
         onToggleTopPin={toggleTopPin}
+        recentShipped={recentShipped}
       />
     );
   }
@@ -8391,6 +8507,37 @@ function LiveView({
           </div>
         </section>
       ) : null}
+      {onOpenRecentShipped && recentShipped.length ? (
+        <section data-recent-shipped="true">
+          <CategoryHeader
+            label="Recently shipped"
+            count={recentShipped.length}
+            dotClass="bg-emerald-500"
+            action={
+              onOpenShipped ? (
+                <button
+                  type="button"
+                  onClick={() => onOpenShipped()}
+                  className="flex items-center gap-0.5 rounded-full px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  View all
+                  <ChevronRight className="size-3" />
+                </button>
+              ) : null
+            }
+          />
+          <div className="flex flex-col gap-2">
+            {recentShipped.map((post) => (
+              <RecentShippedRow
+                key={post.id}
+                post={post}
+                onOpen={onOpenRecentShipped}
+                mobile
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
     </div>
     {sheet && sheetSession ? (
       <SessionTitleSheet
@@ -8453,6 +8600,7 @@ function RailStage({
   focus,
   topPinned,
   onToggleTopPin,
+  recentShipped,
 }: {
   sessions: Session[];
   shippedReview?: Session | null;
@@ -8474,6 +8622,7 @@ function RailStage({
   focus?: { sid: string; n: number } | null;
   topPinned: string[];
   onToggleTopPin: (sid: string) => void;
+  recentShipped: ShipPost[];
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
@@ -8518,14 +8667,6 @@ function RailStage({
   const [pinned, setPinned] = useState<string[]>(readPinned);
   const [preview, setPreview] = useState<string | null>(null);
   const [railCollapsed, setRailCollapsed] = useState<boolean>(readRailCollapsed);
-  const cachedShipped = readFeedCache<ShipPost>(SHIPPED_FEED_KEY);
-  const [recentShippedPosts, setRecentShippedPosts] = useState<ShipPost[]>(
-    () => cachedShipped?.items ?? [],
-  );
-  const recentShipped = useMemo(
-    () => latestDistinctShippedSessions(recentShippedPosts, 5, projectFilter),
-    [projectFilter, recentShippedPosts],
-  );
   // Keyboard cursor (highlighted rail row) + the shortcuts cheatsheet overlay.
   const [cursor, setCursor] = useState<string | null>(null);
   // The desktop rail uses the same polished project sheet and folder browser as
@@ -8541,28 +8682,6 @@ function RailStage({
     window.setTimeout(() => setFolderBrowserOpen(true), 180);
   };
 
-  useEffect(() => {
-    if (!onOpenRecentShipped) return;
-    let alive = true;
-    const load = async () => {
-      try {
-        // Scan beyond five posts so revisions or multiple posts from one
-        // session still produce five distinct finished sessions.
-        const data = await api<{ posts: ShipPost[] }>("/api/shipped?limit=25", {
-          cache: "no-store",
-        });
-        if (alive) setRecentShippedPosts(data.posts);
-      } catch {
-        // Keep the last cached paint; the Shipped page remains the fallback.
-      }
-    };
-    void load();
-    const interval = window.setInterval(() => void load(), 15_000);
-    return () => {
-      alive = false;
-      window.clearInterval(interval);
-    };
-  }, [onOpenRecentShipped]);
   const [showHelp, setShowHelp] = useState(false);
   // One-shot glow token for the stage pane just chosen from the rail. `n`
   // increments so re-selecting the same sid restarts the animation.
@@ -9595,40 +9714,11 @@ function RailStage({
               collapsed={false}
             >
               {recentShipped.map((post) => (
-                <button
+                <RecentShippedRow
                   key={post.id}
-                  type="button"
-                  onClick={() => onOpenRecentShipped(post)}
-                  title={`Open shipped session: ${post.title}`}
-                  className="group flex w-full items-center gap-2 rounded-xl border border-transparent px-2 py-1.5 text-left outline-none transition-colors hover:bg-muted/70 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/60"
-                >
-                  <span className="relative flex size-6 shrink-0 items-center justify-center">
-                    <img
-                      src={agentIconSrc(post.agent)}
-                      alt={agentIconAlt(post.agent)}
-                      className="size-6 rounded-md"
-                    />
-                    <span
-                      aria-hidden
-                      className="absolute -bottom-0.5 -right-0.5 flex size-2.5 items-center justify-center rounded-full bg-emerald-500 ring-2 ring-card"
-                    >
-                      <Check className="size-1.5 text-white" strokeWidth={3} />
-                    </span>
-                  </span>
-                  <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="flex items-baseline gap-1.5">
-                      <span className="min-w-0 flex-1 truncate text-[13px] font-medium leading-tight">
-                        {post.title}
-                      </span>
-                      <span className="shrink-0 text-[10px] leading-tight tabular-nums text-muted-foreground/70">
-                        {timeAgo(post.ts)}
-                      </span>
-                    </span>
-                    <span className="truncate text-[11px] leading-tight text-muted-foreground">
-                      {post.project ? shortProject(post.project) : post.sessionTitle || "Finished session"}
-                    </span>
-                  </span>
-                </button>
+                  post={post}
+                  onOpen={onOpenRecentShipped}
+                />
               ))}
             </RailGroup>
           ) : null}
