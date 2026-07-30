@@ -4,6 +4,18 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Interactive artifacts run on open (v0.1.129)
+
+- Artifacts that draw themselves with scripts now run immediately in an isolated
+  sandbox instead of waiting for an Interactive button, so a live dashboard or
+  clickable prototype is interactive the moment you open it.
+- Static artifacts keep rendering as real DOM, so they still share the app's
+  scroll, text selection and layout, and cost no separate document.
+- Gallery tiles stay lightweight previews and mark scripted artifacts with an
+  Interactive badge rather than showing a half-drawn chart.
+- Fixes a ResizeObserver warning that could surface as an error toast under
+  artifact embeds.
+
 ## July 30, 2026 - Tighter mobile composer (v0.1.128)
 
 - The mobile new-session composer now sits closer to the feed, removing the
