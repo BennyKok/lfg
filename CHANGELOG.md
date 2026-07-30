@@ -4,6 +4,17 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - One project chip on hosted mobile, not two (v0.1.144)
+
+- Removes the project chip from the top-right of the hosted mobile header. The
+  composer at the bottom already carries one, both are wired to the same state,
+  and on a phone-width header that meant the same folder name printed twice.
+  This also brings hosted in line with the plain mobile header, which has never
+  shown the chip.
+- Keeps "All projects" reachable: it was never part of the mobile swipe cycle,
+  so the project menu used to be the only way back to it. The composer's own
+  project sheet now offers it, the same row the desktop rail's sheet has.
+
 ## July 30, 2026 - Fixes the hosted home-screen crash (v0.1.143)
 
 - Fixes the crash that replaced the whole app with an error screen on the hosted

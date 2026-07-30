@@ -5773,6 +5773,14 @@ export function App() {
         )}
       >
       {embedded && isMobile ? (
+        /* Brand only. The project chip that used to sit on the right is gone:
+           the composer already carries one, so the same folder name was printed
+           twice on a phone-width header, and the two chips are wired to the
+           same state anyway (the composer's project sheet drives projectFilter).
+           This also matches the non-embedded mobile header, which has never
+           shown the chip — mobile reaches Shipped/Artifacts by swiping, not
+           through the filter menu's Pages group. The right side stays padded
+           for the host's own island (--lfg-host-top-inset). */
         <header className="z-40 flex shrink-0 items-center justify-between gap-2 pb-1 pl-3 pr-[calc(0.75rem+var(--lfg-host-top-inset))] pt-[calc(0.5rem+env(safe-area-inset-top))]">
           <NavIsland className="shrink-0">
             <div
@@ -5780,21 +5788,6 @@ export function App() {
               aria-label="omg.dev"
             >
               <ProductBrand hosted compact />
-            </div>
-          </NavIsland>
-          <NavIsland className="shrink-0">
-            <div className="flex h-11 items-center rounded-full bg-background/80 px-1.5 backdrop-blur-xl">
-              <ProjectFilterMenu
-                value={
-                  tab === "shipped"
-                    ? "__shipped"
-                    : tab === "artifacts"
-                      ? "__artifacts"
-                      : projectFilter
-                }
-                projects={projectOptions}
-                onChange={changeProjectFilter}
-              />
             </div>
           </NavIsland>
         </header>
@@ -16028,6 +16021,20 @@ function NewSessionDialog({
         onSelect={chooseComposerRepo}
         onBrowse={() => openFolderBrowser(false)}
         onCreate={() => openFolderBrowser(true)}
+        // "All projects" is deliberately NOT in the mobile swipe cycle, so on a
+        // phone the project menu was the only way back to it. The embedded
+        // header no longer carries that menu, which would have made __all a
+        // one-way door — the composer's own sheet offers it instead. Same row
+        // the desktop rail's sheet already shows.
+        allSelected={scopedProject === "__all"}
+        onSelectAll={
+          onProjectChange
+            ? () => {
+                onProjectChange("__all");
+                setProjectSheetOpen(false);
+              }
+            : undefined
+        }
       />
     </form>
     {files.annotator}
