@@ -11674,10 +11674,7 @@ function SessionActionsMenu({
           <DropdownMenuSub>
             <DropdownMenuSubTrigger>
               <MessageSquare className="size-4" />
-              <span className="flex-1">Message view</span>
-              <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-primary">
-                Experimental
-              </span>
+              <span className="flex-1">Display</span>
             </DropdownMenuSubTrigger>
             <DropdownMenuSubContent align="start" className="min-w-56">
               <DropdownMenuRadioGroup
@@ -11880,10 +11877,7 @@ function RailSessionContextMenu({
           <ContextMenuSub>
             <ContextMenuSubTrigger>
               <MessageSquare className="size-4" />
-              <span className="flex-1">Message view</span>
-              <span className="rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-primary">
-                Experimental
-              </span>
+              <span className="flex-1">Display</span>
             </ContextMenuSubTrigger>
             <ContextMenuSubContent className="min-w-56">
               <ContextMenuRadioGroup
