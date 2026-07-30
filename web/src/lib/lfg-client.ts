@@ -2,6 +2,7 @@ import {
   createSameOriginTransport,
   type LfgSocket,
   type LfgTransport,
+  type LfgUploadProgress,
 } from "@lfg-dev/client";
 
 // Standalone lfg and every embeddable host use the same transport contract.
@@ -28,6 +29,15 @@ export function api<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function lfgFetch(path: string, init?: RequestInit): Promise<Response> {
   return lfgTransport.fetch(path, init);
+}
+
+export function lfgUpload(
+  path: string,
+  init: RequestInit,
+  onProgress: (progress: LfgUploadProgress) => void,
+): Promise<Response> {
+  return lfgTransport.upload?.(path, init, onProgress) ??
+    lfgTransport.fetch(path, init);
 }
 
 export function openLfgLiveSocket(): Promise<LfgSocket> {

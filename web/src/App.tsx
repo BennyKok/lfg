@@ -14,7 +14,7 @@ import {
   shouldShowEmbeddedConnectGate,
 } from "./lib/embedded-connect";
 import { emitSessionCreatedToHost } from "./lib/embed-host-signal";
-import { api, lfgAssetUrl, lfgFetch } from "./lib/lfg-client";
+import { api, lfgAssetUrl, lfgFetch, lfgUpload } from "./lib/lfg-client";
 import { cacheProjectFilter, readCachedProjectFilter } from "./lib/project-filter";
 import { uploadFile as uploadFileThroughTransport } from "./lib/upload";
 import { EmbeddedConnectGate } from "./components/embedded-connect-gate";
@@ -1013,7 +1013,7 @@ function uploadFile<T>(
   onProgress: (progress: number) => void,
 ): Promise<T> {
   return uploadFileThroughTransport(
-    lfgFetch,
+    lfgUpload,
     path,
     file,
     contentType,

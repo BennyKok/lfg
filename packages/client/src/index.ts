@@ -31,6 +31,12 @@ export interface LfgSocket {
   addEventListener(type: "error", listener: () => void): void;
 }
 
+export interface LfgUploadProgress {
+  loaded: number;
+  total: number;
+  lengthComputable: boolean;
+}
+
 export interface LfgTransport {
   /**
    * Authenticated raw HTTP access for application surfaces that consume
@@ -38,6 +44,16 @@ export interface LfgTransport {
    * `request`, which parses JSON and normalizes errors.
    */
   fetch(path: string, init?: RequestInit): Promise<Response>;
+  /**
+   * Authenticated upload access with byte-level progress when the transport
+   * can provide it. Older/custom transports may omit this; callers should
+   * fall back to `fetch`.
+   */
+  upload?(
+    path: string,
+    init: RequestInit,
+    onProgress: (progress: LfgUploadProgress) => void,
+  ): Promise<Response>;
   request<T>(path: string, init?: RequestInit): Promise<T>;
   openLiveSocket(): Promise<LfgSocket>;
 }
@@ -52,6 +68,7 @@ export interface CreateGrantTransportOptions {
   getGrant: (input: { forceRefresh: boolean }) => Promise<LfgGrant>;
   fetch?: typeof globalThis.fetch;
   WebSocket?: typeof globalThis.WebSocket;
+  XMLHttpRequest?: typeof globalThis.XMLHttpRequest;
 }
 
 const SOCKET_OPEN = 1;
@@ -111,18 +128,98 @@ function socketUrl(baseUrl: string): string {
   return url.toString();
 }
 
+function responseHeaders(raw: string): Headers {
+  const headers = new Headers();
+  for (const line of raw.trim().split(/[\r\n]+/)) {
+    const separator = line.indexOf(":");
+    if (separator <= 0) continue;
+    headers.append(line.slice(0, separator).trim(), line.slice(separator + 1).trim());
+  }
+  return headers;
+}
+
+function uploadWithXhr(
+  XMLHttpRequestImpl: typeof globalThis.XMLHttpRequest,
+  url: string,
+  init: RequestInit,
+  onProgress: (progress: LfgUploadProgress) => void,
+): Promise<Response> {
+  return new Promise((resolve, reject) => {
+    const request = new XMLHttpRequestImpl();
+    const signal = init.signal;
+    let settled = false;
+
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      signal?.removeEventListener("abort", abort);
+      callback();
+    };
+    const abort = () => request.abort();
+
+    request.open(requestMethod(init), url, true);
+    for (const [name, value] of new Headers(init.headers)) {
+      request.setRequestHeader(name, value);
+    }
+    request.upload.addEventListener("progress", (event) => {
+      onProgress({
+        loaded: event.loaded,
+        total: event.total,
+        lengthComputable: event.lengthComputable,
+      });
+    });
+    request.addEventListener("load", () => {
+      finish(() => {
+        resolve(
+          new Response(request.responseText, {
+            status: request.status,
+            statusText: request.statusText,
+            headers: responseHeaders(request.getAllResponseHeaders()),
+          }),
+        );
+      });
+    });
+    request.addEventListener("error", () => {
+      finish(() => reject(new Error("Upload failed due to a network error")));
+    });
+    request.addEventListener("abort", () => {
+      finish(() => reject(new DOMException("Upload cancelled", "AbortError")));
+    });
+
+    if (signal?.aborted) {
+      finish(() => reject(new DOMException("Upload cancelled", "AbortError")));
+      return;
+    }
+    signal?.addEventListener("abort", abort, { once: true });
+    request.send(init.body as XMLHttpRequestBodyInit | Document | null | undefined);
+  });
+}
+
 export function createSameOriginTransport(
   input: {
     fetch?: typeof globalThis.fetch;
     WebSocket?: typeof globalThis.WebSocket;
+    XMLHttpRequest?: typeof globalThis.XMLHttpRequest;
   } = {},
 ): LfgTransport {
   const fetchImpl = input.fetch ?? globalThis.fetch;
   const WebSocketImpl = input.WebSocket ?? globalThis.WebSocket;
+  const XMLHttpRequestImpl = input.XMLHttpRequest ?? globalThis.XMLHttpRequest;
   return {
     fetch(path: string, init?: RequestInit): Promise<Response> {
       return fetchImpl(path, init);
     },
+    ...(XMLHttpRequestImpl
+      ? {
+          upload(
+            path: string,
+            init: RequestInit,
+            onProgress: (progress: LfgUploadProgress) => void,
+          ): Promise<Response> {
+            return uploadWithXhr(XMLHttpRequestImpl, path, init, onProgress);
+          },
+        }
+      : {}),
     async request<T>(path: string, init?: RequestInit): Promise<T> {
       const response = await fetchImpl(path, init);
       const { data, text } = await readBody(response);
@@ -139,6 +236,7 @@ export function createSameOriginTransport(
 export function createGrantTransport(options: CreateGrantTransportOptions): LfgTransport {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const WebSocketImpl = options.WebSocket ?? globalThis.WebSocket;
+  const XMLHttpRequestImpl = options.XMLHttpRequest ?? globalThis.XMLHttpRequest;
   const baseUrl = normalizeBaseUrl(options.baseUrl);
   let cached: LfgGrant | null = null;
 
@@ -174,8 +272,32 @@ export function createGrantTransport(options: CreateGrantTransportOptions): LfgT
     return response;
   };
 
+  const authenticatedUpload = XMLHttpRequestImpl
+    ? async (
+        path: string,
+        init: RequestInit,
+        onProgress: (progress: LfgUploadProgress) => void,
+      ): Promise<Response> => {
+        const execute = async (forceRefresh: boolean) => {
+          const current = await grant(forceRefresh);
+          const headers = new Headers(init.headers);
+          headers.set("Authorization", `Bearer ${current.token}`);
+          return uploadWithXhr(
+            XMLHttpRequestImpl,
+            `${baseUrl}${path}`,
+            { ...init, headers },
+            onProgress,
+          );
+        };
+        let response = await execute(false);
+        if (response.status === 401) response = await execute(true);
+        return response;
+      }
+    : null;
+
   return {
     fetch: authenticatedFetch,
+    ...(authenticatedUpload ? { upload: authenticatedUpload } : {}),
     async request<T>(path: string, init: RequestInit = {}): Promise<T> {
       const response = await authenticatedFetch(path, init);
       const { data, text } = await readBody(response);

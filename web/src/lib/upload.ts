@@ -1,6 +1,11 @@
-export type UploadFetch = (
+export type UploadRequest = (
   path: string,
-  init?: RequestInit,
+  init: RequestInit,
+  onProgress: (progress: {
+    loaded: number;
+    total: number;
+    lengthComputable: boolean;
+  }) => void,
 ) => Promise<Response>;
 
 /**
@@ -12,7 +17,7 @@ export type UploadFetch = (
  * file bytes to the host application's origin.
  */
 export async function uploadFile<T>(
-  fetchImpl: UploadFetch,
+  upload: UploadRequest,
   path: string,
   file: File,
   contentType: string,
@@ -21,11 +26,19 @@ export async function uploadFile<T>(
   const chunkSize = 8 * 1024 * 1024;
   const uploadId = crypto.randomUUID();
   let result: T | undefined;
+  let reportedProgress = 0;
+
+  const reportProgress = (next: number) => {
+    const progress = Math.min(100, Math.max(reportedProgress, next));
+    if (progress === reportedProgress) return;
+    reportedProgress = progress;
+    onProgress(progress);
+  };
 
   for (let offset = 0; offset < file.size; offset += chunkSize) {
     const chunk = file.slice(offset, Math.min(file.size, offset + chunkSize));
     const separator = path.includes("?") ? "&" : "?";
-    const response = await fetchImpl(
+    const response = await upload(
       `${path}${separator}uploadId=${encodeURIComponent(uploadId)}&offset=${offset}&total=${file.size}`,
       {
         method: "POST",
@@ -33,6 +46,15 @@ export async function uploadFile<T>(
           "Content-Type": contentType || "application/octet-stream",
         },
         body: chunk,
+      },
+      (progress) => {
+        if (!file.size) return;
+        const loaded = progress.lengthComputable
+          ? Math.min(chunk.size, progress.loaded)
+          : 0;
+        reportProgress(
+          Math.round(((offset + loaded) / file.size) * 100),
+        );
       },
     );
     const text = await response.text();
@@ -54,7 +76,7 @@ export async function uploadFile<T>(
     }
 
     result = data as T;
-    onProgress(
+    reportProgress(
       Math.min(100, Math.round(((offset + chunk.size) / file.size) * 100)),
     );
   }

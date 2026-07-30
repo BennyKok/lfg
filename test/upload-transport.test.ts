@@ -36,6 +36,47 @@ test("uploadFile sends chunks through its runtime transport", async () => {
   expect(progress).toEqual([100]);
 });
 
+test("uploadFile reports byte progress supplied by the runtime transport", async () => {
+  const progress: number[] = [];
+  const file = new File(["image bytes"], "image.png", { type: "image/png" });
+
+  await uploadFile(
+    async (_path, _init, onProgress) => {
+      onProgress?.({ loaded: 2, total: file.size, lengthComputable: true });
+      onProgress?.({ loaded: 7, total: file.size, lengthComputable: true });
+      return Response.json({
+        path: "/tmp/lfg-uploads/image.png",
+        name: "image.png",
+      });
+    },
+    "/api/uploads?filename=image.png",
+    file,
+    file.type,
+    (value) => progress.push(value),
+  );
+
+  expect(progress).toEqual([18, 64, 100]);
+});
+
+test("uploadFile never moves progress backward when a transport retries", async () => {
+  const progress: number[] = [];
+  const file = new File(["image bytes"], "image.png", { type: "image/png" });
+
+  await uploadFile(
+    async (_path, _init, onProgress) => {
+      onProgress?.({ loaded: 8, total: file.size, lengthComputable: true });
+      onProgress?.({ loaded: 3, total: file.size, lengthComputable: true });
+      return Response.json({ path: "/tmp/lfg-uploads/image.png" });
+    },
+    "/api/uploads",
+    file,
+    file.type,
+    (value) => progress.push(value),
+  );
+
+  expect(progress).toEqual([73, 100]);
+});
+
 test("uploadFile retains the runtime response error", async () => {
   const file = new File(["x"], "x.txt", { type: "text/plain" });
 
