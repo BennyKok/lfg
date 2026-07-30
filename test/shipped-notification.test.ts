@@ -6,6 +6,7 @@ describe("shipped notifications", () => {
     const server = await readFile("src/commands/serve.ts", "utf8");
     expect(server).toContain("title: `Shipped: ${post.title}`");
     expect(server).toContain("`/?session=${encodeURIComponent(post.sessionId)}`");
+    expect(server).toContain('"/notifications"');
     expect(server).toContain("user: notificationUser");
   });
 
@@ -24,7 +25,7 @@ describe("shipped notifications", () => {
     expect(worker).toContain("await showLfgNotification(notification.title");
   });
 
-  test("acknowledges OS notifications whenever the app becomes visible", async () => {
+  test("acknowledges OS notifications from the Notification Center", async () => {
     const push = await readFile("web/src/lib/push.ts", "utf8");
     const main = await readFile("web/src/main.tsx", "utf8");
     const worker = await readFile("web/public/sw.js", "utf8");
@@ -32,11 +33,13 @@ describe("shipped notifications", () => {
     expect(push).toContain("export async function acknowledgePushNotifications()");
     expect(push).toContain("notification.close()");
     expect(push).toContain("clearAppBadge");
-    expect(main).toContain('document.visibilityState !== "visible"');
-    expect(main).toContain('event.data?.type === "LFG_PUSH_DISPLAYED"');
-    expect(main).toContain('window.addEventListener("pageshow", acknowledgeIfVisible)');
-    expect(worker).toContain('client.postMessage({ type: "LFG_PUSH_DISPLAYED" })');
+    expect(app).toContain("const markAllRead = async () =>");
+    expect(app).toContain("await acknowledgePushNotifications()");
+    expect(app).toContain("Mark all read");
+    expect(app).toContain("Notifications marked read");
+    expect(main).not.toContain("acknowledgePushNotifications");
+    expect(worker).not.toContain("LFG_PUSH_DISPLAYED");
     expect(app).not.toContain("Clear dot");
-    expect(app).toContain("Opening LFG clears its icon dot");
+    expect(app).toContain("Mark all read in Notifications clears the app icon dot");
   });
 });

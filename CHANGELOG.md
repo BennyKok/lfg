@@ -4,6 +4,16 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - A real notification center (v0.1.150)
+
+- Rebrands the Shipped page as Notifications, with a canonical
+  `/notifications` route while preserving old Shipped links.
+- Shipped results now appear as a notification type with per-profile unread
+  state. Opening one marks that item read, and Mark all read clears every unread
+  marker plus the PWA app-icon badge without deleting notification history.
+- Stops silently clearing the PWA badge when the app merely returns to the
+  foreground; acknowledgement now happens explicitly inside Notifications.
+
 ## July 30, 2026 - Notification dots that know when you are back (v0.1.149)
 
 - The PWA notification dot now clears automatically when LFG opens or returns

@@ -14,7 +14,7 @@
  *  typed as `string`, not this union. These values document the known set. */
 export const TAB_VALUES = [
   "live",
-  "shipped",
+  "notifications",
   "artifacts",
   "settings",
   "ask",
@@ -33,13 +33,17 @@ export const DEFAULT_TAB: Tab = "live";
  *  renders the Settings page (the app's existing catch-all). */
 export function pathnameToTab(pathname: string): string {
   const seg = pathname.split("/").filter(Boolean)[0];
-  return seg ? decodeURIComponent(seg) : DEFAULT_TAB;
+  const tab = seg ? decodeURIComponent(seg) : DEFAULT_TAB;
+  // `/shipped` was the original public route. Keep old links working while
+  // making Notifications the canonical page and URL.
+  return tab === "shipped" ? "notifications" : tab;
 }
 
 /** The URL path for a tab. The default tab lives at `/` (kept segment-free so
  *  the common link stays clean); every other tab is a single path segment. */
 export function tabToPath(tab: string): string {
-  return tab === DEFAULT_TAB ? "/" : `/${encodeURIComponent(tab)}`;
+  const canonical = tab === "shipped" ? "notifications" : tab;
+  return canonical === DEFAULT_TAB ? "/" : `/${encodeURIComponent(canonical)}`;
 }
 
 /** Same-tab requests are state updates, not route changes. Avoiding a redundant

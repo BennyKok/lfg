@@ -153,7 +153,7 @@ describe("mobile overlay scroll contract", () => {
     const app = require("node:fs").readFileSync("web/src/App.tsx", "utf8") as string;
 
     expect(app).toContain("embedded && isMobile");
-    expect(app).toContain('tab === "shipped"');
+    expect(app).toContain('tab === "notifications"');
     expect(app).toContain('"__artifacts"');
     expect(app).toContain("projects={projectOptions}");
     expect(app).toContain("onChange={changeProjectFilter}");
@@ -193,7 +193,7 @@ describe("mobile overlay scroll contract", () => {
     const app = require("node:fs").readFileSync("web/src/App.tsx", "utf8") as string;
     const css = require("node:fs").readFileSync("web/src/index.css", "utf8") as string;
 
-    expect(app).toContain('tab === "live" || tab === "shipped" || tab === "artifacts"');
+    expect(app).toContain('tab === "live" || tab === "notifications" || tab === "artifacts"');
     expect(app).toContain(
       "pb-[var(--lfg-inline-composer-height,var(--lfg-composer-clear))]",
     );

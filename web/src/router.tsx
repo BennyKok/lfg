@@ -52,6 +52,15 @@ const tabRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "$tab",
   validateSearch: validateAppSearch,
+  beforeLoad: ({ params, search }) => {
+    if (params.tab !== "shipped") return;
+    throw redirect({
+      to: "/$tab",
+      params: { tab: "notifications" },
+      search,
+      replace: true,
+    });
+  },
   component: () => null,
 });
 

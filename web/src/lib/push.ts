@@ -85,9 +85,9 @@ export async function disablePush(): Promise<void> {
 }
 
 /**
- * Acknowledge this device's visible push notifications when the app comes back
- * into view. The app keeps its durable, in-context indicators (open question
- * count, findings, Shipped history); this only clears the transient OS surface.
+ * Acknowledge this device's visible push notifications after the person marks
+ * the Notification Center read. The center keeps the durable history; this only
+ * clears the transient OS surface.
  *
  * Closing the notifications matters as well as clearAppBadge(): the service
  * worker derives the next badge count from visible notifications, so leaving

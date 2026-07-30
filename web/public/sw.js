@@ -212,21 +212,7 @@ self.addEventListener("push", (event) => {
   } catch {
     payload = null;
   }
-  event.waitUntil(
-    (async () => {
-      await showLatest(payload);
-      // A foreground client can immediately acknowledge the transient OS
-      // notification; the app's own question/finding/Shipped surfaces remain
-      // the durable record. Hidden clients ignore this and clear on foreground.
-      const windows = await self.clients.matchAll({
-        type: "window",
-        includeUncontrolled: true,
-      });
-      for (const client of windows) {
-        client.postMessage({ type: "LFG_PUSH_DISPLAYED" });
-      }
-    })(),
-  );
+  event.waitUntil(showLatest(payload));
 });
 
 self.addEventListener("notificationclick", (event) => {

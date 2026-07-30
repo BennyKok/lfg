@@ -139,7 +139,6 @@ import {
   HardDrive,
   MemoryStick,
   Maximize2,
-  Megaphone,
   ChevronRight,
   Folder,
   GitFork,
@@ -264,7 +263,16 @@ import {
   isSubscribed,
   enablePush,
   disablePush,
+  acknowledgePushNotifications,
 } from "./lib/push";
+import {
+  markAllNotificationsRead,
+  markNotificationRead,
+  notificationIsUnread,
+  notificationReadState,
+  shippedNotificationId,
+  type NotificationReadState,
+} from "./lib/notification-center";
 import { AskNavButton, AskPage, AskProvider } from "./components/ask-center";
 import { PwaInstallCallout, PwaInstallSettingsSection } from "./components/pwa-install";
 import { UsageCampfireHost, useUsageRingLongPress } from "./components/UsageCampfire";
@@ -4079,7 +4087,7 @@ export function App() {
     [navigate],
   );
   const extNavTabs = useExtensionNavTabs();
-  const openShipped = useCallback(() => setTab("shipped"), [setTab]);
+  const openShipped = useCallback(() => setTab("notifications"), [setTab]);
   // Keep the session list + Shipped/Artifacts mounted after first visit so
   // tab switches don't remount, re-fetch, or reboot gallery iframes. Hidden
   // pages set `active=false` to pause polling. First paint of Shipped/Artifacts
@@ -4091,7 +4099,7 @@ export function App() {
   const [keepArtifacts, setKeepArtifacts] = useState(false);
   useEffect(() => {
     if (tab === "live") setKeepLive(true);
-    if (tab === "shipped") setKeepShipped(true);
+    if (tab === "notifications") setKeepShipped(true);
     if (tab === "artifacts") setKeepArtifacts(true);
   }, [tab]);
   // Warm Shipped + Artifacts list data during idle so the first open of either
@@ -4939,8 +4947,8 @@ export function App() {
 
   // Project menu changes, including the Shipped and Artifacts virtual pages.
   const changeProjectFilter = useCallback((value: string) => {
-    if (value === "__shipped") {
-      setTab("shipped");
+    if (value === "__notifications") {
+      setTab("notifications");
       return;
     }
     if (value === "__artifacts") {
@@ -4955,13 +4963,13 @@ export function App() {
     (dir: 1 | -1) => {
       // Swipe cycles through projects plus the two virtual pages (never the
       // "All" view — still reachable via the project menu).
-      const options = [...mobileProjectOptions, "__shipped", "__artifacts"];
+      const options = [...mobileProjectOptions, "__notifications", "__artifacts"];
       if (options.length <= 1) return false;
-      const current = tab === "shipped" ? "__shipped" : tab === "artifacts" ? "__artifacts" : projectFilter;
+      const current = tab === "notifications" ? "__notifications" : tab === "artifacts" ? "__artifacts" : projectFilter;
       const next = cycleProjectFilter(options, current, dir);
       if (next === current) return false;
-      if (next === "__shipped") {
-        setTab("shipped");
+      if (next === "__notifications") {
+        setTab("notifications");
       } else if (next === "__artifacts") {
         setTab("artifacts");
       } else {
@@ -4986,7 +4994,7 @@ export function App() {
   pageSwipeCtx.current = { cycleMobileProjectFilter, composerExpanded };
 
   useEffect(() => {
-    if (!isMobile || (tab !== "live" && tab !== "shipped" && tab !== "artifacts") || callOpen) return;
+    if (!isMobile || (tab !== "live" && tab !== "notifications" && tab !== "artifacts") || callOpen) return;
     const main = mainRef.current;
     if (!main) return;
     const SWIPE_COMMIT = 64;
@@ -5719,7 +5727,7 @@ export function App() {
     isMobile &&
     !callOpen &&
     !viewerArtifact &&
-    (tab === "live" || tab === "shipped" || tab === "artifacts");
+    (tab === "live" || tab === "notifications" || tab === "artifacts");
   // The mobile scroll surface is absolutely positioned, so it escapes the app
   // shell's host-inset padding and would otherwise run its content underneath
   // the omg Computer nav pill. <main> now ends at the top of that band (see its
@@ -5806,7 +5814,7 @@ export function App() {
       <header className="relative z-40 flex shrink-0 items-center justify-between gap-2 px-2 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))] md:px-3">
         <NavIsland className="shrink-0">
           <div className="flex h-11 items-center rounded-full bg-background/80 px-1.5 backdrop-blur-xl">
-            {tab === "live" || tab === "shipped" || tab === "artifacts" ? (
+            {tab === "live" || tab === "notifications" || tab === "artifacts" ? (
               <button
                 type="button"
                 onClick={() => setTab("live")}
@@ -5839,7 +5847,7 @@ export function App() {
 
         <NavIsland className="shrink-0">
           <div className="flex h-11 items-center gap-1.5 rounded-full bg-background/80 px-2 backdrop-blur-xl">
-            {tab === "live" || tab === "shipped" || tab === "artifacts" ? (
+            {tab === "live" || tab === "notifications" || tab === "artifacts" ? (
               // The island stays identical across the swipeable pages: on
               // mobile that's avatar + ask + pages (page identity lives in
               // the heading and the swipe/composer nav); desktop keeps the
@@ -5847,7 +5855,7 @@ export function App() {
               <>
                 {!isMobile ? (
                   <ProjectFilterMenu
-                    value={tab === "shipped" ? "__shipped" : tab === "artifacts" ? "__artifacts" : projectFilter}
+                    value={tab === "notifications" ? "__notifications" : tab === "artifacts" ? "__artifacts" : projectFilter}
                     projects={projectOptions}
                     onChange={changeProjectFilter}
                   />
@@ -5995,10 +6003,11 @@ export function App() {
             onRefresh={() => void refreshCodingAgents({ refreshModels: true })}
           />
         ) : null}
-        {keepShipped || tab === "shipped" ? (
-          <div className={tab === "shipped" ? undefined : "hidden"} aria-hidden={tab !== "shipped"}>
+        {keepShipped || tab === "notifications" ? (
+          <div className={tab === "notifications" ? undefined : "hidden"} aria-hidden={tab !== "notifications"}>
             <ShippedPage
-              active={tab === "shipped"}
+              active={tab === "notifications"}
+              notificationIdentity={identity}
               liveSessionIds={
                 new Set(
                   liveSessions.flatMap((s) =>
@@ -6050,7 +6059,7 @@ export function App() {
         tab !== "ask" &&
         tab !== "usage" &&
         tab !== "coding-agents" &&
-        tab !== "shipped" &&
+        tab !== "notifications" &&
         tab !== "artifacts" &&
         tab !== "changelog" &&
         tab !== "term" &&
@@ -6095,7 +6104,7 @@ export function App() {
         <>
           {isMobile &&
           !viewerArtifact &&
-          (tab === "live" || tab === "shipped" || tab === "artifacts") ? (
+          (tab === "live" || tab === "notifications" || tab === "artifacts") ? (
             // Mobile bottom composer: the create flow lives inline, anchored at
             // the bottom (same component as the desktop drawer,
             // `variant="inline"`). It persists across the swipeable pages
@@ -6949,7 +6958,7 @@ function PagesMenu({
   // Artifacts render no title chrome of their own in the rail layout.
   const known =
     tab === "live" ||
-    tab === "shipped" ||
+    tab === "notifications" ||
     tab === "artifacts" ||
     (showSettings && tab === "settings");
   const value = known || extraTabs.some((t) => t.id === tab) ? tab : "live";
@@ -6989,9 +6998,9 @@ function PagesMenu({
             <Radio className="size-5 shrink-0 text-muted-foreground" />
             Live
           </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem value="shipped">
-            <Megaphone className="size-5 shrink-0 text-muted-foreground" />
-            Shipped
+          <DropdownMenuRadioItem value="notifications">
+            <Bell className="size-5 shrink-0 text-muted-foreground" />
+            Notifications
           </DropdownMenuRadioItem>
           <DropdownMenuRadioItem value="artifacts">
             <LayoutDashboard className="size-5 shrink-0 text-muted-foreground" />
@@ -7035,12 +7044,12 @@ function ProjectFilterMenu({
   onOpen?: () => void;
 }) {
   const active = value !== "__all";
-  // Shipped and Artifacts are virtual pages in this menu.
-  const shipped = value === "__shipped";
+  // Notifications and Artifacts are virtual pages in this menu.
+  const notifications = value === "__notifications";
   const artifacts = value === "__artifacts";
   // Swipe cycles through projects + pages (not "All"); the dropdown below
   // still lists "All projects" as a tappable option.
-  const options = [...projects, "__shipped", "__artifacts"];
+  const options = [...projects, "__notifications", "__artifacts"];
   const touchStartY = useRef<number | null>(null);
   const didSwipe = useRef(false);
 
@@ -7059,8 +7068,8 @@ function ProjectFilterMenu({
         ? "border-primary/30 bg-primary/10 text-primary"
         : "border-border bg-muted/70 text-muted-foreground",
   );
-  const triggerTitle = shipped
-    ? "Shipped"
+  const triggerTitle = notifications
+    ? "Notifications"
     : artifacts
       ? "Artifacts"
       : active
@@ -7068,8 +7077,8 @@ function ProjectFilterMenu({
         : "All projects";
   const triggerContent = (
     <>
-      {shipped ? (
-        <Megaphone className="size-3.5 shrink-0" />
+      {notifications ? (
+        <Bell className="size-3.5 shrink-0" />
       ) : artifacts ? (
         <LayoutDashboard className="size-3.5 shrink-0" />
       ) : (
@@ -7077,7 +7086,7 @@ function ProjectFilterMenu({
       )}
       {active ? (
         <span className="truncate text-xs font-medium">
-          {shipped ? "Shipped" : artifacts ? "Artifacts" : shortProject(value)}
+          {notifications ? "Notifications" : artifacts ? "Artifacts" : shortProject(value)}
         </span>
       ) : null}
     </>
@@ -7088,7 +7097,7 @@ function ProjectFilterMenu({
       <button
         type="button"
         className={triggerClassName}
-        aria-label="Choose project"
+        aria-label="Choose project or page"
         title={triggerTitle}
         onClick={onOpen}
       >
@@ -7100,7 +7109,7 @@ function ProjectFilterMenu({
   return (
     <label
       className={triggerClassName}
-      aria-label="Filter live sessions by project"
+      aria-label="Choose project or page"
       title={triggerTitle}
       onTouchStart={(event) => {
         touchStartY.current = event.touches[0]?.clientY ?? null;
@@ -7124,7 +7133,7 @@ function ProjectFilterMenu({
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        aria-label="Filter live sessions by project"
+        aria-label="Choose project or page"
         className="absolute inset-0 cursor-pointer appearance-none bg-transparent text-transparent opacity-0 outline-none"
         onMouseDown={(event) => {
           // A swipe gesture shouldn't also pop the native picker open afterwards.
@@ -7141,7 +7150,7 @@ function ProjectFilterMenu({
           </option>
         ))}
         <optgroup label="Pages">
-          <option value="__shipped">Shipped</option>
+          <option value="__notifications">Notifications</option>
           <option value="__artifacts">Artifacts</option>
         </optgroup>
       </select>
@@ -18810,6 +18819,7 @@ function ShippedPage({
   onReviewSession,
   onFollowUpCreated,
   liveSessionIds,
+  notificationIdentity,
   artifactsOnly = false,
   active = true,
 }: {
@@ -18817,6 +18827,7 @@ function ShippedPage({
   onReviewSession?: (post: ShipPost) => void;
   onFollowUpCreated?: (sessionId: string) => Promise<void>;
   liveSessionIds: Set<string>;
+  notificationIdentity?: string | null;
   artifactsOnly?: boolean;
   active?: boolean;
 }) {
@@ -18829,6 +18840,10 @@ function ShippedPage({
   const [posts, setPosts] = useState<ShipPost[] | null>(() => cachedPosts?.items ?? null);
   const [postsTotal, setPostsTotal] = useState(() => cachedPosts?.total ?? 0);
   const [postsBusy, setPostsBusy] = useState(false);
+  const [notificationReads, setNotificationReads] = useState<NotificationReadState | null>(() =>
+    artifactsOnly ? null : notificationReadState(notificationIdentity),
+  );
+  const [markingNotificationsRead, setMarkingNotificationsRead] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // A follow-up is a fresh session with the shipped transcript as context,
   // leaving the original finished session untouched.
@@ -18847,6 +18862,27 @@ function ShippedPage({
   const postsLen = useRef(Math.max(FEED_PAGE, cachedPosts?.items.length ?? 0));
   const openArtifact = useContext(ArtifactViewerContext);
   const appDialog = useAppDialog();
+
+  useEffect(() => {
+    if (view !== "feed") return;
+    setNotificationReads(notificationReadState(notificationIdentity));
+  }, [notificationIdentity, view]);
+
+  // Existing Shipped history predates the Notification Center. Establish a
+  // migration baseline on first visit so years of finished work do not appear
+  // as newly unread; only revisions arriving after this point raise the count.
+  useEffect(() => {
+    if (view !== "feed" || posts === null || notificationReads) return;
+    const newestVisible = posts.reduce((latest, post) => Math.max(latest, post.ts), Date.now());
+    setNotificationReads(markAllNotificationsRead(notificationIdentity, newestVisible));
+  }, [notificationIdentity, notificationReads, posts, view]);
+
+  useEffect(() => {
+    if (view !== "feed") return;
+    const sync = () => setNotificationReads(notificationReadState(notificationIdentity));
+    window.addEventListener("storage", sync);
+    return () => window.removeEventListener("storage", sync);
+  }, [notificationIdentity, view]);
   useEffect(() => {
     if (view !== "artifacts") return;
     let alive = true;
@@ -19067,19 +19103,73 @@ function ShippedPage({
     }
   };
 
+  const unreadPosts =
+    posts?.filter((post) =>
+      notificationIsUnread(notificationReads, {
+        id: shippedNotificationId(post),
+        ts: post.ts,
+      }),
+    ).length ?? 0;
+
+  const markPostRead = (post: ShipPost) => {
+    if (
+      !notificationIsUnread(notificationReads, {
+        id: shippedNotificationId(post),
+        ts: post.ts,
+      })
+    ) {
+      return;
+    }
+    setNotificationReads(
+      markNotificationRead(notificationIdentity, shippedNotificationId(post)),
+    );
+  };
+
+  const markAllRead = async () => {
+    if (markingNotificationsRead) return;
+    setMarkingNotificationsRead(true);
+    try {
+      const through = Math.max(Date.now(), ...(posts ?? []).map((post) => post.ts));
+      setNotificationReads(markAllNotificationsRead(notificationIdentity, through));
+      await acknowledgePushNotifications();
+      toast.success("Notifications marked read");
+    } finally {
+      setMarkingNotificationsRead(false);
+    }
+  };
+
   return (
     <div className="mx-auto max-w-xl space-y-4 pb-10">
       <div className="flex items-center justify-between px-1">
         <div>
           <h1 className="text-lg font-semibold tracking-[-0.01em]">
-            {artifactsOnly ? "Artifacts" : "Shipped"}
+            {artifactsOnly ? "Artifacts" : "Notifications"}
           </h1>
           {artifactsOnly ? (
             <p className="mt-0.5 text-xs text-muted-foreground">Interactive reports and live dashboards</p>
           ) : (
-            <p className="mt-0.5 text-xs text-muted-foreground">Finished sessions · review or resume anytime</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {unreadPosts ? `${unreadPosts} unread` : "You're all caught up"}
+              {" · "}results and activity
+            </p>
           )}
         </div>
+        {!artifactsOnly && posts !== null ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            title="Mark notifications read and clear the app icon badge"
+            disabled={markingNotificationsRead}
+            onClick={() => void markAllRead()}
+          >
+            {markingNotificationsRead ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Check className="size-4" />
+            )}
+            Mark all read
+          </Button>
+        ) : null}
       </div>
 
       {view === "artifacts" ? (
@@ -19181,7 +19271,7 @@ function ShippedPage({
 
       {posts !== null && posts.length === 0 ? (
         <div className="rounded-2xl border border-border bg-card/40 px-4 py-10 text-center text-sm text-muted-foreground">
-          Nothing shipped yet — agents post verified results here and decide whether the session should stay live.
+          No notifications yet — verified results and future activity will collect here.
         </div>
       ) : null}
 
@@ -19192,14 +19282,25 @@ function ShippedPage({
         <div className="overflow-hidden rounded-2xl border border-border bg-card/40 shadow-sm">
           {posts.map((post) => {
             const live = !!post.sessionId && liveSessionIds.has(post.sessionId);
+            const unread = notificationIsUnread(notificationReads, {
+              id: shippedNotificationId(post),
+              ts: post.ts,
+            });
             return (
-              <article key={post.id} className="border-b border-border/50 pb-3 last:border-b-0">
+              <article
+                key={post.id}
+                className={cn(
+                  "border-b border-border/50 pb-3 last:border-b-0",
+                  unread && "bg-primary/[0.035]",
+                )}
+              >
                 {/* Tapping the post opens the conversation: straight into the
                     live session when it's still running, the same shared chat
                     renderer plus Resume when it has shipped and closed. */}
                 <button
                   type="button"
                   onClick={() => {
+                    markPostRead(post);
                     if (!post.sessionId) return;
                     if (onReviewSession) onReviewSession(post);
                     else if (live) onOpenSession(post.sessionId);
@@ -19218,10 +19319,19 @@ function ShippedPage({
                         className="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full bg-emerald-500 ring-2 ring-background"
                       />
                     ) : null}
+                    {unread ? (
+                      <span
+                        title="Unread"
+                        className="absolute -left-2 top-1 size-2 rounded-full bg-primary ring-2 ring-background"
+                      />
+                    ) : null}
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-baseline gap-1.5 text-[13px]">
                       <span className="min-w-0 truncate font-semibold">{agentIconAlt(post.agent)}</span>
+                      <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        Shipped
+                      </span>
                       {post.project ? (
                         <span className="min-w-0 truncate text-muted-foreground">· {post.project}</span>
                       ) : null}
@@ -19797,8 +19907,8 @@ function SettingsView({
           </div>
         </div>
         <p className="px-4 text-xs text-muted-foreground">
-          Opening LFG clears its icon dot. Questions, findings, and shipped work
-          stay in place until handled.
+          Mark all read in Notifications clears the app icon dot without
+          deleting notification history.
         </p>
       </section>
 

@@ -5206,7 +5206,7 @@ export async function cmdServe() {
                 body: post.summary || "Tap to review the finished session.",
                 url: post.sessionId
                   ? `/?session=${encodeURIComponent(post.sessionId)}`
-                  : "/?tab=shipped",
+                  : "/notifications",
                 tag: `shipped-${post.id}-${post.rev}`,
               },
             }).catch(() => {});

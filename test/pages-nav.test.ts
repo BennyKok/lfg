@@ -1,4 +1,4 @@
-// Guards the Shipped/Artifacts navigation contract.
+// Guards the Notifications/Artifacts navigation contract.
 //
 // WHY A SOURCE-LEVEL TEST. These pages disappeared from the desktop rail for
 // several releases and nothing failed: they were reachable only through the
@@ -18,7 +18,7 @@ describe("page navigation reachability", () => {
   test("the overflow menu offers every built-in page", () => {
     const menu = app.slice(app.indexOf("function PagesMenu("));
     const body = menu.slice(0, menu.indexOf("\nfunction "));
-    for (const page of ["live", "shipped", "artifacts", "settings"]) {
+    for (const page of ["live", "notifications", "artifacts", "settings"]) {
       expect(body, `PagesMenu is missing ${page}`).toContain(`value="${page}"`);
     }
   });
@@ -59,7 +59,7 @@ describe("page navigation reachability", () => {
   });
 
   test("the header is not suppressed wholesale when embedded", () => {
-    // The regression that left Shipped/Artifacts with no chrome at all: the
+    // The regression that left Notifications/Artifacts with no chrome at all: the
     // header was `null` for every embedded page, so there was no way back to
     // Live except browser history. Only the live-desktop case may skip it,
     // because there the rail is the chrome.
