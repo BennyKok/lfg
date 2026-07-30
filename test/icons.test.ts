@@ -12,6 +12,27 @@ describe("LFG icon assets", () => {
     expect(source).not.toContain("<image");
   });
 
+  test("ships an explicit crisp variant for small UI placements", async () => {
+    const source = await readFile("web/public/icon-small.svg", "utf8");
+    expect(source).toContain('viewBox="0 0 512 512"');
+    expect(source).toContain('id="mark"');
+    expect(source).not.toContain("@media");
+    expect(source).not.toContain('id="full"');
+    expect(source).not.toContain("<image");
+
+    for (const path of [
+      "web/src/App.tsx",
+      "web/src/components/pwa-install.tsx",
+      "web/src/components/embedded-connect-gate.tsx",
+    ]) {
+      const ui = await readFile(path, "utf8");
+      expect(ui).not.toContain('lfgAssetUrl("/icon.svg")');
+    }
+
+    const server = await readFile("src/commands/serve.ts", "utf8");
+    expect(server).toContain('"/icon-small.svg"');
+  });
+
   test("ships each generated PNG at its declared size", async () => {
     const assets = [
       ["web/public/icon-192.png", 192, 192],

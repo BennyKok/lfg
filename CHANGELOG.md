@@ -4,6 +4,15 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Crisp LFG mark at small sizes (v0.1.138)
+
+- Keeps the original pixel-dissolve icon while giving 24–40px UI placements
+  their own explicit small-size vector. iOS can no longer choose the detailed
+  large artwork and shrink its dissolve pixels into unreadable horizontal
+  fragments.
+- The app header, onboarding, connect gate, and install prompt now use that
+  deterministic small mark; large icons and splash artwork stay unchanged.
+
 ## July 30, 2026 - Hosts get a slot in the desktop rail (v0.1.137)
 
 - Adds a `rail-footer` host slot at the bottom of the hosted desktop rail. A

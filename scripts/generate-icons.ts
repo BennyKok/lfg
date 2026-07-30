@@ -1,3 +1,4 @@
+import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import sharp from "sharp";
 
@@ -17,6 +18,26 @@ async function render(
   }
   await image.png().toFile(resolve(root, output));
 }
+
+async function generateSmallIcon(): Promise<void> {
+  const source = await readFile(resolve(webPublic, "icon.svg"), "utf8");
+  const small = source
+    .replace(/<style>[\s\S]*?<\/style>/, "")
+    .replace(/<g id="full"[\s\S]*?<\/g>/, "")
+    .replace('id="mini"', 'id="mark"');
+
+  if (
+    small === source ||
+    small.includes('id="full"') ||
+    small.includes("@media")
+  ) {
+    throw new Error("Could not isolate the small LFG icon artwork");
+  }
+
+  await writeFile(resolve(webPublic, "icon-small.svg"), small);
+}
+
+await generateSmallIcon();
 
 await Promise.all([
   render("icon.svg", "web/public/icon-192.png", 192),

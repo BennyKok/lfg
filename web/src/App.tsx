@@ -6599,7 +6599,7 @@ function ProductBrand({
   if (!hosted) {
     return (
       <img
-        src={lfgAssetUrl("/icon.svg")}
+        src={lfgAssetUrl("/icon-small.svg")}
         alt="lfg"
         className="mx-1 size-6 shrink-0 rounded-md"
       />
@@ -7453,7 +7453,11 @@ function OnboardingFlow({
       <div className="my-auto w-full max-w-md py-6">
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <img src={lfgAssetUrl("/icon.svg")} alt="lfg" className="size-7 shrink-0" />
+            <img
+              src={lfgAssetUrl("/icon-small.svg")}
+              alt="lfg"
+              className="size-7 shrink-0"
+            />
             <span className="text-xs font-medium text-muted-foreground">
               v{version}
             </span>
@@ -7821,7 +7825,11 @@ function WhoAreYou({
     <div className="flex h-dvh flex-col items-center justify-center bg-background px-6 text-foreground">
       <div className="w-full max-w-sm">
         <div className="mb-4 flex items-center gap-2">
-          <img src={lfgAssetUrl("/icon.svg")} alt="lfg" className="size-7 shrink-0" />
+          <img
+            src={lfgAssetUrl("/icon-small.svg")}
+            alt="lfg"
+            className="size-7 shrink-0"
+          />
         </div>
         <h1 className="text-xl font-semibold">Who are you?</h1>
         <p className="mb-5 mt-1 text-sm text-muted-foreground">

@@ -983,6 +983,10 @@ const STATIC_FILES: Record<string, { path: string; type: string }> = {
     type: "application/manifest+json",
   },
   "/icon.svg": { path: join(WEB_DIR, "icon.svg"), type: "image/svg+xml" },
+  "/icon-small.svg": {
+    path: join(WEB_DIR, "icon-small.svg"),
+    type: "image/svg+xml",
+  },
   "/icon-maskable.svg": {
     path: join(WEB_DIR, "icon-maskable.svg"),
     type: "image/svg+xml",
