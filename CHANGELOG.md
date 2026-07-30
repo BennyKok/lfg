@@ -4,6 +4,18 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Shipped and Artifacts are reachable on desktop (v0.1.134)
+
+- The desktop sidebar gains a pages menu, so Shipped and Artifacts can be opened
+  from the rail in both its expanded and collapsed states. Artifacts previously
+  had no desktop entry point at all.
+- The current page is marked in that menu, and extension tabs appear there too —
+  they were previously only reachable through the Settings page.
+- Opening Shipped or Artifacts inside a hosted Computer no longer leaves the page
+  with no navigation and no way back to Live.
+- Fixes hosted sessions briefly showing LFG's own account chrome and profile
+  picker after switching pages.
+
 ## July 30, 2026 - Crisp LFG icon (v0.1.133)
 
 - The LFG mark now uses smooth vector lettering instead of a coarse pixel grid,
