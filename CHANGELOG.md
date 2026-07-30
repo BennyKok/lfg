@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Unified mobile session rows (v0.1.130)
+
+- Regular mobile session cards now match the taller Recently shipped row height
+  for a more consistent, easier-to-scan feed.
+- Recently shipped rows show their source session title instead of repeating
+  the project already selected for the page.
+
 ## July 30, 2026 - Interactive artifacts run on open (v0.1.129)
 
 - Artifacts that draw themselves with scripts now run immediately in an isolated
