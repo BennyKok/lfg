@@ -4,6 +4,18 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Fixes the hosted home-screen crash (v0.1.143)
+
+- Fixes the crash that replaced the whole app with an error screen on the hosted
+  surface. The recent-shipped list spread the response of `/api/shipped`
+  directly during render, so a proxied workspace answering 2xx without a posts
+  array — an error envelope, an empty body, or a wake response while it was
+  still asleep — took the entire app down with "Spread syntax requires
+  ...iterable not be null or undefined".
+- Hardens the Shipped feed and Artifacts gallery against the same class of
+  response, so a workspace that answers oddly shows an empty list instead of
+  losing the whole page.
+
 ## July 30, 2026 - A real crash screen, and crashes that report themselves (v0.1.142)
 
 - Replaces the raw error strip a render crash used to fall through to — a bare
