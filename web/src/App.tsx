@@ -8,6 +8,7 @@ import {
   shouldNavigateToTab,
   shouldPrioritizeSession,
 } from "./lib/app-search";
+import type { AppSearch } from "./lib/app-search";
 import { isEmbedded, readLocationEmbedFlag } from "./lib/embed";
 import {
   embeddedConnectOptions,
@@ -4056,8 +4057,18 @@ export function App() {
     (next: string | ((current: string) => string)) => {
       const resolved = typeof next === "function" ? next(tabRef.current) : next;
       if (!shouldNavigateToTab(tabRef.current, resolved)) return;
-      if (resolved === DEFAULT_TAB) void navigate({ to: "/" });
-      else void navigate({ to: "/$tab", params: { tab: resolved } });
+      // Carry the host-mode contract across the navigation. The router clears
+      // search when none is supplied (see shouldNavigateToTab's note), so
+      // without this, moving to Shipped or Artifacts dropped `embed` — and LFG
+      // came back up as a standalone app *inside* omg: its own settings/user
+      // chrome, plus the identity picker. `session` is deliberately NOT carried;
+      // it is a boot-time focus intent, not durable state.
+      const keepHostMode = (prev: AppSearch): AppSearch => ({
+        ...(prev.embed ? { embed: prev.embed } : {}),
+        ...(prev.embedOrigin ? { embedOrigin: prev.embedOrigin } : {}),
+      });
+      if (resolved === DEFAULT_TAB) void navigate({ to: "/", search: keepHostMode });
+      else void navigate({ to: "/$tab", params: { tab: resolved }, search: keepHostMode });
     },
     [navigate],
   );
@@ -5785,7 +5796,11 @@ export function App() {
             </div>
           </NavIsland>
         </header>
-      ) : embedded || liveDesktopWorkspace ? null : (
+      ) : liveDesktopWorkspace ? null : (
+      /* Embedded used to be suppressed here too, which left Shipped and
+         Artifacts with no chrome at all — no way back to Live except browser
+         history. The host owns identity/settings chrome, not LFG's page
+         navigation, so the individual chrome below is gated instead. */
       <header className="relative z-40 flex shrink-0 items-center justify-between gap-2 px-2 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))] md:px-3">
         <NavIsland className="shrink-0">
           <div className="flex h-11 items-center rounded-full bg-background/80 px-1.5 backdrop-blur-xl">
@@ -5797,19 +5812,24 @@ export function App() {
                 aria-current={tab === "live" ? "page" : undefined}
                 className="flex items-center rounded-full px-1.5 transition-transform active:scale-[0.96]"
               >
-                <ProductBrand compact />
+                {/* Embedded shows omg's mark, matching the mobile embed header
+                    and the rail — the frame must never look like a second app. */}
+                <ProductBrand compact hosted={embedded} />
               </button>
             ) : (
               <button
                 type="button"
                 onClick={() =>
-                  setTab(tab === "settings" || tab === "ask" ? "live" : "settings")
+                  // Embedded has no Settings page of its own to fall back to.
+                  setTab(embedded || tab === "settings" || tab === "ask" ? "live" : "settings")
                 }
                 aria-label="Back"
                 className="flex h-8 items-center gap-1 rounded-full pl-1.5 pr-3 text-[13px] font-medium tracking-[-0.01em] text-muted-foreground transition-colors duration-200 ease-out hover:text-foreground active:scale-[0.96]"
               >
                 <ChevronLeft className="size-[18px]" />
-                <span>{tab === "settings" || tab === "ask" ? "Live" : "Settings"}</span>
+                <span>
+                  {embedded || tab === "settings" || tab === "ask" ? "Live" : "Settings"}
+                </span>
               </button>
             )}
           </div>
@@ -5837,20 +5857,29 @@ export function App() {
                     onClearIdle={() => void clearIdleSessions()}
                   />
                 ) : null}
-                <UserFilterMenu
-                  value={userFilter}
-                  users={users}
-                  onChange={changeUserFilter}
-                />
+                {embedded ? null : (
+                  <UserFilterMenu
+                    value={userFilter}
+                    users={users}
+                    onChange={changeUserFilter}
+                  />
+                )}
               </>
             ) : null}
-            <AskNavButton active={tab === "ask"} onOpen={() => setTab("ask")} />
-            <IconTab
-              active={tab !== "live" && tab !== "shipped" && tab !== "artifacts"}
-              onClick={() => setTab("settings")}
-              icon={<Settings className="size-[18px]" />}
-              label="Settings"
-            />
+            {embedded ? null : (
+              <AskNavButton active={tab === "ask"} onOpen={() => setTab("ask")} />
+            )}
+            {embedded ? null : (
+              <IconTab
+                active={tab !== "live" && tab !== "shipped" && tab !== "artifacts"}
+                onClick={() => setTab("settings")}
+                icon={<Settings className="size-[18px]" />}
+                label="Settings"
+              />
+            )}
+            {/* Same menu as the rail's, so the page axis has one shape wherever
+                the chrome happens to live in a given layout. */}
+            <PagesMenu tab={tab} onOpenTab={setTab} extraTabs={extNavTabs} />
           </div>
         </NavIsland>
       </header>
@@ -5909,6 +5938,12 @@ export function App() {
               onOpenSettings={embedded ? undefined : () => setTab("settings")}
               onOpenAsk={embedded ? undefined : () => setTab("ask")}
               onOpenShipped={openShipped}
+              // Built here rather than inside RailStage: the shell owns the tab
+              // state and the extension registry, and the rail should not have to
+              // know either to render a menu.
+              pagesMenu={
+                <PagesMenu tab={tab} onOpenTab={setTab} extraTabs={extNavTabs} />
+              }
               onOpenRecentShipped={openShippedSession}
               repos={repos}
               onReposChanged={loadCore}
@@ -6900,6 +6935,101 @@ function ManageSessionsMenu({
             <span className="text-xs text-muted-foreground">{template.description}</span>
           </DropdownMenuItem>
         ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * The rail's overflow menu — the page axis on its own.
+ *
+ * WHY THIS EXISTS. Shipped and Artifacts were only ever reachable through the
+ * *project* picker, as a "Pages" optgroup inside it. That put two orthogonal
+ * axes — which folder am I scoped to, and which page am I on — in one control,
+ * and it broke exactly the way that arrangement invites: when the desktop rail
+ * moved to the repo-only drawer picker, the pages silently disappeared. Only on
+ * desktop, because mobile still renders the plain `<select>` that has them. So
+ * for a while Artifacts had no desktop entry point at all, and once you did
+ * reach either page there was nothing to navigate back with.
+ *
+ * Deliberately an overflow menu rather than a labelled switcher: the rail's
+ * action row is small and contested, and this is where the next thing that needs
+ * a home in the rail should go instead of growing that row again.
+ *
+ * Extension tabs are listed here because they were previously reachable only
+ * through the Settings page, which embed mode hides — leaving them unreachable
+ * inside omg entirely.
+ */
+function PagesMenu({
+  tab,
+  onOpenTab,
+  extraTabs,
+  className,
+}: {
+  tab: string;
+  onOpenTab: (tab: string) => void;
+  extraTabs: ExtensionNavTab[];
+  className?: string;
+}) {
+  // Pages are one radio group so exactly one item reads as current. That marker
+  // is also the only "where am I" signal these pages have — Shipped and
+  // Artifacts render no title chrome of their own in the rail layout.
+  const known = tab === "live" || tab === "shipped" || tab === "artifacts";
+  const value = known || extraTabs.some((t) => t.id === tab) ? tab : "live";
+  // Controlled so a selection dismisses the menu. Radio items don't close on
+  // their own — correct for a filter, wrong here: the selection navigates, and
+  // the rail's trigger unmounts on the way out, which left the popup stranded in
+  // the corner of the new page.
+  const [open, setOpen] = useState(false);
+
+  return (
+    <DropdownMenu open={open} onOpenChange={setOpen}>
+      <DropdownMenuTrigger
+        render={
+          <button
+            type="button"
+            aria-label="Pages"
+            title="Pages"
+            className={cn(
+              "flex size-8 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground",
+              className,
+            )}
+          />
+        }
+      >
+        <MoreVertical className="size-4" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-48">
+        <DropdownMenuRadioGroup
+          value={value}
+          onValueChange={(next) => {
+            setOpen(false);
+            onOpenTab(typeof next === "string" ? next : "live");
+          }}
+        >
+          <DropdownMenuLabel>Pages</DropdownMenuLabel>
+          <DropdownMenuRadioItem value="live">
+            <Radio className="size-5 shrink-0 text-muted-foreground" />
+            Live
+          </DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="shipped">
+            <Megaphone className="size-5 shrink-0 text-muted-foreground" />
+            Shipped
+          </DropdownMenuRadioItem>
+          <DropdownMenuRadioItem value="artifacts">
+            <LayoutDashboard className="size-5 shrink-0 text-muted-foreground" />
+            Artifacts
+          </DropdownMenuRadioItem>
+          {extraTabs.length ? <DropdownMenuSeparator /> : null}
+          {extraTabs.map((extension) => (
+            <DropdownMenuRadioItem key={extension.id} value={extension.id}>
+              <span className="flex size-5 shrink-0 items-center justify-center text-muted-foreground">
+                {extension.icon ?? <Flag className="size-4" />}
+              </span>
+              <span className="truncate">{extension.label}</span>
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -8145,6 +8275,7 @@ function LiveView({
   onOpenSettings,
   onOpenAsk,
   onOpenShipped,
+  pagesMenu,
   onOpenRecentShipped,
   onManageSessions,
   onClearIdle,
@@ -8165,6 +8296,8 @@ function LiveView({
   onOpenSettings?: () => void;
   onOpenAsk?: () => void;
   onOpenShipped?: (post?: ShipPost) => void;
+  /** Rail overflow menu, built by the shell so RailStage stays unaware of tabs. */
+  pagesMenu?: ReactNode;
   onOpenRecentShipped?: (post: ShipPost) => void;
   onManageSessions: (template: ManageSessionPromptTemplate) => void;
   onClearIdle: () => void;
@@ -8441,7 +8574,7 @@ function LiveView({
         onUserChange={onUserChange}
         onOpenSettings={onOpenSettings}
         onOpenAsk={onOpenAsk}
-        onOpenShipped={onOpenShipped}
+        pagesMenu={pagesMenu}
         onOpenRecentShipped={onOpenRecentShipped}
         onManageSessions={onManageSessions}
         onClearIdle={onClearIdle}
@@ -8608,7 +8741,7 @@ function RailStage({
   onUserChange,
   onOpenSettings,
   onOpenAsk,
-  onOpenShipped,
+  pagesMenu,
   onOpenRecentShipped,
   onManageSessions,
   onClearIdle,
@@ -8630,7 +8763,8 @@ function RailStage({
   onUserChange?: (v: string) => void;
   onOpenSettings?: () => void;
   onOpenAsk?: () => void;
-  onOpenShipped?: (post?: ShipPost) => void;
+  /** Rail overflow menu, built by the shell so RailStage stays unaware of tabs. */
+  pagesMenu?: ReactNode;
   onOpenRecentShipped?: (post: ShipPost) => void;
   onManageSessions?: (template: ManageSessionPromptTemplate) => void;
   onClearIdle?: () => void;
@@ -9585,17 +9719,11 @@ function RailStage({
                 <Settings className="size-4" />
               </button>
             ) : null}
-            {onOpenShipped ? (
-              <button
-                type="button"
-                onClick={() => onOpenShipped()}
-                aria-label="Shipped"
-                title="Shipped"
-                className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
-              >
-                <Megaphone className="size-4" />
-              </button>
-            ) : null}
+            {/* Replaces a lone Shipped megaphone. That button was the collapsed
+                rail's only page link, so Artifacts had no entry point here at
+                all — and it named one destination where the rail needs a place
+                to put several. */}
+            {pagesMenu}
           </div>
         ) : (
           <div className="flex shrink-0 flex-col gap-2 border-b border-border px-2 py-2">
@@ -9644,6 +9772,7 @@ function RailStage({
                     onClearIdle={onClearIdle}
                   />
                 ) : null}
+                {pagesMenu}
               </div>
             </div>
             <div className="flex items-center gap-1.5">

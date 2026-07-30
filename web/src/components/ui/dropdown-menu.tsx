@@ -10,6 +10,9 @@ import { ChevronRightIcon, CheckIcon } from "lucide-react"
 const popoverSurfaceClass =
   "rounded-2xl bg-popover p-1 shadow-2xl ring-1 ring-foreground/5"
 
+// Forwards Root props, so callers that need it can control `open`/`onOpenChange`
+// — radio items do not dismiss on select, which is right for a filter and wrong
+// for anything that navigates.
 function DropdownMenu({ ...props }: MenuPrimitive.Root.Props) {
   return <MenuPrimitive.Root data-slot="dropdown-menu" {...props} />
 }
