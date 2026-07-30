@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Managed transcript recovery (v0.1.132)
+
+- Managed Claude sessions no longer show "session transcript not found" when a
+  task mentions flags such as `tsc -p` or `claude --print`.
+- Existing affected sessions automatically reconnect to their intact native
+  transcript after LFG updates, without losing conversation history.
+
 ## July 30, 2026 - Live upload progress restored (v0.1.131)
 
 - File attachments once again show smooth, real byte-by-byte upload percentages
