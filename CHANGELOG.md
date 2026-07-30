@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Recently shipped on mobile (v0.1.125)
+
+- Mobile Live now shows the five most recent shipped sessions in a compact
+  section below active work, scoped to the selected project.
+- Finished sessions open in the normal transcript view, and a View all shortcut
+  jumps directly to the complete Shipped feed.
+
 ## July 30, 2026 - Dynamic free OpenCode models (v0.1.124)
 
 - OpenCode's live `opencode/*-free` catalog entries now remain available in
