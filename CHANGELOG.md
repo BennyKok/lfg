@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Smart mobile bottom fade (v0.1.122)
+
+- The mobile composer wash now disappears at the end of the page and eases back
+  in over the preceding 24px, keeping the final session card fully clear.
+
 ## July 29, 2026 - Safer session actions (v0.1.121)
 
 - Idle sessions no longer show a Stop action that cannot do anything.
