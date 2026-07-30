@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Focused agent updates (v0.1.123)
+
+- Session menus now offer an experimental global **User + LFG output** view
+  that keeps user turns and agent-delivered updates readable while hiding
+  internal reasoning, routine tool calls, and ordinary assistant chatter.
+- Images, videos, and live dashboards remain visible in the focused view, and
+  the selection follows the shared LFG settings across sessions and devices.
+
 ## July 30, 2026 - Smart mobile bottom fade (v0.1.122)
 
 - The mobile composer wash now disappears at the end of the page and eases back
