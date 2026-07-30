@@ -19,6 +19,7 @@ import { LFG_SMALL_ICON_PATH } from "./lib/icon-assets";
 import { api, lfgAssetUrl, lfgFetch, lfgUpload } from "./lib/lfg-client";
 import { cacheProjectFilter, readCachedProjectFilter } from "./lib/project-filter";
 import { uploadFile as uploadFileThroughTransport } from "./lib/upload";
+import { AppCrash } from "./components/app-crash";
 import { EmbeddedConnectGate } from "./components/embedded-connect-gate";
 import {
   AuthenticatedArtifactImage,
@@ -3026,10 +3027,17 @@ function AppShellSkeleton() {
 // A single bad render (e.g. an unexpected menu/streaming edge case) must never
 // blank the whole app — isolate it so the rest of the live view keeps working.
 class ErrorBoundary extends Component<
-  { children: ReactNode; fallback?: (reset: () => void) => ReactNode },
-  { error: Error | null }
+  {
+    children: ReactNode;
+    fallback?: (reset: () => void) => ReactNode;
+    /** Shape of the built-in fallback: an inline card, or the whole viewport. */
+    variant?: "screen" | "card";
+    /** Which boundary caught it — rides along on the report. */
+    boundary?: string;
+  },
+  { error: Error | null; componentStack?: string }
 > {
-  state: { error: Error | null } = { error: null };
+  state: { error: Error | null; componentStack?: string } = { error: null };
 
   static getDerivedStateFromError(error: Error) {
     return { error };
@@ -3037,6 +3045,9 @@ class ErrorBoundary extends Component<
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.error("lfg: render error caught by boundary", error, info);
+    // Keep the component stack for the fallback UI — it is the part of the
+    // report a human can actually act on ("which component blew up").
+    this.setState({ componentStack: info?.componentStack ?? undefined });
     // Auto-report render errors with the React component stack — it usually
     // names the failing component, which the auto-fix agent uses to locate it.
     reportError({
@@ -3047,18 +3058,19 @@ class ErrorBoundary extends Component<
     });
   }
 
-  reset = () => this.setState({ error: null });
+  reset = () => this.setState({ error: null, componentStack: undefined });
 
   render() {
     if (this.state.error) {
       if (this.props.fallback) return this.props.fallback(this.reset);
       return (
-        <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-destructive/30 bg-destructive/10 p-4 text-center text-sm text-destructive">
-          <span>Something went wrong rendering this view.</span>
-          <Button size="sm" variant="outline" onClick={this.reset}>
-            Retry
-          </Button>
-        </div>
+        <AppCrash
+          error={this.state.error}
+          componentStack={this.state.componentStack}
+          reset={this.reset}
+          variant={this.props.variant ?? "card"}
+          boundary={this.props.boundary ?? "view"}
+        />
       );
     }
     return this.props.children;
@@ -3066,24 +3078,13 @@ class ErrorBoundary extends Component<
 }
 
 // Top-level backstop: if anything outside a card boundary throws, show a
-// recoverable full-screen message instead of a blank page.
+// recoverable full-screen message instead of a blank page. In practice the
+// router's CatchBoundary catches app render errors first (App is the root
+// route's component) and shows the same AppCrash screen — this stays as the
+// backstop for throws above the router, e.g. in the provider tree.
 export function RootErrorBoundary({ children }: { children: ReactNode }) {
   return (
-    <ErrorBoundary
-      fallback={(reset) => (
-        <div className={cn(APP_SHELL_CLASS, "items-center justify-center gap-3 p-6 text-center")}>
-          <div className="text-sm font-semibold">lfg hit an unexpected error</div>
-          <div className="flex gap-2">
-            <Button size="sm" variant="outline" onClick={reset}>
-              Retry
-            </Button>
-            <Button size="sm" variant="brand" onClick={() => window.location.reload()}>
-              Reload
-            </Button>
-          </div>
-        </div>
-      )}
-    >
+    <ErrorBoundary variant="screen" boundary="root">
       {children}
     </ErrorBoundary>
   );

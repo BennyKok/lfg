@@ -6,6 +6,7 @@ import {
   type RouterHistory,
 } from "@tanstack/react-router";
 import { App } from "./App";
+import { AppCrash } from "./components/app-crash";
 import {
   tabToPath,
   validateAppSearch,
@@ -61,6 +62,20 @@ export function createLfgRouter(history?: RouterHistory) {
     routeTree,
     defaultPreload: false,
     history,
+    // App is the ROOT route component, so any uncaught render error in the app
+    // lands in the root CatchBoundary — INSIDE RootErrorBoundary, which
+    // therefore never sees it. Without this option that boundary falls back to
+    // TanStack's built-in strip ("Something went wrong! / Hide Error" over a red
+    // monospace box) and, worse, reports nothing: componentDidCatch never runs.
+    // AppCrash both looks like the product and files the report itself.
+    defaultErrorComponent: ({ error, info, reset }) => (
+      <AppCrash
+        error={error}
+        componentStack={info?.componentStack}
+        reset={reset}
+        boundary="router"
+      />
+    ),
   });
 }
 

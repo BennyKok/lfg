@@ -3,6 +3,15 @@
 // POST /api/client-error, where the backend stores them, surfaces a finding +
 // push, and dispatches an auto-fix agent.
 //
+// Embedded hosts (omg's dashboard mounts this app natively) reach that endpoint
+// through the injected transport, i.e. the user's OWN lfg instance. That is the
+// right primary sink — it is where the finding and the auto-fix agent belong —
+// but it is also the sink most likely to be unreachable at exactly the moment
+// we need it: a paused/asleep workspace, an expired grant, or a crash that
+// happened before the transport was ready. When the host supplies a central
+// `errorSinkUrl`, we mirror the report there too, so a hosted crash is never
+// invisible just because the workspace behind it was not answering.
+//
 // Two hard rules keep this safe:
 //   1. It must NEVER throw or reject — a reporter that errors would re-trigger
 //      the very handlers it lives in (infinite loop). Everything is wrapped and
@@ -16,10 +25,10 @@
 
 // The hashed entry chunk this document loaded, e.g. "index-ab12cd.js". Present
 // only in a production `vite build`; null under dev/HMR. Mirrors main.tsx.
-import { lfgFetch } from "./lfg-client";
+import { lfgErrorSink, lfgFetch } from "./lfg-client";
 import { isClientErrorNoise } from "../../../src/client-error-policy.ts";
 
-const BUILD_ID =
+export const BUILD_ID =
   document
     .querySelector<HTMLScriptElement>('script[type="module"][src*="/assets/index-"]')
     ?.src.match(/index-[\w-]+\.js/)?.[0] ?? null;
@@ -65,6 +74,16 @@ const RELOAD_LATCH = `lfg:chunk-reload:__report:${BUILD_ID ?? "dev"}`;
 // build: if we already reloaded onto this same build and the chunk STILL won't
 // load, it's a genuine, durable break (not a stale chunk) — return false so it
 // surfaces as a real finding.
+/**
+ * True when a message is a browser's way of saying "that chunk is gone", i.e. a
+ * stale client rather than a bug. The crash UI words itself differently for
+ * these ("New version available", Reload first), so it shares this test instead
+ * of keeping a second, drifting copy of the regex.
+ */
+export function isChunkLoadError(message: string): boolean {
+  return CHUNK_LOAD_ERROR.test(message);
+}
+
 function recoverFromChunkLoadError(message: string): boolean {
   if (!CHUNK_LOAD_ERROR.test(message)) return false;
   let alreadyReloaded = false;
@@ -101,27 +120,33 @@ type Report = {
   kind?: "error" | "unhandledrejection" | "react";
 };
 
-/** Report a frontend error. Safe to call from anywhere; never throws. */
-export function reportError(r: Report): void {
+/**
+ * Report a frontend error. Safe to call from anywhere; never throws.
+ *
+ * Returns true when a report was actually dispatched — the crash UI uses this
+ * to decide whether it may tell the user "Reported to lfg", instead of claiming
+ * it unconditionally and quietly dropping bugs nobody knows are unreported.
+ */
+export function reportError(r: Report): boolean {
   try {
     // Browser delivery notices and unattributed transport failures cannot be
     // fixed in LFG source. Drop them at the reporting boundary; the server
     // applies the same shared policy for cached clients and direct callers.
-    if (isClientErrorNoise(r)) return;
+    if (isClientErrorNoise(r)) return false;
     if (!BUILD_ID) {
       // dev / unbuilt — log only, don't spam the findings feed
       if (r.message) console.error("lfg client error (dev, not reported):", r.message);
-      return;
+      return false;
     }
     // A mid-recovery throw from lazyWithReload (the page is already reloading) —
     // suppress it so the transient state never becomes a finding.
-    if (r.message.startsWith("Reloading to recover stale chunk")) return;
+    if (r.message.startsWith("Reloading to recover stale chunk")) return false;
     // A stale/failed code-split chunk → recover with a one-time reload instead of
     // escalating a transient, self-healing condition into a phantom auto-fix run.
-    if (recoverFromChunkLoadError(r.message)) return;
-    if (count >= MAX_REPORTS_PER_LOAD) return;
+    if (recoverFromChunkLoadError(r.message)) return false;
+    if (count >= MAX_REPORTS_PER_LOAD) return false;
     const key = sig(r.message, r.source ?? (r.stack ?? "").split("\n")[1] ?? "");
-    if (sent.has(key)) return;
+    if (sent.has(key)) return false;
     sent.add(key);
     count++;
 
@@ -139,8 +164,57 @@ export function reportError(r: Report): void {
       body: JSON.stringify(body),
       keepalive: true,
     }).catch(() => {});
+    mirrorToCentralSink(r);
+    return true;
   } catch {
     // reporting must never itself throw
+    return false;
+  }
+}
+
+/**
+ * Copy the report to the host's central sink, when one was configured.
+ *
+ * Deliberately unconditional rather than "only if the transport failed": the
+ * transport call above is fire-and-forget with keepalive precisely so it can
+ * outlive the page, so we cannot wait to learn whether it landed without
+ * risking losing the report entirely. Two cheap POSTs beat one lost crash. The
+ * sink is expected to dedup/rate-limit on its side; this side already caps at
+ * MAX_REPORTS_PER_LOAD and dedups by signature.
+ */
+function mirrorToCentralSink(r: Report): void {
+  const sink = lfgErrorSink();
+  if (!sink?.url) return;
+  try {
+    void fetch(sink.url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // A closed schema the sink can validate — no cookies, no credentials, and
+      // `route` is the app-internal path only, never the full URL with its
+      // query string (which can carry session ids or tokens).
+      body: JSON.stringify({
+        schemaVersion: 1,
+        event: "client_error",
+        kind: r.kind ?? "error",
+        message: r.message,
+        stack: r.stack,
+        componentStack: r.componentStack,
+        source: r.source,
+        line: r.line,
+        col: r.col,
+        buildId: BUILD_ID,
+        appVersion: sink.appVersion,
+        surface: sink.surface,
+        route: location.pathname,
+      }),
+      keepalive: true,
+      // No cookies to a third-party origin — the sink authenticates nothing and
+      // must never receive our session.
+      credentials: "omit",
+      mode: "cors",
+    }).catch(() => {});
+  } catch {
+    /* never re-enter the handlers */
   }
 }
 
