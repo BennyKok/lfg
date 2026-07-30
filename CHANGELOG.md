@@ -4,6 +4,19 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Hosts get a slot in the desktop rail (v0.1.137)
+
+- Adds a `rail-footer` host slot at the bottom of the hosted desktop rail. A
+  host embedding LFG as its entire desktop surface had nowhere to put its own
+  top-level navigation, because that layout suppresses the app header and the
+  rail's top row is already full.
+- The slot is a real node the host portals into, so it moves with the rail
+  instead of floating over it and having to track its width, collapse
+  animation and position. It carries the collapsed flag so the host can stack
+  vertically in the 56px rail.
+- Unfilled slots collapse to nothing, so standalone LFG and hosts that ignore
+  the slot are unaffected.
+
 ## July 30, 2026 - Hosts can reserve the top-right corner (v0.1.136)
 
 - Adds `--lfg-host-top-inset`, the top-right counterpart to the existing

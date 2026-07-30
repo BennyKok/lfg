@@ -9870,6 +9870,23 @@ function RailStage({
             </RailGroup>
           ) : null}
         </div>
+        {/* Host-owned footer. A host embedding LFG as its whole desktop surface
+            (omg) has nowhere to put its own top-level navigation: this layout
+            suppresses the app header, and the rail's top row is already full.
+            Rather than have it float chrome over us — which would mean tracking
+            the rail's width, its collapse animation and its position — we give
+            it a real node inside the rail to portal into. Collapses to nothing
+            when unused (see [data-lfg-host-slot]:empty in index.css), so a host
+            that fills it never pays for it and one that doesn't never sees it.
+            The collapsed flag rides along so the host can stack its controls
+            vertically in the 56px rail instead of overflowing it. */}
+        {hosted ? (
+          <div
+            data-lfg-host-slot="rail-footer"
+            data-lfg-rail-collapsed={railCollapsed ? "true" : undefined}
+            className="shrink-0"
+          />
+        ) : null}
       </aside>
 
       <div

@@ -118,6 +118,27 @@ describe("host bottom inset contract", () => {
     );
   });
 
+  test("hosted desktop rail exposes a footer slot the host can portal into", () => {
+    const app = require("node:fs").readFileSync("web/src/App.tsx", "utf8") as string;
+    const css = require("node:fs").readFileSync("web/src/index.css", "utf8") as string;
+    // A host that owns the whole desktop surface has nowhere for its own
+    // top-level nav: this layout suppresses the app header and the rail's top
+    // row is full. A real node inside the rail beats having it float chrome
+    // over us and track our width, collapse animation and position.
+    expect(app).toContain('data-lfg-host-slot="rail-footer"');
+    // Hosted only — standalone LFG grows no empty node.
+    expect(app).toMatch(
+      /\{hosted \? \(\s*<div\s*\n\s*data-lfg-host-slot="rail-footer"/,
+    );
+    // The host needs to know it has 56px, not 280px, to lay out in.
+    expect(app).toContain(
+      'data-lfg-rail-collapsed={railCollapsed ? "true" : undefined}',
+    );
+    // Unfilled slots must cost nothing: the host portals in AFTER we render,
+    // so :empty is the only continuous answer.
+    expect(css).toMatch(/\[data-lfg-host-slot\]:empty\s*\{\s*display:\s*none/);
+  });
+
   test("desktop embed zeroes host-bottom-inset (omg nav is top-middle)", () => {
     const css = require("node:fs").readFileSync("web/src/index.css", "utf8") as string;
     // Match omg useIsDesktop (lg = 1024). Mobile keeps the 2.75rem bottom pill.
