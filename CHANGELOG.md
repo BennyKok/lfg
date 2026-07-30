@@ -4,6 +4,15 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Inline expired-login recovery (v0.1.126)
+
+- Sessions whose Claude or Codex login expires now show the provider sign-in
+  flow directly above the failed turn instead of leaving a dead authentication
+  error in the transcript.
+- Browser approval, one-time codes, and successful reconnect guidance reuse the
+  existing account flow so users can sign back in and retry without leaving the
+  session.
+
 ## July 30, 2026 - Recently shipped on mobile (v0.1.125)
 
 - Mobile Live now shows the five most recent shipped sessions in a compact
