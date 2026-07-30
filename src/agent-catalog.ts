@@ -289,6 +289,10 @@ function opencodeFamily(model: string): string | null {
 
 export function curateOpenCodeModels(models: string[]): string[] {
   const out: string[] = [];
+  // OpenCode publishes credential-free models in its live catalog. Keep these
+  // dynamic instead of pinning one release in LFG: anonymous installs can then
+  // follow provider additions/removals without an LFG release.
+  const free = models.filter((model) => /^opencode\/.+-free$/.test(model));
   // ChatGPT subscription models (openai/*, present when opencode is logged in
   // via ChatGPT Plus/Pro OAuth) lead the picker. Mirror the codex harness
   // preference order, then stay future-proof by surfacing the newest release
@@ -301,6 +305,7 @@ export function curateOpenCodeModels(models: string[]): string[] {
     addLatest(out, openai.filter((model) => /^openai\/gpt-\d+(?:\.\d+)?-mini$/.test(model)));
     addLatest(out, openai.filter((model) => /codex|spark/.test(model) && !model.endsWith("-fast")));
   }
+  for (const model of free) if (!out.includes(model)) out.push(model);
   const preferred = models.filter((model) =>
     /^(opencode-go|fugu|sakana)\//.test(model) ||
     /^novita-ai\/(deepseek|moonshotai|qwen|zai-org|minimax|minimaxai|xiaomimimo)\//.test(model),
@@ -409,17 +414,45 @@ export function thinkingLevelsForAgent(agent: string): readonly string[] | null 
   return null;
 }
 
+const ACCOUNT_OWNED_AGENT_KEYS = new Set<CodingAgentKind>([
+  "claude",
+  "aisdk",
+  "codex",
+  "codex-aisdk",
+]);
+
+function hasConnectedModelAccount(codingAgents: CodingAgentInfo[]): boolean {
+  return codingAgents.some(
+    (agent) =>
+      ACCOUNT_OWNED_AGENT_KEYS.has(agent.key) &&
+      agent.status.accountConnected === true,
+  );
+}
+
+function defaultModelForCatalogItem(
+  key: CodingAgentKind,
+  models: string[],
+  accountConnected: boolean,
+): string {
+  if (key === "opencode" && !accountConnected) {
+    const free = models.find((model) => /^opencode\/.+-free$/.test(model));
+    if (free) return free;
+  }
+  return models.includes(MODEL_OPTIONS[key].defaultModel)
+    ? MODEL_OPTIONS[key].defaultModel
+    : models[0] ?? MODEL_OPTIONS[key].defaultModel;
+}
+
 export function listModelCatalog(codingAgents: CodingAgentInfo[] = []): ModelCatalogItem[] {
   const configured = new Map(codingAgents.map((agent) => [agent.key, agent]));
+  const accountConnected = hasConnectedModelAccount(codingAgents);
   return MODEL_CATALOG_KEYS.map((key) => {
     const status = configured.get(key);
     const models = modelsForAgent(key);
     return {
       key,
       label: LABELS[key],
-      defaultModel: models.includes(MODEL_OPTIONS[key].defaultModel)
-        ? MODEL_OPTIONS[key].defaultModel
-        : models[0] ?? MODEL_OPTIONS[key].defaultModel,
+      defaultModel: defaultModelForCatalogItem(key, models, accountConnected),
       models,
       thinkingLevels: [...(thinkingLevelsForAgent(key) ?? [])],
       session: key !== "claude" && key !== "codex",
