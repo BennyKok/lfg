@@ -18,6 +18,7 @@
     "whatsapp": "bun run src/cli.ts whatsapp",
     "connect": "bun run src/cli.ts connect",
     "setup": "bun run src/cli.ts setup",
+    "icons": "bun run scripts/generate-icons.ts",
     "test": "bun test",
     "build:packages": "bash scripts/pack-packages.sh --build-only",
     "pack:packages": "bash scripts/pack-packages.sh",

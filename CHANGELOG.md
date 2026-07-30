@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Crisp LFG icon (v0.1.133)
+
+- The LFG mark now uses smooth vector lettering instead of a coarse pixel grid,
+  so it stays clean in the mobile header, onboarding, browser chrome, and larger
+  installed-app surfaces.
+- PWA, maskable, Apple touch, and README icons are generated from the same
+  vector sources to keep every published size consistent.
+
 ## July 30, 2026 - Managed transcript recovery (v0.1.132)
 
 - Managed Claude sessions no longer show "session transcript not found" when a
