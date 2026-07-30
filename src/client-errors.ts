@@ -26,6 +26,7 @@ import { spawnManagedAisdkSession } from "./tmux.ts";
 import { addManaged } from "./managed.ts";
 import { USERS, assignUser } from "./users.ts";
 import { resolveSessionCwd } from "./worktree.ts";
+import { clientErrorNoiseReason } from "./client-error-policy.ts";
 
 // LFG's deployed main checkout. Fix agents branch from it into isolated
 // worktrees and only update it through scripts/land-session.sh.
@@ -113,18 +114,6 @@ export function signature(e: ClientError): string {
   return `${msg}::${cleanFrame}`;
 }
 
-// Errors that are noise, not bugs in our code: browser/extension cross-origin
-// "Script error." with no stack, ResizeObserver loop chatter, and network
-// blips. We still STORE these (audit trail) but never dispatch a fix for them.
-function isNoise(e: ClientError): boolean {
-  const m = (e.message || "").toLowerCase();
-  if (!m || m === "script error." || m === "script error") return true;
-  if (m.includes("resizeobserver loop")) return true;
-  if (m.includes("load failed") && !e.stack) return true;
-  if (/networkerror|failed to fetch/.test(m) && !e.componentStack) return true;
-  return false;
-}
-
 // ---------- dispatched-signature ledger (persisted across restarts) ----------
 
 type DispatchRecord = { sig: string; at: number; session: string; sessionId: string };
@@ -174,6 +163,20 @@ export async function reportClientError(
 
   await persist(e);
 
+  // Persist noise for diagnostics, but stop it before every user-visible or
+  // state-changing path. Previously this guard lived only in maybeDispatchFix,
+  // after addFinding + push, so ResizeObserver notices still woke the user with
+  // an "auto-fix dispatched" finding even though no fixer was launched.
+  const noiseReason = clientErrorNoiseReason(e);
+  if (noiseReason) {
+    return {
+      stored: true,
+      reported: false,
+      dispatched: false,
+      reason: `noise: ${noiseReason}`,
+    };
+  }
+
   // 1) Report it to the human via the findings feed (+ push). Dedup by title so
   //    a repeated error doesn't re-spam the feed.
   const title = `Frontend error: ${e.message.replace(/\s+/g, " ").slice(0, 100)}`;
@@ -205,7 +208,6 @@ export async function reportClientError(
 }
 
 async function maybeDispatchFix(e: ClientError): Promise<{ dispatched: boolean; reason?: string }> {
-  if (isNoise(e)) return { dispatched: false, reason: "noise (not dispatched)" };
   // Only auto-fix real shipped builds. Dev/HMR errors are transient and the
   // person editing is already looking at them.
   if (!e.buildId) return { dispatched: false, reason: "no buildId (dev) — not dispatched" };

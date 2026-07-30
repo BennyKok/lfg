@@ -17,6 +17,7 @@
 // The hashed entry chunk this document loaded, e.g. "index-ab12cd.js". Present
 // only in a production `vite build`; null under dev/HMR. Mirrors main.tsx.
 import { lfgFetch } from "./lfg-client";
+import { isClientErrorNoise } from "../../../src/client-error-policy.ts";
 
 const BUILD_ID =
   document
@@ -103,6 +104,10 @@ type Report = {
 /** Report a frontend error. Safe to call from anywhere; never throws. */
 export function reportError(r: Report): void {
   try {
+    // Browser delivery notices and unattributed transport failures cannot be
+    // fixed in LFG source. Drop them at the reporting boundary; the server
+    // applies the same shared policy for cached clients and direct callers.
+    if (isClientErrorNoise(r)) return;
     if (!BUILD_ID) {
       // dev / unbuilt — log only, don't spam the findings feed
       if (r.message) console.error("lfg client error (dev, not reported):", r.message);
