@@ -24,13 +24,19 @@ describe("shipped notifications", () => {
     expect(worker).toContain("await showLfgNotification(notification.title");
   });
 
-  test("lets the user clear handled PWA notifications and their app badge", async () => {
+  test("acknowledges OS notifications whenever the app becomes visible", async () => {
     const push = await readFile("web/src/lib/push.ts", "utf8");
+    const main = await readFile("web/src/main.tsx", "utf8");
+    const worker = await readFile("web/public/sw.js", "utf8");
     const app = await readFile("web/src/App.tsx", "utf8");
-    expect(push).toContain("export async function clearPushNotificationBadge()");
+    expect(push).toContain("export async function acknowledgePushNotifications()");
     expect(push).toContain("notification.close()");
     expect(push).toContain("clearAppBadge");
-    expect(app).toContain("Clear dot");
-    expect(app).toContain("Mark visible notifications as handled");
+    expect(main).toContain('document.visibilityState !== "visible"');
+    expect(main).toContain('event.data?.type === "LFG_PUSH_DISPLAYED"');
+    expect(main).toContain('window.addEventListener("pageshow", acknowledgeIfVisible)');
+    expect(worker).toContain('client.postMessage({ type: "LFG_PUSH_DISPLAYED" })');
+    expect(app).not.toContain("Clear dot");
+    expect(app).toContain("Opening LFG clears its icon dot");
   });
 });

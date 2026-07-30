@@ -10,6 +10,7 @@ import { RootErrorBoundary } from "./App";
 import { router } from "./router";
 import { registerExtension } from "./lib/extensions";
 import { installErrorReporting } from "./lib/report-error";
+import { acknowledgePushNotifications } from "./lib/push";
 import { AppDialogProvider } from "@/components/ui/app-dialog";
 import {
   applyTheme,
@@ -95,6 +96,19 @@ function promptUpdate(worker: ServiceWorker) {
 async function registerServiceWorker() {
   try {
     const reg = await navigator.serviceWorker.register("/sw.js");
+    // The OS badge is a transient "come back to LFG" signal, not a second
+    // unread store. Once the app is visible, its own durable surfaces take over:
+    // Ask keeps unanswered counts, Live keeps findings, and Shipped keeps
+    // completed work. This also handles pushes received while LFG is already
+    // foregrounded, signalled by the worker after it displays the notification.
+    const acknowledgeIfVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      void acknowledgePushNotifications();
+    };
+    acknowledgeIfVisible();
+    navigator.serviceWorker.addEventListener("message", (event) => {
+      if (event.data?.type === "LFG_PUSH_DISPLAYED") acknowledgeIfVisible();
+    });
 
     // A worker updated during a previous visit may already be waiting. Activate
     // it immediately on startup so opening the PWA cannot strand the user on an
@@ -122,9 +136,15 @@ async function registerServiceWorker() {
     };
     setInterval(check, 60_000);
     document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") check();
+      if (document.visibilityState !== "visible") return;
+      check();
+      acknowledgeIfVisible();
     });
-    window.addEventListener("focus", check);
+    window.addEventListener("focus", () => {
+      check();
+      acknowledgeIfVisible();
+    });
+    window.addEventListener("pageshow", acknowledgeIfVisible);
   } catch {
     // Registration failed — the app still runs, just without offline/update UX.
   }

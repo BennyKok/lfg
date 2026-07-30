@@ -264,7 +264,6 @@ import {
   isSubscribed,
   enablePush,
   disablePush,
-  clearPushNotificationBadge,
 } from "./lib/push";
 import { AskNavButton, AskPage, AskProvider } from "./components/ask-center";
 import { PwaInstallCallout, PwaInstallSettingsSection } from "./components/pwa-install";
@@ -3782,30 +3781,6 @@ function PushBell({ user }: { user?: string | null }) {
       disabled={busy}
       aria-label={on ? "Disable notifications" : "Enable notifications"}
     />
-  );
-}
-
-function ClearNotificationBadgeButton() {
-  const [busy, setBusy] = useState(false);
-
-  const clear = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      await clearPushNotificationBadge();
-      toast.success("Notification dot cleared");
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not clear notification dot");
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Button size="sm" variant="outline" disabled={busy} onClick={() => void clear()}>
-      {busy ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
-      Clear dot
-    </Button>
   );
 }
 
@@ -19771,7 +19746,7 @@ function SettingsView({
         <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Feedback
         </h2>
-        <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card/40">
+        <div className="overflow-hidden rounded-2xl border border-border bg-card/40">
           <div className="flex items-center justify-between gap-4 px-4 py-2.5">
             <div className="flex items-center gap-3">
               <span className="flex size-7 items-center justify-center rounded-[7px] bg-primary text-white">
@@ -19820,23 +19795,10 @@ function SettingsView({
             </div>
             <PushBell user={user} />
           </div>
-          <div className="flex items-center justify-between gap-4 px-4 py-2.5">
-            <div className="flex items-center gap-3">
-              <span className="flex size-7 items-center justify-center rounded-[7px] bg-muted text-foreground">
-                <Bell className="size-4" />
-              </span>
-              <div>
-                <span className="block text-sm font-medium">App icon dot</span>
-                <span className="block text-xs text-muted-foreground">
-                  Mark visible notifications as handled
-                </span>
-              </div>
-            </div>
-            <ClearNotificationBadgeButton />
-          </div>
         </div>
         <p className="px-4 text-xs text-muted-foreground">
-          Get a push when one of your sessions needs you.
+          Opening LFG clears its icon dot. Questions, findings, and shipped work
+          stay in place until handled.
         </p>
       </section>
 

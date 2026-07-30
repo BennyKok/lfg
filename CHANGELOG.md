@@ -4,6 +4,15 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Notification dots that know when you are back (v0.1.149)
+
+- The PWA notification dot now clears automatically when LFG opens or returns
+  to the foreground, including when a push arrives while the app is already in
+  use. Questions, findings, and shipped results remain in their normal in-app
+  surfaces until handled.
+- Removes the manual notification-dot control from Settings; clearing the OS
+  alert is now part of reviewing the app rather than a maintenance task.
+
 ## July 30, 2026 - Send and move on (v0.1.148)
 
 - Sending from either mobile composer now dismisses the field focus so the
