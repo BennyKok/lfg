@@ -83,3 +83,25 @@ export async function disablePush(): Promise<void> {
     body: JSON.stringify({ endpoint }),
   }).catch(() => {});
 }
+
+/**
+ * Mark this device's visible push notifications as handled and clear the
+ * installed app icon's badge. Closing the notifications matters as well as
+ * clearAppBadge(): the service worker derives the next badge count from visible
+ * notifications, so leaving old ones around would make the dot reappear on the
+ * next push.
+ */
+export async function clearPushNotificationBadge(): Promise<void> {
+  if (typeof window === "undefined") return;
+
+  if ("serviceWorker" in navigator) {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const notifications = (await reg?.getNotifications()) ?? [];
+    for (const notification of notifications) notification.close();
+  }
+
+  const badgeNavigator = navigator as Navigator & {
+    clearAppBadge?: () => Promise<void>;
+  };
+  await badgeNavigator.clearAppBadge?.();
+}

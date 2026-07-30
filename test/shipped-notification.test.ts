@@ -23,4 +23,14 @@ describe("shipped notifications", () => {
     expect(worker).toContain("await self.navigator.clearAppBadge()");
     expect(worker).toContain("await showLfgNotification(notification.title");
   });
+
+  test("lets the user clear handled PWA notifications and their app badge", async () => {
+    const push = await readFile("web/src/lib/push.ts", "utf8");
+    const app = await readFile("web/src/App.tsx", "utf8");
+    expect(push).toContain("export async function clearPushNotificationBadge()");
+    expect(push).toContain("notification.close()");
+    expect(push).toContain("clearAppBadge");
+    expect(app).toContain("Clear dot");
+    expect(app).toContain("Mark visible notifications as handled");
+  });
 });

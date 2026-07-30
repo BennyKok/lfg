@@ -264,6 +264,7 @@ import {
   isSubscribed,
   enablePush,
   disablePush,
+  clearPushNotificationBadge,
 } from "./lib/push";
 import { AskNavButton, AskPage, AskProvider } from "./components/ask-center";
 import { PwaInstallCallout, PwaInstallSettingsSection } from "./components/pwa-install";
@@ -3781,6 +3782,30 @@ function PushBell({ user }: { user?: string | null }) {
       disabled={busy}
       aria-label={on ? "Disable notifications" : "Enable notifications"}
     />
+  );
+}
+
+function ClearNotificationBadgeButton() {
+  const [busy, setBusy] = useState(false);
+
+  const clear = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await clearPushNotificationBadge();
+      toast.success("Notification dot cleared");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not clear notification dot");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Button size="sm" variant="outline" disabled={busy} onClick={() => void clear()}>
+      {busy ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
+      Clear dot
+    </Button>
   );
 }
 
@@ -10880,6 +10905,7 @@ function SessionChat({
   // Brief one-shot "launch" pulse on the composer as a message is sent, so the
   // send reads as the turn springing out of the input into the transcript.
   const [launching, setLaunching] = useState(false);
+  const messageInputRef = useRef<HTMLTextAreaElement>(null);
   // Shared composer file plumbing (same hook the new-session and fork composers
   // use): eager uploads, drag & drop, paste, annotate.
   const files = useComposerAttachments({
@@ -11071,6 +11097,7 @@ function SessionChat({
     const text = (overrideText ?? messageText).trim();
     const files = attachments;
     if (!sid || (!text && !files.length)) return;
+    messageInputRef.current?.blur();
     const stashed = stagePromptSend({
       contextKey: stashContext,
       source: "session",
@@ -11230,6 +11257,7 @@ function SessionChat({
             </Button>
             <div className="relative min-w-0 flex-1">
               <SkillTextarea
+                textareaRef={messageInputRef}
                 data-composer-sid={sid}
                 value={messageText}
                 onValueChange={setMessageText}
@@ -15586,12 +15614,11 @@ function NewSessionDialog({
     if (agentSupportsThinking(launchAgent)) localStorage.setItem("lfg_thinking_level", launchThinkingLevel);
     if (launchAgent === "claude") localStorage.setItem("lfg_model", launchModel);
     if (launchUser) localStorage.setItem("lfg_user", launchUser);
-    // Close only the drawer flow. The inline home composer is the fast-entry
-    // path: keep it open and focused so the next session can be typed while this
-    // one boots in the background. Do not auto-expand it on submit; the fixed
-    // bottom bar can expose the browser canvas while its height/position changes.
+    // Close the drawer flow. The inline home composer stays mounted for fast
+    // entry, but release its textarea so a successful submit dismisses the
+    // mobile keyboard while the new session boots in the background.
     if (variant === "inline") {
-      requestAnimationFrame(() => fieldRef.current?.querySelector("textarea")?.focus());
+      fieldRef.current?.querySelector("textarea")?.blur();
     } else {
       onClose();
     }
@@ -19783,7 +19810,7 @@ function SettingsView({
         <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Notifications
         </h2>
-        <div className="overflow-hidden rounded-2xl border border-border bg-card/40">
+        <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card/40">
           <div className="flex items-center justify-between gap-4 px-4 py-2.5">
             <div className="flex items-center gap-3">
               <span className="flex size-7 items-center justify-center rounded-[7px] bg-destructive text-white">
@@ -19792,6 +19819,20 @@ function SettingsView({
               <span className="text-sm font-medium">Push notifications</span>
             </div>
             <PushBell user={user} />
+          </div>
+          <div className="flex items-center justify-between gap-4 px-4 py-2.5">
+            <div className="flex items-center gap-3">
+              <span className="flex size-7 items-center justify-center rounded-[7px] bg-muted text-foreground">
+                <Bell className="size-4" />
+              </span>
+              <div>
+                <span className="block text-sm font-medium">App icon dot</span>
+                <span className="block text-xs text-muted-foreground">
+                  Mark visible notifications as handled
+                </span>
+              </div>
+            </div>
+            <ClearNotificationBadgeButton />
           </div>
         </div>
         <p className="px-4 text-xs text-muted-foreground">

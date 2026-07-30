@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Send and move on (v0.1.148)
+
+- Sending from either mobile composer now dismisses the field focus so the
+  on-screen keyboard closes instead of staying in the way.
+- Settings now includes a one-tap way to clear the installed PWA's notification
+  dot and mark its visible notifications as handled.
+
 ## July 30, 2026 - The app appears before it connects (v0.1.147)
 
 - Replaces the full-screen startup spinner with the real LFG interface. While
