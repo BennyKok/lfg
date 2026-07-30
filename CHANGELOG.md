@@ -4,6 +4,22 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Native artifact rendering (v0.1.127)
+
+- HTML artifacts now render as real DOM in a shadow root instead of a sandboxed
+  iframe, so the Shipped feed, the Artifacts gallery, transcript embeds and the
+  full-page viewer all share the app's own scroll, text selection and layout.
+- Artifact styles stay contained in both directions, and embeds size themselves
+  to their real content height — the polling height reporter is gone.
+- Artifacts that contain scripts show an Interactive control that runs them in
+  an isolated sandbox on request; artifact JavaScript never runs in the app.
+- The Shipped feed shows a real preview of each HTML artifact instead of a
+  filename row, and pulls far less to paint: image tiles use generated previews
+  instead of full-size originals, and videos load when played rather than on
+  first paint.
+- Feed and gallery refreshes now poll a single page instead of re-downloading
+  everything already loaded.
+
 ## July 30, 2026 - Inline expired-login recovery (v0.1.126)
 
 - Sessions whose Claude or Codex login expires now show the provider sign-in
