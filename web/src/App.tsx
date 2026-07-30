@@ -24,6 +24,11 @@ import {
   AuthenticatedArtifactVideo,
 } from "./components/authenticated-artifact";
 import {
+  NativeArtifact,
+  NativeArtifactEmbed,
+  NativeArtifactThumbnail,
+} from "./components/native-artifact";
+import {
   isComputerHostResumeMessage,
   restartContinuousAnimations,
 } from "./embedded-animation-recovery";
@@ -857,6 +862,14 @@ function ArtifactViewerPage({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+  // `hasScripts` is discovered by the parser, not declared by the artifact, so it
+  // arrives after the first paint. `runIsolated` stays false until the user asks.
+  const [hasScripts, setHasScripts] = useState(false);
+  const [runIsolated, setRunIsolated] = useState(false);
+  useEffect(() => {
+    setHasScripts(false);
+    setRunIsolated(false);
+  }, [artifact.url, artifact.cacheKey]);
   const label = artifact.title || artifact.caption || artifact.name || "Artifact";
   // z-[100] sits above the mobile bottom composer (z-55), ask-center (z-60),
   // and floating audio chrome (z-75) so the full-page viewer is not clipped
@@ -874,7 +887,22 @@ function ArtifactViewerPage({
           <span>Back</span>
         </button>
         <div className="min-w-0 flex-1 truncate text-center text-sm font-semibold">{label}</div>
-        <div className="flex w-20 shrink-0 items-center justify-end gap-1.5 pr-1">
+        <div className="flex shrink-0 items-center justify-end gap-1.5 pr-1">
+          {/* Only artifacts that actually script get this, and only after the
+              parser has told us so — the other ~95% never see it. Clicking it
+              trades the native render for the old sandboxed frame, which is the
+              one place artifact JS is allowed to run. */}
+          {artifact.kind === "html" && hasScripts && !runIsolated ? (
+            <button
+              type="button"
+              onClick={() => setRunIsolated(true)}
+              title="This artifact contains scripts. Run it in an isolated sandbox."
+              className="flex items-center gap-1 rounded-full bg-foreground/[0.06] px-2 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <Play className="size-2.5" />
+              Interactive
+            </button>
+          ) : null}
           {artifact.kind === "html" && (artifact.version ?? 1) > 1 ? (
             <span className="flex items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
               <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" />
@@ -885,12 +913,26 @@ function ArtifactViewerPage({
       </header>
       <div className="min-h-0 flex-1 pb-[var(--lfg-safe-bottom)]">
         {artifact.kind === "html" ? (
-          <AuthenticatedArtifactFrame
-            path={artifact.url}
-            cacheKey={artifact.cacheKey ?? artifact.version ?? 0}
-            title={label}
-            className="block h-full w-full border-0 bg-background"
-          />
+          runIsolated ? (
+            <AuthenticatedArtifactFrame
+              path={artifact.url}
+              cacheKey={artifact.cacheKey ?? artifact.version ?? 0}
+              title={label}
+              className="block h-full w-full border-0 bg-background"
+            />
+          ) : (
+            // Real DOM in this document: the host owns the scroll, so text
+            // selection, find-in-page, and momentum all behave like the rest of
+            // the app instead of being trapped in a nested browsing context.
+            <div className="h-full overflow-y-auto overscroll-contain bg-white">
+              <NativeArtifact
+                path={artifact.url}
+                cacheKey={artifact.cacheKey ?? artifact.version ?? 0}
+                onScriptsDetected={setHasScripts}
+                className="block w-full"
+              />
+            </div>
+          )
         ) : artifact.kind === "video" ? (
           <div className="flex h-full items-center justify-center bg-black">
             <AuthenticatedArtifactVideo
@@ -911,52 +953,6 @@ function ArtifactViewerPage({
         )}
       </div>
     </div>
-  );
-}
-
-// Sandboxed artifact iframe that sizes itself to the document: the served
-// artifact html carries an injected reporter that postMessages its height.
-function AutoHeightArtifactFrame({
-  path,
-  cacheKey,
-  title,
-  minHeight = 200,
-  maxHeight = 560,
-  className,
-}: {
-  path: string;
-  cacheKey?: string | number;
-  title?: string;
-  minHeight?: number;
-  maxHeight?: number;
-  className?: string;
-}) {
-  const frameRef = useRef<HTMLIFrameElement>(null);
-  const [height, setHeight] = useState<number | null>(null);
-  useEffect(() => {
-    const onMessage = (e: MessageEvent) => {
-      const data = e.data as { type?: string; height?: number } | null;
-      if (!data || data.type !== "lfg-artifact-height") return;
-      if (!frameRef.current || e.source !== frameRef.current.contentWindow) return;
-      if (typeof data.height === "number" && Number.isFinite(data.height) && data.height > 0) {
-        setHeight(Math.max(minHeight, Math.min(maxHeight, Math.ceil(data.height))));
-      }
-    };
-    window.addEventListener("message", onMessage);
-    return () => window.removeEventListener("message", onMessage);
-  }, [minHeight, maxHeight]);
-  return (
-    <AuthenticatedArtifactFrame
-      frameRef={frameRef}
-      path={path}
-      cacheKey={cacheKey}
-      title={title}
-      style={{ height: height ?? minHeight }}
-      className={cn(
-        "block w-full border-0 bg-background transition-[height] duration-300 ease-out",
-        className,
-      )}
-    />
   );
 }
 
@@ -14124,16 +14120,14 @@ function MessageBubble({
               </button>
             </span>
           </div>
-          {/* Sandboxed: scripts may run for chart rendering, but no same-origin
-              access, no network (CSP on the artifact response), no top-nav.
-              Height follows the document via the injected reporter. */}
-          <AutoHeightArtifactFrame
-            key={`${message.url}:${message.ts ?? message.version ?? 0}`}
+          {/* Rendered natively into a shadow root — see lib/native-artifact.ts.
+              Height is the document's real layout height, so the transcript no
+              longer animates a guessed box toward a postMessaged number. */}
+          <NativeArtifactEmbed
             path={message.url}
             cacheKey={message.ts ?? message.version ?? 0}
-            title={label}
-            minHeight={200}
             maxHeight={560}
+            className="px-3 pb-2"
           />
           {message.caption && message.caption !== label ? (
             <div className="border-t border-border px-3 py-2 text-xs text-muted-foreground">
@@ -18573,61 +18567,25 @@ type ShipPost = {
   mediaItems: ShipMediaItem[];
 };
 
-// An artifacts-gallery tile is a live sandboxed document, not a picture:
-// mounting the whole page's worth at once boots dozens of independent documents
-// — each with its own scripts, timers, and layout — for tiles that are mostly
-// off screen. `loading="lazy"` is only a hint and browsers largely ignore it for
-// iframes already inside the scroll container, so gate the mount ourselves.
+// An artifacts-gallery tile. Previously a live sandboxed document per tile —
+// dozens of independent browsing contexts, each with its own scripts, timers and
+// layout, for tiles that are mostly off screen. Now real DOM in a shadow root
+// (see lib/native-artifact.ts), which is what makes a full page of them cheap.
 //
-// Once a tile has been shown it stays mounted: scrolling back should not re-run
-// a dashboard's scripts (and re-fetch it, since HTML artifacts are `no-store`).
+// Still visibility-gated and still sticky once shown: a page of tiles is a page
+// of fetches, and re-mounting on scroll-back would throw away parsed documents.
 function GalleryTilePreview({
   path,
   cacheKey,
-  title,
   children,
 }: {
   path: string;
   cacheKey?: string | number;
-  title: string;
   children?: React.ReactNode;
 }) {
-  const ref = useRef<HTMLDivElement | null>(null);
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => {
-    if (mounted) return;
-    const el = ref.current;
-    if (!el) return;
-    // Without IntersectionObserver, fall back to the old always-on behavior
-    // rather than showing a permanently blank tile.
-    if (typeof IntersectionObserver === "undefined") {
-      setMounted(true);
-      return;
-    }
-    const obs = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((e) => e.isIntersecting)) setMounted(true);
-      },
-      // Start loading a little before the tile scrolls in so it is usually
-      // painted by the time it lands on screen.
-      { rootMargin: "300px" },
-    );
-    obs.observe(el);
-    return () => obs.disconnect();
-  }, [mounted]);
-
   return (
-    <div ref={ref} className="relative h-32 w-full overflow-hidden bg-background">
-      {mounted ? (
-        <AuthenticatedArtifactFrame
-          path={path}
-          cacheKey={cacheKey}
-          thumbnail
-          title={title}
-          className="pointer-events-none h-[200%] w-[200%] origin-top-left scale-50 select-none border-0"
-        />
-      ) : null}
+    <div className="relative h-32 w-full overflow-hidden bg-background">
+      <NativeArtifactThumbnail path={path} cacheKey={cacheKey} className="h-full w-full" />
       {children}
     </div>
   );
@@ -18657,9 +18615,10 @@ function ShipMedia({
     );
   }
   if (item.kind === "html") {
-    // Keep the showcase feed scannable: HTML artifacts are represented by one
-    // compact row and open in the native full-page viewer. The dedicated
-    // Artifacts page owns rich previews and browsing.
+    // Shipped is a showcase, and HTML artifacts are usually the *substance* of
+    // what shipped — so show the work, not a filename. This used to be a bare
+    // compact row purely because a preview cost a whole browsing context; native
+    // rendering makes an actual preview affordable here.
     const open = () =>
       onExpand?.({
         url: item.url,
@@ -18673,24 +18632,35 @@ function ShipMedia({
       <button
         type="button"
         onClick={open}
-        className="group col-span-full flex w-full items-center gap-3 bg-gradient-to-br from-sky-500/[0.05] to-violet-500/[0.06] px-3 py-2.5 text-left transition-colors hover:bg-foreground/[0.04] active:bg-foreground/[0.06]"
+        className="group col-span-full block w-full text-left"
       >
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border border-border/70 bg-background/70 shadow-sm">
-          <LayoutDashboard className="size-4 text-muted-foreground" />
+        <span className="relative block h-44 w-full overflow-hidden bg-white">
+          <NativeArtifactThumbnail
+            path={item.url}
+            cacheKey={item.updatedAt}
+            className="h-full w-full"
+          />
+          {/* The preview is decorative here; the whole card is the hit target.
+              Overlays sit along the bottom edge, behind this scrim — artifacts
+              lead with a heading at the top-left, and a badge there covered it. */}
+          <span className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-black/55 to-transparent" />
+          {(item.version ?? 1) > 1 ? (
+            <span className="pointer-events-none absolute bottom-1.5 left-2 flex items-center gap-1 text-[10px] font-medium text-white/90 drop-shadow">
+              <span className="size-1.5 rounded-full bg-emerald-400" />
+              live · v{item.version}
+            </span>
+          ) : null}
+          <Maximize2 className="pointer-events-none absolute bottom-1.5 right-2 size-3.5 text-white/80 drop-shadow" />
         </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-xs font-medium">{item.caption || item.name}</span>
-          <span className="mt-0.5 block text-[10px] text-muted-foreground">
-            {item.lastRefreshedAt ? `Refreshed ${timeAgo(item.lastRefreshedAt)}` : "HTML artifact"}
+        <span className="flex items-center gap-2 px-3 py-2">
+          <LayoutDashboard className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-xs font-medium">{item.caption || item.name}</span>
+            <span className="mt-0.5 block text-[10px] text-muted-foreground">
+              {item.lastRefreshedAt ? `Refreshed ${timeAgo(item.lastRefreshedAt)}` : "HTML artifact"}
+            </span>
           </span>
         </span>
-        {(item.version ?? 1) > 1 ? (
-          <span className="flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
-            <span className="size-1.5 rounded-full bg-emerald-500" />
-            live · v{item.version}
-          </span>
-        ) : null}
-        <Maximize2 className="size-3.5 shrink-0 text-muted-foreground transition-colors group-hover:text-foreground" />
       </button>
     );
   }
@@ -18767,17 +18737,24 @@ function ShippedPage({
     let alive = true;
     const load = async () => {
       try {
-        const limit = Math.max(GALLERY_PAGE, galleryLen.current);
+        // One page per tick, same reasoning as the feed poll above: new and
+        // refreshed artifacts land at the head, so re-listing the whole loaded
+        // window every 20s buys nothing.
         const data = await api<{ artifacts: GalleryArtifact[]; total?: number }>(
-          `/api/artifacts?limit=${limit}${galleryKindParam}`,
+          `/api/artifacts?limit=${GALLERY_PAGE}${galleryKindParam}`,
           { cache: "no-store" },
         );
         if (!alive) return;
         const total = data.total ?? data.artifacts.length;
-        setGallery(data.artifacts);
+        setGallery((prev) => {
+          const freshIds = new Set(data.artifacts.map((a) => a.id));
+          const tail = (prev ?? []).filter((a) => !freshIds.has(a.id));
+          const merged = [...data.artifacts, ...tail];
+          galleryLen.current = Math.max(GALLERY_PAGE, merged.length);
+          writeFeedCache(ARTIFACTS_GALLERY_KEY, merged, total);
+          return merged;
+        });
         setGalleryTotal(total);
-        galleryLen.current = Math.max(GALLERY_PAGE, data.artifacts.length);
-        writeFeedCache(ARTIFACTS_GALLERY_KEY, data.artifacts, total);
       } catch {
         // Keep a cached paint if we have one; only fall to empty when nothing
         // has ever loaded.
@@ -18906,17 +18883,28 @@ function ShippedPage({
     let alive = true;
     const load = async () => {
       try {
-        const limit = Math.max(FEED_PAGE, postsLen.current);
+        // Poll ONE page, not everything loaded so far. This used to be
+        // `max(FEED_PAGE, postsLen.current)`, so after five "load more" taps every
+        // 15s tick re-downloaded 75 fully hydrated posts to discover whether one
+        // new post existed. Freshness only ever arrives at the head of the feed.
         const data = await api<{ posts: ShipPost[]; total?: number }>(
-          `/api/shipped?limit=${limit}`,
+          `/api/shipped?limit=${FEED_PAGE}`,
           { cache: "no-store" },
         );
         if (!alive) return;
         const total = data.total ?? data.posts.length;
-        setPosts(data.posts);
+        setPosts((prev) => {
+          // Splice the fresh head onto the tail we already hold, keyed by id so a
+          // post that a newer ship pushed off the first page is not duplicated —
+          // and so the tail keeps its order when the head grows.
+          const freshIds = new Set(data.posts.map((p) => p.id));
+          const tail = (prev ?? []).filter((p) => !freshIds.has(p.id));
+          const merged = [...data.posts, ...tail];
+          postsLen.current = Math.max(FEED_PAGE, merged.length);
+          writeFeedCache(SHIPPED_FEED_KEY, merged, total);
+          return merged;
+        });
         setPostsTotal(total);
-        postsLen.current = Math.max(FEED_PAGE, data.posts.length);
-        writeFeedCache(SHIPPED_FEED_KEY, data.posts, total);
         setError(null);
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : "Could not load the shipped feed");
@@ -19003,11 +18991,7 @@ function ShippedPage({
                     }
                     className="block w-full text-left active:scale-[0.99]"
                   >
-                    <GalleryTilePreview
-                      path={a.url}
-                      cacheKey={a.ts}
-                      title={a.title || a.caption || a.name}
-                    >
+                    <GalleryTilePreview path={a.url} cacheKey={a.ts}>
                       {(a.version ?? 1) > 1 ? (
                         <span className="absolute left-1.5 top-1.5 flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 backdrop-blur dark:text-emerald-400">
                           <span className="size-1.5 rounded-full bg-emerald-500" />

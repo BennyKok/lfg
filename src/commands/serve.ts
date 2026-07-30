@@ -4757,28 +4757,45 @@ export async function cmdServe() {
           const file = Bun.file(filePath);
           if (!(await file.exists())) return err(404, "artifact file not found");
           if (artifact.media === "html") {
-            // Updatable + rendered in a sandboxed iframe: never cache (the same
-            // URL serves newer versions), and lock the document down — inline
-            // script/style only, no network, no parent-frame access.
-            // A tiny reporter is injected so embeds can match content height
-            // (the sandboxed frame is cross-origin; postMessage is the only channel).
+            // Updatable, and normally rendered natively (shadow DOM) by the web
+            // client. The lockdown headers below still matter for the opt-in
+            // isolated-frame path — inline script/style only, no network, no
+            // parent-frame access — and cost nothing on the native path.
+            // The reporter exists only for that legacy frame path, where the
+            // sandboxed document is cross-origin and postMessage is the only way
+            // to communicate its height.
             const reporter =
               '<script>(function(){var last=0;var send=function(){var b=document.body;var h=Math.max(document.documentElement.scrollHeight,b?b.scrollHeight:0);if(Math.abs(h-last)>2){last=h;try{parent.postMessage({type:"lfg-artifact-height",height:h},"*")}catch(e){}}};addEventListener("load",send);setTimeout(send,60);setInterval(send,1000);try{new ResizeObserver(send).observe(document.documentElement)}catch(e){}})();</scr' + "ipt>";
             // `?thumb=1` opts out: the Artifacts gallery renders a wall of these
             // in fixed-height tiles that never resize to content, so the
             // reporter there is pure overhead — one polling timer plus a forced
             // layout every second, per tile, for as long as the page is open.
-            const wantsHeightReporter = url.searchParams.get("thumb") !== "1";
+            // `?native=1` is the shadow-DOM renderer, which lays the document out
+            // for real and therefore needs no reporter at all. `?thumb=1` is the
+            // legacy fixed-height tile. Either way the reporter is pure overhead —
+            // a polling timer plus a forced layout every second, per artifact, for
+            // as long as the page is open.
+            const wantsNative = url.searchParams.get("native") === "1";
+            const wantsHeightReporter =
+              !wantsNative && url.searchParams.get("thumb") !== "1";
             let doc = await file.text();
             if (wantsHeightReporter) {
               doc = doc.includes("</body>")
                 ? doc.replace("</body>", reporter + "</body>")
                 : doc + reporter;
             }
+            // The same URL serves newer versions, so the *unversioned* URL can
+            // never be cached. The native renderer always pins the content
+            // revision it asked for (`v=<cacheKey>`), which makes that exact
+            // response immutable — and lets a gallery page collapse the repeat
+            // requests it would otherwise make for the same artifact.
+            const pinnedRevision = wantsNative && url.searchParams.has("v");
             return new Response(doc, {
               headers: {
                 "Content-Type": "text/html; charset=utf-8",
-                "Cache-Control": "no-store",
+                "Cache-Control": pinnedRevision
+                  ? "private, max-age=31536000, immutable"
+                  : "no-store",
                 "X-Content-Type-Options": "nosniff",
                 "Content-Security-Policy":
                   "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; frame-ancestors 'self'",
