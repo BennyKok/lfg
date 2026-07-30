@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Dynamic free OpenCode models (v0.1.124)
+
+- OpenCode's live `opencode/*-free` catalog entries now remain available in
+  model pickers instead of being dropped by LFG's curated catalog.
+- Computers without a connected Claude or Codex account automatically select
+  a currently available free OpenCode model; connected accounts keep the
+  authenticated default.
+
 ## July 30, 2026 - Focused agent updates (v0.1.123)
 
 - Session menus now offer an experimental global **User + LFG output** view
