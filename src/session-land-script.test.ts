@@ -91,8 +91,8 @@ describe("serialized session landing script", () => {
       `${git(main, "rev-parse", "origin/main")}\n`,
     );
     const buildCwds = (await Bun.file(bunLog).text()).trim().split("\n");
-    expect(buildCwds).toHaveLength(6);
-    expect(buildCwds.filter((cwd) => cwd === main)).toHaveLength(2);
+    expect(buildCwds).toHaveLength(12);
+    expect(buildCwds.filter((cwd) => cwd === main)).toHaveLength(8);
     expect(buildCwds.filter((cwd) => cwd === join(main, "web"))).toHaveLength(4);
   });
 });

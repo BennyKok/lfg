@@ -126,6 +126,12 @@ git -C "$MAIN_ROOT" merge --ff-only origin/main
 if [ "${LFG_LAND_SKIP_BUILD:-0}" != "1" ]; then
   (cd "$MAIN_ROOT" && bun install --frozen-lockfile)
   (cd "$MAIN_ROOT/web" && bun install --frozen-lockfile)
+  # The web workspace resolves @lfg-dev/* through each package's generated
+  # dist entrypoint. Rebuild those entrypoints first so a transport/protocol
+  # source change cannot make the web build consume stale declarations.
+  (cd "$MAIN_ROOT" && bun run --cwd packages/protocol build)
+  (cd "$MAIN_ROOT" && bun run --cwd packages/client build)
+  (cd "$MAIN_ROOT" && bun run --cwd packages/react build)
   (cd "$MAIN_ROOT/web" && bun run build)
 fi
 
