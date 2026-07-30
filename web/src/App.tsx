@@ -8170,7 +8170,11 @@ function useRecentShippedSessions(
         const data = await api<{ posts: ShipPost[] }>("/api/shipped?limit=25", {
           cache: "no-store",
         });
-        if (alive) setPosts(data.posts);
+        // A 2xx body is not a contract. The hosted surface proxies this to a
+        // remote workspace, which can answer with an error envelope, `{}`, or a
+        // wake response — and storing `undefined` here crashed the next render.
+        // Same guard as the session list at the bottom of this file.
+        if (alive) setPosts(Array.isArray(data.posts) ? data.posts : []);
       } catch {
         // Keep the last cached paint; the Shipped page remains the fallback.
       }
@@ -18875,11 +18879,14 @@ function ShippedPage({
           { cache: "no-store" },
         );
         if (!alive) return;
-        const total = data.total ?? data.artifacts.length;
+        // Normalize once: a proxied workspace can answer 2xx without the array,
+        // and everything below spreads/maps it.
+        const artifacts = Array.isArray(data.artifacts) ? data.artifacts : [];
+        const total = data.total ?? artifacts.length;
         setGallery((prev) => {
-          const freshIds = new Set(data.artifacts.map((a) => a.id));
+          const freshIds = new Set(artifacts.map((a) => a.id));
           const tail = (prev ?? []).filter((a) => !freshIds.has(a.id));
-          const merged = [...data.artifacts, ...tail];
+          const merged = [...artifacts, ...tail];
           galleryLen.current = Math.max(GALLERY_PAGE, merged.length);
           writeFeedCache(ARTIFACTS_GALLERY_KEY, merged, total);
           return merged;
@@ -19022,14 +19029,17 @@ function ShippedPage({
           { cache: "no-store" },
         );
         if (!alive) return;
-        const total = data.total ?? data.posts.length;
+        // Normalize once: a proxied workspace can answer 2xx without the array,
+        // and everything below spreads/maps it.
+        const posts = Array.isArray(data.posts) ? data.posts : [];
+        const total = data.total ?? posts.length;
         setPosts((prev) => {
           // Splice the fresh head onto the tail we already hold, keyed by id so a
           // post that a newer ship pushed off the first page is not duplicated —
           // and so the tail keeps its order when the head grows.
-          const freshIds = new Set(data.posts.map((p) => p.id));
+          const freshIds = new Set(posts.map((p) => p.id));
           const tail = (prev ?? []).filter((p) => !freshIds.has(p.id));
-          const merged = [...data.posts, ...tail];
+          const merged = [...posts, ...tail];
           postsLen.current = Math.max(FEED_PAGE, merged.length);
           writeFeedCache(SHIPPED_FEED_KEY, merged, total);
           return merged;

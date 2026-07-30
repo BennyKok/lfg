@@ -35,4 +35,16 @@ describe("latestDistinctShippedSessions", () => {
       latestDistinctShippedSessions(posts, 5, "lfg").map((post) => post.id),
     ).toEqual(["lfg-new", "lfg-old"]);
   });
+
+  // Regression: this is called from a render-phase useMemo with state fed
+  // straight off GET /api/shipped. On the hosted surface that request is proxied
+  // to a remote workspace which can answer 2xx without the array, and spreading
+  // the resulting `undefined` threw "Spread syntax requires ...iterable not be
+  // null or undefined" inside render — taking the entire app down behind the
+  // router's catch boundary.
+  test("survives a response body that carried no posts array", () => {
+    expect(latestDistinctShippedSessions(undefined)).toEqual([]);
+    expect(latestDistinctShippedSessions(null)).toEqual([]);
+    expect(latestDistinctShippedSessions([])).toEqual([]);
+  });
 });
