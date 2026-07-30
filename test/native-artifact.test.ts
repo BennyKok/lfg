@@ -132,7 +132,7 @@ describe("renderer selection", () => {
   });
 
   test("the frame reuses the fetched source instead of refetching", () => {
-    expect(source).toContain("srcDoc={secureArtifactDocument(load.value.source)}");
+    expect(source).toContain("srcDoc={secureArtifactDocument(load.value.source, theme)}");
   });
 
   test("thumbnails never frame, however scripted the artifact", () => {
@@ -150,11 +150,23 @@ describe("renderer selection", () => {
 });
 
 describe("the base stylesheet", () => {
-  test("gives artifacts the white canvas the iframe used to provide", () => {
-    // Artifacts routinely set `color:#111` and no background, relying on the
-    // iframe's default canvas. Losing this makes them unreadable in dark mode.
-    expect(NATIVE_ARTIFACT_BASE_CSS).toContain("background: #ffffff");
-    expect(NATIVE_ARTIFACT_BASE_CSS).toContain("color-scheme: light");
+  test("bridges the host theme through semantic artifact variables", () => {
+    expect(NATIVE_ARTIFACT_BASE_CSS).toContain(
+      "--lfg-artifact-surface: var(--card, #ffffff)",
+    );
+    expect(NATIVE_ARTIFACT_BASE_CSS).toContain(
+      "background: var(--lfg-artifact-surface)",
+    );
+    expect(NATIVE_ARTIFACT_BASE_CSS).toContain(
+      "color: var(--lfg-artifact-foreground)",
+    );
+    expect(NATIVE_ARTIFACT_BASE_CSS).toContain("color-scheme: inherit");
+    expect(NATIVE_ARTIFACT_BASE_CSS).not.toContain("background: #ffffff");
+  });
+
+  test("artifact surfaces do not force a light utility background", () => {
+    const renderer = readFileSync("web/src/components/native-artifact.tsx", "utf8");
+    expect(renderer).not.toContain("bg-white");
   });
 });
 

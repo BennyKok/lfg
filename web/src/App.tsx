@@ -903,7 +903,7 @@ function ArtifactViewerPage({
           // wrapper must not add a second scroll region around it.
           <div
             className={cn(
-              "h-full bg-white",
+              "h-full bg-background",
               framed ? "overflow-hidden" : "overflow-y-auto overscroll-contain",
             )}
           >
@@ -18762,7 +18762,7 @@ function ShipMedia({
         onClick={open}
         className="group col-span-full block w-full text-left"
       >
-        <span className="relative block h-44 w-full overflow-hidden bg-white">
+        <span className="relative block h-44 w-full overflow-hidden bg-card">
           <NativeArtifactThumbnail
             path={item.url}
             cacheKey={item.updatedAt}

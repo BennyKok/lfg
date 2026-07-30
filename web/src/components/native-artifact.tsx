@@ -22,8 +22,13 @@ import {
   parseNativeArtifact,
   type NativeArtifactDocument,
 } from "../lib/native-artifact";
-import { artifactRequestPath, secureArtifactDocument } from "../lib/artifact-document";
+import {
+  artifactRequestPath,
+  secureArtifactDocument,
+  type ArtifactTheme,
+} from "../lib/artifact-document";
 import { lfgFetch } from "../lib/lfg-client";
+import { THEME_CHANGE_EVENT } from "../lib/theme";
 import { cn } from "../lib/utils";
 
 type Load<T> =
@@ -51,6 +56,25 @@ type LoadedArtifact = {
   parsed: NativeArtifactDocument;
   source: string;
 };
+
+function currentArtifactTheme(): ArtifactTheme {
+  return typeof document !== "undefined" &&
+    document.documentElement.classList.contains("dark")
+    ? "dark"
+    : "light";
+}
+
+function useArtifactTheme(): ArtifactTheme {
+  const [theme, setTheme] = useState<ArtifactTheme>(currentArtifactTheme);
+
+  useEffect(() => {
+    const sync = () => setTheme(currentArtifactTheme());
+    window.addEventListener(THEME_CHANGE_EVENT, sync);
+    return () => window.removeEventListener(THEME_CHANGE_EVENT, sync);
+  }, []);
+
+  return theme;
+}
 
 function useNativeArtifact(
   path: string,
@@ -191,6 +215,7 @@ export function NativeArtifact({
   onNeedsFrame?: (needsFrame: boolean) => void;
 }) {
   const load = useNativeArtifact(path, cacheKey);
+  const theme = useArtifactTheme();
   const needsFrame = load.status === "ready" && load.value.parsed.hasScripts;
 
   // Held in a ref so callers can pass an inline arrow without the effect
@@ -213,11 +238,11 @@ export function NativeArtifact({
         // `secureArtifactDocument` re-applies the server's lockdown as a meta
         // CSP, which an authenticated fetch would otherwise have dropped along
         // with the response headers.
-        srcDoc={secureArtifactDocument(load.value.source)}
+        srcDoc={secureArtifactDocument(load.value.source, theme)}
         sandbox="allow-scripts"
         title={title}
         style={style}
-        className={cn("border-0 bg-white", className)}
+        className={cn("border-0 bg-card", className)}
       />
     );
   }
@@ -267,7 +292,7 @@ export function NativeArtifactThumbnail({
   }, [visible]);
 
   return (
-    <div ref={boxRef} className={cn("relative overflow-hidden bg-white", className)}>
+    <div ref={boxRef} className={cn("relative overflow-hidden bg-card", className)}>
       {visible ? (
         <NativeArtifact
           path={path}
@@ -354,7 +379,7 @@ export function NativeArtifactEmbed({
     <div className={cn("relative w-full", className)}>
       <div
         ref={wrapRef}
-        className="relative w-full overflow-hidden rounded-lg bg-white"
+        className="relative w-full overflow-hidden rounded-lg bg-card"
         style={boxStyle}
       >
         <NativeArtifact

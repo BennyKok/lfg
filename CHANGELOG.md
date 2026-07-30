@@ -4,6 +4,16 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Theme-aware artifacts (v0.1.140)
+
+- HTML artifacts can now use LFG's semantic palette for backgrounds, surfaces,
+  text, borders, accents, muted content, and code, so the same artifact follows
+  the app's light or dark appearance.
+- Native Shadow DOM artifacts inherit the live host theme, while interactive
+  artifacts receive the same palette inside their isolated sandbox.
+- Deliberately authored colors still take precedence, preserving branded and
+  self-styled artifacts instead of forcibly recoloring them.
+
 ## July 30, 2026 - Quieter error reporting (v0.1.139)
 
 - ResizeObserver delivery notices no longer appear as high-severity findings,

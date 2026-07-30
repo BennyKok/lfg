@@ -824,9 +824,9 @@ export async function cmdMcp() {
     {
       title: "Publish HTML Artifact In LFG",
       description:
-        "Publish a self-contained HTML artifact (report, data view, live dashboard) into the LFG session transcript. Re-publishing with the same id updates one card in place. Optionally attach an executable server-side refresh script inside the owning session cwd; LFG invokes the path with explicit argv (never a shell), validates complete HTML output, and preserves the last good version on failure. Omit html only when updating an existing artifact's refresh configuration. The HTML iframe has no network or host-execution access.",
+        "Publish a self-contained HTML artifact (report, data view, live dashboard) into the LFG session transcript. Re-publishing with the same id updates one card in place. Optionally attach an executable server-side refresh script inside the owning session cwd; LFG invokes the path with explicit argv (never a shell), validates complete HTML output, and preserves the last good version on failure. Omit html only when updating an existing artifact's refresh configuration. Static HTML renders as sanitized native DOM; scripted HTML runs in an isolated iframe with no network or host-execution access.",
       inputSchema: {
-        html: z.string().min(1).optional().describe("Complete self-contained HTML document (inline CSS/JS/data only; no external resources). May be omitted only to update refresh settings for an existing id."),
+        html: z.string().min(1).optional().describe("Complete self-contained HTML document (inline CSS/JS/data only; no external resources). For native light/dark theming, use the --lfg-artifact-background, --lfg-artifact-surface, --lfg-artifact-foreground, --lfg-artifact-muted, --lfg-artifact-muted-foreground, --lfg-artifact-border, --lfg-artifact-accent, --lfg-artifact-accent-foreground, and --lfg-artifact-code-background CSS variables. May be omitted only to update refresh settings for an existing id."),
         id: z.string().optional().describe("Stable artifact id (3-64 chars: lowercase letters, digits, dashes). Re-publish with the same id to update in place."),
         title: z.string().optional().describe("Short title shown on the artifact card."),
         caption: z.string().optional().describe("Short caption shown under the artifact."),
@@ -1146,7 +1146,7 @@ export async function cmdMcp() {
           .optional()
           .describe("Up to three absolute local image/video paths (with optional captions) captured while verifying."),
         artifactIds: z.array(z.string().min(1)).max(3).optional().describe("Existing session-owned artifact ids to deliver/embed."),
-        html: z.string().min(1).optional().describe("For 'session': a complete self-contained HTML document (inline CSS/JS/data only) published as an artifact card."),
+        html: z.string().min(1).optional().describe("For 'session': a complete self-contained HTML document (inline CSS/JS/data only) published as an artifact card. Theme-aware artifacts should use the --lfg-artifact-* semantic CSS variables exposed by the renderer."),
         id: z.string().optional().describe("Stable id to update in place: an artifact id (with html) or an existing ship-post id."),
         caption: z.string().optional().describe("Short caption for a single 'session' media/artifact card."),
         project: z.string().optional().describe("For 'shipped': project label shown on the post."),

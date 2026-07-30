@@ -212,19 +212,29 @@ export function parseNativeArtifact(source: string): NativeArtifactDocument {
 /**
  * Baseline styles applied *before* the artifact's own CSS.
  *
- * Two jobs. The shadow boundary blocks LFG's selectors but not inherited
- * properties, so font/color are reset to a neutral document default instead of
- * whatever the surrounding UI was using. And artifacts overwhelmingly assume the
- * white canvas an iframe gave them for free (`color:#111` with no background),
- * so the host paints paper-white unless the artifact sets its own background.
+ * The shadow boundary blocks selectors but lets custom properties and inherited
+ * values cross it. Map LFG's semantic palette onto an artifact-specific contract
+ * so an artifact can follow the app theme without coupling itself to the host's
+ * internal token names. Authored CSS comes after this baseline, so an artifact
+ * that intentionally paints its own visual identity still wins.
  */
 export const NATIVE_ARTIFACT_BASE_CSS = `
 :host {
+  --lfg-artifact-background: var(--background, #f2f2f7);
+  --lfg-artifact-surface: var(--card, #ffffff);
+  --lfg-artifact-foreground: var(--foreground, #000000);
+  --lfg-artifact-muted: var(--muted, #f9f9fb);
+  --lfg-artifact-muted-foreground: var(--muted-foreground, rgba(60, 60, 67, 0.6));
+  --lfg-artifact-border: var(--border, rgba(60, 60, 67, 0.12));
+  --lfg-artifact-accent: var(--primary, #007aff);
+  --lfg-artifact-accent-foreground: var(--primary-foreground, #ffffff);
+  --lfg-artifact-code-background: var(--code-bg, rgba(120, 120, 128, 0.08));
   display: block;
-  background: #ffffff;
-  color: #111111;
-  color-scheme: light;
-  font: 16px/1.5 system-ui, -apple-system, sans-serif;
+  background: var(--lfg-artifact-surface);
+  color: var(--lfg-artifact-foreground);
+  color-scheme: inherit;
+  font: inherit;
+  line-height: 1.5;
   text-align: left;
   overflow-wrap: break-word;
 }
@@ -232,5 +242,5 @@ export const NATIVE_ARTIFACT_BASE_CSS = `
 img, svg, video, canvas { max-width: 100%; height: auto; }
 table { max-width: 100%; }
 pre { overflow: auto; }
-a { color: #1d4ed8; }
+a { color: var(--lfg-artifact-accent); }
 `;

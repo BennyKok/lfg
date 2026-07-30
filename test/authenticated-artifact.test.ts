@@ -19,11 +19,25 @@ describe("authenticated artifacts", () => {
   test("restores the server sandbox when fetched HTML becomes srcDoc", () => {
     const html = secureArtifactDocument(
       "<!doctype html><html><head><title>Report</title></head><body>ok</body></html>",
+      "dark",
     );
     expect(html).toContain('http-equiv="Content-Security-Policy"');
     expect(html).toContain("default-src 'none'");
+    expect(html).toContain("color-scheme:dark");
+    expect(html).toContain("--lfg-artifact-surface:#1c1c1e");
+    expect(html).toContain("background:var(--lfg-artifact-surface)");
     expect(html.indexOf("Content-Security-Policy")).toBeLessThan(
       html.indexOf("<title>"),
+    );
+  });
+
+  test("theme defaults precede authored styles so intentional colors still win", () => {
+    const html = secureArtifactDocument(
+      "<html><head><style>body{background:hotpink}</style></head><body>ok</body></html>",
+      "dark",
+    );
+    expect(html.indexOf('id="lfg-artifact-theme"')).toBeLessThan(
+      html.indexOf("background:hotpink"),
     );
   });
 
