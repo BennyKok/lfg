@@ -4,6 +4,15 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Quieter error reporting (v0.1.139)
+
+- ResizeObserver delivery notices no longer appear as high-severity findings,
+  send push notifications, or claim an auto-fix agent was dispatched. The
+  browser and server now share one noise policy, while real observer-related
+  application errors remain reportable.
+- Session transcript choices now live under the clearer **Display** menu
+  without the outdated Experimental badge.
+
 ## July 30, 2026 - Crisp LFG mark at small sizes (v0.1.138)
 
 - Keeps the original pixel-dissolve icon while giving 24–40px UI placements
