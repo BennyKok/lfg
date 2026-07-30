@@ -43,6 +43,13 @@ export type CodingAgentStatus = {
   instructions: string[];
   canAutoSetup: boolean;
   canLoginInTerminal: boolean;
+  /**
+   * Whether this agent can sign in through the in-app URL + code dialog rather
+   * than a terminal. Reported by the server so the client doesn't keep its own
+   * copy of the list — it used to, and adding grok to the server alone left the
+   * button silently opening a terminal instead.
+   */
+  canLoginInBrowser: boolean;
   setupRunning: boolean;
   setupProgress?: {
     percent: number;
@@ -59,10 +66,12 @@ export type CodingAgentInfo = {
   status: CodingAgentStatus;
 };
 
+export type AuthProvider = "claude" | "codex" | "grok";
+
 export type CodingAgentAuthSession = {
   id: string;
   kind: CodingAgentKind;
-  provider: "claude" | "codex";
+  provider: AuthProvider;
   status: "starting" | "waiting" | "complete" | "error";
   authorizationUrl?: string;
   userCode?: string;
@@ -383,7 +392,11 @@ function hasCursorLfgMcp(): boolean {
 
 function hasGrokAuth(): boolean {
   const home = userHome();
-  return !!process.env.XAI_API_KEY || existsSync(`${home}/.grok`);
+  // auth.json, not the directory: the installer creates ~/.grok (bin, downloads,
+  // completions, config.toml) before anyone has signed in, so testing the
+  // directory reported "authenticated" the moment the CLI landed. `grok login`
+  // is what writes auth.json.
+  return !!process.env.XAI_API_KEY || existsSync(`${home}/.grok/auth.json`);
 }
 
 function hasCursorAuth(): boolean {
@@ -443,7 +456,11 @@ function loginCommandPartsFor(kind: CodingAgentKind): string[] | null {
     return [codexPath() ?? "codex", "login", "--device-auth"];
   }
   if (kind === "opencode") return [opencodePath() ?? "opencode"];
-  if (kind === "grok") return [grokPath() ?? "grok"];
+  // Device-code, not the bare TUI: `grok` on its own drops into an interactive
+  // sign-in that needs a real terminal, while `login --device-auth` prints a URL
+  // and a short code the user can approve from any device — the only flow that
+  // works when lfg is running on a headless box.
+  if (kind === "grok") return [grokPath() ?? "grok", "login", "--device-auth"];
   if (kind === "cursor") return [cursorPath() ?? "cursor-agent", "login"];
   if (kind === "hermes") return [hermesPath() ?? "hermes"];
   if (kind === "copilot") return [copilotPath() ?? "copilot"];
@@ -453,9 +470,10 @@ function loginCommandPartsFor(kind: CodingAgentKind): string[] | null {
   return null;
 }
 
-function authProviderFor(kind: CodingAgentKind): "claude" | "codex" | null {
+function authProviderFor(kind: CodingAgentKind): AuthProvider | null {
   if (kind === "claude" || kind === "aisdk") return "claude";
   if (kind === "codex" || kind === "codex-aisdk") return "codex";
+  if (kind === "grok") return "grok";
   return null;
 }
 
@@ -468,13 +486,22 @@ export function cleanAuthOutput(value: string): string {
 }
 
 export function parseAuthOutput(
-  provider: "claude" | "codex",
+  provider: AuthProvider,
   raw: string,
 ): Pick<CodingAgentAuthSession, "authorizationUrl" | "userCode" | "needsCode"> {
   const output = cleanAuthOutput(raw);
   const authorizationUrl = output.match(/https:\/\/[^\s\x07\x1b]+/)?.[0];
   if (provider === "codex") {
     const userCode = output.match(/one-time code[\s\S]{0,160}?\b([A-Z0-9]{4,}-[A-Z0-9]{4,})\b/i)?.[1];
+    return { authorizationUrl, userCode, needsCode: false };
+  }
+  if (provider === "grok") {
+    // `grok login --device-auth` prints the code twice — once inside the URL as
+    // ?user_code=, then again on its own under "Confirm this code". Read it out
+    // of the URL first: that copy can't be confused with surrounding prose.
+    const userCode =
+      output.match(/[?&]user_code=([A-Z0-9]{3,}-[A-Z0-9]{3,})/i)?.[1] ??
+      output.match(/confirm this code[\s\S]{0,120}?\b([A-Z0-9]{3,}-[A-Z0-9]{3,})\b/i)?.[1];
     return { authorizationUrl, userCode, needsCode: false };
   }
   return {
@@ -526,8 +553,12 @@ async function collectAuthOutput(
 export async function startCodingAgentAuth(kind: CodingAgentKind): Promise<CodingAgentAuthSession> {
   const provider = authProviderFor(kind);
   if (!provider) throw new Error(`${CODING_AGENT_LABELS[kind]} does not support browser login yet`);
-  const binary = provider === "claude" ? claudePath() : codexPath();
-  if (!binary) throw new Error(`Install ${provider === "claude" ? "Claude" : "Codex"} before signing in`);
+  const binary =
+    provider === "claude" ? claudePath() : provider === "codex" ? codexPath() : grokPath();
+  if (!binary) {
+    const label = { claude: "Claude", codex: "Codex", grok: "Grok" }[provider];
+    throw new Error(`Install ${label} before signing in`);
+  }
 
   for (const existing of authSessions.values()) {
     if (existing.provider === provider && (existing.status === "starting" || existing.status === "waiting")) {
@@ -536,6 +567,7 @@ export async function startCodingAgentAuth(kind: CodingAgentKind): Promise<Codin
     }
   }
 
+  // codex and grok both spell it `login --device-auth`; only claude differs.
   const argv = provider === "claude"
     ? [binary, "auth", "login", "--claudeai"]
     : [binary, "login", "--device-auth"];
@@ -693,8 +725,8 @@ function statusFor(kind: CodingAgentKind): CodingAgentStatus {
     instructions.push("Install Copilot CLI (npm install -g @github/copilot; requires Node 22+), then run 'copilot' once and /login, or set COPILOT_GITHUB_TOKEN (or GH_TOKEN) with the Copilot Requests scope.");
   } else {
     addBinary("Grok CLI", grokPath());
-    addAuth("Grok auth", hasGrokAuth(), "run `grok` once or set XAI_API_KEY");
-    instructions.push("Install Grok, then run `grok` once and sign in, or set XAI_API_KEY.");
+    addAuth("Grok auth", hasGrokAuth(), "use Login to sign in with a device code, or set XAI_API_KEY");
+    instructions.push("Install Grok, then use Login to sign in with a device code, or set XAI_API_KEY.");
   }
 
   return {
@@ -705,6 +737,8 @@ function statusFor(kind: CodingAgentKind): CodingAgentStatus {
     instructions,
     canAutoSetup,
     canLoginInTerminal,
+    // Single source of truth: exactly the kinds startCodingAgentAuth accepts.
+    canLoginInBrowser: authProviderFor(kind) !== null,
     setupRunning: setupRuns.has(kind),
     setupProgress: setupProgress.get(kind),
     installCommand: installCommandFor(kind) ?? undefined,

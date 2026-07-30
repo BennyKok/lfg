@@ -62,6 +62,50 @@ describe("coding agent browser auth output", () => {
     });
   });
 
+  test("extracts the Grok device URL and code", () => {
+    // Verbatim `grok login --device-auth` output (grok 0.2.114). The code shows
+    // up twice — inside the URL and again on its own line.
+    const output = [
+      "To sign in, open this URL in your browser:",
+      "",
+      "  https://accounts.x.ai/oauth2/device?user_code=M4EY-Q586",
+      "",
+      "  (Could not open browser automatically — open the URL above manually.)",
+      "",
+      "Confirm this code in your browser:",
+      "",
+      "  M4EY-Q586",
+      "",
+      "\x1b[90mOnly continue with a code you requested. Don't share it with anyone.\x1b[0m",
+      "",
+      "Waiting for authorization...",
+    ].join("\r\n");
+
+    expect(parseAuthOutput("grok", output)).toEqual({
+      authorizationUrl: "https://accounts.x.ai/oauth2/device?user_code=M4EY-Q586",
+      userCode: "M4EY-Q586",
+      needsCode: false,
+    });
+  });
+
+  test("reads the Grok code from the prose when the URL carries no query", () => {
+    // Guards the fallback branch: if xAI ever drops user_code from the URL, the
+    // "Confirm this code" line still has to yield the code, otherwise the login
+    // dialog would render a URL with nothing to type.
+    const output = [
+      "To sign in, open this URL in your browser:",
+      "  https://accounts.x.ai/oauth2/device",
+      "Confirm this code in your browser:",
+      "  ABCD-1234",
+    ].join("\n");
+
+    expect(parseAuthOutput("grok", output)).toEqual({
+      authorizationUrl: "https://accounts.x.ai/oauth2/device",
+      userCode: "ABCD-1234",
+      needsCode: false,
+    });
+  });
+
   test("extracts Claude's OSC hyperlink and detects its code prompt", () => {
     const url = "https://claude.com/cai/oauth/authorize?code=true&state=abc";
     const output = `Opening browser…\r\nIf it didn't open: \x1b]8;;${url}\x07${url}\x1b]8;;\x07\r\nPaste code here if prompted > `;

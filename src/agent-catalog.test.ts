@@ -76,6 +76,7 @@ function codingAgent(
       instructions: [],
       canAutoSetup: false,
       canLoginInTerminal: false,
+      canLoginInBrowser: false,
       setupRunning: false,
     },
   };

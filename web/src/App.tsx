@@ -302,6 +302,7 @@ type CodingAgentInfo = {
     setupProgress?: { percent: number; label: string };
     canAutoSetup: boolean;
     canLoginInTerminal: boolean;
+    canLoginInBrowser: boolean;
     checks: { label: string; ok: boolean; detail?: string }[];
     instructions: string[];
     installCommand?: string;
@@ -314,7 +315,7 @@ const CodingAgentsContext = createContext<CodingAgentInfo[] | undefined>(undefin
 type CodingAgentAuthSession = {
   id: string;
   kind: AgentKind;
-  provider: "claude" | "codex";
+  provider: "claude" | "codex" | "grok";
   status: "starting" | "waiting" | "complete" | "error";
   authorizationUrl?: string;
   userCode?: string;
@@ -5529,7 +5530,11 @@ export function App() {
   }
 
   async function loginCodingAgent(kind: AgentKind, inlineSid?: string) {
-    const browserAuth = kind === "aisdk" || kind === "claude" || kind === "codex" || kind === "codex-aisdk";
+    // Ask the server which agents it can actually drive through the URL + code
+    // dialog. This was a hardcoded list here, which meant teaching the server a
+    // new agent wasn't enough — the button kept falling through to a terminal.
+    const browserAuth =
+      codingAgents.find((agent) => agent.key === kind)?.status.canLoginInBrowser ?? false;
     if (!browserAuth) {
       toast.promise(
         api<{ terminalSession: string }>(`/api/coding-agents/${kind}/login-terminal`, { method: "POST" })
