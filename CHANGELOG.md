@@ -4,6 +4,15 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - PWA icon cache refresh (v0.1.141)
+
+- Forces one safe service-worker takeover to remove the stale app shell that
+  could leave an installed iOS PWA or controlled browser tab rendering the old
+  fragmented header icon even after v0.1.138 was deployed.
+- Gives the crisp small icon an explicit versioned URL, so Safari, the PWA
+  worker, and the HTTP cache cannot reuse older artwork under the same key.
+  Later releases return to the normal user-approved update flow.
+
 ## July 30, 2026 - Theme-aware artifacts (v0.1.140)
 
 - HTML artifacts can now use LFG's semantic palette for backgrounds, surfaces,

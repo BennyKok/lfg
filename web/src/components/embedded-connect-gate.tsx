@@ -13,6 +13,7 @@
 import { Loader2 } from "lucide-react";
 import { Button } from "./ui/button";
 import type { ConnectOption } from "../lib/embedded-connect";
+import { LFG_SMALL_ICON_PATH } from "../lib/icon-assets";
 import { lfgAssetUrl } from "../lib/lfg-client";
 
 export function EmbeddedConnectGate({
@@ -37,7 +38,7 @@ export function EmbeddedConnectGate({
       <div className="my-auto w-full max-w-sm py-6">
         <div className="mb-4 flex items-center gap-2">
           <img
-            src={lfgAssetUrl("/icon-small.svg")}
+            src={lfgAssetUrl(LFG_SMALL_ICON_PATH)}
             alt="lfg"
             className="size-7 shrink-0"
           />

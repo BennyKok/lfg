@@ -15,16 +15,31 @@
 // VERSION is stamped per build (see vite.config.ts), so each deploy ships a
 // byte-different worker: the browser runs the install/activate lifecycle, the
 // new caches replace the old ones, and every stale build's chunks are purged
-// instead of accumulating forever. We do NOT skipWaiting on our own — the page
-// shows a toast and only tells us to take over (SKIP_WAITING) when the user
-// clicks Reload, so we never swap assets out from under a live session.
+// instead of accumulating forever. Normally we do NOT skipWaiting on our own —
+// the page shows a toast and only tells us to take over (SKIP_WAITING) when the
+// user clicks Reload, so we never swap assets out from under a live session.
+// A named, one-time cache migration below is the deliberate exception.
 const VERSION = "__VERSION__";
 const SHELL_CACHE = `lfg-shell-${VERSION}`;
 const ASSET_CACHE = `lfg-assets-${VERSION}`;
-const KEEP = new Set([SHELL_CACHE, ASSET_CACHE]);
+// One-time migration: v0.1.138 introduced a dedicated small icon, but an
+// already-open iOS PWA can keep executing the previous shell while a new
+// worker waits behind its Reload toast. The first worker carrying this marker
+// takes over immediately, clears the old shell caches during activation, and
+// triggers the existing controllerchange reload. The fixed marker then stays
+// behind so later releases return to the normal user-approved update flow.
+const CRISP_ICON_CACHE_RESET = "lfg-cache-reset-crisp-icon-v1";
+const KEEP = new Set([SHELL_CACHE, ASSET_CACHE, CRISP_ICON_CACHE_RESET]);
 
-self.addEventListener("install", () => {
-  // Stay in "waiting" until the page asks us to activate (SKIP_WAITING).
+self.addEventListener("install", (event) => {
+  event.waitUntil(
+    (async () => {
+      const keys = await caches.keys();
+      if (keys.includes(CRISP_ICON_CACHE_RESET)) return;
+      await caches.open(CRISP_ICON_CACHE_RESET);
+      await self.skipWaiting();
+    })(),
+  );
 });
 
 self.addEventListener("activate", (event) => {

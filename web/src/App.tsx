@@ -15,6 +15,7 @@ import {
   shouldShowEmbeddedConnectGate,
 } from "./lib/embedded-connect";
 import { emitSessionCreatedToHost } from "./lib/embed-host-signal";
+import { LFG_SMALL_ICON_PATH } from "./lib/icon-assets";
 import { api, lfgAssetUrl, lfgFetch, lfgUpload } from "./lib/lfg-client";
 import { cacheProjectFilter, readCachedProjectFilter } from "./lib/project-filter";
 import { uploadFile as uploadFileThroughTransport } from "./lib/upload";
@@ -6599,7 +6600,7 @@ function ProductBrand({
   if (!hosted) {
     return (
       <img
-        src={lfgAssetUrl("/icon-small.svg")}
+        src={lfgAssetUrl(LFG_SMALL_ICON_PATH)}
         alt="lfg"
         className="mx-1 size-6 shrink-0 rounded-md"
       />
@@ -7454,7 +7455,7 @@ function OnboardingFlow({
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <img
-              src={lfgAssetUrl("/icon-small.svg")}
+              src={lfgAssetUrl(LFG_SMALL_ICON_PATH)}
               alt="lfg"
               className="size-7 shrink-0"
             />
@@ -7826,7 +7827,7 @@ function WhoAreYou({
       <div className="w-full max-w-sm">
         <div className="mb-4 flex items-center gap-2">
           <img
-            src={lfgAssetUrl("/icon-small.svg")}
+            src={lfgAssetUrl(LFG_SMALL_ICON_PATH)}
             alt="lfg"
             className="size-7 shrink-0"
           />

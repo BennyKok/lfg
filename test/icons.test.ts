@@ -31,6 +31,16 @@ describe("LFG icon assets", () => {
 
     const server = await readFile("src/commands/serve.ts", "utf8");
     expect(server).toContain('"/icon-small.svg"');
+
+    const paths = await readFile("web/src/lib/icon-assets.ts", "utf8");
+    expect(paths).toContain("/icon-small.svg?v=");
+  });
+
+  test("forces one service-worker cache reset for stale PWA shells", async () => {
+    const worker = await readFile("web/public/sw.js", "utf8");
+    expect(worker).toContain("lfg-cache-reset-crisp-icon-v1");
+    expect(worker).toContain("await self.skipWaiting()");
+    expect(worker).toContain("keys.includes(CRISP_ICON_CACHE_RESET)");
   });
 
   test("ships each generated PNG at its declared size", async () => {
