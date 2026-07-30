@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Cleaner navigation islands (v0.1.145)
+
+- Moves Settings into the Pages menu and removes the separate gear from the
+  mobile right island and desktop session rail, keeping all page destinations
+  in one predictable dropdown without exposing host-owned settings in embeds.
+
 ## July 30, 2026 - One project chip on hosted mobile, not two (v0.1.144)
 
 - Removes the project chip from the top-right of the hosted mobile header. The

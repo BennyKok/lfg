@@ -18,9 +18,17 @@ describe("page navigation reachability", () => {
   test("the overflow menu offers every built-in page", () => {
     const menu = app.slice(app.indexOf("function PagesMenu("));
     const body = menu.slice(0, menu.indexOf("\nfunction "));
-    for (const page of ["live", "shipped", "artifacts"]) {
+    for (const page of ["live", "shipped", "artifacts", "settings"]) {
       expect(body, `PagesMenu is missing ${page}`).toContain(`value="${page}"`);
     }
+  });
+
+  test("settings can be hidden when the host owns it", () => {
+    const menu = app.slice(app.indexOf("function PagesMenu("));
+    const body = menu.slice(0, menu.indexOf("\nfunction "));
+    expect(body).toContain("showSettings");
+    expect(body).toContain('{showSettings ? (');
+    expect(app).toContain("showSettings={!embedded}");
   });
 
   test("the overflow menu lists runtime extension tabs", () => {
@@ -44,7 +52,10 @@ describe("page navigation reachability", () => {
 
   test("the shell builds the menu and passes it down", () => {
     expect(app).toMatch(/pagesMenu=\{\s*<PagesMenu/);
-    expect(app).toContain("<PagesMenu tab={tab} onOpenTab={setTab} extraTabs={extNavTabs} />");
+    expect(app).toContain("<PagesMenu");
+    expect(app).toContain("onOpenTab={setTab}");
+    expect(app).toContain("extraTabs={extNavTabs}");
+    expect(app).toContain("showSettings={!embedded}");
   });
 
   test("the header is not suppressed wholesale when embedded", () => {
@@ -58,7 +69,7 @@ describe("page navigation reachability", () => {
 
   test("host-owned chrome stays out of the embedded header", () => {
     // Un-suppressing the header must not leak omg's own concerns back in.
-    for (const guarded of ["<AskNavButton", "<UserFilterMenu", "<IconTab"]) {
+    for (const guarded of ["<AskNavButton", "<UserFilterMenu"]) {
       const at = app.indexOf(guarded, app.indexOf(") : liveDesktopWorkspace ? null : ("));
       expect(at, `${guarded} not found in the header`).toBeGreaterThan(0);
       // Each is preceded by an `embedded ? null :` guard within a few lines.

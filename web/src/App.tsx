@@ -5755,10 +5755,10 @@ export function App() {
       {viewerArtifact ? (
         <ArtifactViewerPage artifact={viewerArtifact} onClose={closeArtifactViewer} />
       ) : null}
-      {/* Two floating "islands" — brand + Live on the left, an icon-only
-          Settings button on the right — mirroring the bottom nav's
-          gradient-bordered pill so the whole chrome reads as one matched set.
-          Auto + extension tabs now live inside the Settings page. */}
+      {/* Two floating "islands" — brand + Live on the left, page and account
+          controls on the right — mirroring the bottom nav's gradient-bordered
+          pill so the whole chrome reads as one matched set. Settings now lives
+          in the Pages menu alongside the other page destinations. */}
       {/* Embed keeps product branding but leaves settings/user chrome to omg. */}
       {/* One measured chrome stack: header + install callout + error banner.
           On mobile these all float above the scroll surface, so they share a
@@ -5834,7 +5834,7 @@ export function App() {
           <div className="flex h-11 items-center gap-1.5 rounded-full bg-background/80 px-2 backdrop-blur-xl">
             {tab === "live" || tab === "shipped" || tab === "artifacts" ? (
               // The island stays identical across the swipeable pages: on
-              // mobile that's avatar + ask + settings (page identity lives in
+              // mobile that's avatar + ask + pages (page identity lives in
               // the heading and the swipe/composer nav); desktop keeps the
               // project/page dropdown pill.
               <>
@@ -5864,17 +5864,14 @@ export function App() {
             {embedded ? null : (
               <AskNavButton active={tab === "ask"} onOpen={() => setTab("ask")} />
             )}
-            {embedded ? null : (
-              <IconTab
-                active={tab !== "live" && tab !== "shipped" && tab !== "artifacts"}
-                onClick={() => setTab("settings")}
-                icon={<Settings className="size-[18px]" />}
-                label="Settings"
-              />
-            )}
             {/* Same menu as the rail's, so the page axis has one shape wherever
                 the chrome happens to live in a given layout. */}
-            <PagesMenu tab={tab} onOpenTab={setTab} extraTabs={extNavTabs} />
+            <PagesMenu
+              tab={tab}
+              onOpenTab={setTab}
+              extraTabs={extNavTabs}
+              showSettings={!embedded}
+            />
           </div>
         </NavIsland>
       </header>
@@ -5937,7 +5934,12 @@ export function App() {
               // state and the extension registry, and the rail should not have to
               // know either to render a menu.
               pagesMenu={
-                <PagesMenu tab={tab} onOpenTab={setTab} extraTabs={extNavTabs} />
+                <PagesMenu
+                  tab={tab}
+                  onOpenTab={setTab}
+                  extraTabs={extNavTabs}
+                  showSettings={!embedded}
+                />
               }
               onOpenRecentShipped={openShippedSession}
               repos={repos}
@@ -6472,40 +6474,6 @@ function TopTab({
   );
 }
 
-// Icon-only variant of TopTab used in the top-right island (Settings).
-function IconTab({
-  active,
-  icon,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  icon: ReactNode;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={() => {
-        if (!active) feedback.select();
-        onClick();
-      }}
-      aria-label={label}
-      title={label}
-      aria-current={active ? "page" : undefined}
-      className={cn(
-        "flex size-9 shrink-0 items-center justify-center rounded-full transition-colors duration-200 ease-out",
-        active
-          ? "bg-primary/12 text-primary"
-          : "text-muted-foreground hover:text-foreground active:scale-[0.96]",
-      )}
-    >
-      {icon}
-    </button>
-  );
-}
-
 function TabButton({
   active,
   icon,
@@ -6959,17 +6927,23 @@ function PagesMenu({
   tab,
   onOpenTab,
   extraTabs,
+  showSettings = true,
   className,
 }: {
   tab: string;
   onOpenTab: (tab: string) => void;
   extraTabs: ExtensionNavTab[];
+  showSettings?: boolean;
   className?: string;
 }) {
   // Pages are one radio group so exactly one item reads as current. That marker
   // is also the only "where am I" signal these pages have — Shipped and
   // Artifacts render no title chrome of their own in the rail layout.
-  const known = tab === "live" || tab === "shipped" || tab === "artifacts";
+  const known =
+    tab === "live" ||
+    tab === "shipped" ||
+    tab === "artifacts" ||
+    (showSettings && tab === "settings");
   const value = known || extraTabs.some((t) => t.id === tab) ? tab : "live";
   // Controlled so a selection dismisses the menu. Radio items don't close on
   // their own — correct for a filter, wrong here: the selection navigates, and
@@ -7015,6 +6989,15 @@ function PagesMenu({
             <LayoutDashboard className="size-5 shrink-0 text-muted-foreground" />
             Artifacts
           </DropdownMenuRadioItem>
+          {showSettings ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuRadioItem value="settings">
+                <Settings className="size-5 shrink-0 text-muted-foreground" />
+                Settings
+              </DropdownMenuRadioItem>
+            </>
+          ) : null}
           {extraTabs.length ? <DropdownMenuSeparator /> : null}
           {extraTabs.map((extension) => (
             <DropdownMenuRadioItem key={extension.id} value={extension.id}>
@@ -9715,17 +9698,6 @@ function RailStage({
             >
               <Plus className="size-4" />
             </button>
-            {onOpenSettings ? (
-              <button
-                type="button"
-                onClick={onOpenSettings}
-                aria-label="Settings"
-                title="Settings (,)"
-                className="flex size-8 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted"
-              >
-                <Settings className="size-4" />
-              </button>
-            ) : null}
             {/* Replaces a lone Shipped megaphone. That button was the collapsed
                 rail's only page link, so Artifacts had no entry point here at
                 all — and it named one destination where the rail needs a place
@@ -9756,14 +9728,6 @@ function RailStage({
               <div className="ml-auto flex items-center gap-1">
                 {onOpenAsk ? (
                   <AskNavButton active={false} onOpen={onOpenAsk} />
-                ) : null}
-                {onOpenSettings ? (
-                  <IconTab
-                    active={false}
-                    onClick={onOpenSettings}
-                    icon={<Settings className="size-[18px]" />}
-                    label="Settings"
-                  />
                 ) : null}
                 {onUserChange ? (
                   <UserFilterMenu
