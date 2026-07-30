@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Tighter mobile composer (v0.1.128)
+
+- The mobile new-session composer now sits closer to the feed, removing the
+  oversized empty band while preserving side spacing, touch comfort, and the
+  device safe area.
+
 ## July 30, 2026 - Native artifact rendering (v0.1.127)
 
 - HTML artifacts now render as real DOM in a shadow root instead of a sandboxed
