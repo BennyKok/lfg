@@ -53,6 +53,13 @@
   --lfg-orb-size: 4.5rem;
   /* Host-chrome inset (omg Computer compact bottom nav). 0 outside embed. */
   --lfg-host-bottom-inset: 0px;
+  /* Host-chrome inset on the TOP-RIGHT of the embedded mobile header. The host
+     floats its own nav island in that corner, so our right-hand island has to
+     slide left by the width the host claims. Unlike the bottom inset (which we
+     hardcode, because the pill's height is fixed), this one is host-driven:
+     omg sets it on its surface wrapper. 0 by default, so a host that floats
+     nothing there — or standalone LFG — reserves nothing. */
+  --lfg-host-top-inset: 0px;
   /* Device home-indicator. Standalone uses the real inset; embed cancels it
      (host already places chrome above the home indicator). */
   --lfg-device-safe-bottom: env(safe-area-inset-bottom, 0px);
