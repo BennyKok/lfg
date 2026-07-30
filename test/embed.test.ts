@@ -102,6 +102,22 @@ describe("host bottom inset contract", () => {
     expect(app).toContain('embedded && "pb-[var(--lfg-host-bottom-inset)]"');
   });
 
+  test("host can reserve top-right space in the embedded mobile header", () => {
+    const css = require("node:fs").readFileSync("web/src/index.css", "utf8") as string;
+    const app = require("node:fs").readFileSync("web/src/App.tsx", "utf8") as string;
+    // Default 0 so standalone LFG — and any host that floats nothing in that
+    // corner — reserves nothing. The value is host-driven (omg sets it on its
+    // surface wrapper), unlike the hardcoded bottom inset.
+    expect(css).toMatch(/--lfg-host-top-inset:\s*0px/);
+    // The embedded mobile header's right island slides left by the inset, so a
+    // host island in that corner never lands on the project picker.
+    expect(app).toContain("pr-[calc(0.75rem+var(--lfg-host-top-inset))]");
+    // Left stays a plain gutter — px-3 would re-symmetrise and undo the above.
+    expect(app).not.toMatch(
+      /<header className="z-40 flex shrink-0 items-center justify-between gap-2 px-3/,
+    );
+  });
+
   test("desktop embed zeroes host-bottom-inset (omg nav is top-middle)", () => {
     const css = require("node:fs").readFileSync("web/src/index.css", "utf8") as string;
     // Match omg useIsDesktop (lg = 1024). Mobile keeps the 2.75rem bottom pill.

@@ -4,6 +4,16 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Hosts can reserve the top-right corner (v0.1.136)
+
+- Adds `--lfg-host-top-inset`, the top-right counterpart to the existing
+  `--lfg-host-bottom-inset`. The embedded mobile header now pads its right
+  gutter by that amount, so a host floating its own nav island in that corner
+  slides our project picker out of the way instead of colliding with it.
+- Host-driven rather than hardcoded: it defaults to `0px`, so standalone LFG
+  and any host that floats nothing up there reserve nothing, and the host sets
+  the real width on its own surface wrapper.
+
 ## July 30, 2026 - Original LFG icon restored (v0.1.135)
 
 - Restores the distinctive pixel-dissolve LFG mark across the app, PWA, touch

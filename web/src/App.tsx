@@ -5771,7 +5771,7 @@ export function App() {
         )}
       >
       {embedded && isMobile ? (
-        <header className="z-40 flex shrink-0 items-center justify-between gap-2 px-3 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))]">
+        <header className="z-40 flex shrink-0 items-center justify-between gap-2 pb-1 pl-3 pr-[calc(0.75rem+var(--lfg-host-top-inset))] pt-[calc(0.5rem+env(safe-area-inset-top))]">
           <NavIsland className="shrink-0">
             <div
               className="flex size-11 items-center justify-center rounded-full bg-background/80 backdrop-blur-xl"
