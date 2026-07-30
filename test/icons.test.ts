@@ -3,11 +3,13 @@ import { readFile } from "node:fs/promises";
 import sharp from "sharp";
 
 describe("LFG icon assets", () => {
-  test("uses smooth vector geometry without the old responsive pixel grid", async () => {
+  test("keeps the original responsive pixel-dissolve vector artwork", async () => {
     const source = await readFile("web/public/icon.svg", "utf8");
-    expect(source).not.toContain("@media");
-    expect(source).not.toContain('width="8.28"');
-    expect(source.match(/<rect\b/g)?.length ?? 0).toBeLessThanOrEqual(2);
+    expect(source).toContain('viewBox="0 0 512 512"');
+    expect(source).toContain("@media (max-width:40px)");
+    expect(source).toContain('id="full"');
+    expect(source).toContain('id="mini"');
+    expect(source).not.toContain("<image");
   });
 
   test("ships each generated PNG at its declared size", async () => {

@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Original LFG icon restored (v0.1.135)
+
+- Restores the distinctive pixel-dissolve LFG mark across the app, PWA, touch
+  icon, and README after the smoother replacement lost too much of its identity.
+- Keeps the shared icon generator and asset checks, so the restored artwork
+  remains consistent at every required published size.
+
 ## July 30, 2026 - Shipped and Artifacts are reachable on desktop (v0.1.134)
 
 - The desktop sidebar gains a pages menu, so Shipped and Artifacts can be opened
