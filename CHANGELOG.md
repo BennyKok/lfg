@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - The app appears before it connects (v0.1.147)
+
+- Replaces the full-screen startup spinner with the real LFG interface. While
+  bootstrap data is connecting, controls are visibly and semantically disabled;
+  they become interactive automatically as soon as the app is ready.
+
 ## July 30, 2026 - Shipped notifications open the work (v0.1.146)
 
 - Shipping a result now sends the session owner a push notification with the

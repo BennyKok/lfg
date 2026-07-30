@@ -3015,11 +3015,15 @@ function ComposerSendButton({
 
 const APP_SHELL_CLASS = "relative flex h-dvh flex-col overflow-hidden bg-background text-foreground";
 
-function AppShellSkeleton() {
+function AppStartupStatus() {
   return (
-    <div className={cn(APP_SHELL_CLASS, "items-center justify-center text-muted-foreground")}>
-      <Loader2 className="size-4 animate-spin" aria-hidden />
-      <span className="sr-only">Loading</span>
+    <div
+      id="lfg-startup-status"
+      role="status"
+      className="pointer-events-none fixed left-1/2 top-[calc(0.75rem+env(safe-area-inset-top))] z-[100] flex -translate-x-1/2 items-center gap-2 rounded-full border border-border/70 bg-background/90 px-3 py-1.5 text-xs font-medium text-muted-foreground shadow-sm backdrop-blur-xl"
+    >
+      <span className="size-1.5 animate-pulse rounded-full bg-primary" aria-hidden />
+      Connecting…
     </div>
   );
 }
@@ -5632,10 +5636,6 @@ export function App() {
     return () => window.clearInterval(timer);
   }, [connectGateOpen, refreshCodingAgents]);
 
-  if (loading) {
-    return <AppShellSkeleton />;
-  }
-
   // Reuses loginCodingAgent/setupCodingAgent and the shared auth dialog, and
   // closes itself as soon as refreshCodingAgents reports something configured.
   if (connectGateOpen) {
@@ -5744,8 +5744,15 @@ export function App() {
     <ArtifactViewerContext.Provider value={openArtifactViewer}>
     <div
       ref={rootRef}
+      inert={loading}
+      aria-busy={loading}
+      aria-disabled={loading || undefined}
+      aria-describedby={loading ? "lfg-startup-status" : undefined}
+      data-startup-state={loading ? "connecting" : "ready"}
       className={cn(
         APP_SHELL_CLASS,
+        loading &&
+          "[&_button]:cursor-wait [&_button]:opacity-60 [&_input]:cursor-wait [&_input]:opacity-60 [&_select]:cursor-wait [&_select]:opacity-60 [&_textarea]:cursor-wait [&_textarea]:opacity-60",
         // Embed: leave a blank band of our own background under the host
         // compact pill so list/inline composer sit above it. Full-bleed
         // portals (session sheet) use --lfg-safe-bottom on their own chrome.
@@ -6244,6 +6251,7 @@ export function App() {
       />
       <Toaster position="bottom-center" />
     </div>
+    {loading ? <AppStartupStatus /> : null}
     </ArtifactViewerContext.Provider>
     </TranscriptViewContext.Provider>
     </AskProvider>
