@@ -1772,7 +1772,7 @@ export async function listSessions(): Promise<Session[]> {
     // Resolve the pane this pid runs in up front; the trust check below decides
     // whether we hand it out for send-keys / prompt detection. The pane NAME is
     // still safe to use for matching the managed record either way.
-    const rawTarget = isHeadless(e.cmd) ? null : tmux.targetForPid(e.pid);
+    const rawTarget = isHeadlessClaudeProcess(e.pid, e.cmd) ? null : tmux.targetForPid(e.pid);
     const paneName = rawTarget ? rawTarget.split(":")[0] : null;
     const managedRec = paneName ? managedByName.get(paneName) : undefined;
     // Trust the pane target when the pidfile is authoritative OR the pane is one
@@ -2343,10 +2343,26 @@ function sessionBusy(s: Session): boolean {
   return false;
 }
 
-// `claude -p` / `--print` runs headless (no TUI). pgrep gives us the full
-// argv, so match the flag as a whole token.
-function isHeadless(cmd: string): boolean {
-  return /(^|\s)(-p|--print)(\s|$)/.test(cmd);
+// `claude -p` / `--print` runs headless (no TUI). Inspect the real argv when
+// possible: pgrep flattens argv into one string, so a managed task prompt that
+// mentions a command such as `tsc -p` otherwise looks like a Claude CLI flag.
+export function isHeadlessClaudeArgv(argv: string[]): boolean {
+  const separator = argv.indexOf("--");
+  const flags = argv.slice(1, separator < 0 ? undefined : separator);
+  return flags.includes("-p") || flags.includes("--print");
+}
+
+function isHeadlessClaudeProcess(pid: number, fallbackCmd: string): boolean {
+  try {
+    const argv = readFileSync(`/proc/${pid}/cmdline`, "utf8")
+      .split("\0")
+      .filter(Boolean);
+    if (argv.length) return isHeadlessClaudeArgv(argv);
+  } catch {}
+
+  // Non-Linux fallback. The first standalone `--` still separates Claude's
+  // flags from the positional prompt in LFG-managed launches.
+  return isHeadlessClaudeArgv(fallbackCmd.trim().split(/\s+/));
 }
 
 // Parent pid from /proc/<pid>/stat (4th field, after the parenthesized comm
