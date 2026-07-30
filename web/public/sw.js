@@ -114,9 +114,28 @@ async function fetchJson(url) {
   return null;
 }
 
+// Keep the installed app icon's badge aligned with currently visible
+// notifications. The Badging API is progressive enhancement: unsupported
+// browsers simply keep the ordinary system notification.
+async function syncAppBadge() {
+  if (!self.navigator?.setAppBadge || !self.navigator?.clearAppBadge) return;
+  try {
+    const visible = await self.registration.getNotifications();
+    if (visible.length) await self.navigator.setAppBadge(visible.length);
+    else await self.navigator.clearAppBadge();
+  } catch {
+    // Badging can be unavailable or denied independently of notifications.
+  }
+}
+
+async function showLfgNotification(title, options) {
+  await self.registration.showNotification(title, options);
+  await syncAppBadge();
+}
+
 async function showLatest(payload) {
   if (payload?.title) {
-    await self.registration.showNotification(payload.title, {
+    await showLfgNotification(payload.title, {
       body: payload.body || "",
       icon: "/icon.svg",
       badge: "/icon-maskable.svg",
@@ -142,7 +161,7 @@ async function showLatest(payload) {
   const asked = await fetchJson(feedUrl);
   const notification = asked?.notification || null;
   if (notification?.title) {
-    await self.registration.showNotification(notification.title, {
+    await showLfgNotification(notification.title, {
       body: notification.body || "",
       icon: "/icon.svg",
       badge: "/icon-maskable.svg",
@@ -157,7 +176,7 @@ async function showLatest(payload) {
   const q = (asked?.questions || [])[0] || null;
   if (q) {
     const opts = Array.isArray(q.options) && q.options.length ? ` — ${q.options.join(" / ")}` : "";
-    await self.registration.showNotification("lfg needs your input", {
+    await showLfgNotification("lfg needs your input", {
       body: (q.question || "A question is waiting") + opts,
       icon: "/icon.svg",
       badge: "/icon-maskable.svg",
@@ -176,7 +195,7 @@ async function showLatest(payload) {
   const title = f?.title || "lfg";
   const body =
     f?.suggest || (Array.isArray(f?.reasoning) ? f.reasoning[0] : "") || "New activity in your sessions";
-  await self.registration.showNotification(title, {
+  await showLfgNotification(title, {
     body,
     icon: "/icon.svg",
     badge: "/icon-maskable.svg",
@@ -201,6 +220,7 @@ self.addEventListener("notificationclick", (event) => {
   const target = event.notification.data?.url || "/";
   event.waitUntil(
     (async () => {
+      await syncAppBadge();
       const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
       const client = all.find((c) => "focus" in c);
       if (client) {

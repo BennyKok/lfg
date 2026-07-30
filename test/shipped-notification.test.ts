@@ -15,4 +15,12 @@ describe("shipped notifications", () => {
     expect(worker).toContain("data: { url: notification.url || \"/\" }");
     expect(worker).toContain('if ("navigate" in client) await client.navigate(target)');
   });
+
+  test("keeps the installed PWA badge in sync with visible notifications", async () => {
+    const worker = await readFile("web/public/sw.js", "utf8");
+    expect(worker).toContain("async function syncAppBadge()");
+    expect(worker).toContain("await self.navigator.setAppBadge(visible.length)");
+    expect(worker).toContain("await self.navigator.clearAppBadge()");
+    expect(worker).toContain("await showLfgNotification(notification.title");
+  });
 });
