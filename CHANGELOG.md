@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Shipped notifications open the work (v0.1.146)
+
+- Shipping a result now sends the session owner a push notification with the
+  result title and summary. Tapping it opens that exact session for review,
+  including when the LFG app is already open.
+- Installed PWAs show a badge for visible LFG notifications and clear it once
+  the notifications are handled on platforms that support app badging.
+
 ## July 30, 2026 - Cleaner navigation islands (v0.1.145)
 
 - Moves Settings into the Pages menu and removes the separate gear from the
