@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 30, 2026 - Live upload progress restored (v0.1.131)
+
+- File attachments once again show smooth, real byte-by-byte upload percentages
+  and progress bars instead of sitting at 0% and jumping to complete.
+- Embedded omg.dev uploads keep their authenticated runtime routing while
+  reporting progress, including safe token refreshes during an upload.
+
 ## July 30, 2026 - Unified mobile session rows (v0.1.130)
 
 - Regular mobile session cards now match the taller Recently shipped row height
