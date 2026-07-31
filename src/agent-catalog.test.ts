@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { curateOpenCodeModels, listModelCatalog } from "./agent-catalog.ts";
+import {
+  curateOpenCodeModels,
+  discoveredModelsOrFallback,
+  listModelCatalog,
+  MODEL_OPTIONS,
+  OPENCODE_MODELS,
+} from "./agent-catalog.ts";
 
 const DISCOVERED = [
   "openai/gpt-5.3-codex-spark",
@@ -82,6 +88,25 @@ function codingAgent(
 }
 
 describe("OpenCode catalog default", () => {
+  test("uses only a runnable anonymous model as the cold fallback", () => {
+    expect(OPENCODE_MODELS).toEqual(["opencode/deepseek-v4-flash-free"]);
+    expect(MODEL_OPTIONS.opencode.defaultModel).toBe("opencode/deepseek-v4-flash-free");
+  });
+
+  test("replaces stale fallback providers with successful live discovery", () => {
+    expect(discoveredModelsOrFallback(
+      ["opencode-go/deepseek-v4-flash"],
+      { ok: true, models: ["opencode/deepseek-v4-flash-free"] },
+    )).toEqual(["opencode/deepseek-v4-flash-free"]);
+  });
+
+  test("uses the safe fallback only when live discovery is unavailable", () => {
+    expect(discoveredModelsOrFallback(
+      OPENCODE_MODELS,
+      { ok: false, models: [] },
+    )).toEqual(["opencode/deepseek-v4-flash-free"]);
+  });
+
   test("selects a live free model when no user-owned account is connected", () => {
     const opencode = listModelCatalog([codingAgent("opencode", false)]).find(
       (item) => item.key === "opencode",
@@ -96,7 +121,7 @@ describe("OpenCode catalog default", () => {
       const opencode = listModelCatalog([codingAgent(key, true)]).find(
         (item) => item.key === "opencode",
       );
-      expect(opencode?.defaultModel).toBe("opencode-go/deepseek-v4-flash");
+      expect(opencode?.defaultModel).toBe("opencode/deepseek-v4-flash-free");
     },
   );
 

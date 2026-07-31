@@ -1,7 +1,7 @@
 import type { Agent } from "./agents/registry.ts";
 import type { AutoAgent } from "./auto/store.ts";
 import type { CodingAgentInfo, CodingAgentKind } from "./coding-agents.ts";
-import { discoveredModelIdsByProviderSync, readModelDiscoveryCacheSync } from "./model-discovery.ts";
+import { readModelDiscoveryCacheSync } from "./model-discovery.ts";
 import type { Session } from "./sessions.ts";
 
 export type SkillCatalogItem = {
@@ -56,25 +56,7 @@ export const HERMES_MODELS: string[] = [
 // custom model id so it resolves like the aliases above instead of erroring.
 export const PI_MODELS: string[] = ["fable", "opus", "sonnet", "haiku", "deepseek/deepseek-v4-flash"];
 export const OPENCODE_MODELS: string[] = [
-  "opencode/big-pickle",
   "opencode/deepseek-v4-flash-free",
-  "opencode/mimo-v2.5-free",
-  "opencode/nemotron-3-ultra-free",
-  "opencode/north-mini-code-free",
-  "opencode-go/deepseek-v4-flash",
-  "opencode-go/deepseek-v4-pro",
-  "opencode-go/glm-5.1",
-  "opencode-go/glm-5.2",
-  "opencode-go/kimi-k2.6",
-  "opencode-go/kimi-k3",
-  "opencode-go/kimi-k2.7-code",
-  "opencode-go/mimo-v2.5",
-  "opencode-go/mimo-v2.5-pro",
-  "opencode-go/minimax-m2.7",
-  "opencode-go/minimax-m3",
-  "opencode-go/qwen3.6-plus",
-  "opencode-go/qwen3.7-max",
-  "opencode-go/qwen3.7-plus",
 ];
 export const COPILOT_MODELS: string[] = [
   "claude-sonnet-4.5",
@@ -139,7 +121,7 @@ export const MODEL_OPTIONS: Record<CodingAgentKind, { defaultModel: string; mode
   grok: { defaultModel: "grok-4.5", models: GROK_MODELS },
   cursor: { defaultModel: "auto", models: CURSOR_MODELS },
   hermes: { defaultModel: "nousresearch/hermes-4-405b", models: HERMES_MODELS },
-  opencode: { defaultModel: "opencode-go/deepseek-v4-flash", models: OPENCODE_MODELS },
+  opencode: { defaultModel: "opencode/deepseek-v4-flash-free", models: OPENCODE_MODELS },
   pi: { defaultModel: "sonnet", models: PI_MODELS },
   copilot: { defaultModel: "claude-sonnet-4.5", models: COPILOT_MODELS },
 };
@@ -155,6 +137,13 @@ function mergeModels(...sets: Array<readonly string[] | undefined>): string[] {
     }
   }
   return out;
+}
+
+export function discoveredModelsOrFallback(
+  fallback: readonly string[] | undefined,
+  provider?: { ok: boolean; models: readonly string[] },
+): string[] {
+  return mergeModels(provider?.ok && provider.models.length ? provider.models : fallback);
 }
 
 const CURSOR_THINKING_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
@@ -373,8 +362,10 @@ function curateModels(agent: CodingAgentKind, models: string[]): string[] {
 export function rawModelsForAgent(agent: CodingAgentKind): string[] {
   const fallback = MODEL_OPTIONS[agent]?.models;
   const provider = readModelDiscoveryCacheSync()?.providers?.[agent];
-  const discovered = discoveredModelIdsByProviderSync();
-  return mergeModels(fallback, provider?.ok ? provider.models : undefined, discovered[agent]);
+  // A successful harness query is authoritative. Unioning it with the static
+  // fallback kept removed providers (notably opencode-go) selectable forever,
+  // even after the installed CLI said those providers did not exist.
+  return discoveredModelsOrFallback(fallback, provider);
 }
 
 export function modelsForAgent(agent: CodingAgentKind): string[] {

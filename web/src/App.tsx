@@ -292,7 +292,10 @@ import {
 } from "./components/ask-center";
 import { PwaInstallCallout, PwaInstallSettingsSection } from "./components/pwa-install";
 import { UsageCampfireHost, useUsageRingLongPress } from "./components/UsageCampfire";
-import { configuredAgentOptions } from "./lib/coding-agent-options";
+import {
+  configuredAgentOptions,
+  type AgentAccessMode,
+} from "./lib/coding-agent-options";
 import {
   Conversation,
   ConversationContent,
@@ -337,6 +340,7 @@ type CodingAgentInfo = {
 };
 
 const CodingAgentsContext = createContext<CodingAgentInfo[] | undefined>(undefined);
+const AgentAccessModeContext = createContext<AgentAccessMode>("configured");
 
 type AuthProvider = "claude" | "codex" | "grok";
 
@@ -756,25 +760,7 @@ const CURSOR_MODELS = [
   "grok-4.3",
 ];
 const OPENCODE_MODELS = [
-  "opencode/big-pickle",
   "opencode/deepseek-v4-flash-free",
-  "opencode/mimo-v2.5-free",
-  "opencode/nemotron-3-ultra-free",
-  "opencode/north-mini-code-free",
-  "opencode-go/deepseek-v4-flash",
-  "opencode-go/deepseek-v4-pro",
-  "opencode-go/glm-5.1",
-  "opencode-go/glm-5.2",
-  "opencode-go/kimi-k2.6",
-  "opencode-go/kimi-k3",
-  "opencode-go/kimi-k2.7-code",
-  "opencode-go/mimo-v2.5",
-  "opencode-go/mimo-v2.5-pro",
-  "opencode-go/minimax-m2.7",
-  "opencode-go/minimax-m3",
-  "opencode-go/qwen3.6-plus",
-  "opencode-go/qwen3.7-max",
-  "opencode-go/qwen3.7-plus",
 ];
 // pi resolves the same Claude aliases as claude/aisdk plus one custom proxy
 // model id. Kept in sync with PI_MODELS in src/agent-catalog.ts (the server
@@ -846,7 +832,7 @@ const AGENT_DEFAULT_MODEL: Record<AgentKind, string> = {
   "codex-aisdk": "gpt-5.6-sol",
   grok: "grok-4.5",
   cursor: "auto",
-  opencode: "opencode-go/deepseek-v4-flash",
+  opencode: "opencode/deepseek-v4-flash-free",
   pi: "sonnet",
   copilot: "claude-sonnet-4.5",
 };
@@ -5827,6 +5813,9 @@ export function App() {
   const liveDesktopWorkspace = tab === "live" && isWide;
 
   return (
+    <AgentAccessModeContext.Provider
+      value={embedded ? "connected-or-opencode" : "configured"}
+    >
     <CodingAgentsContext.Provider value={codingAgents}>
     <CodingAgentAuthContext.Provider value={codingAgentAuthFlow}>
     <AgentModelCatalogContext.Provider value={modelCatalog}>
@@ -6317,7 +6306,11 @@ export function App() {
             pi: ["pi"],
           };
           const available = new Set(
-            configuredAgentOptions(AGENT_OPTIONS, codingAgents).map((o) => o.key),
+            configuredAgentOptions(
+              AGENT_OPTIONS,
+              codingAgents,
+              embedded ? "connected-or-opencode" : "configured",
+            ).map((o) => o.key),
           );
           const kind = (preference[usageKind] ?? [usageKind as AgentKind]).find((k) =>
             available.has(k),
@@ -6346,6 +6339,7 @@ export function App() {
     </AgentModelCatalogContext.Provider>
     </CodingAgentAuthContext.Provider>
     </CodingAgentsContext.Provider>
+    </AgentAccessModeContext.Provider>
   );
 }
 
@@ -12893,9 +12887,10 @@ function ForkSessionDialog({
   const continuing = mode === "continue";
   const catalog = useAgentModelCatalog();
   const codingAgents = useContext(CodingAgentsContext);
+  const accessMode = useContext(AgentAccessModeContext);
   const availableAgentOptions = useMemo(
-    () => configuredAgentOptions(AGENT_OPTIONS, codingAgents),
-    [codingAgents],
+    () => configuredAgentOptions(AGENT_OPTIONS, codingAgents, accessMode),
+    [accessMode, codingAgents],
   );
   const defaultModelFor = (key: AgentKind) => catalog.defaults[key] ?? AGENT_DEFAULT_MODEL[key];
   const defaultAgent = defaultForkAgent(session.agent, availableAgentOptions);
@@ -15463,6 +15458,7 @@ function NewSessionDialog({
   agentRequest?: { kind: AgentKind; nonce: number } | null;
 }) {
   const catalog = useAgentModelCatalog();
+  const accessMode = useContext(AgentAccessModeContext);
   const defaultModelFor = (key: AgentKind) => catalog.defaults[key] ?? AGENT_DEFAULT_MODEL[key];
   const [agent, setAgent] = useState<AgentKind>(
     () => (localStorage.getItem("lfg_v2_agent") as AgentKind | null) || "aisdk",
@@ -15999,8 +15995,8 @@ function NewSessionDialog({
   }, [thinkingLevel, thinkingLevels]);
 
   const visibleAgentOptions = useMemo(() => {
-    return configuredAgentOptions(AGENT_OPTIONS, codingAgents);
-  }, [codingAgents]);
+    return configuredAgentOptions(AGENT_OPTIONS, codingAgents, accessMode);
+  }, [accessMode, codingAgents]);
 
   useEffect(() => {
     if (visibleAgentOptions.some((option) => option.key === agent)) return;
@@ -17239,13 +17235,14 @@ function AutoAgentModelPicker({
   codingAgents?: CodingAgentInfo[];
 }) {
   const catalog = useAgentModelCatalog();
+  const accessMode = useContext(AgentAccessModeContext);
   const models = useAgentModels(backend);
   const thinkingLevels = useAgentThinkingLevels(backend);
   const defaultModelFor = (key: AutoAgentBackend) =>
     catalog.defaults[key] ?? AGENT_DEFAULT_MODEL[key];
   const visibleOptions = useMemo(() => {
-    return configuredAgentOptions(AUTO_AGENT_OPTIONS, codingAgents);
-  }, [codingAgents]);
+    return configuredAgentOptions(AUTO_AGENT_OPTIONS, codingAgents, accessMode);
+  }, [accessMode, codingAgents]);
 
   useEffect(() => {
     if (visibleOptions.some((option) => option.key === backend)) return;

@@ -25,4 +25,29 @@ describe("configuredAgentOptions", () => {
   test("preserves options only while availability data is loading", () => {
     expect(configuredAgentOptions(options)).toEqual(options);
   });
+
+  test("offers only anonymous OpenCode on a hosted box without account auth", () => {
+    expect(configuredAgentOptions(options, [
+      { key: "aisdk", visible: true, status: { configured: true, accountConnected: false } },
+      { key: "codex-aisdk", visible: true, status: { configured: true, accountConnected: false } },
+      { key: "opencode", visible: true, status: { configured: true, accountConnected: false } },
+    ], "connected-or-opencode")).toEqual([{ key: "opencode", label: "opencode" }]);
+  });
+
+  test("adds hosted agents only after their user-owned account is connected", () => {
+    expect(configuredAgentOptions(options, [
+      { key: "aisdk", visible: true, status: { configured: true, accountConnected: true } },
+      { key: "codex-aisdk", visible: true, status: { configured: true, accountConnected: false } },
+      { key: "opencode", visible: true, status: { configured: true, accountConnected: false } },
+    ], "connected-or-opencode")).toEqual([
+      { key: "aisdk", label: "claude" },
+      { key: "opencode", label: "opencode" },
+    ]);
+  });
+
+  test("does not flash account-backed agents while hosted availability loads", () => {
+    expect(configuredAgentOptions(options, undefined, "connected-or-opencode")).toEqual([
+      { key: "opencode", label: "opencode" },
+    ]);
+  });
 });
