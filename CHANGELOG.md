@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 31, 2026 - Anonymous OpenCode models are truly anonymous (v0.1.167)
+
+- Skipping provider setup now limits OpenCode's picker to discovered
+  `opencode/*-free` models. Models from credentialed providers are no longer
+  shown merely because the OpenCode CLI knows their names; connecting a
+  user-owned model account restores the broader discovered catalog.
+
 ## July 31, 2026 - Hosted Computer identity no longer depends on email (v0.1.166)
 
 - An omg hosted Computer with no local user roster no longer rejects session
