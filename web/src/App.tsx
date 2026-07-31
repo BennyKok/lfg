@@ -11536,7 +11536,7 @@ function useSessionActions({
   onRemove: (sid: string) => void;
   onError: (error: string | null) => void;
 }) {
-  const [forkOpen, setForkOpen] = useState(false);
+  const [forkMode, setForkMode] = useState<"fork" | "continue" | null>(null);
   const sid = session.sessionId;
   const assignee = users.find((user) => user.email === session.assignedUser);
 
@@ -11594,8 +11594,8 @@ function useSessionActions({
   return {
     sid,
     assignee,
-    forkOpen,
-    setForkOpen,
+    forkMode,
+    setForkMode,
     assign,
     interrupt,
     copyReference,
@@ -11912,8 +11912,8 @@ function SessionActionsMenu({
   const {
     sid,
     assignee,
-    forkOpen,
-    setForkOpen,
+    forkMode,
+    setForkMode,
     assign,
     interrupt,
     copyReference,
@@ -11928,10 +11928,11 @@ function SessionActionsMenu({
         open={tokenUsageOpen}
         onOpenChange={setTokenUsageOpen}
       />
-      {forkOpen ? (
+      {forkMode ? (
         <ForkSessionDialog
           session={session}
-          onClose={() => setForkOpen(false)}
+          mode={forkMode}
+          onClose={() => setForkMode(null)}
           onCreated={onRefresh}
         />
       ) : null}
@@ -12051,7 +12052,13 @@ function SessionActionsMenu({
             <Copy className="size-4" />
             Copy reference
           </DropdownMenuItem>
-          <DropdownMenuItem disabled={!sid} onClick={() => setForkOpen(true)}>
+          {canDriveSession(session) ? (
+            <DropdownMenuItem disabled={!sid} onClick={() => setForkMode("continue")}>
+              <Play className="size-4" />
+              Continue
+            </DropdownMenuItem>
+          ) : null}
+          <DropdownMenuItem disabled={!sid} onClick={() => setForkMode("fork")}>
             <GitFork className="size-4" />
             Fork
           </DropdownMenuItem>
@@ -12113,8 +12120,8 @@ function RailSessionContextMenu({
   const {
     sid,
     assignee,
-    forkOpen,
-    setForkOpen,
+    forkMode,
+    setForkMode,
     assign,
     interrupt,
     copyReference,
@@ -12132,10 +12139,11 @@ function RailSessionContextMenu({
 
   return (
     <>
-      {forkOpen ? (
+      {forkMode ? (
         <ForkSessionDialog
           session={session}
-          onClose={() => setForkOpen(false)}
+          mode={forkMode}
+          onClose={() => setForkMode(null)}
           onCreated={onRefresh}
         />
       ) : null}
@@ -12242,7 +12250,13 @@ function RailSessionContextMenu({
             <Copy className="size-4" />
             Copy reference
           </ContextMenuItem>
-          <ContextMenuItem disabled={!sid} onClick={() => setForkOpen(true)}>
+          {canDriveSession(session) ? (
+            <ContextMenuItem disabled={!sid} onClick={() => setForkMode("continue")}>
+              <Play className="size-4" />
+              Continue
+            </ContextMenuItem>
+          ) : null}
+          <ContextMenuItem disabled={!sid} onClick={() => setForkMode("fork")}>
             <GitFork className="size-4" />
             Fork
           </ContextMenuItem>
@@ -12859,15 +12873,24 @@ function defaultForkAgent(
   return availableOptions[0]?.key ?? "aisdk";
 }
 
+type ForkSessionResult = {
+  sessionId?: string;
+  sourceArchived?: boolean;
+  archiveError?: string;
+};
+
 function ForkSessionDialog({
   session,
+  mode,
   onClose,
   onCreated,
 }: {
   session: Session;
+  mode: "fork" | "continue";
   onClose: () => void;
-  onCreated: (created?: { sessionId?: string }) => Promise<void>;
+  onCreated: (created?: ForkSessionResult) => Promise<void>;
 }) {
+  const continuing = mode === "continue";
   const catalog = useAgentModelCatalog();
   const codingAgents = useContext(CodingAgentsContext);
   const availableAgentOptions = useMemo(
@@ -12913,7 +12936,9 @@ function ForkSessionDialog({
     e?.preventDefault();
     if (!sid) return;
     if (!availableAgentOptions.some((option) => option.key === agent)) {
-      toast.error("Set up and sign in to a coding agent before forking a session.");
+      toast.error(
+        `Set up and sign in to a coding agent before ${continuing ? "continuing" : "forking"} a session.`,
+      );
       return;
     }
     localStorage.setItem("lfg_fork_agent", agent);
@@ -12929,7 +12954,7 @@ function ForkSessionDialog({
           ? await Promise.all(attached.map(files.resolveUpload))
           : [];
         const composedPrompt = composeAttachmentMessage(text, uploaded);
-        return api<{ sessionId?: string }>(`/api/sessions/${sid}/fork`, {
+        return api<ForkSessionResult>(`/api/sessions/${sid}/fork`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -12938,19 +12963,28 @@ function ForkSessionDialog({
             agent,
             model,
             thinkingLevel: agentSupportsThinking(agent) ? thinkingLevel : undefined,
+            archiveSource: continuing || undefined,
           }),
         });
-      })().then((created) => onCreated(created)),
+      })().then(async (created) => {
+        await onCreated(created);
+        return created;
+      }),
       {
-        loading: "Forking session...",
-        success: "Session forked",
+        loading: continuing ? "Continuing in a new session..." : "Forking session...",
+        success: (created) =>
+          continuing && created.sourceArchived === false
+            ? "New session opened, but the old session could not be archived"
+            : continuing
+              ? "Continued in a new session"
+              : "Session forked",
         error: (err) => (err instanceof Error ? err.message : "Couldn't open session"),
       },
     );
   }
 
   return (
-    <BottomSheet onClose={onClose} title="Fork session">
+    <BottomSheet onClose={onClose} title={continuing ? "Continue session" : "Fork session"}>
       <form
         onSubmit={submit}
         {...files.dropZoneProps}
@@ -12960,11 +12994,19 @@ function ForkSessionDialog({
         )}
       >
         <div className="mb-3 flex items-center gap-2">
-          <GitFork className="size-4 text-muted-foreground" />
+          {continuing ? (
+            <Play className="size-4 text-muted-foreground" />
+          ) : (
+            <GitFork className="size-4 text-muted-foreground" />
+          )}
           <div className="min-w-0">
-            <div className="text-[15px] font-semibold">Fork session</div>
+            <div className="text-[15px] font-semibold">
+              {continuing ? "Continue in a new session" : "Fork session"}
+            </div>
             <div className="truncate text-xs text-muted-foreground">
-              {titleForSession(session)}
+              {continuing
+                ? `Archives this session after opening the replacement · ${titleForSession(session)}`
+                : titleForSession(session)}
             </div>
           </div>
         </div>
@@ -13054,8 +13096,8 @@ function ForkSessionDialog({
               Cancel
             </Button>
             <Button type="submit" variant="brand" disabled={!sid}>
-              <GitFork className="size-4" />
-              Open
+              {continuing ? <Play className="size-4" /> : <GitFork className="size-4" />}
+              {continuing ? "Continue" : "Open"}
             </Button>
           </div>
         </div>

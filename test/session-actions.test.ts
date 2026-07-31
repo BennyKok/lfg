@@ -57,4 +57,24 @@ describe("session lifecycle actions", () => {
     expect(doubleConfirm).toContain("setTimeout(() => setArmed(false), timeoutMs)");
     expect(doubleConfirm).toContain("slide-in-from-bottom-1");
   });
+
+  test("offers Continue as a create-then-archive fork mode", () => {
+    const dropdown = section(
+      "function SessionActionsMenu(",
+      "function RailSessionContextMenu(",
+    );
+    const context = section(
+      "function RailSessionContextMenu(",
+      "function SessionTitleSheet(",
+    );
+    const dialog = section("function ForkSessionDialog(", "const SessionCard = memo(");
+
+    for (const menu of [dropdown, context]) {
+      expect(menu).toContain('setForkMode("continue")');
+      expect(menu).toMatch(/<Play[^>]*\/>\s*Continue/);
+    }
+    expect(dialog).toContain('mode: "fork" | "continue";');
+    expect(dialog).toContain("archiveSource: continuing || undefined");
+    expect(dialog).toContain("Archives this session after opening the replacement");
+  });
 });

@@ -4199,6 +4199,7 @@ export async function cmdServe() {
             user?: string;
             model?: string;
             thinkingLevel?: string;
+            archiveSource?: boolean;
             agent?: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "hermes" | "pi";
           } | null;
           const source = (await listSessions()).find((s) => s.sessionId === sourceId);
@@ -4253,6 +4254,24 @@ export async function cmdServe() {
             }),
           });
           const text = await r.text();
+          if (r.ok && body?.archiveSource === true) {
+            const currentSource = (await listSessions()).find((s) => s.sessionId === sourceId);
+            let sourceArchived = true;
+            let archiveError: string | undefined;
+            if (currentSource) {
+              const outcome = await closeLiveSession(currentSource, sourceId, {
+                sessionId: sourceId,
+                source: "session_continue",
+                href: req.headers.get("referer") ?? undefined,
+              });
+              if (!outcome.ok) {
+                sourceArchived = false;
+                archiveError = outcome.reason;
+              }
+            }
+            const created = JSON.parse(text) as Record<string, unknown>;
+            return json({ ...created, sourceArchived, archiveError });
+          }
           return new Response(text, {
             status: r.status,
             headers: { "Content-Type": "application/json" },
