@@ -18799,7 +18799,7 @@ function CodingAgentsPage({
                       Install: <code>{agent.status.installCommand}</code>
                     </div>
                   ) : null}
-                  {agent.status.loginCommand && agent.key !== "aisdk" && agent.key !== "codex-aisdk" ? (
+                  {agent.status.loginCommand && !BROWSER_AUTH_KINDS.has(agent.key) ? (
                     <div className="truncate">
                       Login: <code>{agent.status.loginCommand}</code>
                     </div>
