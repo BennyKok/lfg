@@ -4,6 +4,19 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 31, 2026 - A folder picker you can actually scroll (v0.1.156)
+
+- The Projects sheet shows far more at a glance. The list was boxed into a
+  window barely two rows tall; it now opens to roughly eight, so most people
+  see every project without scrolling at all.
+- Folder paths are hidden by default behind a "Paths" toggle in the sheet
+  header. The project name is usually all you need, and dropping the second
+  line makes each row about a third shorter. Your choice is remembered.
+- Swiping the list scrolls the list. Before, a flick inside that short window
+  usually grabbed the sheet instead and dragged it closed.
+- With more than seven projects the sheet adds a search box, so a long list is
+  a quick type instead of a long scroll.
+
 ## July 31, 2026 - Sign in to Grok from the browser (v0.1.155)
 
 - Connecting Grok no longer needs the terminal. Login on the Grok row now opens
