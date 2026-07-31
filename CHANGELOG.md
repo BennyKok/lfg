@@ -4,6 +4,16 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 31, 2026 - See what each session is using (v0.1.151)
+
+- Restores Token usage to the session menu, opening a focused inspector for
+  current context consumption and cumulative model traffic.
+- Breaks usage down into input, output, cache, reasoning, tools, skills, system
+  prompt, and message categories, while clearly distinguishing provider-reported
+  totals from estimated attribution.
+- Reads live Codex and Claude session counters when they are available and
+  degrades to an explicit unavailable state for agents without token telemetry.
+
 ## July 30, 2026 - A real notification center (v0.1.150)
 
 - Rebrands the Shipped page as Notifications, with a canonical
