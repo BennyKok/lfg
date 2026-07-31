@@ -420,6 +420,17 @@ function hasConnectedModelAccount(codingAgents: CodingAgentInfo[]): boolean {
   );
 }
 
+/** Models the current user can honestly launch from the picker. */
+export function accessibleModelsForAgent(
+  key: CodingAgentKind,
+  models: string[],
+  accountConnected: boolean,
+): string[] {
+  if (key !== "opencode" || accountConnected) return models;
+  const anonymous = models.filter((model) => /^opencode\/.+-free$/.test(model));
+  return anonymous.length ? anonymous : [...OPENCODE_MODELS];
+}
+
 function defaultModelForCatalogItem(
   key: CodingAgentKind,
   models: string[],
@@ -439,10 +450,11 @@ export function defaultModelForAgent(
   key: CodingAgentKind,
   codingAgents: CodingAgentInfo[] = [],
 ): string {
+  const accountConnected = hasConnectedModelAccount(codingAgents);
   return defaultModelForCatalogItem(
     key,
-    modelsForAgent(key),
-    hasConnectedModelAccount(codingAgents),
+    accessibleModelsForAgent(key, modelsForAgent(key), accountConnected),
+    accountConnected,
   );
 }
 
@@ -451,7 +463,7 @@ export function listModelCatalog(codingAgents: CodingAgentInfo[] = []): ModelCat
   const accountConnected = hasConnectedModelAccount(codingAgents);
   return MODEL_CATALOG_KEYS.map((key) => {
     const status = configured.get(key);
-    const models = modelsForAgent(key);
+    const models = accessibleModelsForAgent(key, modelsForAgent(key), accountConnected);
     return {
       key,
       label: LABELS[key],

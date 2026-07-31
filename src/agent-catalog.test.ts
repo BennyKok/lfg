@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  accessibleModelsForAgent,
   curateOpenCodeModels,
   defaultModelForAgent,
   discoveredModelsOrFallback,
@@ -115,6 +116,17 @@ describe("OpenCode catalog default", () => {
     );
     expect(opencode?.defaultModel).toMatch(/^opencode\/.+-free$/);
     expect(opencode?.models).toContain(opencode?.defaultModel);
+  });
+
+  test("shows only credential-free OpenCode models before account setup", () => {
+    expect(accessibleModelsForAgent("opencode", DISCOVERED, false)).toEqual([
+      "opencode/deepseek-v4-flash-free",
+      "opencode/future-coder-free",
+    ]);
+  });
+
+  test("keeps discovered provider models after account setup", () => {
+    expect(accessibleModelsForAgent("opencode", DISCOVERED, true)).toEqual(DISCOVERED);
   });
 
   test.each(["claude", "aisdk", "codex", "codex-aisdk"] as const)(
