@@ -3,22 +3,37 @@ import { readFile } from "node:fs/promises";
 import sharp from "sharp";
 
 describe("LFG icon assets", () => {
-  test("keeps the original responsive pixel-dissolve vector artwork", async () => {
+  // The mark must be real outlines, not a bitmap. It shipped for five weeks as
+  // a grid of ~680 8.28px <rect>s — a 34x26 pixel image in SVG clothing. The
+  // header draws it in a 24px box where the glyph gets ~11.7px for 32 source
+  // pixels: 0.36px each, well under one device pixel even at DPR 3, so every
+  // stroke was averaged into the background and came out grey instead of white.
+  // Outlines rasterize against the actual device grid, so they stay crisp.
+  // A handful of <rect>/<path> is normal artwork; hundreds means a pixel grid.
+  test("keeps the LFG mark as true vector letterforms, never a bitmap", async () => {
     const source = await readFile("web/public/icon.svg", "utf8");
     expect(source).toContain('viewBox="0 0 512 512"');
-    expect(source).toContain("@media (max-width:40px)");
-    expect(source).toContain('id="full"');
-    expect(source).toContain('id="mini"');
     expect(source).not.toContain("<image");
+
+    const rects = source.match(/<rect/g)?.length ?? 0;
+    expect(rects).toBeLessThan(12);
+
+    // A traced bitmap also hides as one path of hundreds of L commands.
+    for (const [, d] of source.matchAll(/\sd="([^"]+)"/g)) {
+      expect((d.match(/L/g)?.length ?? 0)).toBeLessThan(60);
+    }
   });
 
-  test("ships an explicit crisp variant for small UI placements", async () => {
+  test("ships the small placement variant as the same crisp vector", async () => {
     const source = await readFile("web/public/icon-small.svg", "utf8");
     expect(source).toContain('viewBox="0 0 512 512"');
-    expect(source).toContain('id="mark"');
+    expect(source).not.toContain("<image");
+    expect((source.match(/<rect/g)?.length ?? 0)).toBeLessThan(12);
+
+    // Vector needs no size-specific artwork: no variants, no @media swap.
     expect(source).not.toContain("@media");
     expect(source).not.toContain('id="full"');
-    expect(source).not.toContain("<image");
+    expect(source).not.toContain('id="mini"');
 
     for (const path of [
       "web/src/App.tsx",
@@ -41,6 +56,18 @@ describe("LFG icon assets", () => {
     expect(worker).toContain("lfg-cache-reset-crisp-icon-v1");
     expect(worker).toContain("await self.skipWaiting()");
     expect(worker).toContain("keys.includes(CRISP_ICON_CACHE_RESET)");
+  });
+
+  // A suspended PWA can run one shell across many deploys, so a waiting worker
+  // must be adopted on resume rather than left behind a toast nobody taps.
+  test("adopts a waiting worker when the app is resumed", async () => {
+    const main = await readFile("web/src/main.tsx", "utf8");
+    expect(main).toContain("adoptPendingUpdate");
+    expect(main).toMatch(
+      /visibilitychange[\s\S]{0,220}adoptPendingUpdate\(\)/,
+    );
+    // Still only ever asks while the app is in the foreground.
+    expect(main).toContain("promptUpdate");
   });
 
   test("ships each generated PNG at its declared size", async () => {

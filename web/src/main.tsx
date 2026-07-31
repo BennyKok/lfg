@@ -121,8 +121,29 @@ async function registerServiceWorker() {
       reg.update().catch(() => {});
     };
     setInterval(check, 60_000);
+
+    // Adopt a pending update when the app is resumed from the background.
+    //
+    // The toast alone was not enough. An installed PWA — iOS especially — is
+    // suspended rather than closed, so it can run the same shell for days: the
+    // worker installs, waits, and the toast sits in a session the user is not
+    // looking at, gets swiped away with the app, or is simply missed. The result
+    // is a device pinned to an old build across many deploys while the server is
+    // serving something newer, which reads as "my changes never shipped".
+    //
+    // Resume is the safe moment to take it: the app was backgrounded, so there
+    // is no in-flight typing or scroll position worth more than being current,
+    // and reloading here is the behaviour a native app update already has. While
+    // the app is in the foreground we still only ever ask, never interrupt.
+    const adoptPendingUpdate = () => {
+      if (reg.waiting && navigator.serviceWorker.controller) {
+        activateUpdate(reg.waiting);
+      }
+    };
+
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState !== "visible") return;
+      adoptPendingUpdate();
       check();
     });
     window.addEventListener("focus", check);

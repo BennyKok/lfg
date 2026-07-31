@@ -19,18 +19,35 @@ async function render(
   await image.png().toFile(resolve(root, output));
 }
 
+// icon-small.svg is what every small UI placement loads (see icon-assets.ts).
+//
+// It exists because the mark used to be a bitmap — a grid of ~8px <rect>s — and
+// a bitmap has to be redrawn coarser to survive a 24px box. That artwork shipped
+// two variants in one file, #full and #mini, swapped by an inline @media query,
+// and this step sliced #mini out.
+//
+// The mark is true vector letterforms now, so there is nothing to slice: real
+// outlines rasterize crisply at any size and the small file is just a copy. The
+// separate route stays so the app keeps one stable URL to cache-bust, and so
+// re-introducing a size-specific variant later is a change here and nowhere
+// else. If the source ever carries variants again, isolate them; otherwise copy.
 async function generateSmallIcon(): Promise<void> {
   const source = await readFile(resolve(webPublic, "icon.svg"), "utf8");
+
+  const hasSizeVariants =
+    source.includes('id="full"') && source.includes('id="mini"');
+
+  if (!hasSizeVariants) {
+    await writeFile(resolve(webPublic, "icon-small.svg"), source);
+    return;
+  }
+
   const small = source
     .replace(/<style>[\s\S]*?<\/style>/, "")
     .replace(/<g id="full"[\s\S]*?<\/g>/, "")
     .replace('id="mini"', 'id="mark"');
 
-  if (
-    small === source ||
-    small.includes('id="full"') ||
-    small.includes("@media")
-  ) {
+  if (small.includes('id="full"') || small.includes("@media")) {
     throw new Error("Could not isolate the small LFG icon artwork");
   }
 
