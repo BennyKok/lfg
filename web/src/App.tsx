@@ -335,10 +335,31 @@ type CodingAgentInfo = {
 
 const CodingAgentsContext = createContext<CodingAgentInfo[] | undefined>(undefined);
 
+type AuthProvider = "claude" | "codex" | "grok";
+
+const AUTH_PROVIDER_LABELS: Record<AuthProvider, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  grok: "Grok",
+};
+
+/** Agent kinds whose CLI login can be driven from the browser (see
+ *  authProviderFor in src/coding-agents.ts). Everything else is terminal-only. */
+const BROWSER_AUTH_KINDS = new Set<string>([
+  "claude",
+  "aisdk",
+  "codex",
+  "codex-aisdk",
+  "grok",
+]);
+
+const authProviderLabel = (provider?: AuthProvider) =>
+  (provider && AUTH_PROVIDER_LABELS[provider]) || "Account";
+
 type CodingAgentAuthSession = {
   id: string;
   kind: AgentKind;
-  provider: "claude" | "codex";
+  provider: AuthProvider;
   status: "starting" | "waiting" | "complete" | "error";
   authorizationUrl?: string;
   userCode?: string;
@@ -5614,8 +5635,7 @@ export function App() {
   }
 
   async function loginCodingAgent(kind: AgentKind, inlineSid?: string) {
-    const browserAuth = kind === "aisdk" || kind === "claude" || kind === "codex" || kind === "codex-aisdk";
-    if (!browserAuth) {
+    if (!BROWSER_AUTH_KINDS.has(kind)) {
       toast.promise(
         api<{ terminalSession: string }>(`/api/coding-agents/${kind}/login-terminal`, { method: "POST" })
           .then((payload) => {
@@ -5641,7 +5661,7 @@ export function App() {
       if (session.status === "error") throw new Error(session.error || "Couldn't start login");
       if (session.status === "complete") {
         authWindow?.close();
-        toast.success(`${session.provider === "claude" ? "Claude" : "Codex"} connected`);
+        toast.success(`${authProviderLabel(session.provider)} connected`);
         setCodingAgentAuthInlineSid(null);
         if (inlineSid) setCodingAgentAuthCompletedSid(inlineSid);
         await refreshCodingAgents({ refreshModels: true });
@@ -10517,15 +10537,15 @@ function PausedBanner({
   const sid = session.sessionId;
   const reason = session.statusReason;
   const reconnectKind =
-    reason === "provider_auth" &&
-    (session.agent === "claude" ||
-      session.agent === "aisdk" ||
-      session.agent === "codex" ||
-      session.agent === "codex-aisdk")
-      ? session.agent
+    reason === "provider_auth" && session.agent && BROWSER_AUTH_KINDS.has(session.agent)
+      ? (session.agent as AgentKind)
       : null;
   const reconnectLabel =
-    reconnectKind === "codex" || reconnectKind === "codex-aisdk" ? "Codex" : "Claude";
+    reconnectKind === "codex" || reconnectKind === "codex-aisdk"
+      ? "Codex"
+      : reconnectKind === "grok"
+        ? "Grok"
+        : "Claude";
   const inlineAuth =
     sid && authFlow?.inlineSid === sid ? authFlow.session : null;
   const reconnected = !!sid && authFlow?.completedSid === sid;
@@ -18443,7 +18463,7 @@ function CodingAgentAuthPanel({
         const next = await api<CodingAgentAuthSession>(`/api/coding-agents/auth/${session.id}`);
         if (stopped) return;
         if (next.status === "complete") {
-          toast.success(`${next.provider === "claude" ? "Claude" : "Codex"} connected`);
+          toast.success(`${authProviderLabel(next.provider)} connected`);
           await onComplete();
           return;
         }
@@ -18483,7 +18503,7 @@ function CodingAgentAuthPanel({
     }
   }
 
-  const providerLabel = session.provider === "claude" ? "Claude" : "Codex";
+  const providerLabel = authProviderLabel(session.provider);
   return (
     <div className={cn("space-y-4", inline && "mt-3 rounded-xl border border-warning/25 bg-background/70 p-3")}>
       {session.status === "error" ? (
@@ -18497,7 +18517,11 @@ function CodingAgentAuthPanel({
         <>
           {session.userCode ? (
             <div className="rounded-2xl bg-muted px-4 py-4 text-center">
-              <p className="mb-2 text-xs text-muted-foreground">Enter this one-time code</p>
+              <p className="mb-2 text-xs text-muted-foreground">
+                {session.provider === "grok"
+                  ? "Confirm this code in your browser"
+                  : "Enter this one-time code"}
+              </p>
               <button
                 type="button"
                 onClick={() => {
@@ -18565,7 +18589,7 @@ function CodingAgentAuthDialog({
   onSessionChange: (session: CodingAgentAuthSession | null) => void;
   onComplete: () => void | Promise<void>;
 }) {
-  const providerLabel = session?.provider === "claude" ? "Claude" : "Codex";
+  const providerLabel = authProviderLabel(session?.provider);
   async function close() {
     if (session && session.status !== "complete") {
       await api(`/api/coding-agents/auth/${session.id}`, { method: "DELETE" }).catch(() => {});
@@ -18805,14 +18829,14 @@ function CodingAgentsPage({
                   disabled={!agent.status.canLoginInTerminal || agent.status.setupRunning}
                   onClick={() => onLogin(agent.key)}
                   title={
-                    agent.key === "aisdk" || agent.key === "codex-aisdk"
+                    BROWSER_AUTH_KINDS.has(agent.key)
                       ? `Sign in to ${agent.label} in your browser`
                       : agent.status.loginCommand
                         ? `Open terminal and run ${agent.status.loginCommand}`
                       : "No terminal login command is available"
                   }
                 >
-                  {agent.key === "aisdk" || agent.key === "codex-aisdk" ? (
+                  {BROWSER_AUTH_KINDS.has(agent.key) ? (
                     <Globe className="size-4" />
                   ) : (
                     <TerminalSquare className="size-4" />

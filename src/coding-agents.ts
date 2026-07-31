@@ -59,10 +59,19 @@ export type CodingAgentInfo = {
   status: CodingAgentStatus;
 };
 
+/** Providers whose CLI can drive a login from the browser instead of a terminal. */
+export type AuthProvider = "claude" | "codex" | "grok";
+
+const AUTH_PROVIDER_LABELS: Record<AuthProvider, string> = {
+  claude: "Claude",
+  codex: "Codex",
+  grok: "Grok",
+};
+
 export type CodingAgentAuthSession = {
   id: string;
   kind: CodingAgentKind;
-  provider: "claude" | "codex";
+  provider: AuthProvider;
   status: "starting" | "waiting" | "complete" | "error";
   authorizationUrl?: string;
   userCode?: string;
@@ -381,9 +390,20 @@ function hasCursorLfgMcp(): boolean {
   return commandHasLfgMcp(cursorPath());
 }
 
-function hasGrokAuth(): boolean {
-  const home = userHome();
-  return !!process.env.XAI_API_KEY || existsSync(`${home}/.grok`);
+// `grok login` writes ~/.grok/auth.json as a map of issuer::client-id -> entry,
+// and only a non-empty `key` proves a completed sign-in. The directory itself is
+// created by any grok invocation, so its existence is not evidence of auth.
+function hasGrokAccountAuth(): boolean {
+  try {
+    const raw = readFileSync(join(userHome(), ".grok", "auth.json"), "utf8");
+    const root = JSON.parse(raw) as Record<string, { key?: unknown } | null>;
+    if (!root || typeof root !== "object") return false;
+    return Object.values(root).some(
+      (entry) => !!entry && typeof entry.key === "string" && entry.key.length > 0,
+    );
+  } catch {
+    return false;
+  }
 }
 
 function hasCursorAuth(): boolean {
@@ -443,7 +463,7 @@ function loginCommandPartsFor(kind: CodingAgentKind): string[] | null {
     return [codexPath() ?? "codex", "login", "--device-auth"];
   }
   if (kind === "opencode") return [opencodePath() ?? "opencode"];
-  if (kind === "grok") return [grokPath() ?? "grok"];
+  if (kind === "grok") return [grokPath() ?? "grok", "login", "--device-auth"];
   if (kind === "cursor") return [cursorPath() ?? "cursor-agent", "login"];
   if (kind === "hermes") return [hermesPath() ?? "hermes"];
   if (kind === "copilot") return [copilotPath() ?? "copilot"];
@@ -453,10 +473,24 @@ function loginCommandPartsFor(kind: CodingAgentKind): string[] | null {
   return null;
 }
 
-function authProviderFor(kind: CodingAgentKind): "claude" | "codex" | null {
+function authProviderFor(kind: CodingAgentKind): AuthProvider | null {
   if (kind === "claude" || kind === "aisdk") return "claude";
   if (kind === "codex" || kind === "codex-aisdk") return "codex";
+  if (kind === "grok") return "grok";
   return null;
+}
+
+function authProviderBinary(provider: AuthProvider): string | null {
+  if (provider === "claude") return claudePath();
+  if (provider === "codex") return codexPath();
+  return grokPath();
+}
+
+function authProviderArgv(provider: AuthProvider, binary: string): string[] {
+  if (provider === "claude") return [binary, "auth", "login", "--claudeai"];
+  // Codex and Grok both expose an RFC 8628 device flow that prints a
+  // verification URL plus a short user code — no terminal interaction needed.
+  return [binary, "login", "--device-auth"];
 }
 
 /** Remove terminal control sequences before parsing or showing CLI output. */
@@ -468,11 +502,24 @@ export function cleanAuthOutput(value: string): string {
 }
 
 export function parseAuthOutput(
-  provider: "claude" | "codex",
+  provider: AuthProvider,
   raw: string,
 ): Pick<CodingAgentAuthSession, "authorizationUrl" | "userCode" | "needsCode"> {
   const output = cleanAuthOutput(raw);
   const authorizationUrl = output.match(/https:\/\/[^\s\x07\x1b]+/)?.[0];
+  if (provider === "grok") {
+    // `grok login --device-auth` prints (on stderr):
+    //   To sign in, open this URL in your browser:
+    //     https://accounts.x.ai/oauth2/device?user_code=4ZCY-6ZPQ
+    //   Confirm this code in your browser:
+    //     4ZCY-6ZPQ
+    // The verification URL already carries the code, so prefer reading it from
+    // there and fall back to the printed confirmation code.
+    const userCode =
+      output.match(/[?&]user_code=([A-Z0-9]{4,}-[A-Z0-9]{4,})/i)?.[1] ??
+      output.match(/this code[\s\S]{0,160}?\b([A-Z0-9]{4,}-[A-Z0-9]{4,})\b/i)?.[1];
+    return { authorizationUrl, userCode, needsCode: false };
+  }
   if (provider === "codex") {
     const userCode = output.match(/one-time code[\s\S]{0,160}?\b([A-Z0-9]{4,}-[A-Z0-9]{4,})\b/i)?.[1];
     return { authorizationUrl, userCode, needsCode: false };
@@ -526,8 +573,8 @@ async function collectAuthOutput(
 export async function startCodingAgentAuth(kind: CodingAgentKind): Promise<CodingAgentAuthSession> {
   const provider = authProviderFor(kind);
   if (!provider) throw new Error(`${CODING_AGENT_LABELS[kind]} does not support browser login yet`);
-  const binary = provider === "claude" ? claudePath() : codexPath();
-  if (!binary) throw new Error(`Install ${provider === "claude" ? "Claude" : "Codex"} before signing in`);
+  const binary = authProviderBinary(provider);
+  if (!binary) throw new Error(`Install ${AUTH_PROVIDER_LABELS[provider]} before signing in`);
 
   for (const existing of authSessions.values()) {
     if (existing.provider === provider && (existing.status === "starting" || existing.status === "waiting")) {
@@ -536,9 +583,7 @@ export async function startCodingAgentAuth(kind: CodingAgentKind): Promise<Codin
     }
   }
 
-  const argv = provider === "claude"
-    ? [binary, "auth", "login", "--claudeai"]
-    : [binary, "login", "--device-auth"];
+  const argv = authProviderArgv(provider, binary);
   const proc = Bun.spawn(argv, {
     cwd: userHome(),
     env: { ...process.env, BROWSER: "true" },
@@ -570,7 +615,7 @@ export async function startCodingAgentAuth(kind: CodingAgentKind): Promise<Codin
     } else if (session.status !== "complete") {
       const output = cleanAuthOutput(session.output).trim().split("\n").slice(-3).join(" ");
       session.status = "error";
-      session.error = output || `${provider === "claude" ? "Claude" : "Codex"} login was cancelled`;
+      session.error = output || `${AUTH_PROVIDER_LABELS[provider]} login was cancelled`;
     }
     session.markReady();
   });
@@ -692,9 +737,14 @@ function statusFor(kind: CodingAgentKind): CodingAgentStatus {
     addAuth("Copilot auth", hasCopilotAuth(), "run 'copilot' and /login, or set COPILOT_GITHUB_TOKEN / GH_TOKEN with the Copilot Requests scope");
     instructions.push("Install Copilot CLI (npm install -g @github/copilot; requires Node 22+), then run 'copilot' once and /login, or set COPILOT_GITHUB_TOKEN (or GH_TOKEN) with the Copilot Requests scope.");
   } else {
+    accountConnected = hasGrokAccountAuth();
     addBinary("Grok CLI", grokPath());
-    addAuth("Grok auth", hasGrokAuth(), "run `grok` once or set XAI_API_KEY");
-    instructions.push("Install Grok, then run `grok` once and sign in, or set XAI_API_KEY.");
+    addAuth(
+      "Grok auth",
+      accountConnected || !!process.env.XAI_API_KEY,
+      "use Login below or set XAI_API_KEY",
+    );
+    instructions.push("Use Login to sign in to Grok in your browser, or set XAI_API_KEY.");
   }
 
   return {

@@ -62,6 +62,45 @@ describe("coding agent browser auth output", () => {
     });
   });
 
+  test("extracts the Grok verification URL and device code", () => {
+    // Verbatim shape of `grok login --device-auth` (it writes to stderr).
+    const output = [
+      "",
+      "To sign in, open this URL in your browser:",
+      "",
+      "  https://accounts.x.ai/oauth2/device?user_code=4ZCY-6ZPQ",
+      "",
+      "Confirm this code in your browser:",
+      "",
+      "  4ZCY-6ZPQ",
+      "",
+      "\x1b[90mOnly continue with a code you requested. Don't share it with anyone.\x1b[0m",
+      "",
+      "Waiting for authorization...",
+    ].join("\r\n");
+
+    expect(parseAuthOutput("grok", output)).toEqual({
+      authorizationUrl: "https://accounts.x.ai/oauth2/device?user_code=4ZCY-6ZPQ",
+      userCode: "4ZCY-6ZPQ",
+      needsCode: false,
+    });
+  });
+
+  test("reads the Grok code from the printed confirmation when the URL omits it", () => {
+    const output = [
+      "To sign in, open this URL in your browser:",
+      "  https://accounts.x.ai/oauth2/device",
+      "Confirm this code in your browser:",
+      "  4ZCY-6ZPQ",
+    ].join("\n");
+
+    expect(parseAuthOutput("grok", output)).toEqual({
+      authorizationUrl: "https://accounts.x.ai/oauth2/device",
+      userCode: "4ZCY-6ZPQ",
+      needsCode: false,
+    });
+  });
+
   test("extracts Claude's OSC hyperlink and detects its code prompt", () => {
     const url = "https://claude.com/cai/oauth/authorize?code=true&state=abc";
     const output = `Opening browser…\r\nIf it didn't open: \x1b]8;;${url}\x07${url}\x1b]8;;\x07\r\nPaste code here if prompted > `;
@@ -123,6 +162,64 @@ describe("coding agent auth detection", () => {
     mkdirSync(join(home, ".copilot"), { recursive: true });
     writeFileSync(join(home, ".copilot", "hosts.yml"), "github.com: {}\n");
     expect(await copilotAuthOk()).toBe(true);
+  });
+
+  const grokStatus = async (home: string) => {
+    const grok = join(home, "grok");
+    writeFileSync(grok, "#!/bin/sh\nexit 0\n");
+    chmodSync(grok, 0o755);
+    setEnv("LFG_GROK_PATH", grok);
+    const agents = await listCodingAgents();
+    const agent = agents.find((a) => a.key === "grok");
+    if (!agent) throw new Error("grok agent not registered");
+    return agent.status;
+  };
+
+  const useGrokHome = () => {
+    const home = useTmpHome();
+    setEnv("XAI_API_KEY", undefined);
+    return home;
+  };
+
+  test("an empty ~/.grok/ directory is NOT proof of a Grok login", async () => {
+    const home = useGrokHome();
+    // Any `grok` invocation creates ~/.grok — only a saved token is a login.
+    mkdirSync(join(home, ".grok"), { recursive: true });
+    const status = await grokStatus(home);
+    expect(status.accountConnected).toBe(false);
+    expect(status.configured).toBe(false);
+  });
+
+  test("a saved Grok OIDC token counts as a connected account", async () => {
+    const home = useGrokHome();
+    mkdirSync(join(home, ".grok"), { recursive: true });
+    writeFileSync(
+      join(home, ".grok", "auth.json"),
+      JSON.stringify({
+        "https://auth.x.ai::b1a00492-073a-47ea-816f-4c329264a828": {
+          key: "xai-access-token",
+          refresh_token: "xai-refresh-token",
+        },
+      }),
+    );
+    const status = await grokStatus(home);
+    expect(status.accountConnected).toBe(true);
+    expect(status.configured).toBe(true);
+  });
+
+  test("an auth.json with no token is not a Grok login", async () => {
+    const home = useGrokHome();
+    mkdirSync(join(home, ".grok"), { recursive: true });
+    writeFileSync(join(home, ".grok", "auth.json"), JSON.stringify({ "https://auth.x.ai::x": {} }));
+    expect((await grokStatus(home)).accountConnected).toBe(false);
+  });
+
+  test("a platform XAI key makes Grok runnable without claiming the account is connected", async () => {
+    const home = useGrokHome();
+    setEnv("XAI_API_KEY", "platform_test_key");
+    const status = await grokStatus(home);
+    expect(status.configured).toBe(true);
+    expect(status.accountConnected).toBe(false);
   });
 
   test("a platform OpenAI key makes Codex runnable without claiming the account is connected", async () => {
