@@ -164,7 +164,7 @@ import {
 } from "../live-ws.ts";
 import { appendCmd as appendAisdkCmd, removeEntry as removeAisdkEntry, readEntry as readAisdkEntry, findEntryByAnyId as findAisdkEntryByAnyId, isEntryBusy as isAisdkEntryBusy } from "../aisdk-registry.ts";
 import { markClosed } from "../closing.ts";
-import { assignUser, rosterEmails, userRoster } from "../users.ts";
+import { assignUser, resolveSessionUserTag, rosterEmails, userRoster } from "../users.ts";
 import {
   addOnboardingProfile,
   getOnboarding,
@@ -4427,10 +4427,15 @@ export async function cmdServe() {
         // ANCESTOR — not just the immediate parent, which may itself be an
         // unassigned subagent mid-chain (the historic way subagents lost their
         // user tag and became untraceable in per-user views).
-        const requestedUser = body?.user?.trim() || undefined;
-        if (requestedUser && !rosterEmails().includes(requestedUser))
-          return err(400, `unknown user "${requestedUser}" (expected one of the roster emails)`);
-        let assignedUser = requestedUser;
+        //
+        // EXCEPT on a roster-less instance — see resolveSessionUserTag. Only
+        // session CREATE is relaxed; the explicit assign endpoints stay strict,
+        // because "assign this to X" against an empty roster has no correct
+        // answer and should fail rather than silently no-op.
+        const tag = resolveSessionUserTag(body?.user);
+        if (!tag.ok)
+          return err(400, `unknown user "${tag.unknown}" (expected one of the roster emails)`);
+        let assignedUser = tag.user;
         if (!assignedUser && parent) {
           let cursor: (typeof liveRows)[number] | undefined = parent;
           const walked = new Set<string>();
