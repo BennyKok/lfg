@@ -146,6 +146,8 @@ import {
   MemoryStick,
   Maximize2,
   ChevronRight,
+  Eye,
+  EyeOff,
   Folder,
   GitFork,
   KeyRound,
@@ -188,6 +190,7 @@ import { toast } from "@/lib/notify";
 import { haptic } from "@/lib/haptics";
 import { feedback } from "@/lib/feedback";
 import { useUiFeedbackPrefs, setUiFeedbackPrefs } from "@/lib/ui-feedback-prefs";
+import { useProjectListPrefs, setProjectListPrefs } from "@/lib/project-list-prefs";
 import { useSendMorph } from "@/lib/use-send-morph";
 import { reportError } from "./lib/report-error";
 import { lazyWithReload } from "./lib/lazy-with-reload";
@@ -15225,58 +15228,133 @@ function ComposerProjectSheet({
   allSelected?: boolean;
   onSelectAll?: () => void;
 }) {
+  // Paths are off by default: the folder name is almost always enough to pick
+  // from, and dropping the second line halves each row so twice as many
+  // projects fit before you have to scroll.
+  const { showPaths } = useProjectListPrefs();
+  const [query, setQuery] = useState("");
+
+  // A search box only earns its space once the list is long enough that
+  // scanning it is the slow part.
+  const searchable = repos.length > 7;
+  const needle = searchable ? query.trim().toLowerCase() : "";
+
+  // Reset the filter between openings so the sheet never reopens pre-filtered.
+  useEffect(() => {
+    if (!open) setQuery("");
+  }, [open]);
+
+  const visibleRepos = useMemo(() => {
+    if (!needle) return repos;
+    return repos.filter(
+      (repo) =>
+        repo.name.toLowerCase().includes(needle) ||
+        repo.cwd.toLowerCase().includes(needle),
+    );
+  }, [repos, needle]);
+
+  const rowClass = cn(
+    "flex w-full items-center gap-2.5 border-b border-border px-3 text-left last:border-0 active:bg-muted",
+    showPaths ? "py-2.5" : "py-2",
+  );
+
   return (
     <Drawer open={open} onOpenChange={onOpenChange} shouldScaleBackground={false}>
       <DrawerContent className="mx-auto max-h-[78dvh] max-w-lg overflow-hidden">
         <DrawerTitle className="sr-only">Projects</DrawerTitle>
         <div className="flex min-h-0 flex-col px-4 pb-[max(var(--lfg-safe-bottom),1rem)]">
-          <div className="mb-3 flex items-center justify-between">
-            <div>
+          <div className="mb-2.5 flex items-start justify-between gap-2">
+            <div className="min-w-0">
               <h2 className="text-lg font-semibold">Projects</h2>
               <p className="text-xs text-muted-foreground">Choose where your agent will work</p>
             </div>
-            <button type="button" onClick={() => onOpenChange(false)} className="flex size-8 items-center justify-center rounded-full bg-muted" aria-label="Close">
-              <X className="size-4" />
-            </button>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setProjectListPrefs({ showPaths: !showPaths })}
+                aria-pressed={showPaths}
+                title={showPaths ? "Hide folder paths" : "Show folder paths"}
+                className={cn(
+                  "flex h-8 items-center gap-1.5 rounded-full px-2.5 text-xs font-medium transition-colors",
+                  showPaths ? "bg-blue-500/15 text-blue-500" : "bg-muted text-muted-foreground",
+                )}
+              >
+                {showPaths ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
+                Paths
+              </button>
+              <button type="button" onClick={() => onOpenChange(false)} className="flex size-8 items-center justify-center rounded-full bg-muted" aria-label="Close">
+                <X className="size-4" />
+              </button>
+            </div>
           </div>
-          <div className="max-h-[20dvh] min-h-0 overflow-y-auto rounded-2xl border border-border bg-muted/25">
-            {onSelectAll ? (
+          {searchable ? (
+            <div className="relative mb-2">
+              <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+              {/* Deliberately not autofocused — on mobile the keyboard would
+                  swallow the extra rows this redesign just bought. */}
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={`Search ${repos.length} projects`}
+                aria-label="Search projects"
+                className="h-9 w-full rounded-xl border border-border bg-muted/25 pl-8 pr-3 text-sm outline-none placeholder:text-muted-foreground focus:border-blue-500/50"
+              />
+            </div>
+          ) : null}
+          {/* data-vaul-no-drag keeps a vertical swipe inside the list scrolling
+              the list instead of dragging the whole sheet closed — with the old
+              20dvh window almost every flick hit the drawer's drag handler. */}
+          <div
+            data-vaul-no-drag
+            className="max-h-[min(52dvh,26rem)] min-h-0 overflow-y-auto overscroll-contain rounded-2xl border border-border bg-muted/25"
+          >
+            {onSelectAll && !needle ? (
               <button
                 type="button"
                 onClick={onSelectAll}
-                className="flex w-full items-center gap-3 border-b border-border px-3 py-3 text-left active:bg-muted"
+                className={rowClass}
               >
-                <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
                   <Folder className="size-4" />
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium">All projects</span>
-                  <span className="block truncate text-xs text-muted-foreground">
-                    Show every session
-                  </span>
+                  {showPaths ? (
+                    <span className="block truncate text-xs text-muted-foreground">
+                      Show every session
+                    </span>
+                  ) : null}
                 </span>
                 {allSelected ? (
-                  <Check className="size-4 text-emerald-500" />
+                  <Check className="size-4 shrink-0 text-emerald-500" />
                 ) : (
-                  <ChevronRight className="size-4 text-muted-foreground" />
+                  <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
                 )}
               </button>
             ) : null}
-            {repos.map((repo) => (
+            {visibleRepos.map((repo) => (
               <button
                 key={repo.cwd}
                 type="button"
                 onClick={() => onSelect(repo)}
-                className="flex w-full items-center gap-3 border-b border-border px-3 py-3 text-left last:border-0 active:bg-muted"
+                className={rowClass}
               >
-                <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-blue-500/10 text-blue-500"><Folder className="size-4" /></span>
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-blue-500/10 text-blue-500"><Folder className="size-4" /></span>
                 <span className="min-w-0 flex-1">
                   <span className="block truncate text-sm font-medium">{repo.name}</span>
-                  <span className="block truncate text-xs text-muted-foreground">{repo.cwd}</span>
+                  {showPaths ? (
+                    <span className="block truncate text-xs text-muted-foreground">{repo.cwd}</span>
+                  ) : null}
                 </span>
-                {repo.cwd === selected ? <Check className="size-4 text-emerald-500" /> : <ChevronRight className="size-4 text-muted-foreground" />}
+                {repo.cwd === selected ? <Check className="size-4 shrink-0 text-emerald-500" /> : <ChevronRight className="size-4 shrink-0 text-muted-foreground" />}
               </button>
             ))}
+            {visibleRepos.length === 0 ? (
+              <p className="px-3 py-6 text-center text-xs text-muted-foreground">
+                {needle ? `No projects match "${query.trim()}"` : "No projects yet"}
+              </p>
+            ) : null}
           </div>
           <div className="mt-3 grid grid-cols-2 gap-2">
             <Button type="button" variant="outline" onClick={onBrowse}><Folder className="size-4" /> Browse</Button>
