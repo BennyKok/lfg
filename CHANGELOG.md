@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 31, 2026 - OpenCode's safe default everywhere (v0.1.165)
+
+- New and resumed OpenCode sessions now resolve their default from the same
+  live catalog shown in the picker. The server can no longer bypass the picker
+  and silently launch the removed `opencode-go` provider when no model was
+  supplied.
+
 ## July 31, 2026 - Hosted model choices that actually run (v0.1.164)
 
 - Skipping account setup in an omg hosted Computer now leaves one honest
