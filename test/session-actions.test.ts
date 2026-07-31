@@ -16,6 +16,17 @@ function section(start: string, end: string): string {
 }
 
 describe("session lifecycle actions", () => {
+  test("keeps token usage reachable from the session menu", () => {
+    const dropdown = section(
+      "function SessionActionsMenu(",
+      "function RailSessionContextMenu(",
+    );
+
+    expect(dropdown).toContain("<SessionTokenUsageDialog");
+    expect(dropdown).toContain("setTokenUsageOpen(true)");
+    expect(dropdown).toMatch(/<Gauge[^>]*\/>\s*Token usage/);
+  });
+
   test("only offers Stop while the session is busy", () => {
     const dropdown = section(
       "function SessionActionsMenu(",

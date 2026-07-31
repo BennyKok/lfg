@@ -39,6 +39,11 @@ import {
 import { makeDraftPublisher } from "./draft.ts";
 import { readFileSync, statSync } from "node:fs";
 import { claudeAccountEnv } from "../../claude-creds.ts";
+import {
+  readStoredSessionTokenUsage,
+  writeStoredSessionTokenUsage,
+  type ClaudeContextUsageSnapshot,
+} from "../../session-token-usage.ts";
 
 function arg(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(name);
@@ -200,6 +205,63 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
   let closing = false;
   let draft = "";
   let busy = false;
+  const previousUsage = readStoredSessionTokenUsage(sessionId);
+  let sessionTotals = previousUsage?.totals ?? {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    reasoning: 0,
+    total: 0,
+    costUsd: 0,
+  };
+  let contextUsage = previousUsage?.context ?? null;
+  let usageRefresh = 0;
+
+  const persistUsage = () => {
+    writeStoredSessionTokenUsage(sessionId, {
+      updatedAt: Date.now(),
+      model,
+      context: contextUsage,
+      totals: sessionTotals,
+    });
+  };
+
+  const refreshUsageSnapshot = () => {
+    const request = ++usageRefresh;
+    void Promise.allSettled([
+      q.getContextUsage(),
+      q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET(),
+    ])
+      .then(([contextResult, totalsResult]) => {
+        if (request !== usageRefresh) return;
+        if (contextResult.status === "fulfilled") {
+          contextUsage = contextResult.value as ClaudeContextUsageSnapshot;
+        }
+        if (totalsResult.status === "fulfilled") {
+          const reported = totalsResult.value.session;
+          const modelTotals = Object.values(reported.model_usage);
+          const input = modelTotals.reduce((sum, row) => sum + row.inputTokens, 0);
+          const output = modelTotals.reduce((sum, row) => sum + row.outputTokens, 0);
+          const cacheRead = modelTotals.reduce((sum, row) => sum + row.cacheReadInputTokens, 0);
+          const cacheWrite = modelTotals.reduce(
+            (sum, row) => sum + row.cacheCreationInputTokens,
+            0,
+          );
+          sessionTotals = {
+            input,
+            output,
+            cacheRead,
+            cacheWrite,
+            reasoning: 0,
+            total: input + output + cacheRead + cacheWrite,
+            costUsd: reported.total_cost_usd,
+          };
+        }
+        persistUsage();
+      })
+      .catch(() => {});
+  };
 
   // Busy is ACTIVITY-DRIVEN, not turn-counted. The SDK's streaming input may
   // merge a queued/steering send into the running turn, so `result` events do
@@ -281,6 +343,25 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
       return;
     }
     if (type === "result") {
+      const result = msg as {
+        usage?: Record<string, unknown>;
+        total_cost_usd?: number;
+      };
+      const usage = result.usage;
+      if (usage) {
+        const input = Number(usage.input_tokens) || 0;
+        const output = Number(usage.output_tokens) || 0;
+        const cacheRead = Number(usage.cache_read_input_tokens) || 0;
+        const cacheWrite = Number(usage.cache_creation_input_tokens) || 0;
+        sessionTotals.input += input;
+        sessionTotals.output += output;
+        sessionTotals.cacheRead += cacheRead;
+        sessionTotals.cacheWrite += cacheWrite;
+        sessionTotals.total += input + output + cacheRead + cacheWrite;
+        sessionTotals.costUsd = (sessionTotals.costUsd ?? 0) + (Number(result.total_cost_usd) || 0);
+        persistUsage();
+        refreshUsageSnapshot();
+      }
       const errText =
         (msg as { subtype?: string }).subtype !== "success"
           ? String((msg as { result?: unknown }).result ?? (msg as { subtype?: string }).subtype)

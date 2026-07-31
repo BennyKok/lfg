@@ -59,6 +59,7 @@ import {
 } from "../session-diff.ts";
 import { reportClientError, listClientErrors } from "../client-errors.ts";
 import { getAllUsage } from "../usage.ts";
+import { sessionTokenUsage } from "../session-token-usage.ts";
 import {
   vapidPublicKey,
   saveSubscription,
@@ -91,6 +92,7 @@ import {
   refreshResumableCache,
   cwdForTranscript,
   cwdForCodexTranscript,
+  findCodexTranscriptById,
   type PendingPrompt,
   type Session,
   type SessionMsg,
@@ -5405,6 +5407,29 @@ export async function cmdServe() {
 
       // Non-streaming transcript read — lets an orchestrator or LFG MCP client
       // inspect what another session is doing without holding an SSE connection.
+      {
+        const m = path.match(/^\/api\/sessions\/([0-9a-fA-F-]{36})\/token-usage$/);
+        if (m && req.method === "GET") {
+          let transcriptPath = await resolveTranscript(m[1]);
+          // Direct-indexed SDK sessions render from their synthetic lfg://
+          // conversation key, while Codex's authoritative token_count events
+          // remain in the native rollout transcript. Follow the native id only
+          // for usage accounting; chat ordering still belongs to the index.
+          if (transcriptPath?.startsWith("lfg://")) {
+            const session = (await listSessionsCached()).find(
+              (candidate) =>
+                candidate.sessionId === m[1] || candidate.nativeSessionId === m[1],
+            );
+            if (session?.nativeSessionId && session.nativeSessionId !== m[1]) {
+              transcriptPath =
+                (await findCodexTranscriptById(session.nativeSessionId).catch(() => null)) ??
+                transcriptPath;
+            }
+          }
+          return json(await sessionTokenUsage(m[1], transcriptPath));
+        }
+      }
+
       {
         const m = path.match(/^\/api\/sessions\/([0-9a-fA-F-]{36})\/messages$/);
         if (m && req.method === "GET") {
