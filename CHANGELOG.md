@@ -4,6 +4,22 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 31, 2026 - Resuming a session whose worktree was cleaned up (v0.1.162)
+
+- Resuming certain sessions started and then immediately stopped, with nothing
+  in the transcript to explain it. Affected sessions were ones whose per-session
+  worktree had since been reclaimed by the automatic cleanup sweep.
+- Claude files each conversation under a folder named after the directory the
+  session ran in, and finds it again the same way. Once that directory was
+  swept, LFG correctly fell back to the repo root — but the conversation was
+  still filed under the deleted path, so Claude reported no such conversation
+  and quit before the session ever came up.
+- LFG now re-files the conversation under the directory it is resuming into, so
+  the session comes back with its history intact. Nothing is moved or deleted;
+  the original transcript stays where it was.
+- If no stored conversation can be found at all, the resume now starts a fresh
+  one and says so in the log, instead of failing silently.
+
 ## July 31, 2026 - Logo weight matched to the original (v0.1.161)
 
 - The vector wordmark now sits at the same size and weight the mark had before

@@ -193,6 +193,7 @@ import {
 } from "../repos-store.ts";
 import { projectName, reposRoot } from "../projects.ts";
 import { resolveSessionCwd, startWorktreeSweep } from "../worktree.ts";
+import { ensureConversationVisibleFrom } from "../claude-conversation.ts";
 import {
   synthesizeTts,
   transcribeStt,
@@ -3938,6 +3939,21 @@ export async function cmdServe() {
             repoRoot: repoRootForManagedCwd(cwd),
           });
           if (assignedUser) assignUser(tmuxName, assignedUser);
+          // Claude resolves `--resume <id>` against the project dir derived from
+          // the cwd it launches in. When a session's worktree has been reclaimed
+          // by the sweeper we resume into a fallback cwd, and the conversation —
+          // still filed under the deleted worktree's path — becomes invisible.
+          // Claude then exits immediately with "No conversation found with
+          // session ID", killing the harness before it registers, which surfaces
+          // as a resume that starts and instantly stops. Re-file it first.
+          if (cachedResume.backend === "aisdk") {
+            const located = ensureConversationVisibleFrom(cwd, resumeHandle);
+            if (located === "copied") {
+              console.log(`[resume] re-filed conversation ${resumeHandle.slice(0, 8)} under ${cwd}`);
+            } else if (located === "missing") {
+              console.log(`[resume] no stored conversation for ${resumeHandle.slice(0, 8)}; starting fresh`);
+            }
+          }
           const prompt = body?.prompt?.trim() || undefined;
           const spawned = cachedResume.backend === "codex-aisdk"
             ? spawnManagedCodexAisdkSession({
