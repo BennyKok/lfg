@@ -13908,8 +13908,15 @@ const ChatStream = memo(function ChatStream({
     </Conversation>
     {/* Floating jump-to-latest control: appears once the user scrolls away
         from the bottom. The wrapper is click-through so it never blocks taps
-        on the messages beneath it. */}
-    <div className="pointer-events-none absolute inset-x-0 bottom-3 z-10 flex justify-center">
+        on the messages beneath it. When the "files changed / Review" bar is up
+        it owns the bottom slot, so the pill stacks directly above it instead of
+        being covered by it. */}
+    <div
+      className={cn(
+        "pointer-events-none absolute inset-x-0 z-10 flex justify-center transition-[bottom] duration-200 ease-out",
+        diffBarVisible ? "bottom-14" : "bottom-3",
+      )}
+    >
       <button
         type="button"
         onClick={scrollToBottom}
