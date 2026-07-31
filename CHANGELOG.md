@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 31, 2026 - Jump to latest stays reachable (v0.1.153)
+
+- The scroll-to-latest pill no longer disappears behind the "files changed /
+  Review" bar. When a session has diffs, the pill stacks just above the diff
+  bar so you can always jump back to the newest activity.
+
 ## July 31, 2026 - Hosted composers send to the selected Computer (v0.1.152)
 
 - Fixes the embedded text composer sending messages to the host dashboard
