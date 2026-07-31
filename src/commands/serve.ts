@@ -150,7 +150,7 @@ import {
   tmuxHasSession,
   isBusy,
 } from "../tmux.ts";
-import { addManaged, listManaged, patchManaged, removeManaged } from "../managed.ts";
+import { addManaged, listManaged, patchManaged, removeManaged, type ManagedSession } from "../managed.ts";
 import { PtyBridge, termSessionName } from "../pty.ts";
 import { capturePaneScroll, capturePaneEscaped, paneWidth } from "../tmux.ts";
 import { detectUrls } from "../links.ts";
@@ -4712,7 +4712,12 @@ export async function cmdServe() {
           // so offset/total always describe the filtered set.
           const kindFilter = url.searchParams.get("kind");
           const titles = await readTitleOverrides();
-          const managed = listManaged();
+          // Same as the shipped feed: index once, look up per row.
+          const managedBySession = new Map<string, ManagedSession>();
+          for (const session of listManaged()) {
+            if (session.sessionId) managedBySession.set(session.sessionId, session);
+            if (session.nativeSessionId) managedBySession.set(session.nativeSessionId, session);
+          }
           const all = listAllArtifacts().filter(
             (artifact) => !kindFilter || (artifact.media ?? "image") === kindFilter,
           );
@@ -4731,10 +4736,7 @@ export async function cmdServe() {
               caption: artifact.caption,
               sessionId: artifact.sessionId,
               sessionTitle:
-                titles[artifact.sessionId] ??
-                managed.find(
-                  (m2) => m2.sessionId === artifact.sessionId || m2.nativeSessionId === artifact.sessionId,
-                )?.title,
+                titles[artifact.sessionId] ?? managedBySession.get(artifact.sessionId)?.title,
               ts: artifact.updatedAt ?? artifact.createdAt,
               lastRefreshedAt: artifact.refresh?.lastSuccessAt,
               refreshStatus: artifact.refresh?.status,
@@ -4749,12 +4751,18 @@ export async function cmdServe() {
         if (m && req.method === "GET") {
           const artifact = getImageArtifact(m[1]);
           if (!artifact) return err(404, "artifact not found");
-          const wantsPreview = url.searchParams.get("preview") === "1";
+          // `preview=1` is the ~1200px in-transcript size; `preview=thumb` is
+          // the 160px size the Notification Center's 52px squares use.
+          const previewParam = url.searchParams.get("preview");
+          const wantsPreview = previewParam === "1" || previewParam === "thumb";
           let filePath = artifact.filePath;
           let contentType = artifact.mimeType;
           if (wantsPreview && (artifact.media ?? "image") === "image") {
             try {
-              filePath = await getOrCreateImagePreview(artifact);
+              filePath = await getOrCreateImagePreview(
+                artifact,
+                previewParam === "thumb" ? "thumb" : "preview",
+              );
               contentType = "image/webp";
             } catch (error) {
               // A corrupt/unsupported input should not leave the transcript with
@@ -5126,14 +5134,17 @@ export async function cmdServe() {
           const limit = Math.min(Number(url.searchParams.get("limit")) || 50, 200);
           const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
           const titles = await readTitleOverrides();
-          const managed = listManaged();
+          // Index the registry once instead of scanning it per post: a post
+          // may be keyed by either the LFG or the native session id, so both
+          // point at the same record.
+          const managedBySession = new Map<string, ManagedSession>();
+          for (const session of listManaged()) {
+            if (session.sessionId) managedBySession.set(session.sessionId, session);
+            if (session.nativeSessionId) managedBySession.set(session.nativeSessionId, session);
+          }
           const page = listShipPosts(limit, offset);
           const posts = page.posts.map((post) => {
-            const source = post.sessionId
-              ? managed.find(
-                  (s) => s.sessionId === post.sessionId || s.nativeSessionId === post.sessionId,
-                )
-              : undefined;
+            const source = post.sessionId ? managedBySession.get(post.sessionId) : undefined;
             return {
               ...post,
               project: post.project ?? source?.project,

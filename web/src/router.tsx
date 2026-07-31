@@ -53,7 +53,8 @@ const tabRoute = createRoute({
   path: "$tab",
   validateSearch: validateAppSearch,
   beforeLoad: ({ params, search }) => {
-    if (params.tab !== "shipped") return;
+    // `/shipped` and `/ask` both resolve to the Notification Center now.
+    if (params.tab !== "shipped" && params.tab !== "ask") return;
     throw redirect({
       to: "/$tab",
       params: { tab: "notifications" },

@@ -7,6 +7,7 @@
 // behalf). Answers wake any blocked long-poll via an in-memory waiter map.
 
 import { mkdir } from "node:fs/promises";
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { PATHS } from "../config.ts";
@@ -43,9 +44,10 @@ async function ensure() {
 }
 
 // ---------- in-memory long-poll waiters ----------
-// Resolvers keyed by question id. answerQuestion()/expireQuestion() fire them so
-// a blocked POST /api/ask returns the moment a human responds. Purely in-memory:
-// a waiter cannot outlive the request that created it.
+// Resolvers keyed by question id. Anything that resolves a question — an
+// answer, a dismissal, the TTL sweep — fires them, so a blocked POST /api/ask
+// returns the moment a human responds. Purely in-memory: a waiter cannot
+// outlive the request that created it.
 const waiters = new Map<string, Set<(q: AskQuestion) => void>>();
 
 function wake(q: AskQuestion) {
@@ -80,15 +82,48 @@ export function waitForAnswer(id: string, timeoutMs: number): Promise<AskQuestio
 
 // ---------- persistence ----------
 
+// The web client polls the open-question list every 5s, and each poll re-read,
+// re-parsed and re-sorted the whole store. Keep the parsed rows while the file
+// on disk is unchanged; mtime+size means a write from another process (the MCP
+// server answers questions out-of-band) is picked up on the next read.
+//
+// Every mutator here rewrites the whole file through `writeAll`, which drops
+// this cache explicitly.
+//
+// The subtle part is writes from ANOTHER process. Unlike an append-only log,
+// a whole-file rewrite can land on the same byte length, and the kernel stamps
+// mtime at timer-tick resolution — two writes inside one tick share a
+// timestamp. mtime+size alone would then serve a stale parse and lose the
+// write. So an entry is only memoized once the file has been quiet longer than
+// that window: any later rewrite is guaranteed a newer stamp. Steady state
+// (a store nobody has touched for seconds, polled every 5s) still caches.
+const STAT_SETTLE_MS = 1_000;
+let questionsCache: { mtimeMs: number; size: number; rows: AskQuestion[] } | null = null;
+
 export async function listQuestions(status?: AskStatus): Promise<AskQuestion[]> {
-  const f = Bun.file(path());
-  if (!(await f.exists())) return [];
-  const rows = (await f.text())
+  let stat: { mtimeMs: number; size: number };
+  try {
+    stat = statSync(path());
+  } catch {
+    questionsCache = null;
+    return [];
+  }
+  const cached = questionsCache;
+  // Callers mutate what they get back (`addQuestion` pushes onto it), so the
+  // cached array is never handed out directly.
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    return status ? cached.rows.filter((r) => r.status === status) : cached.rows.slice();
+  }
+  const rows = (await Bun.file(path()).text())
     .split("\n")
     .filter((l) => l.trim())
     .map((l) => JSON.parse(l) as AskQuestion);
   rows.sort((a, b) => b.createdAt - a.createdAt);
-  return status ? rows.filter((r) => r.status === status) : rows;
+  questionsCache =
+    Date.now() - stat.mtimeMs >= STAT_SETTLE_MS
+      ? { mtimeMs: stat.mtimeMs, size: stat.size, rows }
+      : null;
+  return status ? rows.filter((r) => r.status === status) : rows.slice();
 }
 
 export async function getQuestion(id: string): Promise<AskQuestion | null> {
@@ -97,10 +132,14 @@ export async function getQuestion(id: string): Promise<AskQuestion | null> {
 
 async function writeAll(rows: AskQuestion[]): Promise<void> {
   await ensure();
+  // Invalidate around the write, not just after it: a read that lands while
+  // the file is half-rewritten must not be able to leave a cache entry behind.
+  questionsCache = null;
   await Bun.write(
     path(),
     rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : ""),
   );
+  questionsCache = null;
 }
 
 export async function addQuestion(input: {
@@ -172,21 +211,6 @@ export async function markHandled(id: string): Promise<AskQuestion | null> {
   return found;
 }
 
-export async function expireQuestion(id: string): Promise<void> {
-  const rows = await listQuestions();
-  let found: AskQuestion | null = null;
-  const next = rows.map((r) => {
-    if (r.id === id && r.status === "open") {
-      found = { ...r, status: "expired" };
-      return found;
-    }
-    return r;
-  });
-  if (!found) return;
-  await writeAll(next);
-  wake(found);
-}
-
 /**
  * Dismiss an open question without delivering an answer to the asking agent.
  * Already-resolved questions are returned unchanged so retries are idempotent.
@@ -230,7 +254,7 @@ export const ASK_TTL_MS = 6 * 60 * 60 * 1000;
  * handed out a stale question, and a no-op sweep never writes at all.
  *
  * Long-poll waiters are woken (an expired question resolves the poll rather
- * than hanging it to the timeout), matching `expireQuestion`.
+ * than hanging it to the timeout) instead of being left to time out.
  */
 export async function sweepExpiredQuestions(ttlMs: number = ASK_TTL_MS): Promise<AskQuestion[]> {
   const rows = await listQuestions();

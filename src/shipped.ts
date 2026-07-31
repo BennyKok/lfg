@@ -46,9 +46,12 @@ export type ShipPostRevision = {
   media: string[];
 };
 
-export type ShipPostHydrated = ShipPostRevision & {
+// What a feed page actually renders. The raw `media` id array is dropped (it
+// duplicates `mediaItems`), the gallery is capped at what a card can show, and
+// the summary is clamped — a poll every 15s shouldn't ship the full 2000-char
+// body of every post to draw a few lines of caption.
+export type ShipPostHydrated = Omit<ShipPostRevision, "media"> & {
   firstTs: number;
-  revisions: number;
   mediaItems: Array<{
     artifactId: string;
     kind: "image" | "video" | "html";
@@ -60,7 +63,27 @@ export type ShipPostHydrated = ShipPostRevision & {
     lastRefreshedAt?: number;
     refreshStatus?: "idle" | "running" | "success" | "error";
   }>;
+  // Attachments on the post, including the ones past the `mediaItems` cap.
+  mediaTotal: number;
+  // Present only when `summary` was cut; the stored revision keeps the full text.
+  summaryTruncated?: boolean;
 };
+
+// A card shows at most four tiles, so hydrating (and shipping) more is waste.
+const MAX_FEED_MEDIA = 4;
+// Feed captions are a few lines; the detail view refetches nothing, but a
+// clamped body is still an order of magnitude less JSON per poll.
+const MAX_FEED_SUMMARY = 400;
+
+// Clamp on a word break when one falls near the end, so the cut doesn't land
+// mid-word; otherwise take the hard limit. The ellipsis is inside the budget.
+function clampSummary(summary: string | undefined): { text?: string; truncated: boolean } {
+  if (!summary || summary.length <= MAX_FEED_SUMMARY) return { text: summary, truncated: false };
+  const head = summary.slice(0, MAX_FEED_SUMMARY - 1);
+  const brk = head.lastIndexOf(" ");
+  const cut = brk > MAX_FEED_SUMMARY * 0.7 ? head.slice(0, brk) : head;
+  return { text: cut.trimEnd() + "…", truncated: true };
+}
 
 // Downscale + re-encode a screenshot before it enters the artifact store.
 // Returns the artifact-ready path (a temp file the caller may clean up) or
@@ -90,11 +113,20 @@ async function optimizeImageForStore(path: string): Promise<{ path: string; temp
 // arrays), so handing them the shared array is safe. Treat it as read-only.
 let revisionsCache: { mtimeMs: number; size: number; rows: ShipPostRevision[] } | null = null;
 
-function readRevisions(): ShipPostRevision[] {
-  let stat: { mtimeMs: number; size: number };
+// The cache key for both memoized layers below. Every write to the log is an
+// append, so mtime+size moves on any change from any process.
+function fileKey(): { mtimeMs: number; size: number } | null {
   try {
-    stat = statSync(FILE);
+    const stat = statSync(FILE);
+    return { mtimeMs: stat.mtimeMs, size: stat.size };
   } catch {
+    return null;
+  }
+}
+
+function readRevisions(): ShipPostRevision[] {
+  const stat = fileKey();
+  if (!stat) {
     revisionsCache = null;
     return [];
   }
@@ -118,6 +150,40 @@ function readRevisions(): ShipPostRevision[] {
   }
   revisionsCache = { mtimeMs: stat.mtimeMs, size: stat.size, rows };
   return rows;
+}
+
+type ShipPostMerged = ShipPostRevision & { firstTs: number; revisions: number };
+
+// Second memoized layer: the log is revisions, the feed is posts. Collapsing
+// one into the other is a full pass over every revision plus a sort of every
+// post — paid on each poll to hand back a 15-post page. Key it on the same
+// file stat as `revisionsCache` so both layers turn over together on a ship.
+//
+// Rows are shared with callers, which only ever copy fields out of them.
+// Treat as read-only.
+let mergedCache: { mtimeMs: number; size: number; posts: ShipPostMerged[] } | null = null;
+
+function readMergedPosts(): ShipPostMerged[] {
+  const stat = fileKey();
+  const cached = mergedCache;
+  if (stat && cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    return cached.posts;
+  }
+  const byId = new Map<string, ShipPostRevision[]>();
+  for (const row of readRevisions()) {
+    const list = byId.get(row.id);
+    if (list) list.push(row);
+    else byId.set(row.id, [row]);
+  }
+  const posts = [...byId.values()]
+    .map((revs) => {
+      revs.sort((a, b) => a.rev - b.rev);
+      const latest = revs[revs.length - 1];
+      return { ...latest, firstTs: revs[0].ts, revisions: revs.length };
+    })
+    .sort((a, b) => b.ts - a.ts);
+  mergedCache = stat ? { mtimeMs: stat.mtimeMs, size: stat.size, posts } : null;
+  return posts;
 }
 
 export async function addShipPost(input: {
@@ -188,24 +254,16 @@ export function listShipPosts(
   limit = 50,
   offset = 0,
 ): { posts: ShipPostHydrated[]; total: number } {
-  const byId = new Map<string, ShipPostRevision[]>();
-  for (const row of readRevisions()) {
-    const list = byId.get(row.id) ?? [];
-    list.push(row);
-    byId.set(row.id, list);
-  }
-  const merged = [...byId.values()]
-    .map((revs) => {
-      revs.sort((a, b) => a.rev - b.rev);
-      const latest = revs[revs.length - 1];
-      return { ...latest, firstTs: revs[0].ts, revisions: revs.length };
-    })
-    .sort((a, b) => b.ts - a.ts);
+  const merged = readMergedPosts();
   // Hydration touches the artifact index per media id, so only the requested
   // page pays that cost — total lets the client know when to stop paging.
-  const posts = merged.slice(offset, offset + limit).map((post) => ({
-      ...post,
-      mediaItems: post.media
+  const posts = merged.slice(offset, offset + limit).map(({ media, revisions, summary, ...rest }) => {
+    const clamped = clampSummary(summary);
+    const hydrated: ShipPostHydrated = {
+      ...rest,
+      summary: clamped.text,
+      mediaItems: media
+        .slice(0, MAX_FEED_MEDIA)
         .map((id) => {
           const artifact = getImageArtifact(id);
           if (!artifact) return null;
@@ -223,6 +281,12 @@ export function listShipPosts(
           };
         })
         .filter((x): x is NonNullable<typeof x> => x !== null),
-    }));
+      // Counted from the stored ids, so a gallery whose artifact was deleted
+      // still reports what the post was published with.
+      mediaTotal: media.length,
+    };
+    if (clamped.truncated) hydrated.summaryTruncated = true;
+    return hydrated;
+  });
   return { posts, total: merged.length };
 }

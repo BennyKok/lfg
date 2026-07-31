@@ -17,7 +17,6 @@ export const TAB_VALUES = [
   "notifications",
   "artifacts",
   "settings",
-  "ask",
   "auto",
   "usage",
   "coding-agents",
@@ -34,15 +33,16 @@ export const DEFAULT_TAB: Tab = "live";
 export function pathnameToTab(pathname: string): string {
   const seg = pathname.split("/").filter(Boolean)[0];
   const tab = seg ? decodeURIComponent(seg) : DEFAULT_TAB;
-  // `/shipped` was the original public route. Keep old links working while
-  // making Notifications the canonical page and URL.
-  return tab === "shipped" ? "notifications" : tab;
+  // `/shipped` was the original public route, and `/ask` was a separate page
+  // for agent questions before they became notifications. Both fold into the
+  // canonical Notification Center; keep old links and bookmarks working.
+  return tab === "shipped" || tab === "ask" ? "notifications" : tab;
 }
 
 /** The URL path for a tab. The default tab lives at `/` (kept segment-free so
  *  the common link stays clean); every other tab is a single path segment. */
 export function tabToPath(tab: string): string {
-  const canonical = tab === "shipped" ? "notifications" : tab;
+  const canonical = tab === "shipped" || tab === "ask" ? "notifications" : tab;
   return canonical === DEFAULT_TAB ? "/" : `/${encodeURIComponent(canonical)}`;
 }
 

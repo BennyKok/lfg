@@ -604,12 +604,41 @@ export function sessionIdForPid(pid: number): string | null {
 }
 
 // User-set title overrides, keyed by sessionId (data/session-titles.json).
+//
+// Read on every session list and every /api/shipped page — a re-read plus a
+// JSON parse per request for a file that changes only when a human renames a
+// session. Cached on mtime+size (same key as the shipped revision log), so a
+// rename from any process still lands on the next read.
+//
+// This file is rewritten whole, so a rename to a same-length title inside one
+// coarse mtime tick could hide behind that key; only memoize once the write
+// has settled (see the same guard in src/ask/store.ts).
+//
+// The map is shared with callers; `setSessionTitle` copies before mutating.
+// Treat it as read-only.
+const TITLE_STAT_SETTLE_MS = 1_000;
+let titleOverridesCache: { mtimeMs: number; size: number; map: Record<string, string> } | null =
+  null;
+
 export async function readTitleOverrides(): Promise<Record<string, string>> {
+  let stat: { mtimeMs: number; size: number };
   try {
-    const f = Bun.file(PATHS.sessionTitles);
-    if (!(await f.exists())) return {};
-    return (await f.json()) as Record<string, string>;
+    stat = statSync(PATHS.sessionTitles);
   } catch {
+    titleOverridesCache = null;
+    return {};
+  }
+  const cached = titleOverridesCache;
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.map;
+  try {
+    const map = (await Bun.file(PATHS.sessionTitles).json()) as Record<string, string>;
+    titleOverridesCache =
+      Date.now() - stat.mtimeMs >= TITLE_STAT_SETTLE_MS
+        ? { mtimeMs: stat.mtimeMs, size: stat.size, map }
+        : null;
+    return map;
+  } catch {
+    titleOverridesCache = null;
     return {};
   }
 }
@@ -618,11 +647,13 @@ export async function setSessionTitle(
   sessionId: string,
   title: string,
 ): Promise<void> {
-  const all = await readTitleOverrides();
+  const all = { ...(await readTitleOverrides()) };
   const t = title.trim();
   if (t) all[sessionId] = t.slice(0, 200);
   else delete all[sessionId]; // empty title clears the override
   await Bun.write(PATHS.sessionTitles, JSON.stringify(all, null, 2));
+  // Don't wait for the mtime to prove the write — this process just made it.
+  titleOverridesCache = null;
   if (t) updateCachedSessionTitle(sessionId, all[sessionId]);
 }
 

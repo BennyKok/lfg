@@ -54,5 +54,53 @@ describe("artifact image previews", () => {
     const firstModified = Bun.file(first).lastModified;
     expect(await getOrCreateImagePreview(artifact)).toBe(first);
     expect(Bun.file(first).lastModified).toBe(firstModified);
+
+    // The Notification Center's 52px squares get their own much smaller
+    // variant, cached under a distinct name so it never collides with the
+    // 1200px preview above.
+    const thumbPath = imagePreviewPath(id, "thumb");
+    cleanup.add(thumbPath);
+    expect(thumbPath).not.toBe(previewPath);
+    const thumb = await getOrCreateImagePreview(artifact, "thumb");
+    expect(thumb).toBe(thumbPath);
+    const thumbMeta = await sharp(thumb).metadata();
+    expect(thumbMeta.format).toBe("webp");
+    expect(thumbMeta.width).toBe(160);
+    expect(Bun.file(thumb).size).toBeLessThan(Bun.file(first).size);
+  });
+
+  test("concurrent preview and thumb requests do not share a generation", async () => {
+    const sourceDir = await mkdtemp(join(tmpdir(), "lfg-preview-test-"));
+    cleanup.add(sourceDir);
+    const sourcePath = join(sourceDir, "wide.png");
+    await sharp({
+      create: { width: 2000, height: 1000, channels: 3, background: "#aa3344" },
+    })
+      .png()
+      .toFile(sourcePath);
+
+    const id = `test-${randomUUID()}`;
+    cleanup.add(imagePreviewPath(id));
+    cleanup.add(imagePreviewPath(id, "thumb"));
+    const artifact: ImageArtifact = {
+      id,
+      sessionId: randomUUID(),
+      createdAt: Date.now(),
+      media: "image",
+      sourcePath,
+      filePath: sourcePath,
+      name: "wide.png",
+      mimeType: "image/png",
+      size: Bun.file(sourcePath).size,
+    };
+
+    // Same artifact, both sizes at once: the in-flight map is keyed by variant,
+    // so the thumb must not be handed the 1200px generation.
+    const [preview, thumb] = await Promise.all([
+      getOrCreateImagePreview(artifact, "preview"),
+      getOrCreateImagePreview(artifact, "thumb"),
+    ]);
+    expect((await sharp(preview).metadata()).width).toBe(1200);
+    expect((await sharp(thumb).metadata()).width).toBe(160);
   });
 });

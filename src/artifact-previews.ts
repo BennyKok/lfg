@@ -7,23 +7,46 @@ import type { ImageArtifact } from "./artifacts.ts";
 
 const PREVIEWS_DIR = join(PATHS.data, "artifacts", "previews");
 const PREVIEW_VERSION = "v1";
-const PREVIEW_WIDTH = 1200;
+
+/**
+ * Two bounded sizes, cached independently on disk.
+ *
+ * `preview` is the in-transcript/lightbox size. `thumb` exists because the
+ * Notification Center renders media as a 52px square: serving the 1200px
+ * preview there meant ~65 KB of image per row to paint a postage stamp, and a
+ * compact feed puts a lot of rows on screen at once.
+ */
+export type ImagePreviewVariant = "preview" | "thumb";
+const VARIANT_WIDTH: Record<ImagePreviewVariant, number> = {
+  preview: 1200,
+  thumb: 160,
+};
 
 // Coalesce simultaneous requests for a new image. The finished files provide
 // the persistent cache across requests and server restarts.
 const pending = new Map<string, Promise<string>>();
 
-export function imagePreviewPath(artifactId: string): string {
-  return join(PREVIEWS_DIR, `${artifactId}-${PREVIEW_VERSION}.webp`);
+export function imagePreviewPath(
+  artifactId: string,
+  variant: ImagePreviewVariant = "preview",
+): string {
+  // The original filename shape is the `preview` variant, so existing caches
+  // stay valid and only the new size needs generating.
+  const suffix = variant === "preview" ? "" : `-${variant}`;
+  return join(PREVIEWS_DIR, `${artifactId}-${PREVIEW_VERSION}${suffix}.webp`);
 }
 
-async function createImagePreview(artifact: ImageArtifact, outputPath: string): Promise<string> {
+async function createImagePreview(
+  artifact: ImageArtifact,
+  outputPath: string,
+  variant: ImagePreviewVariant,
+): Promise<string> {
   await mkdir(PREVIEWS_DIR, { recursive: true });
   const temporaryPath = `${outputPath}.${process.pid}.${randomUUID()}.tmp`;
   try {
     await sharp(artifact.filePath, { animated: false })
       .rotate()
-      .resize({ width: PREVIEW_WIDTH, withoutEnlargement: true })
+      .resize({ width: VARIANT_WIDTH[variant], withoutEnlargement: true })
       .webp({ quality: 76, effort: 4, smartSubsample: true })
       .toFile(temporaryPath);
     await rename(temporaryPath, outputPath);
@@ -34,21 +57,32 @@ async function createImagePreview(artifact: ImageArtifact, outputPath: string): 
   }
 }
 
-export async function getOrCreateImagePreview(artifact: ImageArtifact): Promise<string> {
-  const outputPath = imagePreviewPath(artifact.id);
+export async function getOrCreateImagePreview(
+  artifact: ImageArtifact,
+  variant: ImagePreviewVariant = "preview",
+): Promise<string> {
+  const outputPath = imagePreviewPath(artifact.id, variant);
   if (await Bun.file(outputPath).exists()) return outputPath;
 
-  const active = pending.get(artifact.id);
+  // Keyed by variant too, or a thumb request would be handed the in-flight
+  // 1200px generation and cache the wrong bytes under the thumb name.
+  const key = `${artifact.id}:${variant}`;
+  const active = pending.get(key);
   if (active) return active;
 
-  const generation = createImagePreview(artifact, outputPath).finally(() => {
-    pending.delete(artifact.id);
+  const generation = createImagePreview(artifact, outputPath, variant).finally(() => {
+    pending.delete(key);
   });
-  pending.set(artifact.id, generation);
+  pending.set(key, generation);
   return generation;
 }
 
 export async function deleteImagePreview(artifactId: string): Promise<void> {
-  await pending.get(artifactId)?.catch(() => undefined);
-  await rm(imagePreviewPath(artifactId), { force: true });
+  const variants: ImagePreviewVariant[] = ["preview", "thumb"];
+  await Promise.all(
+    variants.map((variant) => pending.get(`${artifactId}:${variant}`)?.catch(() => undefined)),
+  );
+  await Promise.all(
+    variants.map((variant) => rm(imagePreviewPath(artifactId, variant), { force: true })),
+  );
 }

@@ -1,8 +1,11 @@
-// Ask-store TTL sweep. The bug this pins: `expireQuestion` existed but had
-// zero callers, so an unanswered ask stayed `open` forever — it kept being
-// re-surfaced in the web feed and the voice snapshot, and (the harmful part)
-// `lfg connect` kept emitting it as an `auto.question` channel event, where the
-// omg imsg brain could bind an unrelated inbound message to it as the "answer".
+// Ask-store TTL sweep. The bug this pins: nothing ever expired an ask, so an
+// unanswered one stayed `open` forever — it kept being re-surfaced in the web
+// feed and the voice snapshot, and (the harmful part) `lfg connect` kept
+// emitting it as an `auto.question` channel event, where the omg imsg brain
+// could bind an unrelated inbound message to it as the "answer".
+//
+// Also covers the read cache: every mutator rewrites the whole file, so a
+// stale parse would make a write invisible.
 
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtemp, rm, mkdir } from "node:fs/promises";
@@ -67,6 +70,37 @@ describe("dismissQuestion", () => {
 afterEach(async () => {
   PATHS.data = realData;
   await rm(dir, { recursive: true, force: true });
+});
+
+describe("read cache", () => {
+  test("an out-of-band rewrite of identical byte length is not served stale", async () => {
+    const q = await addQuestion({ question: "cached?", pushback: true });
+    await listQuestions(); // populate the cache
+
+    // Rewrites the store outside the mutators, keeping the same byte length —
+    // the case an mtime+size key alone cannot see.
+    await backdate(q.id, q.createdAt - 5_000);
+
+    expect((await listQuestions())[0]?.createdAt).toBe(q.createdAt - 5_000);
+  });
+
+  test("a mutation is visible on the very next read", async () => {
+    const q = await addQuestion({ question: "answered?", pushback: true });
+    await listQuestions(); // populate the cache
+
+    await answerQuestion(q.id, { answer: "yes", via: "web" });
+
+    expect(await listQuestions("open")).toEqual([]);
+    expect((await listQuestions("answered")).map((r) => r.id)).toEqual([q.id]);
+  });
+
+  test("callers cannot corrupt the cache by mutating what they got back", async () => {
+    const first = await addQuestion({ question: "one", pushback: true });
+    const rows = await listQuestions();
+    rows.push({ ...rows[0], id: "not-persisted" });
+
+    expect((await listQuestions()).map((r) => r.id)).toEqual([first.id]);
+  });
 });
 
 describe("sweepExpiredQuestions", () => {

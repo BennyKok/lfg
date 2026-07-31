@@ -123,29 +123,40 @@ export function AuthenticatedArtifactImage({
   path,
   alt,
   zoomable = false,
+  thumb = false,
   className,
 }: {
   path: string;
   alt: string;
   zoomable?: boolean;
+  /** Fetch the server's 160px webp instead of the original. For small fixed
+   *  squares (the Notification Center's media thumbnails) where downloading a
+   *  multi-megabyte original to paint 52px is pure waste. */
+  thumb?: boolean;
   className?: string;
 }) {
   if (zoomable) {
     return <AuthenticatedZoomableImage path={path} alt={alt} className={className} />;
   }
-  return <AuthenticatedPlainImage path={path} alt={alt} className={className} />;
+  return (
+    <AuthenticatedPlainImage path={path} alt={alt} thumb={thumb} className={className} />
+  );
 }
 
 function AuthenticatedPlainImage({
   path,
   alt,
+  thumb = false,
   className,
 }: {
   path: string;
   alt: string;
+  thumb?: boolean;
   className?: string;
 }) {
-  const source = useArtifactBlobUrl(path);
+  const source = useArtifactBlobUrl(
+    thumb ? artifactRequestPath(path, { preview: "thumb" }) : path,
+  );
   if (source.status === "error") {
     return <ArtifactLoadError className={className} />;
   }

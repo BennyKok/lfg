@@ -97,6 +97,11 @@ import {
   SHIPPED_FEED_KEY,
   writeFeedCache,
 } from "./lib/feed-cache";
+import {
+  refreshShippedHead,
+  SHIPPED_HEAD_LIMIT,
+  subscribeShippedHead,
+} from "./lib/shipped-feed";
 import { findingReference } from "./lib/finding-reference";
 import { setThemePreference, THEME_CHANGE_EVENT } from "./lib/theme";
 import { startsInBottomSystemGestureZone } from "./lib/touch-gestures";
@@ -132,6 +137,7 @@ import {
   ExternalLink,
   Flag,
   Check,
+  CheckCheck,
   ChevronDown,
   ChevronLeft,
   Cpu,
@@ -269,11 +275,18 @@ import {
   markAllNotificationsRead,
   markNotificationRead,
   notificationIsUnread,
+  NOTIFICATION_READ_STATE_EVENT,
   notificationReadState,
   shippedNotificationId,
   type NotificationReadState,
 } from "./lib/notification-center";
-import { AskNavButton, AskPage, AskProvider } from "./components/ask-center";
+import {
+  AskNavButton,
+  AskProvider,
+  QuestionNotification,
+  stripMd,
+  useAsk,
+} from "./components/ask-center";
 import { PwaInstallCallout, PwaInstallSettingsSection } from "./components/pwa-install";
 import { UsageCampfireHost, useUsageRingLongPress } from "./components/UsageCampfire";
 import { configuredAgentOptions } from "./lib/coding-agent-options";
@@ -4102,7 +4115,7 @@ export function App() {
   const [callOpen, setCallOpen] = useState(false);
   const [runLog, setRunLog] = useState<string | null>(null);
   // Auto agents
-  // Tabs are "live" | "settings" | "ask" | "term" | "browser". Auto agents and runtime
+  // Tabs are "live" | "settings" | "notifications" | "term" | "browser". Auto agents and runtime
   // extension nav-tabs now render inside the Settings page rather than as their
   // own top-level tabs.
   // Routing lives in the URL now (TanStack Router). The visible page IS the
@@ -4162,15 +4175,10 @@ export function App() {
       globalThis as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number }
     ).requestIdleCallback;
     const run = () => {
-      if (!readFeedCache(SHIPPED_FEED_KEY)) {
-        void api<{ posts: ShipPost[]; total?: number }>(`/api/shipped?limit=${FEED_PAGE}`, {
-          cache: "no-store",
-        })
-          .then((data) => {
-            writeFeedCache(SHIPPED_FEED_KEY, data.posts, data.total ?? data.posts.length);
-          })
-          .catch(() => {});
-      }
+      // Goes through the shared poller so this coalesces with whatever the
+      // Notification Center or the sidebar may already have in flight, instead
+      // of being a third independent request at boot.
+      if (!readFeedCache(SHIPPED_FEED_KEY)) void refreshShippedHead();
       if (!readFeedCache(ARTIFACTS_GALLERY_KEY)) {
         void api<{ artifacts: GalleryArtifact[]; total?: number }>(
           `/api/artifacts?limit=${GALLERY_PAGE}&kind=html`,
@@ -5883,14 +5891,14 @@ export function App() {
                 type="button"
                 onClick={() =>
                   // Embedded has no Settings page of its own to fall back to.
-                  setTab(embedded || tab === "settings" || tab === "ask" ? "live" : "settings")
+                  setTab(embedded || tab === "settings" ? "live" : "settings")
                 }
                 aria-label="Back"
                 className="flex h-8 items-center gap-1 rounded-full pl-1.5 pr-3 text-[13px] font-medium tracking-[-0.01em] text-muted-foreground transition-colors duration-200 ease-out hover:text-foreground active:scale-[0.96]"
               >
                 <ChevronLeft className="size-[18px]" />
                 <span>
-                  {embedded || tab === "settings" || tab === "ask" ? "Live" : "Settings"}
+                  {embedded || tab === "settings" ? "Live" : "Settings"}
                 </span>
               </button>
             )}
@@ -5929,7 +5937,10 @@ export function App() {
               </>
             ) : null}
             {embedded ? null : (
-              <AskNavButton active={tab === "ask"} onOpen={() => setTab("ask")} />
+              <AskNavButton
+                active={tab === "notifications"}
+                onOpen={() => setTab("notifications")}
+              />
             )}
             {/* Same menu as the rail's, so the page axis has one shape wherever
                 the chrome happens to live in a given layout. */}
@@ -6042,7 +6053,6 @@ export function App() {
             onRunNow={runAutoNow}
           />
         ) : null}
-        {tab === "ask" ? <AskPage /> : null}
         {tab === "usage" ? <UsagePage /> : null}
         {tab === "coding-agents" ? (
           <CodingAgentsPage
@@ -6072,11 +6082,6 @@ export function App() {
                 setLiveFocus({ sid, n: Date.now() });
               }}
               onReviewSession={openShippedSession}
-              onFollowUpCreated={async (sid) => {
-                await refreshSessions();
-                setTab("live");
-                setLiveFocus({ sid, n: Date.now() });
-              }}
             />
           </div>
         ) : null}
@@ -6108,7 +6113,6 @@ export function App() {
         ) : null}
         {tab !== "live" &&
         tab !== "auto" &&
-        tab !== "ask" &&
         tab !== "usage" &&
         tab !== "coding-agents" &&
         tab !== "notifications" &&
@@ -8205,31 +8209,16 @@ function useRecentShippedSessions(
     () => readFeedCache<ShipPost>(SHIPPED_FEED_KEY)?.items ?? [],
   );
 
+  // Shares the Notification Center's poller rather than running a second one:
+  // the head page it scans (for five *distinct* finished sessions) is the same
+  // data the feed already fetches. Subscribing only while `enabled` also means
+  // a closed sidebar stops polling, which it never used to.
   useEffect(() => {
     if (!enabled) return;
-    let alive = true;
-    const load = async () => {
-      try {
-        // Scan beyond five posts so revisions or multiple posts from one
-        // session still produce five distinct finished sessions.
-        const data = await api<{ posts: ShipPost[] }>("/api/shipped?limit=25", {
-          cache: "no-store",
-        });
-        // A 2xx body is not a contract. The hosted surface proxies this to a
-        // remote workspace, which can answer with an error envelope, `{}`, or a
-        // wake response — and storing `undefined` here crashed the next render.
-        // Same guard as the session list at the bottom of this file.
-        if (alive) setPosts(Array.isArray(data.posts) ? data.posts : []);
-      } catch {
-        // Keep the last cached paint; the Shipped page remains the fallback.
-      }
-    };
-    void load();
-    const interval = window.setInterval(() => void load(), 15_000);
-    return () => {
-      alive = false;
-      window.clearInterval(interval);
-    };
+    return subscribeShippedHead<ShipPost>((result) => {
+      // Keep the last cached paint on failure; the Shipped page is the fallback.
+      if (result.ok) setPosts(result.posts);
+    });
   }, [enabled]);
 
   return useMemo(
@@ -12851,12 +12840,10 @@ function ForkSessionDialog({
   session,
   onClose,
   onCreated,
-  mode = "fork",
 }: {
   session: Session;
   onClose: () => void;
   onCreated: (created?: { sessionId?: string }) => Promise<void>;
-  mode?: "fork" | "follow-up";
 }) {
   const catalog = useAgentModelCatalog();
   const codingAgents = useContext(CodingAgentsContext);
@@ -12932,18 +12919,15 @@ function ForkSessionDialog({
         });
       })().then((created) => onCreated(created)),
       {
-        loading: mode === "follow-up" ? "Starting follow-up..." : "Forking session...",
-        success: mode === "follow-up" ? "Follow-up session started" : "Session forked",
+        loading: "Forking session...",
+        success: "Session forked",
         error: (err) => (err instanceof Error ? err.message : "Couldn't open session"),
       },
     );
   }
 
   return (
-    <BottomSheet
-      onClose={onClose}
-      title={mode === "follow-up" ? "Start a follow-up" : "Fork session"}
-    >
+    <BottomSheet onClose={onClose} title="Fork session">
       <form
         onSubmit={submit}
         {...files.dropZoneProps}
@@ -12955,9 +12939,7 @@ function ForkSessionDialog({
         <div className="mb-3 flex items-center gap-2">
           <GitFork className="size-4 text-muted-foreground" />
           <div className="min-w-0">
-            <div className="text-[15px] font-semibold">
-              {mode === "follow-up" ? "New session from this context" : "Fork session"}
-            </div>
+            <div className="text-[15px] font-semibold">Fork session</div>
             <div className="truncate text-xs text-muted-foreground">
               {titleForSession(session)}
             </div>
@@ -13050,7 +13032,7 @@ function ForkSessionDialog({
             </Button>
             <Button type="submit" variant="brand" disabled={!sid}>
               <GitFork className="size-4" />
-              {mode === "follow-up" ? "Start follow-up" : "Open"}
+              Open
             </Button>
           </div>
         </div>
@@ -19032,14 +19014,18 @@ type ShipPost = {
   rev: number;
   ts: number;
   firstTs: number;
-  revisions: number;
   title: string;
+  // Clamped by the server for the feed; the session transcript has the rest.
   summary?: string;
+  summaryTruncated?: boolean;
   sessionId?: string;
   sessionTitle?: string;
   agent?: string;
   project?: string;
+  // Capped at four by the server; `mediaTotal` is the true count so the
+  // thumbnail can show "+N" without shipping the rest of the gallery.
   mediaItems: ShipMediaItem[];
+  mediaTotal?: number;
 };
 
 // An artifacts-gallery tile. Previously a live sandboxed document per tile —
@@ -19066,90 +19052,85 @@ function GalleryTilePreview({
   );
 }
 
-function ShipMedia({
-  item,
+// A notification's media, as a trailing thumbnail rather than a full-width
+// grid. This is the iOS notification shape: the attachment is a hint at what
+// happened, not the payload — one 52px square on the right of the row, tapped
+// to open the real thing. A post with four screenshots used to add ~350px of
+// feed height; it now adds none.
+function ShipMediaThumb({
+  items,
+  total,
   onExpand,
-  tile = false,
 }: {
-  item: ShipMediaItem;
+  items: ShipMediaItem[];
+  total: number;
   onExpand?: (artifact: ViewerArtifact) => void;
-  // Multi-media posts render fixed-height tiles (Twitter-style) so a post
-  // never grows unbounded; tap opens the full artifact in the native viewer.
-  tile?: boolean;
 }) {
-  if (item.kind === "video") {
-    return (
-      <AuthenticatedArtifactVideo
-        path={item.url}
-        label={item.caption || item.name}
-        className={cn(
-          "block w-full bg-black",
-          tile ? "h-44 object-cover" : "max-h-[20rem] object-contain",
-        )}
-      />
-    );
-  }
-  if (item.kind === "html") {
-    // Shipped is a showcase, and HTML artifacts are usually the *substance* of
-    // what shipped — so show the work, not a filename. This used to be a bare
-    // compact row purely because a preview cost a whole browsing context; native
-    // rendering makes an actual preview affordable here.
-    const open = () =>
-      onExpand?.({
-        url: item.url,
-        kind: "html",
-        caption: item.caption,
-        name: item.name,
-        version: item.version,
-        cacheKey: item.updatedAt,
-      });
-    return (
-      <button
-        type="button"
-        onClick={open}
-        className="group col-span-full block w-full text-left"
-      >
-        <span className="relative block h-44 w-full overflow-hidden bg-card">
-          <NativeArtifactThumbnail
-            path={item.url}
-            cacheKey={item.updatedAt}
-            className="h-full w-full"
-          />
-          {/* The preview is decorative here; the whole card is the hit target.
-              Overlays sit along the bottom edge, behind this scrim — artifacts
-              lead with a heading at the top-left, and a badge there covered it. */}
-          <span className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-black/55 to-transparent" />
-          {(item.version ?? 1) > 1 ? (
-            <span className="pointer-events-none absolute bottom-1.5 left-2 flex items-center gap-1 text-[10px] font-medium text-white/90 drop-shadow">
-              <span className="size-1.5 rounded-full bg-emerald-400" />
-              live · v{item.version}
-            </span>
-          ) : null}
-          <Maximize2 className="pointer-events-none absolute bottom-1.5 right-2 size-3.5 text-white/80 drop-shadow" />
-        </span>
-        <span className="flex items-center gap-2 px-3 py-2">
-          <LayoutDashboard className="size-3.5 shrink-0 text-muted-foreground" />
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-xs font-medium">{item.caption || item.name}</span>
-            <span className="mt-0.5 block text-[10px] text-muted-foreground">
-              {item.lastRefreshedAt ? `Refreshed ${timeAgo(item.lastRefreshedAt)}` : "HTML artifact"}
-            </span>
-          </span>
-        </span>
-      </button>
-    );
-  }
+  const item = items[0];
+  if (!item) return null;
+  const extra = Math.max(0, total - 1);
+  const open = () =>
+    onExpand?.({
+      url: item.url,
+      kind: item.kind,
+      caption: item.caption,
+      name: item.name,
+      version: item.version,
+      cacheKey: item.updatedAt,
+    });
   return (
-    <AuthenticatedArtifactImage
-      path={item.url}
-      alt={item.caption || item.name}
-      zoomable
-      className={cn(
-        "block w-full bg-muted object-cover",
-        tile ? "h-44" : "max-h-[20rem]",
+    <button
+      type="button"
+      onClick={open}
+      aria-label={`Open ${item.caption || item.name}`}
+      title={item.caption || item.name}
+      className="relative size-[52px] shrink-0 overflow-hidden rounded-lg border border-border/60 bg-muted transition-transform active:scale-[0.97]"
+    >
+      {item.kind === "image" ? (
+        <AuthenticatedArtifactImage
+          path={item.url}
+          alt={item.caption || item.name}
+          thumb
+          className="size-full object-cover"
+        />
+      ) : item.kind === "html" ? (
+        // Deliberately an icon, not a live preview. A document scaled into a
+        // 52px box is two words of giant text — unreadable, and it costs a
+        // fetch + parse per row. The Artifacts page is where previews belong.
+        <span className="flex size-full items-center justify-center bg-primary/10 text-primary">
+          <LayoutDashboard className="size-4" />
+        </span>
+      ) : (
+        <span className="flex size-full items-center justify-center bg-black/80 text-white/80">
+          <Play className="size-4" />
+        </span>
       )}
-    />
+      {extra > 0 ? (
+        <span className="absolute inset-x-0 bottom-0 bg-black/55 py-0.5 text-center text-[9px] font-semibold text-white">
+          +{extra}
+        </span>
+      ) : null}
+    </button>
   );
+}
+
+// Day buckets for the feed, in the phone-notification idiom: today and
+// yesterday are named, everything older is dated. Grouping is what lets the
+// rows themselves drop their date entirely and show just a time delta.
+function notificationDayLabel(ts: number, now: number): string {
+  const day = (t: number) => {
+    const d = new Date(t);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  };
+  const diffDays = Math.round((day(now) - day(ts)) / 86_400_000);
+  if (diffDays <= 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  const d = new Date(ts);
+  return d.toLocaleDateString(undefined, {
+    month: "long",
+    day: "numeric",
+    ...(d.getFullYear() === new Date(now).getFullYear() ? {} : { year: "numeric" }),
+  });
 }
 
 // Page sizes for the Shipped feed and the artifacts gallery: both load one
@@ -19168,7 +19149,6 @@ const GALLERY_PAGE = 24;
 function ShippedPage({
   onOpenSession,
   onReviewSession,
-  onFollowUpCreated,
   liveSessionIds,
   notificationIdentity,
   artifactsOnly = false,
@@ -19176,7 +19156,6 @@ function ShippedPage({
 }: {
   onOpenSession: (sessionId: string) => void;
   onReviewSession?: (post: ShipPost) => void;
-  onFollowUpCreated?: (sessionId: string) => Promise<void>;
   liveSessionIds: Set<string>;
   notificationIdentity?: string | null;
   artifactsOnly?: boolean;
@@ -19196,9 +19175,10 @@ function ShippedPage({
   );
   const [markingNotificationsRead, setMarkingNotificationsRead] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // A follow-up is a fresh session with the shipped transcript as context,
-  // leaving the original finished session untouched.
-  const [followingUp, setFollowingUp] = useState<ShipPost | null>(null);
+  // Agent questions are notifications too, and <AskProvider> already polls for
+  // them app-wide (it feeds the nav badge). Reading them from context instead
+  // of fetching here keeps the page at one request per tick.
+  const { questions } = useAsk();
   const [gallery, setGallery] = useState<GalleryArtifact[] | null>(() => cachedGallery?.items ?? null);
   const [galleryTotal, setGalleryTotal] = useState(() => cachedGallery?.total ?? 0);
   const [galleryBusy, setGalleryBusy] = useState(false);
@@ -19228,11 +19208,18 @@ function ShippedPage({
     setNotificationReads(markAllNotificationsRead(notificationIdentity, newestVisible));
   }, [notificationIdentity, notificationReads, posts, view]);
 
+  // `storage` covers other tabs; the custom event covers other components in
+  // THIS tab (it was dispatched with nothing listening, so an in-tab write
+  // elsewhere never repainted the feed).
   useEffect(() => {
     if (view !== "feed") return;
     const sync = () => setNotificationReads(notificationReadState(notificationIdentity));
     window.addEventListener("storage", sync);
-    return () => window.removeEventListener("storage", sync);
+    window.addEventListener(NOTIFICATION_READ_STATE_EVENT, sync);
+    return () => {
+      window.removeEventListener("storage", sync);
+      window.removeEventListener(NOTIFICATION_READ_STATE_EVENT, sync);
+    };
   }, [notificationIdentity, view]);
   useEffect(() => {
     if (view !== "artifacts") return;
@@ -19383,52 +19370,37 @@ function ShippedPage({
     }
   };
 
+  // Only ever the HEAD page is polled, not everything loaded so far: freshness
+  // arrives at the top, so re-downloading 75 hydrated posts to discover one new
+  // one is pure waste. The head itself comes from the shared poller in
+  // lib/shipped-feed, which the Live sidebar reads too — one request per tick
+  // for the whole app instead of one per surface.
   useEffect(() => {
-    if (view !== "feed") return;
-    let alive = true;
-    const load = async () => {
-      try {
-        // Poll ONE page, not everything loaded so far. This used to be
-        // `max(FEED_PAGE, postsLen.current)`, so after five "load more" taps every
-        // 15s tick re-downloaded 75 fully hydrated posts to discover whether one
-        // new post existed. Freshness only ever arrives at the head of the feed.
-        const data = await api<{ posts: ShipPost[]; total?: number }>(
-          `/api/shipped?limit=${FEED_PAGE}`,
-          { cache: "no-store" },
-        );
-        if (!alive) return;
-        // Normalize once: a proxied workspace can answer 2xx without the array,
-        // and everything below spreads/maps it.
-        const posts = Array.isArray(data.posts) ? data.posts : [];
-        const total = data.total ?? posts.length;
+    if (view !== "feed" || !active) return;
+    return subscribeShippedHead<ShipPost>((result) => {
+      if (!result.ok) {
+        // Only meaningful when nothing has ever painted; otherwise the stale
+        // page stays up and the next tick retries.
         setPosts((prev) => {
-          // Splice the fresh head onto the tail we already hold, keyed by id so a
-          // post that a newer ship pushed off the first page is not duplicated —
-          // and so the tail keeps its order when the head grows.
-          const freshIds = new Set(posts.map((p) => p.id));
-          const tail = (prev ?? []).filter((p) => !freshIds.has(p.id));
-          const merged = [...posts, ...tail];
-          postsLen.current = Math.max(FEED_PAGE, merged.length);
-          writeFeedCache(SHIPPED_FEED_KEY, merged, total);
-          return merged;
+          if (prev === null) setError(result.error);
+          return prev;
         });
-        setPostsTotal(total);
-        setError(null);
-      } catch (e) {
-        if (alive) setError(e instanceof Error ? e.message : "Could not load the shipped feed");
+        return;
       }
-    };
-    void load();
-    if (!active) {
-      return () => {
-        alive = false;
-      };
-    }
-    const interval = setInterval(() => void load(), 15_000);
-    return () => {
-      alive = false;
-      clearInterval(interval);
-    };
+      setPosts((prev) => {
+        // Splice the fresh head onto the tail we already hold, keyed by id so a
+        // post that a newer ship pushed off the first page is not duplicated —
+        // and so the tail keeps its order when the head grows.
+        const freshIds = new Set(result.posts.map((p) => p.id));
+        const tail = (prev ?? []).filter((p) => !freshIds.has(p.id));
+        const merged = [...result.posts, ...tail];
+        postsLen.current = Math.max(SHIPPED_HEAD_LIMIT, merged.length);
+        writeFeedCache(SHIPPED_FEED_KEY, merged, result.total);
+        return merged;
+      });
+      setPostsTotal(result.total);
+      setError(null);
+    });
   }, [view, active]);
 
   const loadMorePosts = async () => {
@@ -19461,6 +19433,22 @@ function ShippedPage({
         ts: post.ts,
       }),
     ).length ?? 0;
+
+  // Bucket the feed into named days once per posts change. Grouping is what
+  // pays for the compact row: the date lives in the section header, so each
+  // row only carries a time delta.
+  const postGroups = useMemo(() => {
+    if (!posts?.length) return [];
+    const now = Date.now();
+    const groups: Array<{ label: string; items: ShipPost[] }> = [];
+    for (const post of posts) {
+      const label = notificationDayLabel(post.ts, now);
+      const last = groups[groups.length - 1];
+      if (last && last.label === label) last.items.push(post);
+      else groups.push({ label, items: [post] });
+    }
+    return groups;
+  }, [posts]);
 
   const markPostRead = (post: ShipPost) => {
     if (
@@ -19500,25 +19488,30 @@ function ShippedPage({
             <p className="mt-0.5 text-xs text-muted-foreground">Interactive reports and live dashboards</p>
           ) : (
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {unreadPosts ? `${unreadPosts} unread` : "You're all caught up"}
-              {" · "}results and activity
+              {questions.length
+                ? `${questions.length} waiting on you`
+                : unreadPosts
+                  ? `${unreadPosts} unread`
+                  : "You're all caught up"}
             </p>
           )}
         </div>
         {!artifactsOnly && posts !== null ? (
+          // Icon only. It is a rare, undoable housekeeping action — it does not
+          // need to be the second-loudest thing on the page.
           <Button
-            size="sm"
+            size="icon-sm"
             variant="ghost"
-            title="Mark notifications read and clear the app icon badge"
+            aria-label="Mark all read"
+            title="Mark all read — clears the app icon badge"
             disabled={markingNotificationsRead}
             onClick={() => void markAllRead()}
           >
             {markingNotificationsRead ? (
               <Loader2 className="size-4 animate-spin" />
             ) : (
-              <Check className="size-4" />
+              <CheckCheck className="size-4" />
             )}
-            Mark all read
           </Button>
         ) : null}
       </div>
@@ -19620,123 +19613,131 @@ function ShippedPage({
         <div className="py-10 text-center text-sm text-muted-foreground">Loading…</div>
       ) : null}
 
-      {posts !== null && posts.length === 0 ? (
+      {/* Time-sensitive first. Borrowed straight from the phone notification
+          hierarchy: things blocking a person sit above things that merely
+          happened, and they are actionable without leaving the list. */}
+      {questions.length ? (
+        <section className="space-y-1.5">
+          <h2 className="px-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
+            Needs you
+          </h2>
+          <div className="group overflow-hidden rounded-2xl border border-primary/25 bg-primary/[0.03] shadow-sm">
+            {/* Newest first, like the feed below it. The provider keeps the
+                queue oldest-first for working through it in order; a feed
+                that ran two directions at once just read as a bug. */}
+            {[...questions]
+              .sort((a, b) => b.createdAt - a.createdAt)
+              .map((q) => (
+                <QuestionNotification key={q.id} q={q} />
+              ))}
+          </div>
+        </section>
+      ) : null}
+
+      {posts !== null && posts.length === 0 && !questions.length ? (
         <div className="rounded-2xl border border-border bg-card/40 px-4 py-10 text-center text-sm text-muted-foreground">
           No notifications yet — verified results and future activity will collect here.
         </div>
       ) : null}
 
-      {posts?.length ? (
-        // One flat surface with hairline dividers — the posts themselves are
-        // the UI. Byline is agent · project · time; live = dot on the avatar;
-        // everything else (revisions, hints, session titles) lives a tap away.
-        <div className="overflow-hidden rounded-2xl border border-border bg-card/40 shadow-sm">
-          {posts.map((post) => {
-            const live = !!post.sessionId && liveSessionIds.has(post.sessionId);
-            const unread = notificationIsUnread(notificationReads, {
-              id: shippedNotificationId(post),
-              ts: post.ts,
-            });
-            return (
-              <article
-                key={post.id}
-                className={cn(
-                  "border-b border-border/50 pb-3 last:border-b-0",
-                  unread && "bg-primary/[0.035]",
-                )}
-              >
-                {/* Tapping the post opens the conversation: straight into the
-                    live session when it's still running, the same shared chat
-                    renderer plus Resume when it has shipped and closed. */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    markPostRead(post);
-                    if (!post.sessionId) return;
-                    if (onReviewSession) onReviewSession(post);
-                    else if (live) onOpenSession(post.sessionId);
-                  }}
-                  className="flex w-full items-start gap-3 px-4 pt-3 text-left transition-colors hover:bg-foreground/[0.02]"
-                >
-                  <span className="relative mt-0.5 shrink-0">
-                    <img
-                      src={agentIconSrc(post.agent)}
-                      alt={agentIconAlt(post.agent)}
-                      className="size-8 rounded-full border border-border bg-background p-1.5"
-                    />
-                    {live ? (
-                      <span
-                        title="Session is active"
-                        className="absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full bg-emerald-500 ring-2 ring-background"
-                      />
-                    ) : null}
-                    {unread ? (
-                      <span
-                        title="Unread"
-                        className="absolute -left-2 top-1 size-2 rounded-full bg-primary ring-2 ring-background"
-                      />
-                    ) : null}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-baseline gap-1.5 text-[13px]">
-                      <span className="min-w-0 truncate font-semibold">{agentIconAlt(post.agent)}</span>
-                      <span className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-muted-foreground">
-                        Shipped
-                      </span>
-                      {post.project ? (
-                        <span className="min-w-0 truncate text-muted-foreground">· {post.project}</span>
-                      ) : null}
-                      <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
-                        {timeAgo(post.ts)}
-                      </span>
-                    </div>
-                    <h2 className="mt-0.5 text-[15px] font-semibold leading-snug tracking-[-0.01em]">
-                      {post.title}
-                    </h2>
-                    {post.summary ? (
-                      // Clamped to keep the feed scannable (tweet-like) — long
-                      // legacy summaries cut off here; the tap-through session
-                      // transcript carries the full detail.
-                      <div className="mt-0.5 line-clamp-4 text-[13px] leading-relaxed text-muted-foreground">
-                        <MessageResponse>{post.summary}</MessageResponse>
-                      </div>
-                    ) : null}
-                  </div>
-                </button>
-                {post.mediaItems.length ? (
-                  <div
+      {/* One compact row per notification, grouped by day. Leading dot for
+          unread, avatar, agent · project · time, title, two-line body, and the
+          media as a trailing thumbnail. No action buttons at rest: tapping the
+          row opens the session, which is where following up actually belongs. */}
+      {postGroups.map((group) => (
+        <section key={group.label} className="space-y-1.5">
+          <h2 className="px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            {group.label}
+          </h2>
+          <div className="overflow-hidden rounded-2xl border border-border bg-card/40 shadow-sm">
+            {group.items.map((post) => {
+              const live = !!post.sessionId && liveSessionIds.has(post.sessionId);
+              const unread = notificationIsUnread(notificationReads, {
+                id: shippedNotificationId(post),
+                ts: post.ts,
+              });
+              const hasThumb = post.mediaItems.length > 0;
+              return (
+                <article key={post.id} className="relative border-b border-border/50 last:border-b-0">
+                  {/* Tapping the post opens the conversation: straight into the
+                      live session when it's still running, the same shared chat
+                      renderer plus Resume when it has shipped and closed. */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      markPostRead(post);
+                      if (!post.sessionId) return;
+                      if (onReviewSession) onReviewSession(post);
+                      else if (live) onOpenSession(post.sessionId);
+                    }}
                     className={cn(
-                      "ml-[3.75rem] mr-4 mt-2 grid gap-0.5 overflow-hidden rounded-xl border border-border/60",
-                      post.mediaItems.length > 1 ? "grid-cols-2" : "grid-cols-1",
+                      "flex w-full items-start gap-2.5 py-2.5 pl-2.5 text-left transition-colors hover:bg-foreground/[0.02]",
+                      hasThumb ? "pr-[4.75rem]" : "pr-3.5",
                     )}
                   >
-                    {post.mediaItems.slice(0, 4).map((item) => (
-                      <ShipMedia
-                        key={item.artifactId}
-                        item={item}
-                        onExpand={openArtifact}
-                        tile={post.mediaItems.filter((m) => m.kind !== "html").length > 1}
+                    {/* Fixed gutter whether or not the dot is there, so every
+                        row's avatar lands on the same x. */}
+                    <span
+                      className={cn(
+                        "mt-3 size-1.5 shrink-0 rounded-full",
+                        unread && "bg-primary",
+                      )}
+                      title={unread ? "Unread" : undefined}
+                    />
+                    <span className="relative mt-0.5 shrink-0">
+                      <img
+                        src={agentIconSrc(post.agent)}
+                        alt={agentIconAlt(post.agent)}
+                        className="size-7 rounded-full border border-border bg-background p-1"
                       />
-                    ))}
-                  </div>
-                ) : null}
-                {post.sessionId ? (
-                  <div className="ml-[3.75rem] mr-4 mt-2">
-                    <button
-                      type="button"
-                      onClick={() => setFollowingUp(post)}
-                      className="inline-flex h-8 items-center gap-1.5 rounded-full px-3 text-xs font-medium text-muted-foreground transition-colors hover:bg-foreground/[0.05] hover:text-foreground"
-                    >
-                      <GitFork className="size-3.5" />
-                      Follow up
-                    </button>
-                  </div>
-                ) : null}
-              </article>
-            );
-          })}
-        </div>
-      ) : null}
+                      {live ? (
+                        <span
+                          title="Session is active"
+                          className="absolute -bottom-0.5 -right-0.5 size-2 rounded-full bg-emerald-500 ring-2 ring-background"
+                        />
+                      ) : null}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline gap-1.5 text-[11px] text-muted-foreground">
+                        <span className="min-w-0 shrink truncate font-medium text-foreground/75">
+                          {agentIconAlt(post.agent)}
+                        </span>
+                        {post.project ? (
+                          <span className="min-w-0 shrink truncate">· {post.project}</span>
+                        ) : null}
+                        <span className="ml-auto shrink-0 tabular-nums">{timeAgo(post.ts)}</span>
+                      </div>
+                      {/* Two lines, not one: unlike a phone notification the
+                          title here IS the content, and a narrow screen minus
+                          the thumbnail clipped most of it. */}
+                      <h3 className="mt-0.5 line-clamp-2 text-[13.5px] font-semibold leading-snug tracking-[-0.01em]">
+                        {post.title}
+                      </h3>
+                      {post.summary ? (
+                        // Plain text, two lines. Rendering markdown for a body
+                        // that is clamped to two lines cost a whole markdown
+                        // tree per row for text nobody can see.
+                        <p className="mt-0.5 line-clamp-2 text-[12.5px] leading-relaxed text-muted-foreground">
+                          {stripMd(post.summary)}
+                        </p>
+                      ) : null}
+                    </div>
+                  </button>
+                  {hasThumb ? (
+                    <div className="absolute right-3.5 top-2.5">
+                      <ShipMediaThumb
+                        items={post.mediaItems}
+                        total={post.mediaTotal ?? post.mediaItems.length}
+                        onExpand={openArtifact}
+                      />
+                    </div>
+                  ) : null}
+                </article>
+              );
+            })}
+          </div>
+        </section>
+      ))}
       {posts !== null && posts.length < postsTotal ? (
         <button
           type="button"
@@ -19749,27 +19750,6 @@ function ShippedPage({
       ) : null}
         </>
       )}
-      {followingUp?.sessionId ? (
-        <ForkSessionDialog
-          mode="follow-up"
-          session={{
-            sessionId: followingUp.sessionId,
-            title: followingUp.sessionTitle ?? followingUp.title,
-            project: followingUp.project,
-            agent: followingUp.agent,
-          }}
-          onClose={() => setFollowingUp(null)}
-          onCreated={async (created) => {
-            setFollowingUp(null);
-            if (!created?.sessionId) return;
-            if (onFollowUpCreated) {
-              await onFollowUpCreated(created.sessionId);
-            } else {
-              onOpenSession(created.sessionId);
-            }
-          }}
-        />
-      ) : null}
     </div>
   );
 }
