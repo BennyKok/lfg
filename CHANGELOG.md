@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 31, 2026 - Continue in a clean session (v0.1.163)
+
+- Session menus now have a Continue action beside Fork. It opens a fresh agent
+  with the current transcript as context, then archives the session it replaces.
+- The replacement is created first, so a launch failure leaves the current
+  session live instead of losing the place you were continuing from.
+
 ## July 31, 2026 - Resuming a session whose worktree was cleaned up (v0.1.162)
 
 - Resuming certain sessions started and then immediately stopped, with nothing
