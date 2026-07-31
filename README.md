@@ -1,41 +1,17 @@
-# lfg
-
-Run AI coding agents on your own machine, from anywhere.
-
-[![Deploy on omg](https://omg.dev/deploy-badge.svg?v=2)](https://omg.dev/sandbox/templates/lfg)
-
-**One-click setup:** click the badge to run `lfg` on
-[omg.dev](https://omg.dev/sandbox/templates/lfg) — no VPS, no installer, no
-`tmux`/Bun prerequisites. See [One-click setup on omg.dev](#one-click-setup-on-omgdev).
-
 <a href="https://lfg.apps.omg.dev">
   <img src="https://raw.githubusercontent.com/BennyKok/lfg/main/docs/images/lfg-icon.png" alt="lfg icon" width="96" />
 </a>
+
+# lfg
+
+**Run AI coding agents on your own machine, from anywhere.**
 
 `lfg` turns a Linux box or macOS workstation into a private control plane for
 Claude Code, Codex, OpenCode, Cursor, Grok, Hermes, Pi, and GitHub Copilot. It
 starts each agent in a long-lived `tmux` session, streams the transcript to a
 web UI, and lets you answer prompts or steer work from your phone or laptop.
 
-**Website:** [lfg.apps.omg.dev](https://lfg.apps.omg.dev)
-
-## Why lfg?
-
-- **Run agents where your code lives.** Sessions execute on your machine, in your
-  repos, with your local CLIs and credentials — not a remote sandbox you have to
-  keep in sync.
-- **One UI for every harness.** Switch agents and models per session, resume
-  work, answer permission prompts, and manage projects from an installable PWA.
-- **Keep it private.** The server binds to loopback by default and is designed to
-  be exposed through Tailscale, not the public internet.
-- **Show the work.** Agents can display verification media, publish updatable
-  HTML dashboards, and post finished results to the Shipped feed.
-- **Delegate with lineage.** LFG MCP tools spawn subagents that stay visible in
-  the UI, inherit parent context, and report progress back.
-- **Automate repo checks.** Optional markdown-defined agents collect git, repo,
-  GitHub, model, or security context and produce scheduled reports.
-
-## Screenshots
+[Website](https://lfg.apps.omg.dev) · [Quick start](#quick-start) · [Security](#security) · [Contributing](./CONTRIBUTING.md)
 
 <p>
   <img src="https://raw.githubusercontent.com/BennyKok/lfg/main/docs/images/lfg-screenshot-1.jpg" alt="lfg web UI screenshot" width="31%" />
@@ -43,65 +19,109 @@ web UI, and lets you answer prompts or steer work from your phone or laptop.
   <img src="https://raw.githubusercontent.com/BennyKok/lfg/main/docs/images/lfg-screenshot-3.jpg" alt="lfg usage limits screenshot" width="31%" />
 </p>
 
-Images live in this repo (not hotlinked from elsewhere) so the README renders
-reliably on GitHub.
+---
 
-## Requirements
+## Quick start
 
-- [Bun](https://bun.sh)
-- `tmux`
-- `git`
-- At least one supported coding agent:
-  - `claude` — Claude Code CLI
-  - `codex` — OpenAI Codex CLI
-  - `opencode` — OpenCode CLI
-  - `cursor-agent` — Cursor CLI
-  - `grok` — Grok CLI
-  - `hermes` — Hermes Agent
-  - `copilot` — GitHub Copilot CLI (Node 22+)
-  - **Pi** — ships bundled with LFG (`@mariozechner/pi-coding-agent`); no
-    separate CLI install. Auth via `ANTHROPIC_API_KEY` or `~/.pi/agent/auth.json`
-- Optional: [Tailscale](https://tailscale.com) for private remote access
-
-## Quick Start
-
-There are two ways to get a running `lfg`:
-
-1. **One-click on omg.dev** — a hosted workspace in a few seconds, nothing to
-   install. See [One-click setup on omg.dev](#one-click-setup-on-omgdev).
-2. **Install on your own machine** — the setup script below. Best for day-to-day
-   work, since sessions then run where your repos and authenticated CLIs already
-   are.
-
-Install on an Ubuntu/Debian VPS or macOS workstation:
+**Install it on your own machine — one command:**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/BennyKok/lfg/main/scripts/setup.sh | bash
 ```
 
-For a non-interactive Tailscale join:
+Then open **http://127.0.0.1:8766**.
+
+That's the whole install. The script provisions Bun, `tmux`, and `git`,
+downloads the latest release, writes `.env`, and starts `lfg` as a user service
+bound to loopback. On a fresh Ubuntu/Debian box, add
+`LFG_INSTALL_SYSTEM_DEPS=1` so it may `apt-get` the base packages.
+
+Next: [connect a coding agent](#connect-a-coding-agent) so you have something to
+run, and [reach it from your phone](#reach-it-from-your-phone).
+
+**Or try it hosted, with no install at all:**
+
+[![Deploy on omg](https://omg.dev/deploy-badge.svg?v=2)](https://omg.dev/sandbox/templates/lfg)
+
+One click on [omg.dev](https://omg.dev/sandbox/templates/lfg) gives you a
+workspace with `lfg` already running — nothing to install and no server to
+provision. See [One-click setup on omg.dev](#one-click-setup-on-omgdev).
+
+> **Which should I pick?** Install locally if you want agents working on the
+> repos and authenticated CLIs already on your machine — that is what `lfg` is
+> for. Use omg.dev to try it in seconds, or when you would rather not run a box
+> at all.
+
+### Run from source instead
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BennyKok/lfg/main/scripts/setup.sh \
-  | TS_AUTHKEY=tskey-auth-xxxx bash
+git clone https://github.com/BennyKok/lfg.git
+cd lfg
+bun install
+cp .env.example .env
+bun run serve
 ```
 
-The setup script downloads the latest release, installs production dependencies,
-writes `.env`, and starts the server as a user service bound to loopback. When
-Claude or Codex is already installed, setup also registers the local LFG MCP
-server with that CLI. **Settings → Coding agents → Install MCP** verifies and
-registers LFG MCP with Claude, Codex, OpenCode, Grok, and Cursor when those
-CLIs are present (Hermes, Copilot, and Pi have no MCP registration surface).
+Open `http://127.0.0.1:8766`. For UI hot reload (proxies `/api` to the Bun
+server): `cd web && bun install && bun run dev`.
 
-To expose the UI over your private tailnet:
+### What you need
+
+The installer handles all of this for you; this list is for the from-source path
+and for the curious.
+
+- [Bun](https://bun.sh), `tmux`, `git`
+- At least one coding agent CLI — see below
+- Optional: [Tailscale](https://tailscale.com) for private remote access
+
+## Connect a coding agent
+
+`lfg` drives agent CLIs that you own and authenticate. Open **Settings → Coding
+agents** in the web UI to install one, check its binary path and auth state, and
+register LFG's MCP server with it.
+
+| Agent | Command | Notes |
+| --- | --- | --- |
+| Claude Code | `claude` | Installed by the setup script |
+| OpenAI Codex | `codex` | |
+| OpenCode | `opencode` | |
+| Cursor | `cursor-agent` | |
+| Grok | `grok` | |
+| Hermes | `hermes` | |
+| GitHub Copilot | `copilot` | Needs Node 22+ |
+| Pi | *bundled* | Ships with LFG (`@mariozechner/pi-coding-agent`); no separate install |
+
+OAuth-based agents need a one-time terminal or browser login. API-key providers
+read env vars such as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` from `.env`. Pi
+authenticates via `ANTHROPIC_API_KEY` or `~/.pi/agent/auth.json`.
+
+**Settings → Coding agents → Install MCP** registers LFG MCP with Claude, Codex,
+OpenCode, Grok, and Cursor when those CLIs are present. (Hermes, Copilot, and Pi
+have no MCP registration surface.) The setup script does this automatically for
+Claude and Codex when they are already installed.
+
+## Reach it from your phone
+
+`lfg` binds to loopback and has **no authentication of its own** — it trusts the
+network you put it behind. Two supported ways to get to it remotely:
 
 ```bash
-LFG_TAILSCALE_SERVE=1 lfg setup
+LFG_TAILSCALE_SERVE=1 lfg setup      # private: front it with Tailscale
 ```
 
-Open **Settings → Coding agents** to install or check CLIs. OAuth-based agents
-still need a one-time terminal/browser login; API-key providers can use env vars
-such as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
+```bash
+LFG_RELAY_URL=wss://your-relay.example/connect lfg connect ABC123   # outbound relay, no inbound port
+```
+
+Tailscale is the simpler choice if you only open the UI from your own devices.
+The relay (experimental) exists for the case Tailscale can't cover — rendering a
+session from your box on a *public* web origin; it needs a relay you or someone
+else operates, since none ships with LFG. Full comparison, the pairing flow, and
+opt-in session lifecycle events:
+**[docs/remote-access.md](./docs/remote-access.md)**.
+
+Do not put `lfg` on the public internet without your own auth in front of it.
+See [Security](#security).
 
 ## One-click setup on omg.dev
 
@@ -116,191 +136,55 @@ such as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
    `lfg serve --host 0.0.0.0 --port 8766`.
 3. Your browser lands on the workspace URL with the LFG web UI already running.
 
-The template ships with `lfg` and its runtime prerequisites already installed, so
-none of the [Requirements](#requirements) above apply. Workspaces hibernate when
-idle and wake on the same URL.
+The template ships with `lfg` and its prerequisites installed, so none of
+[What you need](#what-you-need) applies. Workspaces hibernate when idle and wake
+on the same URL.
 
-A fresh workspace intentionally has no agent CLIs signed in. Open **Settings →
-Coding agents** to install a CLI and check its auth state, then either complete
-the normal OAuth login inside the workspace or set `ANTHROPIC_API_KEY` /
-`OPENAI_API_KEY` for API-key operation. More detail in
+A fresh workspace intentionally has no agent CLIs signed in — use **Settings →
+Coding agents** as above. Because the sandbox is a remote machine, agents work
+on repos you clone *into* that workspace; to use the repos already on your own
+machine, install locally instead. More detail in
 [deploy/omg](./deploy/omg/README.md).
 
-Because the sandbox is a remote machine, agents work on repos you clone *into*
-that workspace. To run agents against the repos already on your own machine, use
-the [Quick Start](#quick-start) installer instead.
+## Why lfg?
 
-## Other cloud deploys
-
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template?template=https://github.com/BennyKok/lfg)
-
-The shared [Dockerfile](./Dockerfile) also works for
-[Railway](./deploy/railway/README.md), [Fly.io](./deploy/fly/README.md),
-[Render](./deploy/render/README.md), [DigitalOcean](./deploy/digitalocean/README.md),
-and [Koyeb](./deploy/koyeb/README.md). For Hetzner, use the cloud-init template in
-[deploy/hetzner](./deploy/hetzner/README.md).
-
-These PaaS targets are best for demos or private-network deployments. Day-to-day
-agent work is happiest on the machine that already has your repos, `tmux`, and
-authenticated CLIs. A VPS remains the cleanest production-style target.
-
-The Dockerfile builds from the source tree it is given: it installs dependencies
-with Bun, builds the web UI, and runs `bun run serve`. Nothing has to be
-published first — a one-click deploy builds whatever commit the platform checks
-out.
-
-**Maintainer note:** “deploy” means make current changes visible in the running
-instance (rebuild/restart as needed). “release” means cut a tag and publish
-`lfg-bundle.tar.gz`.
-
-Platform-specific account, networking, and secret requirements live in each
-`deploy/*/README.md`. In short: keep public networking off unless you put auth
-in front of `lfg`, prefer Tailscale for remote access, and scope provider keys
-to that environment only.
-
-## Local Development
-
-```bash
-git clone https://github.com/BennyKok/lfg.git
-cd lfg
-bun install
-cp .env.example .env
-bun run serve
-```
-
-Open `http://127.0.0.1:8766`.
-
-For UI hot reload (proxies `/api` to the Bun server):
-
-```bash
-cd web && bun install && bun run dev
-```
-
-Authenticate the agent CLI you want to use (for example run `claude` once and
-complete OAuth), or set the required API key in `.env`.
-
-## Embedding the LFG application
-
-Every release publishes four immutable packages:
-
-- `@lfg-dev/protocol` — shared wire types
-- `@lfg-dev/client` — authenticated HTTP and multiplexed live transport
-- `@lfg-dev/react` — smaller headless/session surfaces
-- `@lfg-dev/app` — the exact full LFG application used by the standalone web UI
-
-React hosts mount the full application with their own transport and asset
-origin. LFG keeps its internal navigation in a memory router, so it does not
-take over the host product's URL:
-
-```tsx
-import { createGrantTransport } from "@lfg-dev/client";
-import { LfgAppSurface } from "@lfg-dev/app";
-import "@lfg-dev/app/styles.css";
-
-<LfgAppSurface
-  transport={createGrantTransport({
-    baseUrl: "https://sessions.example",
-    getGrant: mintSignedSessionGrant,
-  })}
-  assetBaseUrl="https://sessions.example"
-/>
-```
-
-Standalone LFG and embedded hosts therefore render one visual component tree;
-only authentication, API origin, and outer product navigation belong to the
-host.
+- **Run agents where your code lives.** Sessions execute on your machine, in
+  your repos, with your local CLIs and credentials — not a remote sandbox you
+  have to keep in sync.
+- **One UI for every harness.** Switch agents and models per session, resume
+  work, answer permission prompts, and manage projects from an installable PWA.
+- **Keep it private.** The server binds to loopback by default and is designed
+  to be exposed through Tailscale, not the public internet.
+- **Show the work.** Agents can display verification media, publish updatable
+  HTML dashboards, and post finished results to the Shipped feed.
+- **Delegate with lineage.** LFG MCP tools spawn subagents that stay visible in
+  the UI, inherit parent context, and report progress back.
+- **Automate repo checks.** Optional markdown-defined agents collect git, repo,
+  GitHub, model, or security context and produce scheduled reports.
 
 ## Commands
 
 ```bash
-bun run serve                  # web UI + control server
-bun run agents -- list         # list markdown-defined insight agents
-bun run agents -- run <name>   # run an insight agent
-bun run subagent -- models     # list runtime sub-agent providers/models
-bun run subagent -- create --prompt "..." --agent codex-aisdk
-bun run mcp                    # stdio MCP server for LFG session tools
-bun run whatsapp -- run        # optional WhatsApp sidecar
-bun run connect -- <code>      # pair this box to a remote-access relay (see below)
-bun run setup                  # rerun provisioning/update flow
+lfg serve                      # web UI + control server
+lfg setup                      # rerun provisioning/update flow
+lfg connect <code>             # reach this box through a relay (see docs/remote-access.md)
+lfg mcp                        # stdio MCP server for LFG session tools
+lfg agents list                # list markdown-defined insight agents
+lfg agents run <name>          # run an insight agent
+lfg subagent models            # list runtime sub-agent providers/models
+lfg subagent create --prompt "..." --agent codex-aisdk
+lfg whatsapp run               # optional WhatsApp sidecar
 ```
 
-Installed release builds expose the same surface as `lfg <command>`.
+From a source checkout, use `bun run <command>` (e.g. `bun run serve`) — the
+surface is identical.
 
-### `lfg connect` — reach this box through a relay
+## MCP tools
 
-`lfg serve`'s control API has no application-layer auth of its own (see
-[Security](#security)) — it trusts loopback + your tailnet. `lfg connect`
-lets an *operator-run relay* reach this box instead, without opening any
-inbound port: the box dials **out** to the relay over a WebSocket and holds
-it open, and the relay's own auth (a pairing code, then a persisted bearer
-token) is the boundary. No relay implementation ships with LFG — this is the
-generic client half of a documented protocol any relay operator can
-implement (see the wire protocol at the top of
-[`src/commands/connect.ts`](./src/commands/connect.ts)).
-
-```bash
-LFG_RELAY_URL=wss://your-relay.example/connect lfg connect ABC123   # redeem a one-time code, then stay connected
-LFG_RELAY_URL=wss://your-relay.example/connect lfg connect          # resume the saved binding (e.g. after a restart) — no code needed
-lfg connect status                                                  # show the current binding, if any
-lfg connect disconnect                                              # drop the saved binding locally
-```
-
-Run it under a process supervisor (systemd, `pm2`, etc. — not bundled) for a
-box that should stay connected: a bare `lfg connect` re-invocation resumes the
-saved binding on its own, so a crash/reboot recovers without operator action.
-
-`LFG_RELAY_URL` is required (no default — this file must never hardcode a
-specific operator's relay). The saved binding token lives in
-`data/relay-credentials.json` (mode `0600`); if the relay reports the token
-invalid, expired, or revoked, reconnecting stops and asks you to re-pair with
-a fresh code rather than retrying forever.
-
-**Session lifecycle events (opt-in).** Set `LFG_CONNECT_EVENTS=1` to also
-forward a small `event` frame up the relay socket whenever a local session
-finishes (`session.completed`) or needs a human (`session.needs_attention` —
-model unavailable, out of credits, provider auth/error; see `computeStatus` in
-[`src/sessions.ts`](./src/sessions.ts)). This is polled locally against this
-box's own `GET /api/sessions` every `LFG_CONNECT_EVENTS_INTERVAL_MS` (default
-`4000`) and only sent while a relay connection is open — see the "Session
-lifecycle events" doc block at the top of
-[`src/commands/connect.ts`](./src/commands/connect.ts) for the exact
-transition rules and wire shape.
-
-Not every transition is forwarded, even with the flag on. Two sanity defaults
-apply client-side, for any relay operator, before a frame is ever built:
-a session with a `parentSessionId` (a subagent) never forwards — subagent
-churn on a busy box is routine and constant, and forwarding it would make
-every internal step of someone else's task look like a top-level
-notification; and a `session.completed` for a session that ran under
-`LFG_CONNECT_EVENTS_MIN_DURATION_MS` (default `60000`) is dropped — a
-one-minute-or-shorter run isn't news. `session.needs_attention` is exempt
-from that duration floor (a blocked session is actionable regardless of how
-young it is). See `isTopLevelSession`/`isReportableTransition` in
-[`src/commands/connect.ts`](./src/commands/connect.ts).
-
-**Privacy:** this is off by default because the event includes the session's
-title (derived from your own first prompt in that session) and project/agent
-name, which then leave this box for whatever relay `LFG_RELAY_URL` points at.
-The top-level/60s filter above narrows *which* transitions can trigger that,
-but doesn't change what leaves the box once one does — a forwarded event's
-title is still your own raw prompt text, verbatim.
-
-The MCP server talks to the local `lfg serve` API and exposes tools such as
-`lfg_capabilities`, `lfg_list_sessions`, `lfg_get_session_messages`,
-`lfg_send_session_message`, `lfg_create_subagent`, and `lfg_list_subagents`. Use it from an MCP client with
-`lfg mcp` or `bun run mcp`. When an MCP client also exposes its own generic
-sub-agent/delegation tool, prefer the `lfg_*subagent*` and `lfg_delegate_*`
-tools so child sessions stay visible in LFG, inherit parent/user context, and
-can run on any configured harness. LFG-managed subagents may nest up to four
-levels deep. Each child is launched with an operating contract that tells it to
-use LFG MCP for any further delegation and to send `[subagent progress]` updates
-plus one terminal `[subagent complete]`, `[subagent blocked]`, or
-`[subagent failed]` message back to its parent session.
-### MCP tools
-
-`lfg mcp` (or `bun run mcp`) talks to the local `lfg serve` API. Prefer LFG’s
-own subagent tools over a client’s generic “spawn agent” helper so children stay
-visible, inherit parent/user context, and can run on any configured harness.
+`lfg mcp` talks to the local `lfg serve` API and exposes LFG's session tools to
+any MCP client. Prefer LFG's own subagent tools over a client's generic "spawn
+agent" helper so children stay visible in the UI, inherit parent and user
+context, and can run on any configured harness.
 
 | Area | Tools |
 | --- | --- |
@@ -316,44 +200,34 @@ contract** (when to show media, publish artifacts, ask the user, delegate, or
 ship). Sessions started on an older contract are marked in the UI so they can be
 closed and resumed to pick up the current tool catalog.
 
-Subagents may nest up to four levels. Each child is expected to send
-`[subagent progress]` updates and one terminal
-`[subagent complete]` / `[subagent blocked]` / `[subagent failed]` message to
-its parent.
-
-Backend diagnostics append to `data/logs/trace-YYYY-MM-DD.jsonl` (API timings,
-transcript indexing, live stream stalls, send queue state).
+Subagents may nest up to four levels. Each child sends `[subagent progress]`
+updates and one terminal `[subagent complete]` / `[subagent blocked]` /
+`[subagent failed]` message to its parent.
 
 ## Configuration
 
-Configuration lives in `.env`; see [`.env.example`](./.env.example).
+Configuration lives in `.env`. **[`.env.example`](./.env.example) documents every
+variable inline** — these are the ones most people touch:
 
 | Variable | Purpose |
 | --- | --- |
 | `LFG_HOST` | Bind address. Keep `127.0.0.1` unless you know the risk. |
 | `LFG_PORT` | Web UI and API port. Defaults to `8766`. |
-| `LFG_TRACE_RETENTION_DAYS` | Days of backend trace logs to retain. Defaults to `7`. |
-| `LFG_TRACE_TRANSCRIPT_PAGE_SAMPLE_RATE` | Sample one fast transcript-page trace in every N calls. Defaults to `100`; slow calls are always retained. |
-| `LFG_TRACE_TRANSCRIPT_PAGES` | Set to `1` to retain every transcript-page trace for a focused diagnostic. |
 | `LFG_REPOS_ROOT` | Directory scanned for git repos. |
-| `LFG_CLAUDE_PATH` | Override the `claude` binary path. |
-| `LFG_CODEX_PATH` | Override the `codex` binary path. |
-| `LFG_OPENCODE_PATH` | Override the `opencode` binary path. |
-| `LFG_CURSOR_PATH` | Override the Cursor CLI path (`cursor-agent`, or a non-Grok `agent`). |
-| `LFG_HERMES_PATH` | Override the `hermes` binary path. |
-| `LFG_HERMES_PROVIDER` | Optional provider override for `hermes chat --provider`. |
-| `LFG_PI_PATH` | Override the bundled Pi CLI path. |
-| `LFG_PI_PROFILE_DIR` | Optional [custom agent profile](./docs/custom-agent-profiles.md) for Pi (extra system prompt, skills, display name). |
-| `LFG_COPILOT_PATH` | Override the `copilot` binary path. Auth via interactive `/login` or `COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN` (Copilot Requests scope). |
-| `LFG_COPILOT_ALLOW_ALL_TOOLS` | Set to `1` to pass `--allow-all-tools` when spawning Copilot. Off by default; enable only when the host is the trust boundary. |
-| `LFG_COPILOT_VERSION` | Pinned `@github/copilot` version for `LFG_INSTALL_COPILOT=1` (default `1.0.71`). Prefer a known-good pin over floating `latest`. |
 | `ANTHROPIC_API_KEY` | Optional API key for Claude / Pi flows. |
-| `LFG_WHATSAPP_*` | Optional WhatsApp bridge settings. |
-| `LFG_RELAY_URL` | Relay WebSocket URL for `lfg connect` (required to use it — no default). See [Commands](#commands). |
-| `LFG_CONNECT_EVENTS` | Opt-in (default off): `lfg connect` forwards session completed/needs-attention events to the relay. Session titles leave the box when on — see [Commands](#commands). |
-| `LFG_CONNECT_EVENTS_INTERVAL_MS` | Local session-poll interval in ms when `LFG_CONNECT_EVENTS` is on (default `4000`). |
-| `LFG_CONNECT_EVENTS_MIN_DURATION_MS` | Minimum session duration (ms) for a `session.completed` to be forwarded when `LFG_CONNECT_EVENTS` is on (default `60000`). Does not apply to `session.needs_attention`. |
+| `LFG_<AGENT>_PATH` | Override a CLI's binary path (`LFG_CLAUDE_PATH`, `LFG_CODEX_PATH`, `LFG_OPENCODE_PATH`, `LFG_CURSOR_PATH`, `LFG_HERMES_PATH`, `LFG_PI_PATH`, `LFG_COPILOT_PATH`). |
+| `LFG_RELAY_URL` | Relay WebSocket URL for `lfg connect`. See [docs/remote-access.md](./docs/remote-access.md). |
 | `LFG_INSTALL_CHANNEL` | Install channel: `source`, `release`, or `container`. Usually set by setup/deploy. |
+
+Other groups: agent-specific behaviour (`LFG_COPILOT_ALLOW_ALL_TOOLS`,
+`LFG_HERMES_PROVIDER`, `LFG_PI_PROFILE_DIR` — see
+[custom agent profiles](./docs/custom-agent-profiles.md)), relay event
+forwarding (`LFG_CONNECT_EVENTS*`), backend tracing
+(`LFG_TRACE_RETENTION_DAYS`, `LFG_TRACE_TRANSCRIPT_*`), and the optional
+WhatsApp bridge (`LFG_WHATSAPP_*`).
+
+Backend diagnostics append to `data/logs/trace-YYYY-MM-DD.jsonl` (API timings,
+transcript indexing, live stream stalls, send queue state).
 
 ## Security
 
@@ -364,7 +238,36 @@ privately through Tailscale.
 **Do not expose `lfg` directly to the public internet.** Read
 [SECURITY.md](./SECURITY.md) before sharing access.
 
-## Project Layout
+## Deploy to a cloud host
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template?template=https://github.com/BennyKok/lfg)
+
+The shared [Dockerfile](./Dockerfile) works for
+[Railway](./deploy/railway/README.md), [Fly.io](./deploy/fly/README.md),
+[Render](./deploy/render/README.md), [DigitalOcean](./deploy/digitalocean/README.md),
+and [Koyeb](./deploy/koyeb/README.md). For Hetzner, use the cloud-init template
+in [deploy/hetzner](./deploy/hetzner/README.md). It builds from the source tree
+it is given — installs dependencies with Bun, builds the web UI, runs
+`bun run serve` — so a one-click deploy builds whatever commit the platform
+checks out. Nothing has to be published first.
+
+These PaaS targets are best for demos or private-network deployments. Day-to-day
+agent work is happiest on the machine that already has your repos, `tmux`, and
+authenticated CLIs.
+
+Platform-specific account, networking, and secret requirements live in each
+`deploy/*/README.md`. In short: keep public networking off unless you put auth
+in front of `lfg`, prefer Tailscale for remote access, and scope provider keys
+to that environment only.
+
+## Embedding LFG in your own product
+
+Every release publishes `@lfg-dev/protocol`, `@lfg-dev/client`, `@lfg-dev/react`,
+and `@lfg-dev/app` — the last being the exact full application the standalone
+web UI runs. React hosts mount it with their own transport and asset origin. See
+**[docs/embedding.md](./docs/embedding.md)**.
+
+## Project layout
 
 ```text
 src/                 CLI, server, sessions, tmux, agents, MCP, integrations
