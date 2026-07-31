@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 31, 2026 - Hosted composers send to the selected Computer (v0.1.152)
+
+- Fixes the embedded text composer sending messages to the host dashboard
+  instead of the selected LFG Computer. Hosted and custom-connected Computers
+  now send through the same authenticated transport as every other session
+  action.
+
 ## July 31, 2026 - See what each session is using (v0.1.151)
 
 - Restores Token usage to the session menu, opening a focused inspector for
