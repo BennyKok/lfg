@@ -4,6 +4,16 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 31, 2026 - Hosted Computer identity no longer depends on email (v0.1.166)
+
+- An omg hosted Computer with no local user roster no longer rejects session
+  creation or resume when the embedded browser remembers an account email.
+  Hosted access remains owned by omg's stable account id; LFG's email field is
+  treated only as optional presentation metadata.
+- The embedded client now sends an owner only when it exists in the Computer's
+  current roster. A changed or stale email can no longer strand create, resume,
+  continue, fork, finding-reply, or session-management flows.
+
 ## July 31, 2026 - OpenCode's safe default everywhere (v0.1.165)
 
 - New and resumed OpenCode sessions now resolve their default from the same
