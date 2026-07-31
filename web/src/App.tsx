@@ -18,6 +18,7 @@ import { emitSessionCreatedToHost } from "./lib/embed-host-signal";
 import { LFG_SMALL_ICON_PATH } from "./lib/icon-assets";
 import { api, lfgAssetUrl, lfgFetch, lfgUpload } from "./lib/lfg-client";
 import { cacheProjectFilter, readCachedProjectFilter } from "./lib/project-filter";
+import { resolveRosterUser } from "./lib/roster-user";
 import { uploadFile as uploadFileThroughTransport } from "./lib/upload";
 import { AppCrash } from "./components/app-crash";
 import { EmbeddedConnectGate } from "./components/embedded-connect-gate";
@@ -5318,11 +5319,12 @@ export function App() {
     const sourceAgent = autoAgents.find((a) => a.id === f.agentId);
     const agentCwd = sourceAgent?.cwd;
     const cwd = agentCwd || localStorage.getItem("lfg_v2_repo") || repos[0]?.cwd || "";
-    const owner =
-      (userFilter !== "__all" && userFilter !== "__unassigned" ? userFilter : "") ||
-      localStorage.getItem("lfg_user") ||
-      users[0]?.email ||
-      "";
+    const owner = resolveRosterUser(
+      userFilter !== "__all" && userFilter !== "__unassigned"
+        ? userFilter
+        : localStorage.getItem("lfg_user"),
+      users,
+    );
     setOpenFinding(null);
     try {
       const res = await api<{ sessionId?: string }>("/api/sessions/new", {
@@ -5496,11 +5498,12 @@ export function App() {
       modelCatalog.defaults[launchAgent] ||
       AGENT_DEFAULT_MODEL[launchAgent];
     const owner =
-      userFilter !== "__all" && userFilter !== "__unassigned"
-        ? userFilter
-        : userFilter === "__unassigned"
-          ? ""
-          : localStorage.getItem("lfg_user") || users[0]?.email || "";
+      userFilter === "__unassigned"
+        ? ""
+        : resolveRosterUser(
+            userFilter !== "__all" ? userFilter : localStorage.getItem("lfg_user"),
+            users,
+          );
     const prompt = buildManageSessionsPrompt(template, projectFilter);
 
     try {
@@ -15478,8 +15481,8 @@ function NewSessionDialog({
   // the live view's auto-default filter (which flips to a specific user) then
   // hides it, so "I created a session but don't see it". The Owner dropdown still
   // lets you pick Unassigned explicitly.
-  const [user, setUser] = useState(
-    () => defaultUser || localStorage.getItem("lfg_user") || users[0]?.email || "",
+  const [user, setUser] = useState(() =>
+    resolveRosterUser(defaultUser || localStorage.getItem("lfg_user"), users),
   );
   const [prompt, setPromptState] = useState(
     () => readPromptDraft("new-session")?.text ?? "",
@@ -15867,6 +15870,7 @@ function NewSessionDialog({
             ? model
             : defaultModelFor("codex-aisdk")
           : undefined;
+    const resumeUser = resolveRosterUser(user, users);
     onClose();
     toast.promise(
       api("/api/sessions/resume", {
@@ -15875,7 +15879,7 @@ function NewSessionDialog({
         body: JSON.stringify({
           sessionId: session.sessionId,
           prompt: resumePrompt || undefined,
-          user: user || undefined,
+          user: resumeUser || undefined,
           model: resumeModel,
         }),
       })
@@ -15900,7 +15904,9 @@ function NewSessionDialog({
   // Each time the dialog opens, default the owner to the currently selected
   // user (the live-view filter / active profile) so a new session lands with us.
   useEffect(() => {
-    if (open) setUser(defaultUser || localStorage.getItem("lfg_user") || users[0]?.email || "");
+    if (open) {
+      setUser(resolveRosterUser(defaultUser || localStorage.getItem("lfg_user"), users));
+    }
   }, [open, defaultUser, users]);
 
   const models = catalog.models[agent] ?? AGENT_MODELS[agent];
@@ -16037,7 +16043,7 @@ function NewSessionDialog({
       toast.error(message);
       return;
     }
-    const launchUser = user || null;
+    const launchUser = resolveRosterUser(user, users) || null;
     const launchAgent = agent;
     const launchModel = model;
     const launchThinkingLevel = thinkingLevel;

@@ -18,6 +18,13 @@ describe("resolveSessionUserTag", () => {
     expect(resolveSessionUserTag(undefined, [])).toEqual({ ok: true, user: undefined });
   });
 
+  test("roster-less resume drops a stale persisted assignment", () => {
+    expect(resolveSessionUserTag("old-account@example.com", [])).toEqual({
+      ok: true,
+      user: undefined,
+    });
+  });
+
   test("a configured roster still rejects an unknown email", () => {
     expect(resolveSessionUserTag("stranger@example.com", ROSTER)).toEqual({
       ok: false,

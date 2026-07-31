@@ -48,14 +48,14 @@ export type SessionUserTag =
   | { ok: false; unknown: string };
 
 /**
- * Decide the user tag for an incoming session CREATE.
+ * Decide the user tag for an incoming session transition.
  *
  * Multi-user tagging is opt-in. The roster is LFG_USERS plus onboarding
  * profiles, and when both are empty there is nobody to split the session list
  * between — the feature is OFF, not "every user is invalid". A hosted
  * deployment (an omg Computer is one box per account) is exactly that shape,
  * and a client that tags sessions with the signed-in identity was 400ing every
- * session create against a box with no roster to map it to. So a roster-less
+ * create or resume against a box with no roster to map it to. So a roster-less
  * instance drops the tag and leaves the session unassigned.
  *
  * With a roster configured the old contract stands: an unknown email is a hard

@@ -3914,8 +3914,9 @@ export async function cmdServe() {
           const cwd = await resolveResumeCwd(cachedResume.cwd, cachedResume.project);
           const tmuxName = `lfg-${randomBytes(3).toString("hex")}`;
           const resumeHandle = cachedResume.resumeHandle || sessionId;
-          const assignedUser = body?.user || cachedResume.assignedUser || undefined;
-          if (assignedUser && !rosterEmails().includes(assignedUser)) return err(400, "unknown user");
+          const tag = resolveSessionUserTag(body?.user || cachedResume.assignedUser);
+          if (!tag.ok) return err(400, `unknown user "${tag.unknown}"`);
+          const assignedUser = tag.user;
           const resumeModel = model || cachedResume.model || (
             cachedResume.backend === "codex-aisdk"
               ? "gpt-5.5"
@@ -4031,8 +4032,9 @@ export async function cmdServe() {
             cachedResume.project,
           );
           const tmuxName = `lfg-${randomBytes(3).toString("hex")}`;
-          const assignedUser = body?.user || cachedResume.assignedUser || undefined;
-          if (assignedUser && !rosterEmails().includes(assignedUser)) return err(400, "unknown user");
+          const tag = resolveSessionUserTag(body?.user || cachedResume.assignedUser);
+          if (!tag.ok) return err(400, `unknown user "${tag.unknown}"`);
+          const assignedUser = tag.user;
           const resumeModel = model || cachedResume.model || (
             agent === "grok" ? GROK_DEFAULT_MODEL : "auto"
           );
