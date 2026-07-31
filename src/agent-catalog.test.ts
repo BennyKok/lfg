@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   curateOpenCodeModels,
+  defaultModelForAgent,
   discoveredModelsOrFallback,
   listModelCatalog,
   MODEL_OPTIONS,
@@ -91,6 +92,7 @@ describe("OpenCode catalog default", () => {
   test("uses only a runnable anonymous model as the cold fallback", () => {
     expect(OPENCODE_MODELS).toEqual(["opencode/deepseek-v4-flash-free"]);
     expect(MODEL_OPTIONS.opencode.defaultModel).toBe("opencode/deepseek-v4-flash-free");
+    expect(defaultModelForAgent("opencode")).toBe("opencode/deepseek-v4-flash-free");
   });
 
   test("replaces stale fallback providers with successful live discovery", () => {

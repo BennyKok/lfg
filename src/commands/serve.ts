@@ -223,6 +223,7 @@ import {
 } from "../coding-agents.ts";
 import {
   AUTO_AGENT_BACKENDS,
+  defaultModelForAgent,
   listModelCatalog,
   modelsForAgent,
   resolveModelForAgent,
@@ -421,13 +422,12 @@ function uploadChunkParams(url: URL): { uploadId: string; offset: number; total:
 }
 
 const GROK_DEFAULT_MODEL = "grok-4.5";
-const OPENCODE_DEFAULT_MODEL = "opencode-go/deepseek-v4-flash";
 const PI_DEFAULT_MODEL = "sonnet";
 // Models whose provider currently rejects our requests (Sakana's fugu returns a
 // hard 403 Forbidden, and the local Novita credential currently 403s too — see
 // opencode.log). A session born onto one of these streams zero output and
 // silently goes idle, so redirect create + model-switch away from them to the
-// verified OpenCode Go default instead of letting the turn die.
+// catalog-owned anonymous OpenCode default instead of letting the turn die.
 const OPENCODE_DISABLED_MODELS = new Set<string>([
   "fugu/fugu",
   "fugu/fugu-ultra",
@@ -3920,7 +3920,7 @@ export async function cmdServe() {
             cachedResume.backend === "codex-aisdk"
               ? "gpt-5.5"
               : cachedResume.backend === "opencode"
-                ? OPENCODE_DEFAULT_MODEL
+                ? defaultModelForAgent("opencode")
                 : cachedResume.backend === "pi"
                   ? PI_DEFAULT_MODEL
                   : "opus"
@@ -4320,9 +4320,11 @@ export async function cmdServe() {
         // hard 400, never a silent fallback to some other model. Codex model
         // names are provider/catalog driven, so validate shape instead.
         const requestedModel = body?.model?.trim() || undefined;
+        const opencodeDefault =
+          agent === "opencode" ? defaultModelForAgent("opencode") : undefined;
         const model =
           agent === "opencode" && requestedModel && OPENCODE_DISABLED_MODELS.has(requestedModel)
-            ? OPENCODE_DEFAULT_MODEL
+            ? opencodeDefault
             : requestedModel;
         if (agent === "claude" && model) {
           const allowed = modelsForAgent("claude");
@@ -4513,7 +4515,7 @@ export async function cmdServe() {
             : agent === "cursor"
               ? resolvedModel ?? "auto"
               : agent === "opencode"
-                  ? resolvedModel ?? OPENCODE_DEFAULT_MODEL
+                  ? resolvedModel ?? opencodeDefault
                   : agent === "codex-aisdk"
                     ? resolvedModel ?? "gpt-5.5"
                     : agent === "aisdk"
@@ -4609,7 +4611,7 @@ export async function cmdServe() {
                       name: tmuxName,
                       cwd,
                       prompt,
-                      model: resolvedModel ?? OPENCODE_DEFAULT_MODEL,
+                      model: resolvedModel ?? opencodeDefault!,
                       key: opencodeKey!,
                       lfgSessionId: launchId,
                       lfgUser: assignedUser,

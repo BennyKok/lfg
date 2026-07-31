@@ -434,6 +434,18 @@ function defaultModelForCatalogItem(
     : models[0] ?? MODEL_OPTIONS[key].defaultModel;
 }
 
+/** Resolve the current default from the same catalog the picker renders. */
+export function defaultModelForAgent(
+  key: CodingAgentKind,
+  codingAgents: CodingAgentInfo[] = [],
+): string {
+  return defaultModelForCatalogItem(
+    key,
+    modelsForAgent(key),
+    hasConnectedModelAccount(codingAgents),
+  );
+}
+
 export function listModelCatalog(codingAgents: CodingAgentInfo[] = []): ModelCatalogItem[] {
   const configured = new Map(codingAgents.map((agent) => [agent.key, agent]));
   const accountConnected = hasConnectedModelAccount(codingAgents);
