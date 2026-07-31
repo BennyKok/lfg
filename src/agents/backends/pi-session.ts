@@ -36,6 +36,7 @@ import type { SessionMsg } from "../../sessions.ts";
 import { indexSessionMessagesDirect } from "../../transcript-index.ts";
 import { makeDraftPublisher } from "./draft.ts";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { initialCmdOffset, readNewCmdLines, writeCursor } from "./cmd-tail.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
@@ -373,27 +374,20 @@ export async function cmdPiSession(argv: string[]): Promise<void> {
   // Tail the command file by byte offset — same polling approach as the other
   // harnesses (simple + reliable across filesystems; 250ms is interactive).
   const cmdFile = cmdPath(key);
-  let cmdOffset = 0;
-  try { cmdOffset = statSync(cmdFile).size; } catch {}
+  let cmdOffset = initialCmdOffset(cmdFile);
+  writeCursor(cmdFile, cmdOffset);
   const poll = setInterval(() => {
-    let raw = "";
-    try {
-      raw = readFileSync(cmdFile, "utf8");
-    } catch {
-      return; // not created yet
-    }
-    if (raw.length <= cmdOffset) {
-      if (raw.length < cmdOffset) cmdOffset = 0; // truncated/rotated
-      return;
-    }
-    const fresh = raw.slice(cmdOffset);
-    cmdOffset = raw.length;
-    for (const line of fresh.split("\n")) {
-      if (!line.trim()) continue;
+    const { lines, offset } = readNewCmdLines(cmdFile, cmdOffset);
+    if (offset === cmdOffset && !lines.length) return;
+    cmdOffset = offset;
+    for (const line of lines) {
       try {
         dispatch(JSON.parse(line) as AisdkCommand);
       } catch {}
     }
+    // Record what we consumed so a restart resumes here rather than re-reading
+    // delivered commands or skipping ones queued while this process was down.
+    writeCursor(cmdFile, cmdOffset);
   }, 250);
 
   // First message, if any, kicks off the conversation immediately.

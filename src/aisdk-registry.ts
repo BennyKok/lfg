@@ -16,6 +16,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { PATHS } from "./config.ts";
+import { removeCursor } from "./agents/backends/cmd-tail.ts";
 
 const DIR = join(PATHS.data, "aisdk");
 
@@ -151,6 +152,9 @@ export function removeEntry(sessionId: string): void {
   try {
     rmSync(cmdPath(sessionId), { force: true });
   } catch {}
+  // The harness's durable tail cursor goes with the command file it points into;
+  // a stray cursor would otherwise apply to a freshly recreated command file.
+  removeCursor(cmdPath(sessionId));
 }
 
 // Append one command for the harness to pick up. The harness tails this file.

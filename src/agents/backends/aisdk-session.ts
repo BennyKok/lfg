@@ -38,6 +38,7 @@ import {
 } from "../../transcript-index.ts";
 import { makeDraftPublisher } from "./draft.ts";
 import { readFileSync, statSync } from "node:fs";
+import { initialCmdOffset, readNewCmdLines, writeCursor } from "./cmd-tail.ts";
 import { claudeAccountEnv } from "../../claude-creds.ts";
 import {
   readStoredSessionTokenUsage,
@@ -404,33 +405,26 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
     }
   }
 
-  // Tail the command file by byte offset. Polling (vs fs.watch) is simpler and
+  // Tail the command file by BYTE offset. Polling (vs fs.watch) is simpler and
   // reliable across editors/filesystems; 250ms is well within interactive feel.
+  // See cmd-tail.ts for why the arithmetic must stay in bytes — mixing bytes and
+  // UTF-16 lengths used to rewind the cursor to 0 and replay the entire command
+  // history as new turns.
   const cmdFile = cmdPath(sessionId);
-  let cmdOffset = 0;
-  // Start tailing from the CURRENT end of the command file. Commands before
-  // this process started belong to a previous harness incarnation — replaying
-  // them on restart would re-send every historical message as a new turn.
-  try { cmdOffset = statSync(cmdFile).size; } catch {}
+  let cmdOffset = initialCmdOffset(cmdFile);
+  writeCursor(cmdFile, cmdOffset);
   const poll = setInterval(() => {
-    let raw = "";
-    try {
-      raw = readFileSync(cmdFile, "utf8");
-    } catch {
-      return; // not created yet
-    }
-    if (raw.length <= cmdOffset) {
-      if (raw.length < cmdOffset) cmdOffset = 0; // truncated/rotated
-      return;
-    }
-    const fresh = raw.slice(cmdOffset);
-    cmdOffset = raw.length;
-    for (const line of fresh.split("\n")) {
-      if (!line.trim()) continue;
+    const { lines, offset } = readNewCmdLines(cmdFile, cmdOffset);
+    if (offset === cmdOffset && !lines.length) return;
+    cmdOffset = offset;
+    for (const line of lines) {
       try {
         dispatch(JSON.parse(line) as AisdkCommand);
       } catch {}
     }
+    // Record what we consumed so a restart resumes here rather than re-reading
+    // delivered commands or skipping ones queued while this process was down.
+    writeCursor(cmdFile, cmdOffset);
   }, 250);
 
   // First message, if any, kicks off the conversation immediately.

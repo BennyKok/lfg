@@ -4,6 +4,26 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 31, 2026 - Resuming a session no longer replays your old messages (v0.1.158)
+
+- Resuming a session after a crash or restart could re-send your entire message
+  history back to the agent as if you had just typed it. The old messages
+  arrived stamped with the current time, so they piled up at the bottom of the
+  transcript as the "newest" thing, with the real conversation stranded above
+  them — and the agent would start answering questions you asked hours ago.
+- The cause was a cursor that counted the command log in bytes but compared it
+  in characters. Any non-ASCII character — a "—", an "…", an arrow, an emoji,
+  the smart punctuation dictated messages are full of — made the two disagree,
+  which read as "the file was truncated" and rewound the cursor to the start.
+  A single accented character was enough to trigger it.
+- On this machine 8 of 33 live sessions were primed to do exactly that, 379
+  replayed messages in total, the worst holding 247. All four agent backends
+  shared the bug; all four are fixed and covered by tests.
+- Sessions now remember how far they got. Messages you send while the server is
+  down or restarting are delivered when it comes back, instead of being silently
+  dropped — previously the only protection against replay was to skip everything
+  that arrived while the session was away.
+
 ## July 31, 2026 - Dismiss a question you're not going to answer (v0.1.157)
 
 - "Needs you" questions in the Notification Center can now be dismissed. The
