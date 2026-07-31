@@ -853,10 +853,12 @@ const AGENT_THINKING_LEVELS: Record<AgentKind, string[]> = {
   aisdk: ["low", "medium", "high", "xhigh", "max"],
   codex: ["none", "minimal", "low", "medium", "high", "xhigh"],
   "codex-aisdk": ["none", "minimal", "low", "medium", "high", "xhigh"],
-  grok: ["low", "medium", "high", "xhigh", "max"],
+  // grok's CLI exits on anything above high, so these are all it can take.
+  grok: ["low", "medium", "high"],
   cursor: ["low", "medium", "high", "xhigh", "max"],
   opencode: [],
-  pi: ["low", "medium", "high", "xhigh", "max"],
+  // pi's own list, straight from its --thinking help. It has a real "off".
+  pi: ["off", "minimal", "low", "medium", "high", "xhigh"],
   // copilot's CLI exposes no reasoning-effort knob (thinkingLevelsForAgent
   // returns null for it, same as opencode), so the selector stays hidden.
   copilot: [],
