@@ -4,6 +4,17 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 31, 2026 - Sign in to Grok from the browser (v0.1.155)
+
+- Connecting Grok no longer needs the terminal. Login on the Grok row now opens
+  the x.ai approval page directly, shows the one-time code, and detects approval
+  on its own — the same flow Claude and Codex already use.
+- The approval page opens with the code already filled in, so there is nothing
+  to copy across; just check it matches what LFG shows.
+- Grok now reports "connected" only when a sign-in token is actually saved.
+  Before, it counted the `~/.grok` folder as proof, so it could claim you were
+  signed in when you were not.
+
 ## July 31, 2026 - One notification inbox (v0.1.154)
 
 - Questions from agents now appear at the top of Notifications and are answered
