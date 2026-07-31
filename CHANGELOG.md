@@ -4,6 +4,18 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 31, 2026 - A genuinely sharp logo, and updates that actually arrive (v0.1.160)
+
+- The LFG mark is now real vector artwork, so it is sharp at every size. It had
+  been a small bitmap dressed up as an SVG since June, which no amount of
+  rendering work could rescue at the 24px the header draws it at. Same wordmark,
+  same colours — just drawn as outlines instead of pixels.
+- Reopening the app now picks up the newest version on its own. An installed app
+  is suspended rather than closed, so it could keep running one old build across
+  many updates while a "Reload to get the latest" prompt waited in a screen you
+  were not looking at. Resuming the app adopts a pending update instead; while
+  you are actively using it, LFG still asks first.
+
 ## July 31, 2026 - The LFG logo is sharp again (v0.1.159)
 
 - The mark in the top-left header renders crisply on iPhone and iPad again. It
