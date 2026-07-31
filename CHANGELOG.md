@@ -4,6 +4,17 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 31, 2026 - Hosted model choices that actually run (v0.1.164)
+
+- Skipping account setup in an omg hosted Computer now leaves one honest
+  choice: OpenCode. Claude, Codex, and other account-backed agents appear only
+  after that user-owned account is connected, rather than being unlocked by
+  platform proxy credentials.
+- OpenCode's live model list is now authoritative. Removed providers such as
+  `opencode-go` can no longer leak back into the picker from an old built-in
+  catalog; before discovery completes, LFG offers the verified anonymous
+  DeepSeek Flash model as its safe fallback.
+
 ## July 31, 2026 - Continue in a clean session (v0.1.163)
 
 - Session menus now have a Continue action beside Fork. It opens a fresh agent
