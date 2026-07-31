@@ -4,6 +4,19 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 31, 2026 - Dismiss a question you're not going to answer (v0.1.157)
+
+- "Needs you" questions in the Notification Center can now be dismissed. The
+  X on each card was there but invisible — hidden behind a hover state that
+  desktop overrode and phones can't trigger at all — so the only way to clear
+  a question was to answer it, while it kept the badge lit.
+- The dismiss button is always visible now, with a proper tap target, and a
+  "Dismiss all" clears a stack of them at once. Bulk dismissal asks for a
+  second tap to confirm, since every waiting agent moves on.
+- Answering or dismissing a question also takes down its phone notification.
+  Those banners are sticky by design, so they used to linger on the lock
+  screen long after the question was handled.
+
 ## July 31, 2026 - A folder picker you can actually scroll (v0.1.156)
 
 - The Projects sheet shows far more at a glance. The list was boxed into a
