@@ -4,6 +4,20 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 31, 2026 - One notification inbox (v0.1.154)
+
+- Questions from agents now appear at the top of Notifications and are answered
+  right there — tap a suggested option or type a reply. The separate Ask page is
+  gone; `/ask` opens Notifications.
+- Notifications are far more compact: one row per item with a small media
+  thumbnail instead of a full-width gallery, grouped under Today / Yesterday.
+  About three times as many fit on a phone screen.
+- The "Follow up" button is gone from notification cards. Opening a notification
+  takes you to the session, where forking already lives.
+- The feed loads faster and lighter: images download at thumbnail size rather
+  than full resolution, the list only sends what it shows, and a backgrounded
+  tab stops polling.
+
 ## July 31, 2026 - Jump to latest stays reachable (v0.1.153)
 
 - The scroll-to-latest pill no longer disappears behind the "files changed /
