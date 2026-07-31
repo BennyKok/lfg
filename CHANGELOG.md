@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 31, 2026 - Logo weight matched to the original (v0.1.161)
+
+- The vector wordmark now sits at the same size and weight the mark had before
+  it was redrawn. Converting it to vector had also made it noticeably larger and
+  heavier than the logo people were used to; it reads as the familiar mark again,
+  just sharp.
+
 ## July 31, 2026 - A genuinely sharp logo, and updates that actually arrive (v0.1.160)
 
 - The LFG mark is now real vector artwork, so it is sharp at every size. It had

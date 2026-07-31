@@ -6,7 +6,9 @@
     </linearGradient>
   </defs>
   <rect width="512" height="512" fill="url(#bg)"/>
-  <g fill="#fff" transform="translate(256 256) scale(.82) translate(-268 -256)">
+  <!-- Same 0.78 wordmark weight as icon.svg, so the adaptive icon and the app
+       icon read identically. Still well inside the maskable safe zone. -->
+  <g fill="#fff" transform="translate(256 256) scale(.78) translate(-268 -256)">
     <rect x="126" y="158" width="38" height="190" rx="7"/>
     <path d="M196 218v-12c0-36 22-56 59-56h29v35h-19c-21 0-30 8-30 25v8h48v36h-48v94h-39v-94h-28v-36h28Z"/>
     <path fill-rule="evenodd" d="M337 210c16 0 30 6 40 17v-13h37v126c0 51-29 78-78 78-25 0-48-7-65-19l16-30c14 9 30 14 47 14 28 0 43-13 43-40v-9c-11 12-25 18-41 18-39 0-68-30-68-71s29-71 69-71Zm7 35c-21 0-37 15-37 36s16 36 37 36c20 0 36-15 36-36s-16-36-36-36Z"/>
