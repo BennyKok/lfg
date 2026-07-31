@@ -438,6 +438,7 @@ const OPENCODE_DISABLED_MODELS = new Set<string>([
 ]);
 import { enqueueMessage, listQueue, retryMessage, clearResolved, reconcileQueued, getMessage } from "../sendq.ts";
 import { startFleetWatcher, subscribeFleet, type FleetEvent } from "../voice-bus.ts";
+import { startSessionPushBridge } from "../session-push.ts";
 import { handleElevenLlm, handleElevenToken } from "../voice-eleven-llm.ts";
 import { resolveVoiceIntent, type VoiceIntentRequest } from "../voice-intent.ts";
 
@@ -6387,6 +6388,9 @@ export async function cmdServe() {
   // Watch the fleet for busy -> idle transitions and fan "completed" events out
   // to voice subscribers (/api/voice/events). Idempotent + best-effort.
   startFleetWatcher();
+  // Bridge those same completions to Web Push, so an installed PWA hears
+  // about a landed turn with the app closed. Must follow startFleetWatcher().
+  startSessionPushBridge();
   // Keep SQLite as the chat read model for every active session. Transcript
   // JSONL files are treated as an import source; live draft deltas stay
   // ephemeral until the provider writes the completed turn.
