@@ -1,4 +1,5 @@
 import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
+import { lfgFetch } from "./lfg-client";
 
 export type LfgMessage = {
   id?: string;
@@ -455,15 +456,25 @@ class LfgChunkEmitter {
 
 export class LfgChatTransport implements ChatTransport<LfgChatMessage> {
   private readonly subscribeTranscript?: LfgTranscriptSubscribe;
-  private readonly fetchImpl: typeof globalThis.fetch;
+  private readonly fetchImpl: (input: string, init?: RequestInit) => Promise<Response>;
   private readonly apiBase: string;
+  private readonly usesConfiguredTransport: boolean;
   private readonly sessionId: string;
 
   constructor({ sessionId, apiBase = "", subscribeTranscript, fetch: fetchImpl }: LfgChatTransportOptions) {
     this.sessionId = sessionId;
     this.apiBase = apiBase;
     this.subscribeTranscript = subscribeTranscript;
-    this.fetchImpl = fetchImpl ?? globalThis.fetch.bind(globalThis);
+    // The embedded app's host owns auth and routing through configureLfgTransport.
+    // Falling back to window.fetch here bypassed that boundary and sent composer
+    // POSTs to the host page's origin (app.omg.dev) instead of the selected LFG
+    // instance. Use the configured transport whenever no explicit low-level
+    // fetch/base override was requested; standalone LFG's configured default is
+    // already the same-origin transport.
+    this.usesConfiguredTransport = !fetchImpl && !apiBase;
+    this.fetchImpl = fetchImpl ?? (this.usesConfiguredTransport
+      ? lfgFetch
+      : globalThis.fetch.bind(globalThis));
   }
 
   async sendMessages({
@@ -474,7 +485,7 @@ export class LfgChatTransport implements ChatTransport<LfgChatMessage> {
     const text = this.extractLatestUserText(messages);
     if (!text) throw new Error("Cannot send an empty message");
     const stream = this.createStream(abortSignal);
-    const response = await this.fetchImpl(this.httpUrl(`/api/sessions/${encodeURIComponent(this.sessionId)}/send`), {
+    const response = await this.fetchImpl(this.requestTarget(`/api/sessions/${encodeURIComponent(this.sessionId)}/send`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text, mode: (body as { mode?: string } | undefined)?.mode }),
@@ -531,7 +542,8 @@ export class LfgChatTransport implements ChatTransport<LfgChatMessage> {
     return "";
   }
 
-  private httpUrl(path: string) {
+  private requestTarget(path: string) {
+    if (this.usesConfiguredTransport) return path;
     return new URL(path, this.apiBase || (typeof location !== "undefined" ? location.origin : "http://127.0.0.1:8766")).toString();
   }
 }
