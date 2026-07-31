@@ -4,6 +4,10 @@ Run AI coding agents on your own machine, from anywhere.
 
 [![Deploy on omg](https://omg.dev/deploy-badge.svg?v=2)](https://omg.dev/sandbox/templates/lfg)
 
+**One-click setup:** click the badge to run `lfg` on
+[omg.dev](https://omg.dev/sandbox/templates/lfg) — no VPS, no installer, no
+`tmux`/Bun prerequisites. See [One-click setup on omg.dev](#one-click-setup-on-omgdev).
+
 <a href="https://lfg.apps.omg.dev">
   <img src="https://raw.githubusercontent.com/BennyKok/lfg/main/docs/images/lfg-icon.png" alt="lfg icon" width="96" />
 </a>
@@ -61,6 +65,14 @@ reliably on GitHub.
 
 ## Quick Start
 
+There are two ways to get a running `lfg`:
+
+1. **One-click on omg.dev** — a hosted workspace in a few seconds, nothing to
+   install. See [One-click setup on omg.dev](#one-click-setup-on-omgdev).
+2. **Install on your own machine** — the setup script below. Best for day-to-day
+   work, since sessions then run where your repos and authenticated CLIs already
+   are.
+
 Install on an Ubuntu/Debian VPS or macOS workstation:
 
 ```bash
@@ -91,14 +103,34 @@ Open **Settings → Coding agents** to install or check CLIs. OAuth-based agents
 still need a one-time terminal/browser login; API-key providers can use env vars
 such as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
 
-## One-click & cloud deploy
+## One-click setup on omg.dev
 
 [![Deploy on omg](https://omg.dev/deploy-badge.svg?v=2)](https://omg.dev/sandbox/templates/lfg)
 
-**[OMG](https://omg.dev/sandbox/templates/lfg)** is the fastest hosted workspace
-path: it creates a sandbox from the LFG template, starts `lfg serve` on port
-`8766`, and opens the workspace URL. Fresh workspaces start with no personal
-agent sessions — use **Settings → Coding agents** to install and sign in.
+**[omg.dev](https://omg.dev/sandbox/templates/lfg)** is the fastest way to try
+`lfg` — one click, no local install and no server to provision:
+
+1. Open [omg.dev/sandbox/templates/lfg](https://omg.dev/sandbox/templates/lfg)
+   and sign in to OMG if prompted.
+2. OMG creates a sandbox from the prebuilt `lfg` template and starts
+   `lfg serve --host 0.0.0.0 --port 8766`.
+3. Your browser lands on the workspace URL with the LFG web UI already running.
+
+The template ships with `lfg` and its runtime prerequisites already installed, so
+none of the [Requirements](#requirements) above apply. Workspaces hibernate when
+idle and wake on the same URL.
+
+A fresh workspace intentionally has no agent CLIs signed in. Open **Settings →
+Coding agents** to install a CLI and check its auth state, then either complete
+the normal OAuth login inside the workspace or set `ANTHROPIC_API_KEY` /
+`OPENAI_API_KEY` for API-key operation. More detail in
+[deploy/omg](./deploy/omg/README.md).
+
+Because the sandbox is a remote machine, agents work on repos you clone *into*
+that workspace. To run agents against the repos already on your own machine, use
+the [Quick Start](#quick-start) installer instead.
+
+## Other cloud deploys
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template?template=https://github.com/BennyKok/lfg)
 

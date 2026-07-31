@@ -2,14 +2,14 @@
 
 OMG is the one-click hosted workspace path for `lfg`.
 
-[![Deploy on OMG](https://img.shields.io/badge/Deploy%20on-OMG-ff5530?style=for-the-badge)](https://omg.dev/deploy?repo=https%3A%2F%2Fgithub.com%2FBennyKok%2Flfg)
+[![Deploy on omg](https://omg.dev/deploy-badge.svg?v=2)](https://omg.dev/sandbox/templates/lfg)
 
 ## Flow
 
-1. Open `https://omg.dev/deploy?repo=https%3A%2F%2Fgithub.com%2FBennyKok%2Flfg`.
+1. Open `https://omg.dev/sandbox/templates/lfg`.
 2. Sign in to OMG if prompted.
-3. OMG normalizes the GitHub URL and maps `BennyKok/lfg` to the prebuilt
-   `templateId: "lfg"` sandbox on port `8766`.
+3. OMG creates a sandbox from the prebuilt `templateId: "lfg"` template on port
+   `8766`.
 4. The control plane starts `lfg serve --host 0.0.0.0 --port 8766`.
 5. The browser redirects to the sandbox public URL.
 
@@ -31,7 +31,7 @@ For Claude or Codex, complete the normal CLI login inside the workspace, or set
 
 The OMG side owns the launch route and template lifecycle:
 
-- Route: `https://omg.dev/deploy?repo=<github-url>`
+- Route: `https://omg.dev/sandbox/templates/<template-id>`
 - LFG repo URL: `https://github.com/BennyKok/lfg`
 - Template: `lfg`
 - Port: `8766`
