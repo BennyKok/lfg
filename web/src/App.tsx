@@ -19280,7 +19280,15 @@ function ShippedPage({
   // Agent questions are notifications too, and <AskProvider> already polls for
   // them app-wide (it feeds the nav badge). Reading them from context instead
   // of fetching here keeps the page at one request per tick.
-  const { questions } = useAsk();
+  const { questions, busy: asksBusy, dismissAll: dismissAllQuestions } = useAsk();
+  // Two-step, because this one is bulk and irreversible: every asking agent
+  // stops waiting. Single dismissals stay one tap.
+  const [confirmDismissAll, setConfirmDismissAll] = useState(false);
+  // Never leave a primed destructive button behind when the stack changes under
+  // it — the count in the label would be answering for a different set.
+  useEffect(() => {
+    setConfirmDismissAll(false);
+  }, [questions.length]);
   const [gallery, setGallery] = useState<GalleryArtifact[] | null>(() => cachedGallery?.items ?? null);
   const [galleryTotal, setGalleryTotal] = useState(() => cachedGallery?.total ?? 0);
   const [galleryBusy, setGalleryBusy] = useState(false);
@@ -19720,10 +19728,35 @@ function ShippedPage({
           happened, and they are actionable without leaving the list. */}
       {questions.length ? (
         <section className="space-y-1.5">
-          <h2 className="px-1 text-[11px] font-semibold uppercase tracking-wide text-primary">
-            Needs you
-          </h2>
-          <div className="group overflow-hidden rounded-2xl border border-primary/25 bg-primary/[0.03] shadow-sm">
+          <div className="flex items-center justify-between gap-2 px-1">
+            <h2 className="text-[11px] font-semibold uppercase tracking-wide text-primary">
+              Needs you
+            </h2>
+            {questions.length > 1 ? (
+              <button
+                type="button"
+                disabled={asksBusy}
+                onClick={() => {
+                  if (!confirmDismissAll) {
+                    setConfirmDismissAll(true);
+                    return;
+                  }
+                  setConfirmDismissAll(false);
+                  void dismissAllQuestions();
+                }}
+                onBlur={() => setConfirmDismissAll(false)}
+                className={cn(
+                  "-my-1 rounded-full px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50",
+                  confirmDismissAll
+                    ? "bg-destructive/10 text-destructive"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {confirmDismissAll ? `Dismiss all ${questions.length}?` : "Dismiss all"}
+              </button>
+            ) : null}
+          </div>
+          <div className="overflow-hidden rounded-2xl border border-primary/25 bg-primary/[0.03] shadow-sm">
             {/* Newest first, like the feed below it. The provider keeps the
                 queue oldest-first for working through it in order; a feed
                 that ran two directions at once just read as a bug. */}

@@ -25,6 +25,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { MessageResponse } from "@/components/ai-elements/message";
 import { cn } from "@/lib/utils";
 import { lfgFetch } from "@/lib/lfg-client";
+import { closePushNotification } from "@/lib/push";
 import { MessageCircleQuestion, Send, X } from "lucide-react";
 
 export type Question = {
@@ -57,6 +58,7 @@ type AskContextValue = {
   busy: boolean;
   answer: (q: Question, text: string) => Promise<void>;
   dismiss: (q: Question) => Promise<void>;
+  dismissAll: () => Promise<void>;
 };
 
 const AskContext = createContext<AskContextValue | null>(null);
@@ -140,6 +142,7 @@ export function AskProvider({ children }: { children: React.ReactNode }) {
         // Drop it locally so the next question shows immediately; the poll
         // reconciles shortly after.
         setQuestions((prev) => prev.filter((x) => x.id !== q.id));
+        void closePushNotification(`ask-${q.id}`);
         toast("Sent to the agent");
       } catch {
         toast.error("Could not send your answer");
@@ -150,26 +153,61 @@ export function AskProvider({ children }: { children: React.ReactNode }) {
     [busy],
   );
 
+  // Dismissing is how a person says "I'm not answering this" — the asking agent
+  // stops waiting and moves on. Clear the cell locally, and take the sticky OS
+  // banner down with it so the notification doesn't outlive the question.
+  const dismissOne = useCallback(async (q: Question) => {
+    const res = await lfgFetch(`/api/ask/${q.id}/dismiss`, { method: "POST" });
+    if (!res.ok) throw new Error(await res.text());
+    setQuestions((prev) => prev.filter((x) => x.id !== q.id));
+    void closePushNotification(`ask-${q.id}`);
+  }, []);
+
   const dismiss = useCallback(
     async (q: Question) => {
       if (busy) return;
       setBusy(true);
       try {
-        const res = await lfgFetch(`/api/ask/${q.id}/dismiss`, { method: "POST" });
-        if (!res.ok) throw new Error(await res.text());
-        setQuestions((prev) => prev.filter((x) => x.id !== q.id));
-        toast("Question dismissed");
+        await dismissOne(q);
+        toast("Question dismissed — the agent will stop waiting");
       } catch {
         toast.error("Could not dismiss the question");
       } finally {
         setBusy(false);
       }
     },
-    [busy],
+    [busy, dismissOne],
   );
 
+  // Clearing a backlog one X at a time is the thing people actually complain
+  // about, so the whole stack goes in one action. Independent requests: one
+  // failure must not strand the rest.
+  const dismissAll = useCallback(async () => {
+    if (busy) return;
+    const targets = questions;
+    if (!targets.length) return;
+    setBusy(true);
+    try {
+      const results = await Promise.allSettled(targets.map((q) => dismissOne(q)));
+      const failed = results.filter((r) => r.status === "rejected").length;
+      if (failed)
+        toast.error(
+          failed === targets.length
+            ? "Could not dismiss the questions"
+            : `Dismissed ${targets.length - failed}, ${failed} failed`,
+        );
+      else
+        toast(
+          `Dismissed ${targets.length} question${targets.length === 1 ? "" : "s"}`,
+        );
+    } finally {
+      setBusy(false);
+      void refresh();
+    }
+  }, [busy, questions, dismissOne, refresh]);
+
   return (
-    <AskContext.Provider value={{ questions, busy, answer, dismiss }}>
+    <AskContext.Provider value={{ questions, busy, answer, dismiss, dismissAll }}>
       {children}
     </AskContext.Provider>
   );
@@ -247,13 +285,18 @@ export function QuestionNotification({
             <span className="ml-auto shrink-0 text-[11px] tabular-nums text-muted-foreground">
               {timeAgo(q.createdAt)}
             </span>
+            {/* Always visible, never hover-gated. A question you cannot clear
+                is a notification that owns you: it pins the nav badge, keeps a
+                requireInteraction banner on the lock screen, and the person has
+                no way out except answering. Reveal-on-hover also does not exist
+                on the phone this is mostly read on. */}
             <button
               type="button"
               onClick={() => void dismiss(q)}
               disabled={busy}
               aria-label="Dismiss question"
-              title="Dismiss question"
-              className="-mr-1 shrink-0 rounded-full p-1 text-muted-foreground/60 opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100 disabled:pointer-events-none sm:opacity-0"
+              title="Dismiss — the agent stops waiting"
+              className="-my-1 -mr-1.5 flex size-7 shrink-0 self-center items-center justify-center rounded-full text-muted-foreground/70 transition-[color,background-color,transform] duration-150 hover:bg-destructive/10 hover:text-destructive active:scale-[0.94] disabled:pointer-events-none disabled:opacity-40"
             >
               <X className="size-3.5" />
             </button>

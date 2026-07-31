@@ -14,8 +14,34 @@ describe("questions live inside the Notification Center", () => {
     const source = await app();
     expect(source).toContain("<QuestionNotification key={q.id} q={q} />");
     // Read from the app-wide provider, not fetched a second time by the page.
-    expect(source).toContain("const { questions } = useAsk();");
+    expect(source).toContain("} = useAsk();");
+    expect(source).not.toContain("/api/ask?status=open");
     expect(source).toContain("Needs you");
+  });
+
+  test("a question can always be dismissed, on any device", async () => {
+    const center = await askCenter();
+    const dismissButton = center.slice(
+      center.indexOf('aria-label="Dismiss question"'),
+      center.indexOf('<X className="size-3.5" />'),
+    );
+    expect(dismissButton).toBeTruthy();
+    // Regression: the control shipped hover-gated (`opacity-0` +
+    // `group-hover:opacity-100` + `sm:opacity-0`), which the media-query rule
+    // won on desktop and touch could never trigger at all — the only way out of
+    // a question was answering it.
+    expect(dismissButton).not.toContain("opacity-0");
+    expect(dismissButton).not.toContain("group-hover");
+    // Bulk escape hatch for a stacked backlog.
+    expect(center).toContain("dismissAll");
+    expect(await app()).toContain("Dismiss all");
+  });
+
+  test("resolving a question takes its sticky OS banner down", async () => {
+    const center = await askCenter();
+    // Ask notifications use requireInteraction, so they outlive the question
+    // unless the page closes them by tag.
+    expect(center).toContain("closePushNotification(`ask-${q.id}`)");
   });
 
   test("the ask page is gone, not just unlinked", async () => {

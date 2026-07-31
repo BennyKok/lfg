@@ -85,6 +85,33 @@ export async function disablePush(): Promise<void> {
 }
 
 /**
+ * Close one visible OS notification by tag — used when its subject is resolved
+ * in-app (answering or dismissing a question clears its `ask-<id>` banner).
+ *
+ * Ask notifications are shown with `requireInteraction`, so without this they
+ * sit on the lock screen forever after the question is already handled.
+ */
+export async function closePushNotification(tag: string): Promise<void> {
+  if (typeof window === "undefined" || !("serviceWorker" in navigator)) return;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (!reg) return;
+    for (const notification of await reg.getNotifications({ tag })) notification.close();
+    // The service worker derives the app badge from visible notifications, but
+    // only recomputes it on push. Keep it honest from the page side too.
+    const remaining = (await reg.getNotifications()).length;
+    const badgeNavigator = navigator as Navigator & {
+      setAppBadge?: (count?: number) => Promise<void>;
+      clearAppBadge?: () => Promise<void>;
+    };
+    if (remaining) await badgeNavigator.setAppBadge?.(remaining);
+    else await badgeNavigator.clearAppBadge?.();
+  } catch {
+    // OS-surface cleanup is best-effort; the in-app state is the source of truth.
+  }
+}
+
+/**
  * Acknowledge this device's visible push notifications after the person marks
  * the Notification Center read. The center keeps the durable history; this only
  * clears the transient OS surface.
