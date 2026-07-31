@@ -23,4 +23,13 @@ describe("Claude account launch environment", () => {
       ...command,
     ]);
   });
+
+  test("sets the isolated config directory for a selected account", () => {
+    const command = ["claude", "--model", "opus"];
+    const argv = claudeAccountLaunchCommand(command, true, "/data/claude/account-2");
+    expect(argv.slice(-4)).toEqual([
+      "CLAUDE_CONFIG_DIR=/data/claude/account-2",
+      ...command,
+    ]);
+  });
 });

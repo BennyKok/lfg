@@ -43,6 +43,8 @@ export type ManagedSession = {
   launchState?: "launching" | "running" | "failed";
   launchError?: string;
   model?: string;
+  /** Isolated Claude subscription account pinned when this session launched. */
+  claudeAccountId?: string;
   title?: string;
   /** Stable UI project label. Kept because resumed sessions can report a stale cwd. */
   project?: string;

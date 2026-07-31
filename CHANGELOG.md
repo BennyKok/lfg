@@ -4,6 +4,16 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 31, 2026 - Multiple Claude accounts (v0.1.168)
+
+- Connect multiple Claude subscriptions from Coding agents settings. Each login
+  is isolated, numbered, and can be reconnected or removed independently.
+- The new-session and fork agent pickers now show one Claude icon per connected
+  account, with a small account number at the bottom-right of each icon.
+- Claude sessions stay pinned to the account they started with, including after
+  a restart or resume, so switching the target for a new session never changes
+  the identity of work already in progress.
+
 ## July 31, 2026 - Anonymous OpenCode models are truly anonymous (v0.1.167)
 
 - Skipping provider setup now limits OpenCode's picker to discovered
@@ -38,7 +48,6 @@ Recent product updates and deployment notes.
   `opencode-go` can no longer leak back into the picker from an old built-in
   catalog; before discovery completes, LFG offers the verified anonymous
   DeepSeek Flash model as its safe fallback.
-
 ## July 31, 2026 - Continue in a clean session (v0.1.163)
 
 - Session menus now have a Continue action beside Fork. It opens a fresh agent

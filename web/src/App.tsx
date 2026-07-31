@@ -337,7 +337,17 @@ type CodingAgentInfo = {
     instructions: string[];
     installCommand?: string;
     loginCommand?: string;
+    accounts?: ClaudeAccountInfo[];
   };
+};
+
+type ClaudeAccountInfo = {
+  id: string;
+  number: number;
+  label: string;
+  connected: boolean;
+  removable: boolean;
+  createdAt: number;
 };
 
 const CodingAgentsContext = createContext<CodingAgentInfo[] | undefined>(undefined);
@@ -373,6 +383,7 @@ type CodingAgentAuthSession = {
   userCode?: string;
   needsCode: boolean;
   error?: string;
+  claudeAccountId?: string;
 };
 
 type CodingAgentAuthFlow = {
@@ -910,6 +921,34 @@ const AGENT_OPTIONS: { key: AgentKind; label: string; Icon: typeof Sparkles }[] 
   { key: "copilot", label: "copilot", Icon: Github },
 ];
 
+type AgentLaunchOption = (typeof AGENT_OPTIONS)[number] & {
+  selectorId?: string;
+  accountId?: string;
+  badge?: number;
+};
+
+function configuredLaunchOptions(
+  codingAgents?: CodingAgentInfo[],
+  accessMode: AgentAccessMode = "configured",
+): AgentLaunchOption[] {
+  const base = configuredAgentOptions(AGENT_OPTIONS, codingAgents, accessMode);
+  const accounts = codingAgents
+    ?.find((agent) => agent.key === "aisdk")
+    ?.status.accounts?.filter((account) => account.connected);
+  if (!accounts?.length) return base;
+  return base.flatMap((option) =>
+    option.key === "aisdk"
+      ? accounts.map((account) => ({
+          ...option,
+          label: account.label,
+          selectorId: `aisdk:${account.id}`,
+          accountId: account.id,
+          badge: account.number,
+        }))
+      : [option],
+  );
+}
+
 // Bump when any agent SVG's artwork changes. The version rides on every icon
 // URL so the backend can serve them `immutable` for a year — repeat renders hit
 // the browser cache, never the network — while a redeploy that changes an icon
@@ -1360,12 +1399,20 @@ function AgentIconStrip<K extends AgentKind>({
   onSelect,
   flat = false,
   className,
+  selectedId,
 }: {
-  options: readonly { key: K; label: string }[];
+  options: readonly {
+    key: K;
+    label: string;
+    selectorId?: string;
+    accountId?: string;
+    badge?: number;
+  }[];
   value: K;
-  onSelect: (key: K) => void;
+  onSelect: (key: K, option?: { accountId?: string; selectorId?: string }) => void;
   flat?: boolean;
   className?: string;
+  selectedId?: string;
 }) {
   if (!options.length) return null;
   return (
@@ -1376,25 +1423,34 @@ function AgentIconStrip<K extends AgentKind>({
         className,
       )}
     >
-      {options.map(({ key, label }) => (
-        <button
-          key={key}
-          type="button"
-          title={label}
-          aria-label={label}
-          onClick={() => onSelect(key)}
-          className={cn(
-            "flex h-7 w-9 items-center justify-center rounded-full transition",
-            value === key
-              ? flat
-                ? "bg-muted text-foreground"
-                : "bg-background text-foreground shadow-sm"
-              : "text-muted-foreground",
-          )}
-        >
-          <img src={agentIconSrc(key)} alt="" className="size-5" />
-        </button>
-      ))}
+      {options.map((option) => {
+        const { key, label, selectorId, accountId, badge } = option;
+        const selected = selectedId ? selectedId === (selectorId ?? key) : value === key;
+        return (
+          <button
+            key={selectorId ?? key}
+            type="button"
+            title={label}
+            aria-label={label}
+            onClick={() => onSelect(key, { accountId, selectorId })}
+            className={cn(
+              "relative flex h-7 w-9 items-center justify-center rounded-full transition",
+              selected
+                ? flat
+                  ? "bg-muted text-foreground"
+                  : "bg-background text-foreground shadow-sm"
+                : "text-muted-foreground",
+            )}
+          >
+            <img src={agentIconSrc(key)} alt="" className="size-5" />
+            {badge != null ? (
+              <span className="absolute -bottom-0.5 right-0 flex size-3.5 items-center justify-center rounded-full bg-foreground text-[8px] font-bold leading-none text-background ring-1 ring-background">
+                {badge}
+              </span>
+            ) : null}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -5626,7 +5682,11 @@ export function App() {
     );
   }
 
-  async function loginCodingAgent(kind: AgentKind, inlineSid?: string) {
+  async function loginCodingAgent(
+    kind: AgentKind,
+    inlineSid?: string,
+    claudeAccountId?: string,
+  ) {
     if (!BROWSER_AUTH_KINDS.has(kind)) {
       toast.promise(
         api<{ terminalSession: string }>(`/api/coding-agents/${kind}/login-terminal`, { method: "POST" })
@@ -5649,6 +5709,8 @@ export function App() {
     try {
       const session = await api<CodingAgentAuthSession>(`/api/coding-agents/${kind}/auth`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ claudeAccountId }),
       });
       if (session.status === "error") throw new Error(session.error || "Couldn't start login");
       if (session.status === "complete") {
@@ -5670,6 +5732,40 @@ export function App() {
       authWindow?.close();
       setCodingAgentAuthInlineSid(null);
       toast.error(e instanceof Error ? e.message : "Couldn't start login");
+    }
+  }
+
+  async function addClaudeAccount() {
+    try {
+      const { account } = await api<{ account: ClaudeAccountInfo }>(
+        "/api/coding-agents/claude/accounts",
+        { method: "POST" },
+      );
+      await refreshCodingAgents();
+      await loginCodingAgent("aisdk", undefined, account.id);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't add Claude account");
+    }
+  }
+
+  async function removeClaudeAccountFromSettings(account: ClaudeAccountInfo) {
+    if (!account.removable) return;
+    const confirmed = await appDialog.confirm({
+      title: `Remove ${account.label}?`,
+      description: "New sessions will no longer be able to use this login. Existing running sessions must be closed first.",
+      confirmLabel: "Remove account",
+      destructive: true,
+    });
+    if (!confirmed) return;
+    try {
+      await api(`/api/coding-agents/claude/accounts/${account.id}`, { method: "DELETE" });
+      if (localStorage.getItem("lfg_claude_account") === account.id) {
+        localStorage.removeItem("lfg_claude_account");
+      }
+      await refreshCodingAgents({ refreshModels: true });
+      toast.success(`${account.label} removed`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't remove Claude account");
     }
   }
 
@@ -6075,7 +6171,9 @@ export function App() {
             agents={codingAgents}
             onVisibleChange={(kind, visible) => void setCodingAgentVisible(kind, visible)}
             onSetup={setupCodingAgent}
-            onLogin={loginCodingAgent}
+            onLogin={(kind, accountId) => loginCodingAgent(kind, undefined, accountId)}
+            onAddClaudeAccount={addClaudeAccount}
+            onRemoveClaudeAccount={removeClaudeAccountFromSettings}
             onSetupCheck={runSetupCheck}
             onRefresh={() => void refreshCodingAgents({ refreshModels: true })}
           />
@@ -12892,12 +12990,15 @@ function ForkSessionDialog({
   const codingAgents = useContext(CodingAgentsContext);
   const accessMode = useContext(AgentAccessModeContext);
   const availableAgentOptions = useMemo(
-    () => configuredAgentOptions(AGENT_OPTIONS, codingAgents, accessMode),
+    () => configuredLaunchOptions(codingAgents, accessMode),
     [accessMode, codingAgents],
   );
   const defaultModelFor = (key: AgentKind) => catalog.defaults[key] ?? AGENT_DEFAULT_MODEL[key];
   const defaultAgent = defaultForkAgent(session.agent, availableAgentOptions);
   const [agent, setAgent] = useState<AgentKind>(() => defaultAgent);
+  const [claudeAccountId, setClaudeAccountId] = useState(
+    () => localStorage.getItem("lfg_claude_account") || "",
+  );
   const [model, setModel] = useState(
     () =>
       localStorage.getItem(`lfg_fork_model_${defaultAgent}`) ||
@@ -12908,6 +13009,8 @@ function ForkSessionDialog({
   const sid = session.sessionId;
   const models = catalog.models[agent] ?? AGENT_MODELS[agent];
   const thinkingLevels = useAgentThinkingLevels(agent);
+  const selectedLaunchId =
+    agent === "aisdk" && claudeAccountId ? `aisdk:${claudeAccountId}` : agent;
   // Same composer plumbing as the new-session composer: eager uploads, drag &
   // drop, paste, annotate.
   const files = useComposerAttachments({
@@ -12924,6 +13027,12 @@ function ForkSessionDialog({
     setAgent(next);
     setModel(localStorage.getItem(`lfg_fork_model_${next}`) || defaultModelFor(next));
   }, [agent, availableAgentOptions]);
+  useEffect(() => {
+    if (agent !== "aisdk") return;
+    if (availableAgentOptions.some((option) => (option.selectorId ?? option.key) === selectedLaunchId)) return;
+    const firstClaude = availableAgentOptions.find((option) => option.key === "aisdk");
+    if (firstClaude?.accountId) setClaudeAccountId(firstClaude.accountId);
+  }, [agent, availableAgentOptions, selectedLaunchId]);
   useEffect(() => {
     if (thinkingLevels.length && !thinkingLevels.includes(thinkingLevel)) {
       setThinkingLevel(thinkingLevels.includes("high") ? "high" : thinkingLevels[0]);
@@ -12961,6 +13070,7 @@ function ForkSessionDialog({
             agent,
             model,
             thinkingLevel: agentSupportsThinking(agent) ? thinkingLevel : undefined,
+            claudeAccountId: agent === "aisdk" ? claudeAccountId || undefined : undefined,
             archiveSource: continuing || undefined,
           }),
         });
@@ -13051,8 +13161,13 @@ function ForkSessionDialog({
           <AgentIconStrip
             options={availableAgentOptions}
             value={agent}
-            onSelect={(key) => {
+            selectedId={selectedLaunchId}
+            onSelect={(key, option) => {
               setAgent(key);
+              if (option?.accountId) {
+                setClaudeAccountId(option.accountId);
+                localStorage.setItem("lfg_claude_account", option.accountId);
+              }
               setModel(localStorage.getItem(`lfg_fork_model_${key}`) || defaultModelFor(key));
             }}
           />
@@ -15466,6 +15581,9 @@ function NewSessionDialog({
   const [agent, setAgent] = useState<AgentKind>(
     () => (localStorage.getItem("lfg_v2_agent") as AgentKind | null) || "aisdk",
   );
+  const [claudeAccountId, setClaudeAccountId] = useState(
+    () => localStorage.getItem("lfg_claude_account") || "",
+  );
   const [repo, setRepo] = useState(() => localStorage.getItem("lfg_v2_repo") || "");
   const [model, setModel] = useState(
     () =>
@@ -16001,8 +16119,11 @@ function NewSessionDialog({
   }, [thinkingLevel, thinkingLevels]);
 
   const visibleAgentOptions = useMemo(() => {
-    return configuredAgentOptions(AGENT_OPTIONS, codingAgents, accessMode);
+    return configuredLaunchOptions(codingAgents, accessMode);
   }, [accessMode, codingAgents]);
+
+  const selectedLaunchId =
+    agent === "aisdk" && claudeAccountId ? `aisdk:${claudeAccountId}` : agent;
 
   useEffect(() => {
     if (visibleAgentOptions.some((option) => option.key === agent)) return;
@@ -16011,6 +16132,18 @@ function NewSessionDialog({
     setAgent(next);
     setModel(localStorage.getItem(`lfg_model_${next}`) || defaultModelFor(next));
   }, [agent, visibleAgentOptions]);
+
+  useEffect(() => {
+    if (agent !== "aisdk") return;
+    const selected = visibleAgentOptions.find(
+      (option) => (option.selectorId ?? option.key) === selectedLaunchId,
+    );
+    if (selected) return;
+    const firstClaude = visibleAgentOptions.find((option) => option.key === "aisdk");
+    if (!firstClaude?.accountId) return;
+    setClaudeAccountId(firstClaude.accountId);
+    localStorage.setItem("lfg_claude_account", firstClaude.accountId);
+  }, [agent, selectedLaunchId, visibleAgentOptions]);
 
   // An outside surface (the usage campfire) picked an agent for us. Keyed on the
   // nonce so choosing the same agent twice still applies.
@@ -16047,6 +16180,7 @@ function NewSessionDialog({
     const launchAgent = agent;
     const launchModel = model;
     const launchThinkingLevel = thinkingLevel;
+    const launchClaudeAccountId = launchAgent === "aisdk" ? claudeAccountId || undefined : undefined;
     const stashed = stagePromptSend({
       contextKey: "new-session",
       source: "new-session",
@@ -16070,6 +16204,7 @@ function NewSessionDialog({
     localStorage.setItem("lfg_v2_agent", launchAgent);
     localStorage.setItem("lfg_v2_repo", selectedRepo);
     localStorage.setItem(`lfg_model_${launchAgent}`, launchModel);
+    if (launchClaudeAccountId) localStorage.setItem("lfg_claude_account", launchClaudeAccountId);
     if (agentSupportsThinking(launchAgent)) localStorage.setItem("lfg_thinking_level", launchThinkingLevel);
     if (launchAgent === "claude") localStorage.setItem("lfg_model", launchModel);
     if (launchUser) localStorage.setItem("lfg_user", launchUser);
@@ -16096,6 +16231,7 @@ function NewSessionDialog({
             agent: launchAgent,
             model: launchModel,
             thinkingLevel: agentSupportsThinking(launchAgent) ? launchThinkingLevel : undefined,
+            claudeAccountId: launchClaudeAccountId,
           }),
         });
         const sid = res?.sessionId;
@@ -16135,7 +16271,9 @@ function NewSessionDialog({
     visibleAgentOptions.some((option) => option.key === agent) &&
     (!!prompt.trim() || attachments.length > 0);
   const selectedAgentOption =
-    visibleAgentOptions.find((option) => option.key === agent) ?? visibleAgentOptions[0] ?? AGENT_OPTIONS[0];
+    visibleAgentOptions.find(
+      (option) => (option.selectorId ?? option.key) === selectedLaunchId,
+    ) ?? visibleAgentOptions.find((option) => option.key === agent) ?? visibleAgentOptions[0] ?? AGENT_OPTIONS[0];
   // Keep every agent in a fixed position so picking one never reshuffles the
   // icons. The selected agent is highlighted in place rather than hoisted out.
   const agentButtons = visibleAgentOptions;
@@ -16149,13 +16287,18 @@ function NewSessionDialog({
   const cycleAgent = (dir: 1 | -1) => {
     const opts = visibleAgentOptions;
     if (opts.length < 2) return;
-    const idx = opts.findIndex((option) => option.key === agent);
+    const idx = opts.findIndex((option) => (option.selectorId ?? option.key) === selectedLaunchId);
     const nextIdx = ((idx < 0 ? 0 : idx) + dir + opts.length) % opts.length;
-    const nextKey = opts[nextIdx].key;
-    if (nextKey === agent) return;
+    const next = opts[nextIdx];
+    const nextKey = next.key;
+    if ((next.selectorId ?? nextKey) === selectedLaunchId) return;
     setAgentIconDir(dir);
     setAgentIconNonce((n) => n + 1);
     setAgent(nextKey);
+    if (next.accountId) {
+      setClaudeAccountId(next.accountId);
+      localStorage.setItem("lfg_claude_account", next.accountId);
+    }
     setModel(localStorage.getItem(`lfg_model_${nextKey}`) || defaultModelFor(nextKey));
     feedback.swipe();
   };
@@ -16165,14 +16308,23 @@ function NewSessionDialog({
     <AgentIconStrip
       options={agentButtons}
       value={agent}
+      selectedId={selectedLaunchId}
       flat={variant === "inline"}
-      onSelect={(key) => {
+      onSelect={(key, option) => {
         // Re-tapping the already-selected agent collapses the row.
-        if (variant === "inline" && expanded && agent === key) {
+        if (
+          variant === "inline" &&
+          expanded &&
+          selectedLaunchId === (option?.selectorId ?? key)
+        ) {
           onExpandedChange?.(false);
           return;
         }
         setAgent(key);
+        if (option?.accountId) {
+          setClaudeAccountId(option.accountId);
+          localStorage.setItem("lfg_claude_account", option.accountId);
+        }
         setModel(localStorage.getItem(`lfg_model_${key}`) || defaultModelFor(key));
       }}
     />
@@ -16278,7 +16430,7 @@ function NewSessionDialog({
             title={`${selectedAgentOption.label} — swipe to switch agent`}
             aria-label={`Agent: ${selectedAgentOption.label}. Swipe up or down to switch.`}
             style={{ touchAction: "none" }}
-            className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-full border border-border bg-background text-foreground shadow-sm transition active:scale-[0.96]"
+            className="relative flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-background text-foreground shadow-sm transition active:scale-[0.96]"
           >
             <span className="pointer-events-none relative flex size-5 items-center justify-center overflow-hidden">
               <img
@@ -16295,6 +16447,11 @@ function NewSessionDialog({
                 )}
               />
             </span>
+            {selectedAgentOption.badge != null ? (
+              <span className="pointer-events-none absolute -bottom-0.5 -right-0.5 flex size-3.5 items-center justify-center rounded-full bg-foreground text-[8px] font-bold leading-none text-background ring-1 ring-background">
+                {selectedAgentOption.badge}
+              </span>
+            ) : null}
           </button>
         }
       />
@@ -18747,6 +18904,8 @@ function CodingAgentsPage({
   onVisibleChange,
   onSetup,
   onLogin,
+  onAddClaudeAccount,
+  onRemoveClaudeAccount,
   onSetupCheck,
   onRefresh,
 }: {
@@ -18754,7 +18913,9 @@ function CodingAgentsPage({
   agents: CodingAgentInfo[];
   onVisibleChange: (kind: AgentKind, visible: boolean) => void;
   onSetup: (kind: AgentKind) => void;
-  onLogin: (kind: AgentKind) => void;
+  onLogin: (kind: AgentKind, claudeAccountId?: string) => void;
+  onAddClaudeAccount: () => void;
+  onRemoveClaudeAccount: (account: ClaudeAccountInfo) => void;
   onSetupCheck: (key: string) => void;
   onRefresh: () => void | Promise<void>;
 }) {
@@ -18912,6 +19073,47 @@ function CodingAgentsPage({
                 />
               </div>
 
+              {agent.key === "aisdk" && agent.status.accounts?.length ? (
+                <div className="mt-3 space-y-1.5 pl-11">
+                  {agent.status.accounts.map((account) => (
+                    <div
+                      key={account.id}
+                      className="flex items-center gap-2 rounded-xl border border-border/70 bg-background/55 px-2.5 py-2"
+                    >
+                      <span className="relative flex size-7 shrink-0 items-center justify-center rounded-full bg-muted">
+                        <img src={agentIconSrc("aisdk")} alt="" className="size-4.5" />
+                        <span className="absolute -bottom-0.5 -right-0.5 flex size-3.5 items-center justify-center rounded-full bg-foreground text-[8px] font-bold text-background ring-1 ring-background">
+                          {account.number}
+                        </span>
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-xs font-medium">
+                        {account.label}
+                      </span>
+                      <Badge variant={account.connected ? "default" : "secondary"}>
+                        {account.connected ? "Connected" : "Needs login"}
+                      </Badge>
+                      {!account.connected ? (
+                        <Button size="sm" variant="outline" onClick={() => onLogin(agent.key, account.id)}>
+                          <Globe className="size-3.5" />
+                          Connect
+                        </Button>
+                      ) : null}
+                      {account.removable ? (
+                        <button
+                          type="button"
+                          onClick={() => onRemoveClaudeAccount(account)}
+                          title={`Remove ${account.label}`}
+                          aria-label={`Remove ${account.label}`}
+                          className="flex size-7 items-center justify-center rounded-full text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+
               <div className="mt-3 flex flex-wrap items-center gap-2 pl-11">
                 <div className="min-w-0 flex-1 space-y-1 text-xs text-muted-foreground">
                   {agent.status.instructions.map((instruction) => (
@@ -18950,7 +19152,11 @@ function CodingAgentsPage({
                   size="sm"
                   variant="outline"
                   disabled={!agent.status.canLoginInTerminal || agent.status.setupRunning}
-                  onClick={() => onLogin(agent.key)}
+                  onClick={() =>
+                    agent.key === "aisdk" && agent.status.accounts?.some((account) => account.connected)
+                      ? onAddClaudeAccount()
+                      : onLogin(agent.key)
+                  }
                   title={
                     BROWSER_AUTH_KINDS.has(agent.key)
                       ? `Sign in to ${agent.label} in your browser`
@@ -18964,7 +19170,9 @@ function CodingAgentsPage({
                   ) : (
                     <TerminalSquare className="size-4" />
                   )}
-                  Login
+                  {agent.key === "aisdk" && agent.status.accounts?.some((account) => account.connected)
+                    ? "Add account"
+                    : "Login"}
                 </Button>
               </div>
             </div>

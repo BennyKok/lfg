@@ -37,4 +37,11 @@ describe("claudeAccountEnv", () => {
     }
     expect(source.ANTHROPIC_BASE_URL).toBe("https://proxy.example");
   });
+
+  test("targets an isolated Claude config directory", () => {
+    expect(claudeAccountEnv({ PATH: "/usr/bin" }, true, "/data/claude/account-2")).toEqual({
+      PATH: "/usr/bin",
+      CLAUDE_CONFIG_DIR: "/data/claude/account-2",
+    });
+  });
 });

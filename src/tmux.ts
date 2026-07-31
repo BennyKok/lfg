@@ -9,6 +9,11 @@ import {
   CLAUDE_PLATFORM_ENV_KEYS,
   claudeOauthToken,
 } from "./claude-creds.ts";
+import {
+  DEFAULT_CLAUDE_ACCOUNT_ID,
+  claudeAccountConfigDir,
+  resolveClaudeAccount,
+} from "./claude-accounts.ts";
 
 // Known-good Claude model alias to launch with when a caller doesn't specify
 // one. Never launch a managed `claude` bare — see spawnManagedSession. Opus is
@@ -170,14 +175,28 @@ export function claudeBin(): string {
 export function claudeAccountLaunchCommand(
   command: string[],
   accountConnected = claudeOauthToken() !== null,
+  configDir?: string,
 ): string[] {
   if (!accountConnected) return command;
   const envBin = Bun.which("env") ?? "/usr/bin/env";
   return [
     envBin,
     ...CLAUDE_PLATFORM_ENV_KEYS.flatMap((key) => ["-u", key]),
+    ...(configDir ? [`CLAUDE_CONFIG_DIR=${configDir}`] : []),
     ...command,
   ];
+}
+
+function claudeLaunchCommandForAccount(command: string[], accountId?: string): string[] {
+  const account = resolveClaudeAccount(accountId);
+  if (!account) return claudeAccountLaunchCommand(command, false);
+  // Leave the legacy/default account implicit so macOS keeps its normal
+  // Keychain behavior. Only custom accounts need config-directory isolation.
+  const configDir =
+    account.id === DEFAULT_CLAUDE_ACCOUNT_ID
+      ? null
+      : claudeAccountConfigDir(account.id);
+  return claudeAccountLaunchCommand(command, !!account, configDir ?? undefined);
 }
 
 let _codexBin: string | null = null;
@@ -482,6 +501,7 @@ export function spawnManagedSession(opts: {
   lfgSessionId?: string;
   lfgUser?: string | null;
   containInAgentSlice?: boolean;
+  claudeAccountId?: string;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   ensureFolderTrusted(opts.cwd);
@@ -519,7 +539,7 @@ export function spawnManagedSession(opts: {
     opts.name,
     "-c",
     opts.cwd,
-    ...claudeAccountLaunchCommand(claudeArgv),
+    ...claudeLaunchCommandForAccount(claudeArgv, opts.claudeAccountId),
   ];
   addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
   containTmuxCommand(argv, claudeBin(), opts.containInAgentSlice, opts);
@@ -544,15 +564,16 @@ export function relaunchSessionWithModel(opts: {
   cwd: string;
   sessionId: string;
   model: string;
+  claudeAccountId?: string;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   ensureFolderTrusted(opts.cwd);
   const r = Bun.spawnSync([
     "tmux", "respawn-pane", "-k", "-c", opts.cwd, "-t", opts.tmuxTarget,
-    ...claudeAccountLaunchCommand([
+    ...claudeLaunchCommandForAccount([
       claudeBin(), "--dangerously-skip-permissions", "--add-dir", reposRoot(),
       "--resume", opts.sessionId, "--model", opts.model,
-    ]),
+    ], opts.claudeAccountId),
   ]);
   if (r.exitCode !== 0)
     return { ok: false, error: dec.decode(r.stderr) || "respawn-pane failed" };
@@ -817,6 +838,7 @@ export function spawnManagedAisdkSession(opts: {
   lfgSessionId?: string;
   lfgUser?: string | null;
   containInAgentSlice?: boolean;
+  claudeAccountId?: string;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   // The provider drives the bundled claude binary, which still honors the trust
@@ -836,6 +858,8 @@ export function spawnManagedAisdkSession(opts: {
   // Forward the requested thinking level; the harness maps it onto the
   // claude-code provider's `effort` option (see aisdk-session.ts).
   if (opts.thinkingLevel) argv.push("--thinking-level", opts.thinkingLevel);
+  const claudeAccountId = opts.claudeAccountId ?? resolveClaudeAccount()?.id;
+  if (claudeAccountId) argv.push("--claude-account", claudeAccountId);
   const prompt = withLfgRuntimeContract(opts.prompt);
   if (prompt?.trim()) argv.push("--", prompt);
   addSessionEnv(argv, opts.lfgSessionId ?? opts.sessionId, opts.lfgUser);

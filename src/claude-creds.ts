@@ -19,11 +19,15 @@ export const CLAUDE_PLATFORM_ENV_KEYS = [
   "ANTHROPIC_BASE_URL",
 ] as const;
 
-function readCredsFile(): ClaudeCreds | null {
+function defaultConfigDir(): string {
+  return join(process.env.HOME ?? homedir(), ".claude");
+}
+
+function readCredsFile(configDir = defaultConfigDir()): ClaudeCreds | null {
   try {
     return JSON.parse(
       readFileSync(
-        join(process.env.HOME ?? homedir(), ".claude", ".credentials.json"),
+        join(configDir, ".credentials.json"),
         "utf8",
       ),
     ) as ClaudeCreds;
@@ -47,12 +51,16 @@ function readCredsKeychain(): ClaudeCreds | null {
 }
 
 /** Claude subscription OAuth access token, or null when not signed in. */
-export function claudeOauthToken(): string | null {
+export function claudeOauthToken(configDir?: string): string | null {
   // The Linux credentials file is cheap to read and can appear while LFG is
   // running after a browser login. Read it before the Keychain cache so a
   // completed first-run connection is visible on the very next status poll.
-  const fileToken = readCredsFile()?.claudeAiOauth?.accessToken ?? null;
+  const fileToken = readCredsFile(configDir)?.claudeAiOauth?.accessToken ?? null;
   if (fileToken) return fileToken;
+  // Custom config directories are intentionally file-backed. Falling through
+  // to the one machine-wide Keychain entry would make every isolated account
+  // resolve to the same login on macOS.
+  if (configDir && configDir !== defaultConfigDir()) return null;
   if (process.platform !== "darwin") return null;
 
   if (cached && Date.now() - cached.at < TTL_MS) return cached.token;
@@ -71,13 +79,18 @@ export function claudeOauthToken(): string | null {
 export function claudeAccountEnv(
   source: NodeJS.ProcessEnv = process.env,
   accountConnected = claudeOauthToken() !== null,
+  configDir?: string,
 ): Record<string, string> | undefined {
   if (!accountConnected) return undefined;
   const blocked = new Set<string>(CLAUDE_PLATFORM_ENV_KEYS);
-  return Object.fromEntries(
+  const env = Object.fromEntries(
     Object.entries(source).filter(
       (entry): entry is [string, string] =>
         entry[1] !== undefined && !blocked.has(entry[0]),
     ),
   );
+  if (configDir && configDir !== defaultConfigDir()) {
+    env.CLAUDE_CONFIG_DIR = configDir;
+  }
+  return env;
 }

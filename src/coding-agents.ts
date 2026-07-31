@@ -5,7 +5,12 @@ import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { PATHS } from "./config.ts";
 import { lfgCapabilityAccess } from "./lfg-capabilities.ts";
-import { claudeOauthToken } from "./claude-creds.ts";
+import {
+  claudeAccountConfigDir,
+  connectedClaudeAccounts,
+  listClaudeAccounts,
+  type ClaudeAccount,
+} from "./claude-accounts.ts";
 
 export type CodingAgentKind =
   | "claude"
@@ -50,6 +55,8 @@ export type CodingAgentStatus = {
   };
   installCommand?: string;
   loginCommand?: string;
+  /** Claude-only: isolated subscription accounts available to session launchers. */
+  accounts?: ClaudeAccount[];
 };
 
 export type CodingAgentInfo = {
@@ -77,6 +84,7 @@ export type CodingAgentAuthSession = {
   userCode?: string;
   needsCode: boolean;
   error?: string;
+  claudeAccountId?: string;
 };
 
 type InternalAuthSession = CodingAgentAuthSession & {
@@ -310,11 +318,6 @@ function copilotPath(): string | null {
     `${home}/.bun/bin/copilot`,
     "/usr/local/bin/copilot",
   ]);
-}
-
-function hasClaudeAccountAuth(): boolean {
-  // claudeOauthToken covers both the Linux credentials file and macOS Keychain.
-  return claudeOauthToken() !== null;
 }
 
 function hasCodexAccountAuth(): boolean {
@@ -570,11 +573,21 @@ async function collectAuthOutput(
   } catch {}
 }
 
-export async function startCodingAgentAuth(kind: CodingAgentKind): Promise<CodingAgentAuthSession> {
+export async function startCodingAgentAuth(
+  kind: CodingAgentKind,
+  opts: { claudeAccountId?: string } = {},
+): Promise<CodingAgentAuthSession> {
   const provider = authProviderFor(kind);
   if (!provider) throw new Error(`${CODING_AGENT_LABELS[kind]} does not support browser login yet`);
   const binary = authProviderBinary(provider);
   if (!binary) throw new Error(`Install ${AUTH_PROVIDER_LABELS[provider]} before signing in`);
+  const claudeConfigDir =
+    provider === "claude" && opts.claudeAccountId
+      ? claudeAccountConfigDir(opts.claudeAccountId)
+      : undefined;
+  if (provider === "claude" && opts.claudeAccountId && !claudeConfigDir) {
+    throw new Error("Claude account not found");
+  }
 
   for (const existing of authSessions.values()) {
     if (existing.provider === provider && (existing.status === "starting" || existing.status === "waiting")) {
@@ -586,7 +599,11 @@ export async function startCodingAgentAuth(kind: CodingAgentKind): Promise<Codin
   const argv = authProviderArgv(provider, binary);
   const proc = Bun.spawn(argv, {
     cwd: userHome(),
-    env: { ...process.env, BROWSER: "true" },
+    env: {
+      ...process.env,
+      BROWSER: "true",
+      ...(claudeConfigDir ? { CLAUDE_CONFIG_DIR: claudeConfigDir } : {}),
+    },
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
@@ -604,6 +621,9 @@ export async function startCodingAgentAuth(kind: CodingAgentKind): Promise<Codin
     ready,
     markReady,
     expiresAt: Date.now() + AUTH_SESSION_TTL_MS,
+    ...(provider === "claude" && opts.claudeAccountId
+      ? { claudeAccountId: opts.claudeAccountId }
+      : {}),
   };
   authSessions.set(session.id, session);
   void collectAuthOutput(session, proc.stdout);
@@ -694,14 +714,14 @@ function statusFor(kind: CodingAgentKind): CodingAgentStatus {
   };
 
   if (kind === "claude" || kind === "aisdk") {
-    accountConnected = hasClaudeAccountAuth();
+    accountConnected = connectedClaudeAccounts().length > 0;
     addBinary("Claude CLI", claudePath());
     addAuth(
       "Claude auth",
       accountConnected || !!process.env.ANTHROPIC_API_KEY,
       "use Login below or set ANTHROPIC_API_KEY",
     );
-    instructions.push("Use Login to sign in with Claude in your browser, or set ANTHROPIC_API_KEY.");
+    instructions.push("Add Claude accounts below, or set ANTHROPIC_API_KEY.");
   } else if (kind === "codex" || kind === "codex-aisdk") {
     accountConnected = hasCodexAccountAuth();
     addBinary("Codex CLI", codexPath());
@@ -759,6 +779,9 @@ function statusFor(kind: CodingAgentKind): CodingAgentStatus {
     setupProgress: setupProgress.get(kind),
     installCommand: installCommandFor(kind) ?? undefined,
     loginCommand: loginCommandFor(kind) ?? undefined,
+    ...(kind === "claude" || kind === "aisdk"
+      ? { accounts: listClaudeAccounts() }
+      : {}),
   };
 }
 

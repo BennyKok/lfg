@@ -222,6 +222,14 @@ import {
   submitCodingAgentAuthCode,
 } from "../coding-agents.ts";
 import {
+  bindClaudeSessionAccount,
+  claudeAccountIdForSession,
+  createClaudeAccount,
+  listClaudeAccounts,
+  removeClaudeAccount,
+  resolveClaudeAccount,
+} from "../claude-accounts.ts";
+import {
   AUTO_AGENT_BACKENDS,
   defaultModelForAgent,
   listModelCatalog,
@@ -2571,6 +2579,22 @@ export async function cmdServe() {
           discovery: readModelDiscoveryCacheSync(),
         });
       }
+      if (path === "/api/coding-agents/claude/accounts" && req.method === "GET") {
+        return json({ accounts: listClaudeAccounts() });
+      }
+      if (path === "/api/coding-agents/claude/accounts" && req.method === "POST") {
+        return json({ account: createClaudeAccount() });
+      }
+      {
+        const m = path.match(/^\/api\/coding-agents\/claude\/accounts\/([a-f0-9-]+)$/);
+        if (m && req.method === "DELETE") {
+          const active = listManaged().some((session) => session.claudeAccountId === m[1]);
+          if (active) return err(409, "Close sessions using this Claude account before removing it");
+          return removeClaudeAccount(m[1])
+            ? json({ ok: true, accounts: listClaudeAccounts() })
+            : err(404, "Claude account not found");
+        }
+      }
       if (path === "/api/setup/checks" && req.method === "GET") {
         return json({ checks: await listSetupChecksCached() });
       }
@@ -2741,7 +2765,12 @@ export async function cmdServe() {
           const kind = m[1];
           if (!isCodingAgentKind(kind)) return err(404, "unknown coding agent");
           try {
-            return json(await startCodingAgentAuth(kind));
+            const body = (await req.json().catch(() => null)) as {
+              claudeAccountId?: unknown;
+            } | null;
+            const claudeAccountId =
+              typeof body?.claudeAccountId === "string" ? body.claudeAccountId : undefined;
+            return json(await startCodingAgentAuth(kind, { claudeAccountId }));
           } catch (e) {
             return err(502, e instanceof Error ? e.message : "failed to start login");
           }
@@ -3906,6 +3935,7 @@ export async function cmdServe() {
         const resumeGate = await activationGate();
         if (resumeGate) return resumeGate;
         const cachedResume = getCachedResumableSession(sessionId);
+        const pinnedClaudeAccountId = claudeAccountIdForSession(sessionId) ?? undefined;
 
         // Direct-indexed SDK sessions have no lfg-owned transcript JSONL to
         // discover. Relaunch from the durable catalog and keep the same lfg key
@@ -3935,6 +3965,9 @@ export async function cmdServe() {
             nativeSessionId: resumeHandle,
             launchState: "launching",
             model: resumeModel,
+            ...(cachedResume.backend === "aisdk"
+              ? { claudeAccountId: pinnedClaudeAccountId }
+              : {}),
             title: cachedResume.title,
             project: cachedResume.project || undefined,
             repoRoot: repoRootForManagedCwd(cwd),
@@ -3997,6 +4030,7 @@ export async function cmdServe() {
                     sessionId,
                     lfgSessionId: sessionId,
                     lfgUser: assignedUser,
+                    claudeAccountId: pinnedClaudeAccountId,
                   });
           if (!spawned.ok) {
             removeManaged(tmuxName);
@@ -4169,6 +4203,7 @@ export async function cmdServe() {
           nativeSessionId: sessionId,
           launchState: "launching",
           model: model ?? "opus",
+          claudeAccountId: pinnedClaudeAccountId,
           project: cachedResume?.project || undefined,
           repoRoot: repoRootForManagedCwd(cwd),
         });
@@ -4181,6 +4216,7 @@ export async function cmdServe() {
           sessionId,
           prompt: resumePrompt,
           lfgUser: body?.user,
+          claudeAccountId: pinnedClaudeAccountId,
         });
         if (!r.ok) {
           removeManaged(tmuxName);
@@ -4202,6 +4238,7 @@ export async function cmdServe() {
             model?: string;
             thinkingLevel?: string;
             archiveSource?: boolean;
+            claudeAccountId?: string;
             agent?: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "hermes" | "pi";
           } | null;
           const source = (await listSessions()).find((s) => s.sessionId === sourceId);
@@ -4253,6 +4290,7 @@ export async function cmdServe() {
               agent: body?.agent,
               model: body?.model,
               thinkingLevel: body?.thinkingLevel,
+              claudeAccountId: body?.claudeAccountId,
             }),
           });
           const text = await r.text();
@@ -4290,6 +4328,7 @@ export async function cmdServe() {
           worktree?: boolean;
           model?: string;
           thinkingLevel?: string;
+          claudeAccountId?: string;
           parentSessionId?: string;
           spawnedBy?: string;
           agent?: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "copilot" | "hermes" | "pi";
@@ -4318,6 +4357,15 @@ export async function cmdServe() {
                         : body?.agent === "claude"
                           ? "claude"
                           : "aisdk";
+        const requestedClaudeAccountId = body?.claudeAccountId?.trim() || undefined;
+        const selectedClaudeAccount =
+          agent === "claude" || agent === "aisdk"
+            ? resolveClaudeAccount(requestedClaudeAccountId)
+            : null;
+        if ((agent === "claude" || agent === "aisdk") && requestedClaudeAccountId && !selectedClaudeAccount) {
+          return err(400, "Claude account is missing or not connected");
+        }
+        const claudeAccountId = selectedClaudeAccount?.id;
         // Allowlist Claude models — they land on a shell argv. Unknown value =
         // hard 400, never a silent fallback to some other model. Codex model
         // names are provider/catalog driven, so validate shape instead.
@@ -4542,6 +4590,7 @@ export async function cmdServe() {
               : undefined,
           launchState: "launching",
           model: launchModel,
+          claudeAccountId,
           title: body?.prompt?.slice(0, 72),
           project: repo.project,
           parentSessionId: parent?.sessionId ?? parentId,
@@ -4551,6 +4600,7 @@ export async function cmdServe() {
           repoRoot: worktree?.repoRoot,
           worktreeBranch: worktree?.branch,
         });
+        if (claudeAccountId) bindClaudeSessionAccount(launchId, claudeAccountId);
         invalidateListSessionsCache();
         // Tag the new session before spawn so a concurrent /api/sessions refresh
         // can show the durable row under the right user filter immediately.
@@ -4600,6 +4650,7 @@ export async function cmdServe() {
                   lfgSessionId: launchId,
                   lfgUser: assignedUser,
                   containInAgentSlice: isSubagent,
+                  claudeAccountId,
                 })
               : agent === "codex-aisdk"
                 ? spawnManagedCodexAisdkSession({
@@ -4636,7 +4687,7 @@ export async function cmdServe() {
                         lfgUser: assignedUser,
                         containInAgentSlice: isSubagent,
                       })
-                    : spawnManagedSession({ name: tmuxName, cwd, prompt, model: resolvedModel, thinkingLevel, lfgSessionId: launchId, lfgUser: assignedUser, containInAgentSlice: isSubagent });
+                    : spawnManagedSession({ name: tmuxName, cwd, prompt, model: resolvedModel, thinkingLevel, lfgSessionId: launchId, lfgUser: assignedUser, containInAgentSlice: isSubagent, claudeAccountId });
         if (!r.ok) {
           removeManaged(tmuxName);
           assignUser(tmuxName, null);
@@ -5436,6 +5487,7 @@ export async function cmdServe() {
               cwd: sess.cwd,
               sessionId: nativeSessionId,
               model,
+              claudeAccountId: claudeAccountIdForSession(sess.sessionId) ?? undefined,
             });
             if (!r.ok) return err(500, r.error || "relaunch failed");
             // Same 2.1+ resume gate as /api/sessions/resume — the relaunched pane

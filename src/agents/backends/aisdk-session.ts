@@ -41,6 +41,10 @@ import { readFileSync, statSync } from "node:fs";
 import { initialCmdOffset, readNewCmdLines, writeCursor } from "./cmd-tail.ts";
 import { claudeAccountEnv } from "../../claude-creds.ts";
 import {
+  claudeAccountConfigDir,
+  resolveClaudeAccount,
+} from "../../claude-accounts.ts";
+import {
   readStoredSessionTokenUsage,
   writeStoredSessionTokenUsage,
   type ClaudeContextUsageSnapshot,
@@ -155,6 +159,7 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
   const effort = effortFor(arg(argv, "--thinking-level"));
   const cwd = arg(argv, "--cwd") ?? process.cwd();
   const tmuxName = arg(argv, "--tmux") ?? "";
+  const claudeAccountId = arg(argv, "--claude-account");
   // Everything after `--` is the initial prompt (mirrors how spawnManagedSession
   // passes the first message to the claude CLI).
   const dashI = argv.indexOf("--");
@@ -171,7 +176,13 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
   } catch {}
 
   const claudePath = resolveClaudePath();
-  const accountEnv = claudeAccountEnv();
+  const account = resolveClaudeAccount(claudeAccountId);
+  const accountConfigDir = account ? claudeAccountConfigDir(account.id) : null;
+  const accountEnv = claudeAccountEnv(
+    process.env,
+    !!account,
+    accountConfigDir ?? undefined,
+  );
   const { query } = await import("@anthropic-ai/claude-agent-sdk");
 
   // Control-plane registry entry — the moment this exists (and our pid is alive),
