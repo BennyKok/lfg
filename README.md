@@ -103,7 +103,19 @@ Claude and Codex when they are already installed.
 ## Reach it from your phone
 
 `lfg` binds to loopback and has **no authentication of its own** — it trusts the
-network you put it behind. Two supported ways to get to it remotely:
+network you put it behind. If you use omg.dev, its authenticated CLI is the
+shortest path to the hosted relay:
+
+```bash
+omg connect                              # installs LFG if needed, then pairs and connects
+```
+
+`omg connect` discovers OMG's relay and passes a one-time code directly to
+`lfg connect`, without a dashboard or clipboard step. It resumes the saved
+binding on later runs. Sign in once with `omg login`; install the CLI with
+`npm install --global @omg-dev/cli` if you do not already have it.
+
+The underlying remote-access choices remain Tailscale or a relay you trust:
 
 ```bash
 LFG_TAILSCALE_SERVE=1 lfg setup      # private: front it with Tailscale
@@ -115,9 +127,10 @@ LFG_RELAY_URL=wss://your-relay.example/connect lfg connect ABC123   # outbound r
 
 Tailscale is the simpler choice if you only open the UI from your own devices.
 The relay (experimental) exists for the case Tailscale can't cover — rendering a
-session from your box on a *public* web origin; it needs a relay you or someone
-else operates, since none ships with LFG. Full comparison, the pairing flow, and
-opt-in session lifecycle events:
+session from your box on a *public* web origin. OMG operates one that its CLI
+configures for you; other operators can implement the same generic protocol.
+No relay ships with LFG itself. Full comparison, the pairing flow, and opt-in
+session lifecycle events:
 **[docs/remote-access.md](./docs/remote-access.md)**.
 
 Do not put `lfg` on the public internet without your own auth in front of it.

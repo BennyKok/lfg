@@ -1,15 +1,16 @@
 # Remote access
 
 `lfg serve` binds to loopback and has no application-layer auth of its own — it
-trusts whatever network perimeter you put it behind. There are two supported
-ways to reach it from your phone or laptop.
+trusts whatever network perimeter you put it behind. The two underlying paths
+are Tailscale or a relay; OMG's CLI is the one-command setup for its hosted
+relay, while `lfg connect` remains the generic path for any operator.
 
-| | [Tailscale](#tailscale-recommended) | [Relay (`lfg connect`)](#relay-lfg-connect) |
-| --- | --- | --- |
-| Inbound port | none | none |
-| Who you trust | your tailnet | the relay operator's auth |
-| Works on a public origin | no (private `100.x` address) | yes |
-| Setup | `LFG_TAILSCALE_SERVE=1 lfg setup` | `lfg connect <code>` |
+| | [Tailscale](#tailscale-recommended) | [OMG relay](#omg-relay) | [Custom relay](#custom-relay) |
+| --- | --- | --- | --- |
+| Inbound port | none | none | none |
+| Who you trust | your tailnet | OMG auth | the relay operator's auth |
+| Works on a public origin | no (private `100.x` address) | yes | yes |
+| Setup | `LFG_TAILSCALE_SERVE=1 lfg setup` | `omg connect` | `lfg connect <code>` |
 
 ## Tailscale (recommended)
 
@@ -34,6 +35,26 @@ is the boundary.
 No relay implementation ships with LFG. This is the generic client half of a
 documented protocol any relay operator can implement — see the wire protocol at
 the top of [`src/commands/connect.ts`](../src/commands/connect.ts).
+
+### OMG relay
+
+After signing in once with `omg login`, run:
+
+```bash
+omg connect
+```
+
+The OMG CLI installs LFG when it is missing, discovers OMG's public relay URL,
+mints a short-lived pairing code for the authenticated account, and invokes
+`lfg connect` without exposing the code to the clipboard. Later runs resume the
+saved OMG binding. Use `omg connect --new` only when you intentionally want a
+fresh binding, or `--no-install` to require an existing LFG install.
+
+Install the command with `npm install --global @omg-dev/cli` (or
+`bun add --global @omg-dev/cli`). This convenience wrapper is operator-specific;
+the LFG command and wire protocol below remain provider-agnostic.
+
+### Custom relay
 
 ```bash
 # redeem a one-time pairing code, then stay connected
