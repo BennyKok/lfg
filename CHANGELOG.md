@@ -4,6 +4,17 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## July 31, 2026 - The LFG logo is sharp again (v0.1.159)
+
+- The mark in the top-left header renders crisply on iPhone and iPad again. It
+  had looked soft and low-resolution since late June — long enough that it read
+  as "the logo is just low-res now" rather than as a bug.
+- The artwork was never the problem and has not changed. The header's frosted
+  pill carried the blur on the same element that wrapped the logo, and iOS
+  folds an SVG into a blurred ancestor's layer and redraws it there, softening
+  it. The blur now sits on its own layer behind the pill, so the mark is drawn
+  at full resolution. The frosted chrome looks exactly the same.
+
 ## July 31, 2026 - Resuming a session no longer replays your old messages (v0.1.158)
 
 - Resuming a session after a crash or restart could re-send your entire message

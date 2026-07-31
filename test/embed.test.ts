@@ -189,6 +189,39 @@ describe("mobile overlay scroll contract", () => {
     expect(app).toContain("Math.max(0, main.scrollTop) / 24");
   });
 
+  // Regression: the LFG mark went soft on iOS from Jun 22 (nav islands) until
+  // this fix. The artwork never changed — icon.svg is byte-identical across the
+  // whole window. The header island itself carried backdrop-blur-xl, and iOS
+  // flattens an SVG child into its backdrop-filtered ancestor's layer and
+  // rasterizes it there before scaling. 1a0132e fixed the outer header wrapper
+  // the same way but left the islands, so the mark stayed blurry.
+  test("header islands blur behind the brand mark, never above it", () => {
+    const app = require("node:fs").readFileSync("web/src/App.tsx", "utf8") as string;
+    const css = require("node:fs").readFileSync("web/src/index.css", "utf8") as string;
+
+    // The frosted surface is a z-index:-1 ::before, so the mark is never a
+    // descendant of a backdrop-filtered element.
+    expect(css).toMatch(/\.glass-island\s*\{[^}]*isolation:\s*isolate[^}]*\}/);
+    expect(css).not.toMatch(/\.glass-island\s*\{[^}]*backdrop-filter/);
+    expect(css).toMatch(
+      /\.glass-island::before\s*\{[^}]*backdrop-filter:\s*blur\(24px\)/,
+    );
+    // Must inherit the pill radius or the frost squares off the rounded island.
+    expect(css).toMatch(/\.glass-island::before\s*\{[^}]*border-radius:\s*inherit/);
+
+    // No header island may reintroduce the filter on the element that wraps the
+    // brand: every <ProductBrand> ancestor island uses the class instead.
+    for (const island of app.matchAll(
+      /className="([^"]*\brounded-full\b[^"]*\bh-11\b[^"]*|[^"]*\bsize-11\b[^"]*\brounded-full\b[^"]*)"/g,
+    )) {
+      expect(island[1]).not.toContain("backdrop-blur");
+    }
+    expect(app).toContain("glass-island flex h-11 items-center rounded-full px-1.5");
+    expect(app).toContain(
+      "glass-island flex size-11 items-center justify-center rounded-full",
+    );
+  });
+
   test("composer pages reserve chrome while the fade overlays content", () => {
     const app = require("node:fs").readFileSync("web/src/App.tsx", "utf8") as string;
     const css = require("node:fs").readFileSync("web/src/index.css", "utf8") as string;

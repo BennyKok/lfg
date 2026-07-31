@@ -5882,7 +5882,7 @@ export function App() {
         <header className="z-40 flex shrink-0 items-center justify-between gap-2 pb-1 pl-3 pr-[calc(0.75rem+var(--lfg-host-top-inset))] pt-[calc(0.5rem+env(safe-area-inset-top))]">
           <NavIsland className="shrink-0">
             <div
-              className="flex size-11 items-center justify-center rounded-full bg-background/80 backdrop-blur-xl"
+              className="glass-island flex size-11 items-center justify-center rounded-full"
               aria-label="omg.dev"
             >
               <ProductBrand hosted compact />
@@ -5896,7 +5896,7 @@ export function App() {
          navigation, so the individual chrome below is gated instead. */
       <header className="relative z-40 flex shrink-0 items-center justify-between gap-2 px-2 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))] md:px-3">
         <NavIsland className="shrink-0">
-          <div className="flex h-11 items-center rounded-full bg-background/80 px-1.5 backdrop-blur-xl">
+          <div className="glass-island flex h-11 items-center rounded-full px-1.5">
             {tab === "live" || tab === "notifications" || tab === "artifacts" ? (
               <button
                 type="button"
@@ -5929,7 +5929,7 @@ export function App() {
         </NavIsland>
 
         <NavIsland className="shrink-0">
-          <div className="flex h-11 items-center gap-1.5 rounded-full bg-background/80 px-2 backdrop-blur-xl">
+          <div className="glass-island flex h-11 items-center gap-1.5 rounded-full px-2">
             {tab === "live" || tab === "notifications" || tab === "artifacts" ? (
               // The island stays identical across the swipeable pages: on
               // mobile that's avatar + ask + pages (page identity lives in
