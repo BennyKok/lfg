@@ -36,3 +36,27 @@ export interface LfgAppSurfaceProps {
 export declare function LfgAppSurface(
   props: LfgAppSurfaceProps,
 ): JSX.Element;
+
+/**
+ * Machine-owned settings pages a host can mount on their own, underneath its
+ * own account and plan UI, instead of reimplementing them.
+ */
+export type LfgSettingsPage =
+  | "settings"
+  | "coding-agents"
+  | "auto"
+  | "storage"
+  | "more";
+
+export interface LfgSettingsSurfaceProps {
+  transport: LfgTransport;
+  assetBaseUrl?: string;
+  /** Which page to mount. Defaults to the settings root. */
+  page?: LfgSettingsPage;
+  className?: string;
+  errorSink?: LfgErrorSink;
+}
+
+export declare function LfgSettingsSurface(
+  props: LfgSettingsSurfaceProps,
+): JSX.Element;
