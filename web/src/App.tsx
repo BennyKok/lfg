@@ -4489,11 +4489,10 @@ export function App() {
     const sync = () => {
       if (disposed) return;
       // The layout viewport doesn't shrink for the keyboard on iOS, so it is the
-      // honest ceiling for how tall the shell may be.
-      const layoutHeight = Math.max(
-        window.innerHeight || 0,
-        document.documentElement.clientHeight || 0,
-      );
+      // honest ceiling for how tall the shell may be. Deliberately only
+      // `innerHeight`: <html>'s own clientHeight is sized *from* the value we
+      // publish below, so mixing it in would let one bad sample latch itself in.
+      const layoutHeight = window.innerHeight || 0;
       // Undo any latched pinch scale so the visual height is comparable to
       // layout px — a zoomed viewport reports a proportionally smaller height.
       const scale = vv.scale && vv.scale > 0 ? vv.scale : 1;
