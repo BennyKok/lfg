@@ -9,7 +9,7 @@ import {
   shouldPrioritizeSession,
 } from "./lib/app-search";
 import type { AppSearch } from "./lib/app-search";
-import { isEmbedded, readLocationEmbedFlag } from "./lib/embed";
+import { isBareSurface, isEmbedded, readLocationEmbedFlag } from "./lib/embed";
 import {
   embeddedConnectOptions,
   shouldShowEmbeddedConnectGate,
@@ -4098,6 +4098,9 @@ export function App() {
   // default to all sessions. `?embed=1` is the explicit contract; framing alone
   // is enough as a defence-in-depth signal.
   const embedded = isEmbedded(deepLinkSearch);
+  // Host-mounted single page: suppress every piece of LFG shell chrome the
+  // host already renders (header, brand, nav, composer).
+  const bare = isBareSurface();
   // Session deep-links win over filter/identity work so the target card opens
   // as soon as bootstrap returns sessions.
   const prioritizeSession = shouldPrioritizeSession(deepLinkSearch) || !!sessionDeepLinkRef.current;
@@ -6151,6 +6154,7 @@ export function App() {
           single fade backdrop and a single measured height (see
           --lfg-mobile-header-height) instead of the header alone reserving
           space and the callout landing on top of the first row. */}
+      {bare ? null : (
       <div
         ref={setMobileChromeEl}
         className={cn(
@@ -6274,6 +6278,7 @@ export function App() {
         </div>
       ) : null}
       </div>
+      )}
 
       <main
         ref={mainRef}
@@ -6466,7 +6471,7 @@ export function App() {
         ) : null}
       </main>
 
-      {!callOpen ? (
+      {!callOpen && !bare ? (
         <>
           {isMobile &&
           !viewerArtifact &&
@@ -20531,10 +20536,14 @@ function SettingsView({
   connection: ConnectionState | null;
 }) {
   const initial = (user ?? "").trim().slice(0, 1).toUpperCase() || "?";
+  // A host mounting this page renders the signed-in account itself — and its
+  // account is the real one, where ours is only a per-device session tag. Two
+  // identity blocks on one page is worse than none.
+  const bare = isBareSurface();
 
   return (
     <div className="mx-auto max-w-xl space-y-8 pb-10">
-      {/* Account */}
+      {bare ? null : (
       <div className="flex items-center gap-3.5 px-1">
         <div className="flex size-12 shrink-0 items-center justify-center rounded-full bg-secondary text-lg font-semibold text-muted-foreground">
           {initial}
@@ -20548,6 +20557,7 @@ function SettingsView({
           </div>
         </div>
       </div>
+      )}
 
       {/* Live browser-to-server RTT, measured over the same socket that carries
           session updates. This is intentionally dynamic rather than a cached
