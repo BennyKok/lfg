@@ -1089,9 +1089,6 @@ function agentIconSrc(agent?: string): string {
 // this instead of re-deriving the colours, so they can never drift apart.
 const STATUS_DOT_BUSY = "animate-pulse bg-warning";
 const STATUS_DOT_IDLE = "bg-success/30 ring-1 ring-inset ring-success/20";
-// The avatar overlay sits on the card surface, so idle reads as a solid dot
-// against the ring instead of the low-contrast wash used inline.
-const STATUS_DOT_IDLE_SOLID = "bg-success";
 
 function SessionStatusDot({
   busy,
@@ -1099,20 +1096,27 @@ function SessionStatusDot({
   className,
 }: {
   busy: boolean;
-  // "inline": a standalone dot in a header row.
-  // "avatar": badge pinned to the bottom-right of an agent avatar.
+  // "inline": a standalone dot in a header row, showing busy AND idle.
+  // "avatar": pinned to an agent avatar, and only ever drawn for busy — see
+  //   below for why idle earns nothing there.
   variant?: "inline" | "avatar";
   className?: string;
 }) {
+  // On an avatar, idle is the resting state of nearly every row, so a dot for
+  // it was a wall of green marking "nothing is happening" — the rail already
+  // groups and counts sessions, which is where you read the shape of the fleet.
+  // Only "working right now" earns a mark, and it sits opposite the account
+  // number, which owns the bottom-right corner on every agent icon in the app.
+  if (variant === "avatar" && !busy) return null;
   return (
     <span
       aria-label={busy ? "working" : "idle"}
       className={cn(
         "shrink-0 rounded-full",
         variant === "avatar"
-          ? "absolute -bottom-0.5 -right-0.5 size-2.5 ring-2 ring-card"
+          ? "absolute -right-0.5 -top-0.5 size-2.5 ring-2 ring-card"
           : "size-2",
-        busy ? STATUS_DOT_BUSY : variant === "avatar" ? STATUS_DOT_IDLE_SOLID : STATUS_DOT_IDLE,
+        busy ? STATUS_DOT_BUSY : STATUS_DOT_IDLE,
         className,
       )}
     />
@@ -1148,21 +1152,19 @@ function useClaudeAccountNumber(
 
 /**
  * The account number worn by a Claude icon, so a fleet split across several
- * logins is readable without opening anything. Matches the numbered marks in
- * the agent pickers.
+ * logins is readable without opening anything.
  *
- * Sits bottom-right by default. Session avatars already put the busy/idle dot
- * there, so those pass `corner="top-right"` — the number moves rather than the
- * status dot, which is the older and more load-bearing signal.
+ * Always bottom-right — the same corner the agent pickers and the usage
+ * campfire use, so the number is in one place across the whole app and you
+ * never have to look for it. Anything else that wants a corner on an agent
+ * avatar (the busy dot) goes elsewhere.
  */
 function ClaudeAccountBadge({
   number,
-  corner = "bottom-right",
   size = "md",
   className,
 }: {
   number: number | null;
-  corner?: "bottom-right" | "top-right";
   size?: "sm" | "md";
   className?: string;
 }) {
@@ -1171,9 +1173,8 @@ function ClaudeAccountBadge({
     <span
       aria-hidden
       className={cn(
-        "pointer-events-none absolute flex items-center justify-center rounded-full bg-foreground font-bold leading-none text-background ring-1 ring-background",
+        "pointer-events-none absolute -bottom-0.5 -right-0.5 flex items-center justify-center rounded-full bg-foreground font-bold leading-none text-background ring-1 ring-background",
         size === "sm" ? "size-3 text-[7px]" : "size-3.5 text-[8px]",
-        corner === "top-right" ? "-right-1 -top-1" : "-bottom-0.5 -right-0.5",
         className,
       )}
     >
@@ -1186,13 +1187,11 @@ function ClaudeAccountBadge({
 function SessionAgentIcon({
   session,
   className,
-  corner,
   size,
   wrapperClassName,
 }: {
   session: Pick<Session, "agent" | "agentLabel" | "claudeAccountId">;
   className?: string;
-  corner?: "bottom-right" | "top-right";
   size?: "sm" | "md";
   wrapperClassName?: string;
 }) {
@@ -1212,7 +1211,7 @@ function SessionAgentIcon({
   return (
     <span className={cn("relative inline-flex shrink-0", wrapperClassName)}>
       {img}
-      <ClaudeAccountBadge number={number} corner={corner} size={size} />
+      <ClaudeAccountBadge number={number} size={size} />
     </span>
   );
 }
@@ -10515,7 +10514,7 @@ const RailItem = memo(function RailItem({
         )}
       >
         <span className="relative flex size-6 shrink-0 items-center justify-center">
-          <SessionAgentIcon session={session} className="size-6 rounded-md" corner="top-right" />
+          <SessionAgentIcon session={session} className="size-6 rounded-md" />
           <SessionStatusDot busy={busy} variant="avatar" />
           {topPinned && collapsed ? (
             <Pin

@@ -4,6 +4,17 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 1, 2026 - A calmer session rail (v0.1.171)
+
+- The Claude account number now sits bottom-right on every agent icon in the
+  app, matching the agent pickers and the usage campfire, so it is always in
+  the same place.
+- Session avatars no longer carry a green "idle" dot. Idle is the resting state
+  of nearly every row, so the dots were a wall of green marking that nothing was
+  happening — the rail's groups and counts already show the shape of the fleet.
+  Only a session that is working right now gets a mark, and it moved to the
+  top-right corner so it never competes with the account number.
+
 ## August 1, 2026 - Claude account numbers on every session (v0.1.170)
 
 - A session pinned to a numbered Claude account now wears that number on its
