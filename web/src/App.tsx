@@ -598,6 +598,8 @@ type Message = {
   name?: string;
   mimeType?: string;
   size?: number;
+  width?: number;
+  height?: number;
   caption?: string;
   alt?: string;
   version?: number;
@@ -14968,6 +14970,8 @@ function MessageBubble({
             <AuthenticatedArtifactImage
               path={message.url}
               alt={message.alt || label}
+              width={message.width}
+              height={message.height}
               zoomable
               className="block max-h-[24rem] w-auto max-w-full self-center bg-muted object-contain"
             />

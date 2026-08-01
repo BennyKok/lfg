@@ -4,6 +4,16 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 1, 2026 - Faster, steadier image previews (v0.1.174)
+
+- Image messages now carry their orientation-correct width and height from the
+  display tool through storage and the transcript API. Image cards reserve that
+  exact aspect ratio while loading instead of jumping from a generic placeholder
+  to the finished preview.
+- Transcript images load a lighter WebP capped to 1080px on both axes, so tall
+  screenshots no longer download thousands of invisible pixels. Opening an
+  image still fetches the untouched original at full resolution.
+
 ## August 1, 2026 - Smoother sessions and agent setup (v0.1.173)
 
 - Installed PWAs now notify you when a coding session finishes a turn, with the

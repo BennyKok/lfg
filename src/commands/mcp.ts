@@ -53,6 +53,8 @@ type ImageArtifactResponse = {
     name: string;
     caption?: string;
     alt?: string;
+    width?: number;
+    height?: number;
     version?: number;
     refresh?: {
       enabled: boolean;

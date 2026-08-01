@@ -5014,7 +5014,7 @@ export async function cmdServe() {
               const extension = extname(mediaPath).toLowerCase();
               const artifact = [".mp4", ".m4v", ".webm", ".mov", ".ogv"].includes(extension)
                 ? createVideoArtifact({ sessionId: m[1], path: mediaPath })
-                : createImageArtifact({ sessionId: m[1], path: mediaPath });
+                : await createImageArtifact({ sessionId: m[1], path: mediaPath });
               artifacts.push(artifact);
             }
             const media: OriginDeliveryMedia[] = artifacts.map((artifact) => ({
@@ -5079,7 +5079,7 @@ export async function cmdServe() {
           try {
             const transcriptPath = await resolveTranscript(m[1]);
             const indexPath = transcriptPath ?? sessionIndexKey(m[1]);
-            const artifact = createImageArtifact({
+            const artifact = await createImageArtifact({
               sessionId: m[1],
               path: body.path,
               caption: body.caption,

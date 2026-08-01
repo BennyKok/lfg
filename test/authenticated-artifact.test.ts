@@ -61,8 +61,13 @@ describe("authenticated artifacts", () => {
     expect(component).toContain("lfgFetch(path");
     expect(component).toContain("URL.createObjectURL");
     expect(component).toContain("URL.revokeObjectURL(objectUrl)");
+    expect(component).toContain("aspectRatio:");
+    expect(component).toContain("width={width}");
+    expect(component).toContain("height={height}");
     expect(lightbox).toContain('src.startsWith("blob:")');
     expect(app).toContain("<AuthenticatedArtifactImage");
+    expect(app).toContain("width={message.width}");
+    expect(app).toContain("height={message.height}");
     expect(app).toContain("<AuthenticatedArtifactVideo");
     // HTML artifacts render through the native renderer, which fetches through
     // the transport itself (asserted in native-artifact.test.ts).
