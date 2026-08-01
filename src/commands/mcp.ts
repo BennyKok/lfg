@@ -436,7 +436,16 @@ async function createSubagent({
   };
 }
 
-export async function cmdMcp() {
+/**
+ * Build the LFG MCP server, transport-free.
+ *
+ * Every tool here is a thin proxy: it calls `api()`, which is an HTTP request
+ * to the `lfg serve` process on this box. The server holds no state of its own,
+ * which is what makes it safe to share — see `serveLfgMcpRequest` in
+ * ../commands/serve.ts, where one in-process instance answers every agent over
+ * HTTP instead of each agent spawning its own copy.
+ */
+export function buildLfgMcpServer(): McpServer {
   const server = new McpServer({
     name: "lfg",
     version: VERSION,
@@ -1269,6 +1278,18 @@ export async function cmdMcp() {
     },
   );
 
+  return server;
+}
+
+/**
+ * `lfg mcp` — the stdio entry point.
+ *
+ * Kept for agents whose CLI cannot register an HTTP MCP server, and for direct
+ * invocation. Agents that can use HTTP are pointed at the shared endpoint on
+ * the serve process instead, which avoids one ~38 MB process per session.
+ */
+export async function cmdMcp() {
+  const server = buildLfgMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
   console.error(`lfg MCP server connected to ${localServeBaseUrl()}`);

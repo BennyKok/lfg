@@ -3,7 +3,7 @@ import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { PATHS } from "./config.ts";
+import { PATHS, localServeBaseUrl } from "./config.ts";
 import { lfgCapabilityAccess } from "./lfg-capabilities.ts";
 import {
   claudeAccountConfigDir,
@@ -357,13 +357,26 @@ function mcpCommandArgs(): string[] | null {
   return [bun, join(PATHS.root, "src", "cli.ts"), "mcp"];
 }
 
+/**
+ * The shared MCP endpoint on the local `lfg serve`.
+ *
+ * Registering this URL instead of a stdio command is what stops every agent
+ * session from spawning its own `lfg mcp` process (~38 MB each; 14 sessions on
+ * one box cost ~540 MB of identical processes). The tool surface is the same —
+ * see src/mcp-http.ts.
+ */
+function mcpHttpUrl(): string {
+  return `${localServeBaseUrl()}/mcp`;
+}
+
 function hasClaudeLfgMcp(): boolean {
   const claude = claudePath();
-  const args = mcpCommandArgs();
-  if (!claude || !args) return false;
+  if (!claude) return false;
   const out = commandOutput([claude, "mcp", "get", "lfg"]);
   if (!out.ok) return false;
-  return args.every((part) => out.text.includes(part));
+  // Only the HTTP registration counts. A leftover stdio entry from an older
+  // install reports as "not installed" so setup replaces it.
+  return out.text.includes(mcpHttpUrl());
 }
 
 function hasCodexLfgMcp(): boolean {
@@ -857,9 +870,17 @@ export async function listSetupChecks(): Promise<SetupCheck[]> {
   ];
 }
 
-function installClaudeMcp(claude: string, args: string[]): void {
+/**
+ * Register LFG with Claude over HTTP rather than stdio.
+ *
+ * `mcp remove` first also migrates an older stdio registration, so an existing
+ * install stops spawning a per-session `lfg mcp` child as soon as setup reruns.
+ */
+function installClaudeMcp(claude: string): void {
   commandOutput([claude, "mcp", "remove", "lfg", "-s", "user"]);
-  const out = commandOutput([claude, "mcp", "add", "-s", "user", "lfg", "--", ...args]);
+  const out = commandOutput([
+    claude, "mcp", "add", "-s", "user", "--transport", "http", "lfg", mcpHttpUrl(),
+  ]);
   if (!out.ok) throw new Error(out.text.trim() || "Claude MCP install failed");
 }
 
@@ -939,7 +960,7 @@ export async function runSetupAction(key: string): Promise<void> {
     if (!claude && !codex && !opencode && !grok && !cursor) {
       throw new Error("Install a supported coding agent first, then register the LFG MCP server");
     }
-    if (claude) installClaudeMcp(claude, args);
+    if (claude) installClaudeMcp(claude);
     if (codex) installCodexMcp(codex, args);
     if (opencode) await installOpencodeMcp(args);
     if (grok) installGrokMcp(grok, args);

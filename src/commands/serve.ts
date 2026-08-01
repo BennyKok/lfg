@@ -18,6 +18,7 @@ import {
   sourceUpdateStatus,
 } from "../self-update.ts";
 import { compressedAssetResponse, maybeCompressResponse } from "../http-compress.ts";
+import { serveLfgMcpRequest } from "../mcp-http.ts";
 import { shortSessionId } from "../lfg-capabilities.ts";
 import {
   getCachedResumableSession,
@@ -2204,6 +2205,15 @@ export async function cmdServe() {
 
       const response = await (async () => {
       try {
+      // The shared MCP endpoint. Agents registered with `--transport http`
+      // reach the same tool surface `lfg mcp` exposes over stdio, without each
+      // session spawning its own copy of this process. Streamable HTTP drives
+      // POST (requests), GET (server-initiated stream) and DELETE (teardown),
+      // so the transport owns method handling rather than this router.
+      if (path === "/mcp") {
+        return await serveLfgMcpRequest(req);
+      }
+
       if (path === "/api/manager/capabilities") {
         if (req.method !== "GET") return err(405, "method not allowed");
         return json(managerRoundService.capabilities());
