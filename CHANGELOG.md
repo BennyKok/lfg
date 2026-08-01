@@ -4,6 +4,17 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 1, 2026 - Settings that a host can mount (v0.1.175)
+
+- Hosts embedding LFG can mount a settings page on its own now, and it renders
+  as sections only — no LFG header, brand mark, identity block or bottom nav.
+  Mounted inside a product that already has its own header and account, the
+  surface used to draw a second one of each, which is the duplication that
+  mounting a shared surface is meant to remove in the first place.
+- `?bare=1` renders that same hosted layout in a plain browser, so it can be
+  checked without building the package and mounting it in a host.
+
+
 ## August 1, 2026 - Settings, regrouped (v0.1.172)
 
 - Settings is a one-pager now. It used to be seventeen sections in a single
