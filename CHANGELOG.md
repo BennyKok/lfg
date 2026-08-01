@@ -4,6 +4,15 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 1, 2026 - Voice composers that stay in place (v0.1.176)
+
+- The home and live-session chat composers now share the same growing textarea
+  and maximum height. Long prompts scroll inside the field instead of expanding
+  the whole home composer, so the agent and microphone controls stay anchored.
+- Live voice transcription now follows the newest spoken line in both
+  composers. Manual edits in the middle of a long draft keep their position and
+  are not pulled back to the bottom.
+
 ## August 1, 2026 - Settings that a host can mount (v0.1.175)
 
 - Hosts embedding LFG can mount a settings page on its own now, and it renders
