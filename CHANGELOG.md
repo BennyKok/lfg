@@ -4,6 +4,16 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 1, 2026 - Claude account numbers on every session (v0.1.170)
+
+- A session pinned to a numbered Claude account now wears that number on its
+  agent mark everywhere the mark appears: the rail rows, the session card and
+  detail headers (the top-left icon), and the session picker. Telling which
+  login a session is running on no longer means opening it.
+- The number only appears once a second account is connected — with one login
+  there is nothing to disambiguate — and sits opposite the busy/idle dot so
+  neither signal covers the other.
+
 ## August 1, 2026 - Usage follows your Claude accounts (v0.1.169)
 
 - Usage now reports one entry per connected Claude account. The campfire view

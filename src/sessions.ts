@@ -257,6 +257,12 @@ export type Session = {
   capabilityVersion?: string | null;
   /** True when a long-lived managed session predates the current LFG capability contract. */
   capabilitiesStale?: boolean;
+  /**
+   * Isolated Claude subscription this session is pinned to, when it launched on
+   * one. Clients use it to stamp the account's number on the session's Claude
+   * mark, so a fleet spread across several logins is readable at a glance.
+   */
+  claudeAccountId?: string | null;
   launching?: boolean;
   startedAt: number | null;
   transcriptPath: string | null;
@@ -461,6 +467,7 @@ function managedLineage(m: ManagedSession | undefined): Pick<
   | "spawnedBy"
   | "capabilityVersion"
   | "capabilitiesStale"
+  | "claudeAccountId"
 > {
   return {
     parentSessionId: m?.parentSessionId ?? null,
@@ -469,6 +476,7 @@ function managedLineage(m: ManagedSession | undefined): Pick<
     spawnedBy: m?.spawnedBy ?? null,
     capabilityVersion: m?.capabilityVersion ?? null,
     capabilitiesStale: !!m && m.capabilityVersion !== LFG_CAPABILITY_VERSION,
+    claudeAccountId: m?.claudeAccountId ?? null,
   };
 }
 

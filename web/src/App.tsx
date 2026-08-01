@@ -484,6 +484,8 @@ type Session = {
   spawnedBy?: string | null;
   capabilityVersion?: string | null;
   capabilitiesStale?: boolean;
+  /** Claude account this session is pinned to, when it launched on a numbered one. */
+  claudeAccountId?: string | null;
   // Build health (from the backend). "blocked" means the session can't make
   // progress until a human acts; statusReason/statusDetail explain why.
   status?: "ok" | "blocked";
@@ -1114,6 +1116,104 @@ function SessionStatusDot({
         className,
       )}
     />
+  );
+}
+
+/**
+ * Connected Claude accounts, but only once there is more than one. A single
+ * login has no identity to disambiguate, so stamping "1" on every Claude mark
+ * in the fleet would be noise rather than information.
+ */
+function useNumberedClaudeAccounts(): ClaudeAccountInfo[] {
+  const codingAgents = useContext(CodingAgentsContext);
+  return useMemo(() => {
+    const accounts = codingAgents
+      ?.find((agent) => agent.key === "aisdk")
+      ?.status.accounts?.filter((account) => account.connected);
+    return accounts && accounts.length > 1 ? accounts : [];
+  }, [codingAgents]);
+}
+
+/** The account number to stamp on a Claude mark, or null when there's nothing to tell apart. */
+function useClaudeAccountNumber(
+  agent: string | undefined,
+  claudeAccountId: string | null | undefined,
+): number | null {
+  const accounts = useNumberedClaudeAccounts();
+  if (!claudeAccountId) return null;
+  // Only the Claude marks are ambiguous; every other agent has one identity.
+  if (agent && agent !== "aisdk" && agent !== "claude") return null;
+  return accounts.find((account) => account.id === claudeAccountId)?.number ?? null;
+}
+
+/**
+ * The account number worn by a Claude icon, so a fleet split across several
+ * logins is readable without opening anything. Matches the numbered marks in
+ * the agent pickers.
+ *
+ * Sits bottom-right by default. Session avatars already put the busy/idle dot
+ * there, so those pass `corner="top-right"` — the number moves rather than the
+ * status dot, which is the older and more load-bearing signal.
+ */
+function ClaudeAccountBadge({
+  number,
+  corner = "bottom-right",
+  size = "md",
+  className,
+}: {
+  number: number | null;
+  corner?: "bottom-right" | "top-right";
+  size?: "sm" | "md";
+  className?: string;
+}) {
+  if (number == null) return null;
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        "pointer-events-none absolute flex items-center justify-center rounded-full bg-foreground font-bold leading-none text-background ring-1 ring-background",
+        size === "sm" ? "size-3 text-[7px]" : "size-3.5 text-[8px]",
+        corner === "top-right" ? "-right-1 -top-1" : "-bottom-0.5 -right-0.5",
+        className,
+      )}
+    >
+      {number}
+    </span>
+  );
+}
+
+/** A session's agent mark, wearing its Claude account number when it has one. */
+function SessionAgentIcon({
+  session,
+  className,
+  corner,
+  size,
+  wrapperClassName,
+}: {
+  session: Pick<Session, "agent" | "agentLabel" | "claudeAccountId">;
+  className?: string;
+  corner?: "bottom-right" | "top-right";
+  size?: "sm" | "md";
+  wrapperClassName?: string;
+}) {
+  const number = useClaudeAccountNumber(session.agent, session.claudeAccountId);
+  const label = session.agentLabel || agentIconAlt(session.agent);
+  const img = (
+    <img
+      src={agentIconSrc(session.agent)}
+      alt={number == null ? label : `${label} ${number}`}
+      title={session.agentLabel || undefined}
+      className={className}
+    />
+  );
+  // Without a number there is nothing to position against, so the extra
+  // wrapper element is skipped entirely.
+  if (number == null && !wrapperClassName) return img;
+  return (
+    <span className={cn("relative inline-flex shrink-0", wrapperClassName)}>
+      {img}
+      <ClaudeAccountBadge number={number} corner={corner} size={size} />
+    </span>
   );
 }
 
@@ -10413,12 +10513,7 @@ const RailItem = memo(function RailItem({
         )}
       >
         <span className="relative flex size-6 shrink-0 items-center justify-center">
-          <img
-            src={agentIconSrc(session.agent)}
-            alt={session.agentLabel || agentIconAlt(session.agent)}
-            title={session.agentLabel || undefined}
-            className="size-6 rounded-md"
-          />
+          <SessionAgentIcon session={session} className="size-6 rounded-md" corner="top-right" />
           <SessionStatusDot busy={busy} variant="avatar" />
           {topPinned && collapsed ? (
             <Pin
@@ -12962,11 +13057,10 @@ function SessionTitleSheet({
           >
             <ChevronDown />
           </Button>
-          <img
-            src={agentIconSrc(session.agent)}
-            alt={session.agentLabel || agentIconAlt(session.agent)}
-            title={session.agentLabel || undefined}
+          <SessionAgentIcon
+            session={session}
             className="size-7 shrink-0 rounded-lg"
+            wrapperClassName="shrink-0"
           />
           {renamingInline ? (
             <SessionTitleInlineEditor
@@ -13801,14 +13895,15 @@ const onTouchStart = (e: ReactTouchEvent) => {
             {/* "aisdk" is Claude Code under the hood (driven via the AI SDK), so
                 it wears the same Claude mark as a tmux claude session; only the
                 new-session picker keeps a distinct label to tell them apart. */}
-            <img
-              src={agentIconSrc(session.agent)}
-              alt={session.agentLabel || agentIconAlt(session.agent)}
-              title={session.agentLabel || undefined}
+            <SessionAgentIcon
+              session={session}
               className={cn(
                 "rounded-lg transition-all duration-300 ease-ios",
                 busy || summarizing ? "size-4" : "size-6",
               )}
+              // The spinner takes over the icon's box while working, so the
+              // number shrinks with it rather than floating off the artwork.
+              size={busy || summarizing ? "sm" : "md"}
             />
           </button>
           {renamingInline ? (
@@ -17154,11 +17249,7 @@ function ResumeSessionSheet({
                       className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left transition hover:bg-muted active:scale-[0.99]"
                     >
                       <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted">
-                        <img
-                          src={agentIconSrc(session.agent)}
-                          alt={agentIconAlt(session.agent)}
-                          className="size-4"
-                        />
+                        <SessionAgentIcon session={session} className="size-4" size="sm" />
                       </span>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-sm font-medium">{session.title}</span>
