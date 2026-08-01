@@ -15753,6 +15753,17 @@ function ComposerProjectSheet({
     );
   }, [repos, needle]);
 
+  // `selected` (the concrete repo a new session will run in) and `allSelected`
+  // (the live-view filter sitting on "__all") are independent inputs, and the
+  // composer passes both at once: with no project filter it still falls back to
+  // a real repo for the session, so it hands us selected="/…/duet-app"
+  // *alongside* allSelected. Ticking each row off its own prop then drew two
+  // ticks in a single-choice list. The concrete repo wins — it's the honest
+  // answer to "choose where your agent will work" — so "All projects" only
+  // ticks when there is no concrete target, which is exactly the live-view
+  // rail's sheet (it passes selected="" whenever the filter is "__all").
+  const allTicked = allSelected && !selected;
+
   const rowClass = cn(
     "flex w-full items-center gap-2.5 border-b border-border px-3 text-left last:border-0 active:bg-muted",
     showPaths ? "py-2.5" : "py-2",
@@ -15826,7 +15837,7 @@ function ComposerProjectSheet({
                     </span>
                   ) : null}
                 </span>
-                {allSelected ? (
+                {allTicked ? (
                   <Check className="size-4 shrink-0 text-emerald-500" />
                 ) : (
                   <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
