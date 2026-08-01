@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 1, 2026 - Archive wording everywhere (v0.1.185)
+
+- Session swipe actions, keyboard confirmations, and Smart clear now consistently
+  say Archive instead of Delete or End. Confirmations also make clear that an
+  archived session leaves the live view but remains available to resume later
+  from Recent sessions.
+
 ## August 1, 2026 - Cloud workspaces can update themselves again (v0.1.184)
 
 - LFG running in an OMG cloud workspace can now take updates. It restarts
