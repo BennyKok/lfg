@@ -6378,15 +6378,24 @@ export function App() {
       <main
         ref={mainRef}
         className={cn(
-          "min-h-0 px-0 md:flex-1 md:px-3 md:pt-3",
-          isMobile &&
-            // Narrow layout scrolls behind the floating chrome, so the box is
-            // pinned to the shell rather than living in the flex flow. It stops
-            // at the host inset (see mainBottomPadding) and keeps a real side
-            // gutter for card corners and shadows. The header fade overlays the
-            // scroll surface; only the measured chrome height is layout space.
-            "absolute inset-x-0 bottom-[var(--lfg-host-bottom-inset)] top-0 px-2 pt-[var(--lfg-mobile-header-height)] [scroll-padding-top:var(--lfg-mobile-header-height)]",
-          liveDesktopWorkspace ? "overflow-hidden pb-3" : `overflow-y-auto ${mainBottomPadding}`,
+          "min-h-0",
+          // Every rule below exists to accommodate LFG's own chrome. A bare
+          // surface has none of it: the gutter would double up on the host's
+          // padding (misaligning our cards against theirs by exactly that
+          // much), the header inset would reserve space for a header we
+          // didn't render, and the absolute box would leave the mount with no
+          // intrinsic height for the host to size against.
+          !bare && [
+            "px-0 md:flex-1 md:px-3 md:pt-3",
+            isMobile &&
+              // Narrow layout scrolls behind the floating chrome, so the box is
+              // pinned to the shell rather than living in the flex flow. It stops
+              // at the host inset (see mainBottomPadding) and keeps a real side
+              // gutter for card corners and shadows. The header fade overlays the
+              // scroll surface; only the measured chrome height is layout space.
+              "absolute inset-x-0 bottom-[var(--lfg-host-bottom-inset)] top-0 px-2 pt-[var(--lfg-mobile-header-height)] [scroll-padding-top:var(--lfg-mobile-header-height)]",
+            liveDesktopWorkspace ? "overflow-hidden pb-3" : `overflow-y-auto ${mainBottomPadding}`,
+          ],
         )}
       >
         {keepLive || tab === "live" ? (
