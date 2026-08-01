@@ -4,6 +4,18 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 1, 2026 - One MCP server for the whole box (v0.1.183)
+
+- Running several Claude sessions at once no longer costs a duplicate
+  background process each. LFG registered itself with Claude as a stdio MCP
+  server, so every session started its own copy of `lfg mcp` — around 38 MB
+  apiece, and a box with 14 sessions was carrying 14 identical ones (~540 MB)
+  whose only job was to forward calls to the LFG server already running beside
+  them. The server now answers MCP directly at `/mcp`, and Claude is pointed
+  there over HTTP, so sessions share one endpoint. Existing installs migrate
+  the next time MCP setup runs; Codex, OpenCode, Grok and Cursor keep working
+  exactly as before.
+
 ## August 1, 2026 - Security patches for the graph we actually ship (v0.1.182)
 
 - Patched the vulnerable transitive dependencies in the bundle: `fast-uri`,
