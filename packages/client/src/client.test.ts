@@ -8,11 +8,12 @@ import {
 } from "./index";
 
 class FakeSocket implements LfgSocket {
+  binaryType: BinaryType = "blob";
   readyState = 0;
-  sent: string[] = [];
+  sent: Array<string | ArrayBufferLike | Blob | ArrayBufferView> = [];
   private listeners = new Map<string, Set<(event?: never) => void>>();
 
-  send(data: string) {
+  send(data: string | ArrayBufferLike | Blob | ArrayBufferView) {
     this.sent.push(data);
   }
 
@@ -29,6 +30,15 @@ class FakeSocket implements LfgSocket {
   open() {
     this.readyState = 1;
     for (const listener of this.listeners.get("open") ?? []) listener();
+  }
+}
+
+class RecordingWebSocket extends FakeSocket {
+  static calls: Array<{ url: string; protocols?: string | string[] }> = [];
+
+  constructor(url: string | URL, protocols?: string | string[]) {
+    super();
+    RecordingWebSocket.calls.push({ url: String(url), protocols });
   }
 }
 
@@ -108,6 +118,7 @@ test("many transcript subscriptions share one socket and one batched subscribe f
   const transport: LfgTransport = {
     fetch: async () => new Response(),
     request: async () => ({}) as never,
+    openSocket: async () => socket,
     openLiveSocket: async () => {
       opens += 1;
       return socket;
@@ -122,7 +133,7 @@ test("many transcript subscriptions share one socket and one batched subscribe f
 
   expect(opens).toBe(1);
   expect(socket.sent).toHaveLength(1);
-  expect(JSON.parse(socket.sent[0]!)).toEqual({
+  expect(JSON.parse(String(socket.sent[0]!))).toEqual({
     t: "subscribe",
     channels: [
       { kind: "transcript", key: "a" },
@@ -227,6 +238,34 @@ test("raw package fetch shares bearer auth and refreshes once on 401", async () 
     {
       url: "https://sessions.example/api/bootstrap",
       authorization: "Bearer fresh",
+    },
+  ]);
+});
+
+test("grant sockets keep terminal and live traffic inside the authenticated host boundary", async () => {
+  RecordingWebSocket.calls = [];
+  const grants: string[] = [];
+  const transport = createGrantTransport({
+    baseUrl: "https://sessions.example/",
+    getGrant: async () => {
+      grants.push("socket-token");
+      return { token: "socket-token", expiresAt: Date.now() + 60_000 };
+    },
+    WebSocket: RecordingWebSocket as unknown as typeof WebSocket,
+  });
+
+  await transport.openSocket("/api/term?session=main&cols=80&rows=24");
+  await transport.openLiveSocket();
+
+  expect(grants).toEqual(["socket-token"]);
+  expect(RecordingWebSocket.calls).toEqual([
+    {
+      url: "wss://sessions.example/api/term?session=main&cols=80&rows=24",
+      protocols: ["lfg-bearer.socket-token"],
+    },
+    {
+      url: "wss://sessions.example/api/live/ws",
+      protocols: ["lfg-bearer.socket-token"],
     },
   ]);
 });

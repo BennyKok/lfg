@@ -40,6 +40,6 @@ describe("shipped notifications", () => {
     expect(main).not.toContain("acknowledgePushNotifications");
     expect(worker).not.toContain("LFG_PUSH_DISPLAYED");
     expect(app).not.toContain("Clear dot");
-    expect(app).toContain("Mark all read in Notifications clears the app icon dot");
+    expect(app).toContain('title="Mark all read — clears the app icon badge"');
   });
 });

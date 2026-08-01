@@ -22,8 +22,9 @@ export type {
 } from "@lfg-dev/protocol";
 
 export interface LfgSocket {
+  binaryType: BinaryType;
   readonly readyState: number;
-  send(data: string): void;
+  send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void;
   close(code?: number, reason?: string): void;
   addEventListener(type: "open", listener: () => void): void;
   addEventListener(type: "message", listener: (event: { data: unknown }) => void): void;
@@ -55,6 +56,12 @@ export interface LfgTransport {
     onProgress: (progress: LfgUploadProgress) => void,
   ): Promise<Response>;
   request<T>(path: string, init?: RequestInit): Promise<T>;
+  /**
+   * Authenticated WebSocket access for application surfaces such as live
+   * transcripts and terminals. Hosts own this boundary just like HTTP: an
+   * embedded surface must never infer a socket origin from `location`.
+   */
+  openSocket(path: string): Promise<LfgSocket>;
   openLiveSocket(): Promise<LfgSocket>;
 }
 
@@ -122,8 +129,12 @@ function normalizeBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
 }
 
-function socketUrl(baseUrl: string): string {
-  const url = new URL(`${normalizeBaseUrl(baseUrl)}/api/live/ws`);
+function normalizedPath(path: string): string {
+  return path.startsWith("/") ? path : `/${path}`;
+}
+
+function socketUrl(baseUrl: string, path: string): string {
+  const url = new URL(`${normalizeBaseUrl(baseUrl)}${normalizedPath(path)}`);
   url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
   return url.toString();
 }
@@ -205,6 +216,12 @@ export function createSameOriginTransport(
   const fetchImpl = input.fetch ?? globalThis.fetch;
   const WebSocketImpl = input.WebSocket ?? globalThis.WebSocket;
   const XMLHttpRequestImpl = input.XMLHttpRequest ?? globalThis.XMLHttpRequest;
+  const openSocket = async (path: string): Promise<LfgSocket> => {
+    const protocol = globalThis.location?.protocol === "https:" ? "wss:" : "ws:";
+    return new WebSocketImpl(
+      `${protocol}//${globalThis.location.host}${normalizedPath(path)}`,
+    ) as LfgSocket;
+  };
   return {
     fetch(path: string, init?: RequestInit): Promise<Response> {
       return fetchImpl(path, init);
@@ -226,10 +243,8 @@ export function createSameOriginTransport(
       if (!response.ok) throw apiError(response, requestMethod(init), path, data, text);
       return data as T;
     },
-    async openLiveSocket(): Promise<LfgSocket> {
-      const protocol = globalThis.location?.protocol === "https:" ? "wss:" : "ws:";
-      return new WebSocketImpl(`${protocol}//${globalThis.location.host}/api/live/ws`) as LfgSocket;
-    },
+    openSocket,
+    openLiveSocket: () => openSocket("/api/live/ws"),
   };
 }
 
@@ -295,6 +310,14 @@ export function createGrantTransport(options: CreateGrantTransportOptions): LfgT
       }
     : null;
 
+  const openSocket = async (path: string): Promise<LfgSocket> => {
+    const current = await grant(false);
+    return new WebSocketImpl(
+      socketUrl(baseUrl, path),
+      [`lfg-bearer.${current.token}`],
+    ) as LfgSocket;
+  };
+
   return {
     fetch: authenticatedFetch,
     ...(authenticatedUpload ? { upload: authenticatedUpload } : {}),
@@ -304,13 +327,8 @@ export function createGrantTransport(options: CreateGrantTransportOptions): LfgT
       if (!response.ok) throw apiError(response, requestMethod(init), path, data, text);
       return data as T;
     },
-    async openLiveSocket(): Promise<LfgSocket> {
-      const current = await grant(false);
-      return new WebSocketImpl(
-        socketUrl(baseUrl),
-        [`lfg-bearer.${current.token}`],
-      ) as LfgSocket;
-    },
+    openSocket,
+    openLiveSocket: () => openSocket("/api/live/ws"),
   };
 }
 

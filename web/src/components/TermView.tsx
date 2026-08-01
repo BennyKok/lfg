@@ -19,7 +19,8 @@ import {
   TerminalSquare,
   X,
 } from "lucide-react";
-import { lfgFetch } from "@/lib/lfg-client";
+import type { LfgSocket } from "@lfg-dev/client";
+import { lfgFetch, openLfgSocket } from "@/lib/lfg-client";
 
 // One WASM load per page, shared across mount/unmount of the tab.
 let ghosttyReady: Promise<void> | null = null;
@@ -37,6 +38,8 @@ const TERMINAL_THEME = {
   selectionBackground: "#3f3f46",
   selectionForeground: "#fafafa",
 } as const;
+
+const SOCKET_OPEN = 1;
 
 // Merge freshly-seen URLs into the running list, most-recent first, deduped and
 // capped. `found` is chronological, so unshifting in order leaves the newest at
@@ -846,7 +849,7 @@ export function TermView({
 } = {}) {
   const [termSession, setTermSession] = useState(() => localStorage.getItem("lfg_term_session") || "main");
   const hostRef = useRef<HTMLDivElement>(null);
-  const wsRef = useRef<WebSocket | null>(null);
+  const wsRef = useRef<LfgSocket | null>(null);
   const termRef = useRef<InstanceType<typeof GhosttyTerminal> | null>(null);
   const [status, setStatus] = useState<"connecting" | "open" | "reconnecting" | "closed">("connecting");
   // URLs detected in the output stream → rendered as tappable chips, since a
@@ -898,7 +901,7 @@ export function TermView({
   // Send raw bytes (keystrokes / control sequences) to the PTY.
   const sendRaw = useCallback((data: string) => {
     const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(data));
+    if (ws && ws.readyState === SOCKET_OPEN) ws.send(new TextEncoder().encode(data));
   }, []);
 
   const cancelLongPress = useCallback(() => {
@@ -1080,39 +1083,61 @@ export function TermView({
     let cleanupMouseReporting: (() => void) | null = null;
     let cleanupFocusTracking: (() => void) | null = null;
     let attempt = 0;
+    let opening = false;
+
+    const scheduleReconnect = () => {
+      if (disposed || reconnectTimer) return;
+      setStatus("reconnecting");
+      const delay = Math.min(5000, 500 * 2 ** attempt++);
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        void connect();
+      }, delay);
+    };
 
     // (Re)open the socket. The tmux shell session lives independently of serve,
     // so when serve restarts (deploys) the socket drops but the session is
     // intact — reconnecting just re-attaches and tmux repaints. That's what
     // makes a deploy non-destructive instead of wiping the terminal.
-    const connect = () => {
-      if (disposed || !term) return;
-      const proto = location.protocol === "https:" ? "wss:" : "ws:";
-      const url = `${proto}//${location.host}/api/term?${connTarget}&cols=${term.cols}&rows=${term.rows}`;
-      const ws = new WebSocket(url);
+    async function connect() {
+      if (disposed || !term || opening || wsRef.current) return;
+      opening = true;
+      let ws: LfgSocket;
+      try {
+        ws = await openLfgSocket(
+          `/api/term?${connTarget}&cols=${term.cols}&rows=${term.rows}`,
+        );
+      } catch {
+        opening = false;
+        scheduleReconnect();
+        return;
+      }
+      opening = false;
+      if (disposed || !term) {
+        ws.close();
+        return;
+      }
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
 
-      ws.onopen = () => {
+      ws.addEventListener("open", () => {
         attempt = 0;
         setStatus("open");
         term?.focus();
         // Force tmux to repaint the reattached session at our geometry.
         if (term) ws.send(JSON.stringify({ t: "resize", cols: term.cols, rows: term.rows }));
-      };
-      ws.onmessage = (e) => {
+      });
+      ws.addEventListener("message", (e) => {
         if (typeof e.data === "string") term?.write(e.data);
         else term?.write(new Uint8Array(e.data as ArrayBuffer));
-      };
-      ws.onclose = () => {
-        wsRef.current = null;
+      });
+      ws.addEventListener("close", () => {
+        if (wsRef.current === ws) wsRef.current = null;
         if (disposed) return;
         // Reconnect with backoff (0.5s → 5s) so a serve restart self-heals.
-        setStatus("reconnecting");
-        const delay = Math.min(5000, 500 * 2 ** attempt++);
-        reconnectTimer = setTimeout(connect, delay);
-      };
-    };
+        scheduleReconnect();
+      });
+    }
 
     (async () => {
       await ensureGhostty();
@@ -1148,11 +1173,11 @@ export function TermView({
       // distinguishes the two by frame type).
       term.onData((d: string) => {
         const ws = wsRef.current;
-        if (ws && ws.readyState === WebSocket.OPEN) ws.send(new TextEncoder().encode(d));
+        if (ws && ws.readyState === SOCKET_OPEN) ws.send(new TextEncoder().encode(d));
       });
       term.onResize(({ cols, rows }: { cols: number; rows: number }) => {
         const ws = wsRef.current;
-        if (ws && ws.readyState === WebSocket.OPEN)
+        if (ws && ws.readyState === SOCKET_OPEN)
           ws.send(JSON.stringify({ t: "resize", cols, rows }));
       });
 
@@ -1176,7 +1201,7 @@ export function TermView({
         try { fit?.fit(); } catch {}
       });
       ro.observe(hostRef.current);
-      connect();
+      void connect();
     })();
 
     return () => {

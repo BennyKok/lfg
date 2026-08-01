@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 1, 2026 - Embedded terminals use their host transport (v0.1.186)
+
+- Terminals mounted inside another product now open their WebSocket through
+  the same authenticated host transport as HTTP and live transcript traffic.
+  They previously inferred the socket from the embedding page URL, so OMG
+  cloud Computers tried to connect to the dashboard itself and immediately
+  closed instead of reaching the Computer's LFG runtime.
+
 ## August 1, 2026 - Archive wording everywhere (v0.1.185)
 
 - Session swipe actions, keyboard confirmations, and Smart clear now consistently

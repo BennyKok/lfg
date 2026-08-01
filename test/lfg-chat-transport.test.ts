@@ -6,13 +6,45 @@ import {
   LfgChatTransport,
   type LfgTranscriptEvent,
 } from "../web/src/lib/lfg-chat-transport.ts";
-import { configureLfgTransport } from "../web/src/lib/lfg-client.ts";
+import {
+  configureLfgTransport,
+  openLfgSocket,
+} from "../web/src/lib/lfg-client.ts";
 
 afterEach(() => {
   configureLfgTransport(createSameOriginTransport());
 });
 
 describe("LfgChatTransport", () => {
+  test("routes feature sockets through the host-configured transport", async () => {
+    const paths: string[] = [];
+    const socket = {
+      binaryType: "blob" as BinaryType,
+      readyState: 0,
+      send() {},
+      close() {},
+      addEventListener() {},
+    };
+    configureLfgTransport({
+      async fetch() {
+        return new Response("{}", { status: 200 });
+      },
+      async request() {
+        return {} as never;
+      },
+      async openSocket(path) {
+        paths.push(path);
+        return socket;
+      },
+      async openLiveSocket() {
+        throw new Error("live socket not used in this test");
+      },
+    });
+
+    expect(await openLfgSocket("/api/term?session=main")).toBe(socket);
+    expect(paths).toEqual(["/api/term?session=main"]);
+  });
+
   test("sends through the host-configured transport instead of the embedding page origin", async () => {
     const calls: Array<{ path: string; method: string; body: string }> = [];
     configureLfgTransport({
@@ -26,6 +58,9 @@ describe("LfgChatTransport", () => {
       },
       async request() {
         throw new Error("request should not own the chat transport send");
+      },
+      async openSocket() {
+        throw new Error("socket not used in this test");
       },
       async openLiveSocket() {
         throw new Error("socket not used in this test");

@@ -67,6 +67,10 @@ export function openLfgLiveSocket(): Promise<LfgSocket> {
   return lfgTransport.openLiveSocket();
 }
 
+export function openLfgSocket(path: string): Promise<LfgSocket> {
+  return lfgTransport.openSocket(path);
+}
+
 export function lfgAssetUrl(path: string): string {
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   return `${lfgAssetBaseUrl}${normalizedPath}`;
