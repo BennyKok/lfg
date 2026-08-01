@@ -7,7 +7,7 @@
 //
 // The websocket itself is abstracted behind WSLike so this module doesn't depend
 // on Bun's ServerWebSocket — serve.ts adapts its socket to this shape.
-import { chromium } from "playwright";
+import { loadChromium } from "../native-deps.ts";
 import {
   newProfileId,
   profileStatePath,
@@ -101,6 +101,7 @@ export async function startLoginSession(
   // without a display still work. `--disable-blink-features=AutomationControlled`
   // drops the `--enable-automation` fingerprint Meta keys on.
   const headed = !!process.env.DISPLAY;
+  const chromium = await loadChromium();
   const browser = await chromium.launch({
     headless: !headed,
     args: ["--disable-blink-features=AutomationControlled"],

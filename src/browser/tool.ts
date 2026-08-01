@@ -3,7 +3,7 @@
 // context that replays the profile's storageState so the agent acts as the
 // logged-in user. testProfile is a cheap liveness probe to tell whether a saved
 // login is still valid.
-import { chromium } from "playwright";
+import { loadChromium } from "../native-deps.ts";
 import { getProfile, profileStatePath, touchProfile } from "./profiles.ts";
 
 // Open a headless browser already carrying the profile's cookies/localStorage.
@@ -13,6 +13,7 @@ export async function launchWithProfile(id: string): Promise<{
   context: any;
   page: any;
 }> {
+  const chromium = await loadChromium();
   const browser = await chromium.launch({ headless: true });
   const context = await browser.newContext({
     storageState: profileStatePath(id),

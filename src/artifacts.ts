@@ -9,7 +9,7 @@ import {
 } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
-import sharp from "sharp";
+import { loadSharp } from "./native-deps.ts";
 import { PATHS } from "./config.ts";
 import type { SessionMsg } from "./sessions.ts";
 
@@ -293,6 +293,7 @@ export async function createImageArtifact(input: {
   // can reserve the final aspect ratio without decoding the image again.
   // Sharp reports stored pixel dimensions; orientations 5-8 rotate the image
   // a quarter turn when browsers/previews display it, so swap the axes.
+  const sharp = await loadSharp();
   const metadata = await sharp(input.path, { animated: false }).metadata().catch(() => null);
   if (!metadata?.width || !metadata.height) return createMediaArtifact(input, "image");
   const quarterTurn =

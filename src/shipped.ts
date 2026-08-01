@@ -18,6 +18,7 @@ import { tmpdir } from "node:os";
 import { dirname, extname, join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { PATHS } from "./config.ts";
+import { loadSharp } from "./native-deps.ts";
 import {
   createImageArtifact,
   createVideoArtifact,
@@ -92,7 +93,7 @@ function clampSummary(summary: string | undefined): { text?: string; truncated: 
 async function optimizeImageForStore(path: string): Promise<{ path: string; temp: boolean }> {
   if (!OPTIMIZABLE_EXT.test(path)) return { path, temp: false };
   try {
-    const { default: sharp } = await import("sharp");
+    const sharp = await loadSharp();
     const out = join(tmpdir(), `lfg-ship-${randomBytes(6).toString("hex")}.webp`);
     await sharp(path)
       .resize({ width: MAX_MEDIA_WIDTH, withoutEnlargement: true })

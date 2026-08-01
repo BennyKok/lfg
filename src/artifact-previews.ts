@@ -1,7 +1,7 @@
 import { mkdir, rename, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import sharp from "sharp";
+import { loadSharp } from "./native-deps.ts";
 import { PATHS } from "./config.ts";
 import type { ImageArtifact } from "./artifacts.ts";
 
@@ -53,6 +53,7 @@ async function createImagePreview(
   await mkdir(PREVIEWS_DIR, { recursive: true });
   const temporaryPath = `${outputPath}.${process.pid}.${randomUUID()}.tmp`;
   try {
+    const sharp = await loadSharp();
     const image = sharp(artifact.filePath, { animated: false }).rotate();
     await image
       .resize(
