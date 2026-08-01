@@ -1,4 +1,4 @@
-<a href="https://lfg.apps.omg.dev">
+<a href="https://omg.dev">
   <img src="https://raw.githubusercontent.com/BennyKok/lfg/main/docs/images/lfg-icon.png" alt="lfg icon" width="96" />
 </a>
 
@@ -11,7 +11,7 @@ Claude Code, Codex, OpenCode, Cursor, Grok, Hermes, Pi, and GitHub Copilot. It
 starts each agent in a long-lived `tmux` session, streams the transcript to a
 web UI, and lets you answer prompts or steer work from your phone or laptop.
 
-[Website](https://lfg.apps.omg.dev) · [Quick start](#quick-start) · [Security](#security) · [Contributing](./CONTRIBUTING.md)
+[Website](https://omg.dev) · [Quick start](#quick-start) · [Security](#security) · [Contributing](./CONTRIBUTING.md)
 
 <p>
   <img src="https://raw.githubusercontent.com/BennyKok/lfg/main/docs/images/lfg-screenshot-1.jpg" alt="lfg web UI screenshot" width="31%" />
