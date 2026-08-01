@@ -37,6 +37,34 @@ understand it before you run it anywhere shared.
   line only; it is never written to disk. Prefer ephemeral, pre-approved, tagged,
   single-use keys.
 
+## Dependency auditing
+
+`bun.lock` is the only lockfile that describes what we ship — the Dockerfile
+copies it, CI runs `bun install --frozen-lockfile`, and the service runs under
+bun. **GitHub Dependabot cannot parse `bun.lock`**; it only understands
+`package-lock.json` / `yarn.lock` / `pnpm-lock.yaml`. Stale npm lockfiles used
+to sit in the repo, so Dependabot spent its time on a dependency graph nobody
+installed while missing the real one. Those files are gone — do not reintroduce
+one to appease a scanner.
+
+Use `bun audit` instead. The `audit` workflow runs it on every push and PR plus
+weekly (so advisories published against an unchanged graph still surface), and
+fails on new high/critical findings.
+
+Two things to know before changing dependencies:
+
+- **`overrides` in `package.json` exist for security patching.** Most advisories
+  here land on transitive packages, so the fix is to pin the patched version
+  rather than add a direct dependency. Keep every override inside the range its
+  consumers already accept — a same-major bump. Do not run `bun update <pkg>` on
+  a transitive package: it promotes it to a direct dependency at the newest
+  major, which can hand a consumer a version it never agreed to.
+- **Accepted exceptions live in the workflow, not in someone's memory.** If an
+  advisory has no fixed release, add a `--ignore=<GHSA-id>` with a comment
+  covering why the exposure is acceptable and what removes it. The workflow
+  always prints the unfiltered report to the job summary so an exception cannot
+  silently become permanent.
+
 ## Reporting a vulnerability
 
 Please open a private security advisory on the GitHub repository (or email the

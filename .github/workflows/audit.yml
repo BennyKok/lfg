@@ -1,0 +1,54 @@
+name: audit
+
+# GitHub's Dependabot cannot parse bun.lock — it only understands
+# package-lock/yarn/pnpm lockfiles. This repo installs exclusively with bun, so
+# Dependabot was scanning stale npm lockfiles (since deleted) and was blind to
+# the dependency graph we actually ship. This workflow is the replacement: it
+# audits the real graph on every push, every PR, and weekly so newly-published
+# advisories against unchanged dependencies still surface.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Mondays 09:00 UTC — catches advisories published against a graph that
+    # hasn't changed, which push/PR runs alone would never notice.
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      # Accepted exceptions — every entry needs a reason and a way out.
+      #
+      # GHSA-jfgx-wxx8-mp94 (high) — @mariozechner/pi-coding-agent: predictable
+      #   temp extension install paths allow local privilege escalation on
+      #   *shared* Linux hosts. The advisory covers >=0.50.0 <=0.73.1 and 0.73.1
+      #   is the newest published release, so there is no version to upgrade to.
+      #   Exposure needs a hostile local user on the same machine; LFG runs
+      #   single-tenant. Drop this ignore as soon as a fixed release exists.
+      - name: Audit the bun dependency graph (fails on new high/critical)
+        run: bun audit --audit-level=high --ignore=GHSA-jfgx-wxx8-mp94
+
+      # Always-visible full report, including the lows and the ignored entries,
+      # so an accepted exception can never quietly become invisible.
+      - name: Full advisory report
+        if: always()
+        run: |
+          {
+            echo '## bun audit — full report'
+            echo '```'
+            bun audit 2>&1 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
