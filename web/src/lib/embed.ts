@@ -50,35 +50,3 @@ export function isEmbedded(
   }
   return isFramed();
 }
-
-// A "bare" surface is a host mounting one LFG page inside its own product
-// chrome — omg's Settings mounting the machine's settings, for example. The
-// host already renders a header, a back affordance and the signed-in account,
-// so LFG must not render its own: two brand marks and two identity blocks on
-// one page is exactly the duplication that mounting is supposed to remove.
-//
-// Module-level rather than context because the decision is made once, by the
-// package entry point, before any React tree exists — and it never changes for
-// the lifetime of that surface.
-let bareSurface = false;
-
-/** Called by the package entry point before the router mounts. */
-export function setBareSurface(value: boolean): void {
-  bareSurface = value;
-}
-
-/**
- * True when LFG is rendering a single page inside a host's own chrome.
- *
- * `?bare=1` is honoured as well so the hosted layout can be inspected in a
- * plain browser, without building the package and mounting it in the host.
- */
-export function isBareSurface(): boolean {
-  if (bareSurface) return true;
-  if (typeof window === "undefined") return false;
-  try {
-    return new URLSearchParams(window.location.search).get("bare") === "1";
-  } catch {
-    return false;
-  }
-}

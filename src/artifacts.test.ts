@@ -114,10 +114,10 @@ describe("stable HTML artifact ownership", () => {
     expect(getImageArtifact(after.id)).toBeNull();
   });
 
-  test("an HTML publish cannot take over an image artifact id", () => {
+  test("an HTML publish cannot take over an image artifact id", async () => {
     const source = join(root, "image.png");
     writeFileSync(source, "not-a-real-png");
-    const image = createImageArtifact({ sessionId: SESSION_A, path: source });
+    const image = await createImageArtifact({ sessionId: SESSION_A, path: source });
 
     expect(() => publishHtmlArtifact({
       sessionId: SESSION_B,

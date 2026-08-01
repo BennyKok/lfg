@@ -485,6 +485,19 @@ export function claudeEffortFor(level?: string): string | undefined {
   return undefined;
 }
 
+// grok's --effort takes only low|medium|high and exits on anything else, so a
+// level carried over from another agent can't simply be forwarded. Clamp rather
+// than drop: a stored xhigh/max meant "as high as this agent goes", and dropping
+// it would silently leave the session at grok's default.
+export function grokEffortFor(level?: string): string | undefined {
+  if (!level) return undefined;
+  // grok has no way to turn thinking off, so pi's "off" floors to its lowest.
+  if (level === "off") return "low";
+  const effort = claudeEffortFor(level);
+  if (!effort) return undefined;
+  return effort === "xhigh" || effort === "max" ? "high" : effort;
+}
+
 export function spawnManagedSession(opts: {
   name: string;
   cwd: string;
@@ -651,7 +664,9 @@ export function managedGrokSessionArgv(opts: ManagedGrokSessionOptions): string[
   ];
   if (opts.resume) argv.push("--resume", opts.resume);
   if (opts.model) argv.push("--model", opts.model);
-  const effort = claudeEffortFor(opts.thinkingLevel);
+  // grok's own vocabulary: it exits on an unknown effort level, so an
+  // xhigh/max carried over from another agent would stop the session launching.
+  const effort = grokEffortFor(opts.thinkingLevel);
   if (effort) argv.push("--effort", effort);
   const prompt = withLfgRuntimeContract(opts.prompt);
   if (prompt?.trim()) argv.push("--", prompt);

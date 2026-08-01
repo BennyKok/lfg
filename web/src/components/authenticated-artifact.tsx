@@ -61,11 +61,31 @@ function ArtifactLoadError({ className }: { className?: string }) {
   );
 }
 
-function ArtifactLoading({ className }: { className?: string }) {
+function ArtifactLoading({
+  className,
+  width,
+  height,
+}: {
+  className?: string;
+  width?: number;
+  height?: number;
+}) {
+  const hasDimensions = !!width && !!height;
   return (
     <div
       aria-hidden
-      className={cn("min-h-28 min-w-40 animate-pulse bg-muted/35", className)}
+      // Match the final image's exact intrinsic box. The transcript can lay out
+      // the card before authenticated preview bytes arrive, eliminating the
+      // old 160x112 placeholder -> image jump.
+      style={hasDimensions ? {
+        aspectRatio: `${width} / ${height}`,
+        width: `min(${width}px, calc(24rem * ${width / height}))`,
+      } : undefined}
+      className={cn(
+        "animate-pulse bg-muted/35",
+        !hasDimensions && "min-h-28 min-w-40",
+        className,
+      )}
     />
   );
 }
@@ -74,7 +94,7 @@ function ArtifactLoading({ className }: { className?: string }) {
  * A zoomable authenticated image that does NOT download the original to show a
  * thumbnail.
  *
- * `ZoomableImage` appends `?preview=1` to get the server's ~1200px webp, but it
+ * `ZoomableImage` appends `?preview=1` to get the server's bounded WebP, but it
  * has to skip that for `blob:` URLs — and every authenticated image is a blob,
  * because the bytes arrive through the transport rather than the `<img>` element.
  * So the feed was rendering 176px tiles out of full-size originals (up to 25 MB
@@ -84,10 +104,14 @@ function ArtifactLoading({ className }: { className?: string }) {
 function AuthenticatedZoomableImage({
   path,
   alt,
+  width,
+  height,
   className,
 }: {
   path: string;
   alt: string;
+  width?: number;
+  height?: number;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -95,13 +119,17 @@ function AuthenticatedZoomableImage({
   const full = useArtifactBlobUrl(open ? path : null);
 
   if (preview.status === "error") return <ArtifactLoadError className={className} />;
-  if (preview.status === "loading") return <ArtifactLoading className={className} />;
+  if (preview.status === "loading") {
+    return <ArtifactLoading className={className} width={width} height={height} />;
+  }
 
   return (
     <>
       <img
         src={preview.value}
         alt={alt}
+        width={width}
+        height={height}
         loading="lazy"
         decoding="async"
         onClick={() => setOpen(true)}
@@ -122,12 +150,16 @@ function AuthenticatedZoomableImage({
 export function AuthenticatedArtifactImage({
   path,
   alt,
+  width,
+  height,
   zoomable = false,
   thumb = false,
   className,
 }: {
   path: string;
   alt: string;
+  width?: number;
+  height?: number;
   zoomable?: boolean;
   /** Fetch the server's 160px webp instead of the original. For small fixed
    *  squares (the Notification Center's media thumbnails) where downloading a
@@ -136,7 +168,15 @@ export function AuthenticatedArtifactImage({
   className?: string;
 }) {
   if (zoomable) {
-    return <AuthenticatedZoomableImage path={path} alt={alt} className={className} />;
+    return (
+      <AuthenticatedZoomableImage
+        path={path}
+        alt={alt}
+        width={width}
+        height={height}
+        className={className}
+      />
+    );
   }
   return (
     <AuthenticatedPlainImage path={path} alt={alt} thumb={thumb} className={className} />

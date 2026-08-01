@@ -10,7 +10,6 @@ import "./index.css";
 import { RootErrorBoundary } from "./App";
 import { AppDialogProvider } from "./components/ui/app-dialog";
 import { configureLfgTransport, type LfgErrorSink } from "./lib/lfg-client";
-import { setBareSurface } from "./lib/embed";
 import { createLfgRouter } from "./router";
 
 export { createGrantTransport } from "@lfg-dev/client";
@@ -81,9 +80,6 @@ export function LfgSettingsSurface({
   className,
   errorSink,
 }: LfgSettingsSurfaceProps) {
-  // Set before the router mounts: the host owns the header, the back
-  // affordance and the account, so this surface renders sections only.
-  setBareSurface(true);
   configureLfgTransport(transport, { assetBaseUrl, errorSink });
   const [router] = useState<AnyRouter>(() =>
     createLfgRouter(
