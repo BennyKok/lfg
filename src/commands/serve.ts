@@ -1,5 +1,5 @@
 import { mkdir, open, readdir, realpath, stat } from "node:fs/promises";
-import { appendFileSync, statfsSync, statSync, mkdirSync, readFileSync, type Dirent } from "node:fs";
+import { appendFileSync, existsSync, statfsSync, statSync, mkdirSync, readFileSync, type Dirent } from "node:fs";
 import { tmpdir, homedir, loadavg, cpus, totalmem, freemem } from "node:os";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
@@ -1933,9 +1933,10 @@ function sseHeaders(): Record<string, string> {
 
 // ---------- server ----------
 
-// Per-socket state for the browser terminal: which tmux session it attaches to
-// and the initial geometry the client reported at connect time.
-type TermSocketData = { sessionName: string; cols: number; rows: number };
+// Per-socket state for the browser terminal: which tmux session it attaches to,
+// where its shell starts, and the initial geometry the client reported at
+// connect time.
+type TermSocketData = { sessionName: string; cwd: string; cols: number; rows: number };
 
 // Live PTY bridges keyed by their websocket, so message/close handlers can find
 // the bridge to write to / tear down.
@@ -1991,6 +1992,30 @@ function clampDim(raw: string | null, fallback: number): number {
   const n = parseInt(raw ?? "", 10);
   if (!Number.isFinite(n)) return fallback;
   return Math.max(1, Math.min(500, n));
+}
+
+// Resolve which shell a terminal websocket/scan request wants.
+//
+// `?sessionId=<uuid>` asks for that agent session's OWN terminal: a dedicated
+// persistent tmux session whose shell starts in the session's cwd (its
+// worktree), so pulling up the terminal from a session card lands you exactly
+// where that agent is working. Falling back to `?session=<name>` keeps the
+// free-form global shells ("main", the login terminals) working unchanged.
+async function resolveTermTarget(
+  url: URL,
+): Promise<{ sessionName: string; cwd: string }> {
+  const sessionId = url.searchParams.get("sessionId");
+  if (sessionId) {
+    const sess = (await listSessionsCached().catch(() => [])).find(
+      (s) => s.sessionId === sessionId,
+    );
+    const cwd = sess?.cwd && existsSync(sess.cwd) ? sess.cwd : homedir();
+    return { sessionName: termSessionName(`s-${sessionId}`), cwd };
+  }
+  return {
+    sessionName: termSessionName(url.searchParams.get("session") || "main"),
+    cwd: homedir(),
+  };
 }
 
 function prepareLoginTerminal(kind: string, command: string): string {
@@ -2072,9 +2097,15 @@ export async function cmdServe() {
         }
         try {
           const { sessionName, cols, rows } = ws.data;
+          const cwd = ws.data.cwd || homedir();
+          // `-c cwd` sets the tmux session's start-directory, so the shell (and
+          // every later window/pane in it) opens where this terminal belongs —
+          // the agent session's worktree for per-session terminals. It only
+          // applies when tmux actually creates the session; `-A` re-attaches an
+          // existing one untouched, which is what makes the shell persist.
           const bridge = new PtyBridge(
-            ["tmux", "new-session", "-A", "-s", sessionName],
-            { cols, rows, cwd: homedir() },
+            ["tmux", "new-session", "-A", "-s", sessionName, "-c", cwd],
+            { cols, rows, cwd },
           );
           bridge.onData((chunk) => {
             try {
@@ -2244,11 +2275,11 @@ export async function cmdServe() {
 
       // ---- browser terminal (websocket upgrade) ----
       if (path === "/api/term") {
-        const sessionName = termSessionName(url.searchParams.get("session") || "main");
+        const { sessionName, cwd } = await resolveTermTarget(url);
         const cols = clampDim(url.searchParams.get("cols"), 80);
         const rows = clampDim(url.searchParams.get("rows"), 24);
         const ok = server.upgrade(req, {
-          data: { sessionName, cols, rows },
+          data: { sessionName, cwd, cols, rows },
         });
         if (ok) return undefined; // upgraded — Bun takes over the socket
         return err(400, "expected a websocket upgrade");
@@ -2283,7 +2314,7 @@ export async function cmdServe() {
       // the app, so tmux -J can't help). We reconstruct full URLs from the pane
       // by stitching full-width rows, and also read any OSC 8 hyperlink targets.
       if (path === "/api/term/scan" && req.method === "GET") {
-        const target = termSessionName(url.searchParams.get("session") || "main");
+        const { sessionName: target } = await resolveTermTarget(url);
         const plain = capturePaneScroll(target);
         if (plain == null) return json({ urls: [] });
         const urls = detectUrls({

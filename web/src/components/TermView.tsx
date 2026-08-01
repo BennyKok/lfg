@@ -7,11 +7,14 @@ import type { FormEvent, TouchEvent as ReactTouchEvent } from "react";
 import { init, Terminal as GhosttyTerminal, FitAddon } from "ghostty-web";
 import {
   Check,
+  ChevronRight,
   ClipboardPaste,
   Copy,
   ExternalLink,
   Keyboard,
-  KeyboardOff,
+  Pin,
+  PinOff,
+  RotateCcw,
   SendHorizontal,
   TerminalSquare,
   X,
@@ -82,48 +85,78 @@ const KEY_SEQUENCES = {
   pageDown: "\x1b[6~",
 } as const;
 
-type HelperKey = {
+type DeckKey = {
   id: string;
+  /** Single-character hint: press it while the deck is open to fire the key. */
+  hint: string;
   label: string;
+  desc: string;
   sequence: string;
   ariaLabel: string;
-  title?: string;
 };
 
-const HELPER_KEY_GROUPS: Array<{ id: string; label: string; keys: HelperKey[] }> = [
-  {
-    id: "command",
-    label: "Cmd",
-    keys: [
-      { id: "esc", label: "Esc", sequence: KEY_SEQUENCES.esc, ariaLabel: "Escape" },
-      { id: "tab", label: "Tab", sequence: KEY_SEQUENCES.tab, ariaLabel: "Tab" },
-      { id: "ctrlC", label: "^C", sequence: KEY_SEQUENCES.ctrlC, ariaLabel: "Control C" },
-      { id: "ctrlD", label: "^D", sequence: KEY_SEQUENCES.ctrlD, ariaLabel: "Control D" },
-      { id: "ctrlL", label: "^L", sequence: KEY_SEQUENCES.ctrlL, ariaLabel: "Control L" },
-    ],
-  },
-  {
-    id: "history",
-    label: "Hist",
-    keys: [
-      { id: "ctrlP", label: "^P", sequence: KEY_SEQUENCES.ctrlP, ariaLabel: "Control P" },
-      { id: "ctrlN", label: "^N", sequence: KEY_SEQUENCES.ctrlN, ariaLabel: "Control N" },
-      { id: "up", label: "↑", sequence: KEY_SEQUENCES.up, ariaLabel: "Arrow up" },
-      { id: "down", label: "↓", sequence: KEY_SEQUENCES.down, ariaLabel: "Arrow down" },
-    ],
-  },
+// The vi menu's key map. Every entry is both a tap target and a one-letter hint
+// you can type while the deck is open. Hints follow vi wherever vi has an
+// opinion (hjkl motion, 0/$ line ends, g/G, u/f paging, x delete) so existing
+// muscle memory transfers instead of having to be learned. Case matters — `l`
+// is right-arrow, `L` is ^L — which is also how vi treats g/G.
+const DECK_SECTIONS: Array<{ id: string; label: string; keys: DeckKey[] }> = [
   {
     id: "move",
     label: "Move",
     keys: [
-      { id: "left", label: "←", sequence: KEY_SEQUENCES.left, ariaLabel: "Arrow left" },
-      { id: "right", label: "→", sequence: KEY_SEQUENCES.right, ariaLabel: "Arrow right" },
-      { id: "ctrlA", label: "^A", sequence: KEY_SEQUENCES.ctrlA, ariaLabel: "Control A" },
-      { id: "ctrlE", label: "^E", sequence: KEY_SEQUENCES.ctrlE, ariaLabel: "Control E" },
-      { id: "enter", label: "⏎", sequence: KEY_SEQUENCES.enter, ariaLabel: "Enter" },
+      { id: "left", hint: "h", label: "←", desc: "left", sequence: KEY_SEQUENCES.left, ariaLabel: "Arrow left" },
+      { id: "down", hint: "j", label: "↓", desc: "down", sequence: KEY_SEQUENCES.down, ariaLabel: "Arrow down" },
+      { id: "up", hint: "k", label: "↑", desc: "up", sequence: KEY_SEQUENCES.up, ariaLabel: "Arrow up" },
+      { id: "right", hint: "l", label: "→", desc: "right", sequence: KEY_SEQUENCES.right, ariaLabel: "Arrow right" },
+      { id: "bol", hint: "0", label: "^A", desc: "line start", sequence: KEY_SEQUENCES.ctrlA, ariaLabel: "Control A" },
+      { id: "eol", hint: "$", label: "^E", desc: "line end", sequence: KEY_SEQUENCES.ctrlE, ariaLabel: "Control E" },
+      { id: "home", hint: "g", label: "Home", desc: "top", sequence: KEY_SEQUENCES.home, ariaLabel: "Home" },
+      { id: "end", hint: "G", label: "End", desc: "bottom", sequence: KEY_SEQUENCES.end, ariaLabel: "End" },
+      { id: "pgup", hint: "u", label: "PgUp", desc: "page up", sequence: KEY_SEQUENCES.pageUp, ariaLabel: "Page up" },
+      { id: "pgdn", hint: "f", label: "PgDn", desc: "page down", sequence: KEY_SEQUENCES.pageDown, ariaLabel: "Page down" },
+    ],
+  },
+  {
+    id: "signal",
+    label: "Signal",
+    keys: [
+      { id: "esc", hint: "e", label: "Esc", desc: "escape", sequence: KEY_SEQUENCES.esc, ariaLabel: "Escape" },
+      { id: "ctrlC", hint: "c", label: "^C", desc: "interrupt", sequence: KEY_SEQUENCES.ctrlC, ariaLabel: "Control C" },
+      { id: "ctrlD", hint: "d", label: "^D", desc: "eof", sequence: KEY_SEQUENCES.ctrlD, ariaLabel: "Control D" },
+      { id: "ctrlL", hint: "L", label: "^L", desc: "clear", sequence: KEY_SEQUENCES.ctrlL, ariaLabel: "Control L" },
+    ],
+  },
+  {
+    id: "history",
+    label: "History",
+    keys: [
+      { id: "ctrlP", hint: "p", label: "^P", desc: "previous", sequence: KEY_SEQUENCES.ctrlP, ariaLabel: "Control P" },
+      { id: "ctrlN", hint: "n", label: "^N", desc: "next", sequence: KEY_SEQUENCES.ctrlN, ariaLabel: "Control N" },
+    ],
+  },
+  {
+    id: "edit",
+    label: "Edit",
+    keys: [
+      { id: "tab", hint: "t", label: "Tab", desc: "complete", sequence: KEY_SEQUENCES.tab, ariaLabel: "Tab" },
+      { id: "enter", hint: "r", label: "⏎", desc: "return", sequence: KEY_SEQUENCES.enter, ariaLabel: "Enter" },
+      { id: "backspace", hint: "b", label: "⌫", desc: "backspace", sequence: KEY_SEQUENCES.backspace, ariaLabel: "Backspace" },
+      { id: "delete", hint: "x", label: "Del", desc: "delete", sequence: KEY_SEQUENCES.delete, ariaLabel: "Delete" },
     ],
   },
 ];
+
+const DECK_KEY_BY_HINT = new Map(
+  DECK_SECTIONS.flatMap((s) => s.keys.map((k) => [k.hint, k] as const)),
+);
+
+// Deck-level commands. Their hints are chosen to not collide with any key hint
+// above: i = "insert mode" (hand focus back to the shell), P = put/paste,
+// . = repeat last key, : = type any key spec, s = stick the deck open.
+const DECK_ACTION_HINTS = { insert: "i", paste: "P", repeat: ".", command: ":", stick: "s" } as const;
+
+const DECK_STICKY_KEY = "lfg_term_deck_sticky";
 
 const SPECIAL_KEY_SEQUENCES: Record<string, string> = {
   esc: KEY_SEQUENCES.esc,
@@ -453,7 +486,341 @@ function installMouseReporting(
   };
 }
 
-export function TermView() {
+function DeckAction({
+  hint,
+  label,
+  icon: Icon,
+  onClick,
+  disabled,
+  active,
+}: {
+  hint: string;
+  label: string;
+  icon: typeof Keyboard;
+  onClick: () => void;
+  disabled?: boolean;
+  active?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      style={{ touchAction: "manipulation" }}
+      title={`${label} — press ${hint}`}
+      aria-label={label}
+      className={`flex h-9 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-lg px-2 text-xs font-medium disabled:opacity-30 ${
+        active ? "bg-white text-black" : "bg-white/[0.07] text-white/80 active:bg-white/25"
+      }`}
+    >
+      <Icon className="size-3.5 shrink-0" />
+      <span className="truncate">{label}</span>
+      <span
+        className={`font-mono text-[9px] leading-none ${active ? "text-black/45" : "text-white/35"}`}
+      >
+        {hint}
+      </span>
+    </button>
+  );
+}
+
+type DeckMode = "normal" | "command";
+
+/**
+ * The vi menu — every extra terminal key, hidden until summoned.
+ *
+ * The old chrome kept ~110px of key toolbar on screen permanently for keys you
+ * touch a few times a minute. This trades that for a modal deck: the terminal
+ * is full-bleed by default, and ⌃⇧K / the Keys button / a swipe up from the
+ * bottom edge brings the keys in.
+ *
+ * While it's open the deck OWNS the keyboard (capture-phase listener, so
+ * ghostty's textarea never sees the keystroke) and every key is a one-letter
+ * hint — the same thing you'd tap on a phone. `:` drops into command mode for
+ * anything not on the grid, `.` repeats, `i` hands focus back to the shell.
+ */
+function KeyDeck({
+  open,
+  sticky,
+  lastKey,
+  onSendKey,
+  onSendSequence,
+  onPaste,
+  onInsert,
+  onToggleSticky,
+  onClose,
+}: {
+  open: boolean;
+  sticky: boolean;
+  lastKey: DeckKey | null;
+  onSendKey: (key: DeckKey) => void;
+  onSendSequence: (sequence: string) => void;
+  onPaste: () => void;
+  onInsert: () => void;
+  onToggleSticky: () => void;
+  onClose: () => void;
+}) {
+  const [mode, setMode] = useState<DeckMode>("normal");
+  const [command, setCommand] = useState("");
+  const [invalid, setInvalid] = useState(false);
+  const commandRef = useRef<HTMLInputElement>(null);
+
+  // Every summon starts in normal mode — the deck is never left half-open in
+  // command mode from a previous visit.
+  useEffect(() => {
+    if (!open) {
+      setMode("normal");
+      setCommand("");
+      setInvalid(false);
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (open && mode === "command") commandRef.current?.focus();
+  }, [open, mode]);
+
+  const submitCommand = useCallback(
+    (e?: FormEvent<HTMLFormElement>) => {
+      e?.preventDefault();
+      const sequence = parseTerminalKey(command);
+      if (sequence == null) {
+        setInvalid(true);
+        commandRef.current?.focus();
+        return;
+      }
+      onSendSequence(sequence);
+      setCommand("");
+      setInvalid(false);
+    },
+    [command, onSendSequence],
+  );
+
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (mode === "command") setMode("normal");
+        else onClose();
+        return;
+      }
+      // In command mode the input owns the keyboard — hints would fight typing.
+      if (mode === "command") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const hit = DECK_KEY_BY_HINT.get(e.key);
+      const consume = () => {
+        e.preventDefault();
+        e.stopPropagation();
+      };
+      if (hit) {
+        consume();
+        onSendKey(hit);
+        return;
+      }
+      switch (e.key) {
+        case DECK_ACTION_HINTS.insert:
+          consume();
+          onInsert();
+          return;
+        case DECK_ACTION_HINTS.paste:
+          consume();
+          onPaste();
+          return;
+        case DECK_ACTION_HINTS.repeat:
+          consume();
+          if (lastKey) onSendKey(lastKey);
+          return;
+        case DECK_ACTION_HINTS.command:
+          consume();
+          setMode("command");
+          return;
+        case DECK_ACTION_HINTS.stick:
+          consume();
+          onToggleSticky();
+          return;
+        case "q": // vi's "quit this menu"
+          consume();
+          onClose();
+          return;
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [open, mode, lastKey, onClose, onInsert, onPaste, onSendKey, onToggleSticky]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      role="dialog"
+      aria-label="Terminal keys"
+      className="lfg-term-deck absolute inset-x-0 bottom-0 z-30 border-t border-white/10 bg-[#0b0b0d]/97 backdrop-blur-md"
+    >
+      <div className="flex items-center gap-2 px-2.5 pb-1 pt-2">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-white/35">Keys</span>
+        <span className="rounded bg-white/10 px-1.5 py-0.5 font-mono text-[10px] text-white/60">
+          {mode === "command" ? ":" : "normal"}
+        </span>
+        <span className="hidden truncate text-[10px] text-white/30 sm:inline">
+          press a hint · {DECK_ACTION_HINTS.command} any key · q close
+        </span>
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={onToggleSticky}
+            style={{ touchAction: "manipulation" }}
+            aria-pressed={sticky}
+            title={sticky ? "Unstick — close after each key (s)" : "Stick open — stay open after a key (s)"}
+            aria-label={sticky ? "Unstick key deck" : "Stick key deck open"}
+            className={`grid size-7 place-items-center rounded-md ${
+              sticky ? "bg-white text-black" : "bg-white/10 text-white/60 active:bg-white/25"
+            }`}
+          >
+            {sticky ? <Pin className="size-3.5" /> : <PinOff className="size-3.5" />}
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{ touchAction: "manipulation" }}
+            title="Close keys (Esc)"
+            aria-label="Close terminal keys"
+            className="grid size-7 place-items-center rounded-md bg-white/10 text-white/60 active:bg-white/25"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+      </div>
+
+      <div className="max-h-[42vh] overflow-y-auto px-2.5 pb-1.5">
+        {DECK_SECTIONS.map((section) => (
+          <div key={section.id} className="mb-2 last:mb-0">
+            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-white/25">
+              {section.label}
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {section.keys.map((key) => (
+                <button
+                  type="button"
+                  key={key.id}
+                  onClick={() => onSendKey(key)}
+                  style={{ touchAction: "manipulation" }}
+                  aria-label={key.ariaLabel}
+                  title={`${key.desc} — press ${key.hint}`}
+                  className="relative grid h-11 min-w-14 place-items-center rounded-lg bg-white/[0.07] px-2.5 text-sm font-semibold text-white/85 active:bg-white/25"
+                >
+                  <span>{key.label}</span>
+                  <span className="absolute right-1 top-0.5 font-mono text-[9px] leading-none text-white/35">
+                    {key.hint}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex items-center gap-1.5 border-t border-white/[0.07] px-2.5 py-2 pb-[calc(0.5rem+var(--lfg-safe-bottom,0px))]">
+        {mode === "command" ? (
+          <form
+            onSubmit={submitCommand}
+            className={`flex min-w-0 flex-1 items-center gap-1 rounded-lg border px-2 py-1 ${
+              invalid ? "border-red-400/70 bg-red-500/10" : "border-white/10 bg-white/[0.04]"
+            }`}
+          >
+            <span className="shrink-0 font-mono text-sm text-white/40">:</span>
+            <input
+              ref={commandRef}
+              value={command}
+              onChange={(e) => {
+                setCommand(e.target.value);
+                setInvalid(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  setMode("normal");
+                }
+              }}
+              placeholder="ctrl+p · f5 · alt+."
+              inputMode="text"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              aria-label="Terminal key to send"
+              aria-invalid={invalid}
+              style={{ fontSize: 16 }}
+              className="min-w-0 flex-1 bg-transparent px-1 py-1 text-sm text-white outline-none placeholder:text-white/25"
+            />
+            <button
+              type="submit"
+              style={{ touchAction: "manipulation" }}
+              className="grid size-7 shrink-0 place-items-center rounded-md bg-white/10 text-white/85 active:bg-white/25"
+              aria-label="Send terminal key"
+              title="Send terminal key"
+            >
+              <SendHorizontal className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setMode("normal")}
+              style={{ touchAction: "manipulation" }}
+              className="grid size-7 shrink-0 place-items-center rounded-md text-white/45 active:bg-white/15"
+              aria-label="Leave command mode"
+              title="Leave command mode (Esc)"
+            >
+              <X className="size-3.5" />
+            </button>
+          </form>
+        ) : (
+          <>
+            <DeckAction
+              hint={DECK_ACTION_HINTS.insert}
+              label="Insert"
+              icon={Keyboard}
+              onClick={onInsert}
+            />
+            <DeckAction
+              hint={DECK_ACTION_HINTS.paste}
+              label="Paste"
+              icon={ClipboardPaste}
+              onClick={onPaste}
+            />
+            <DeckAction
+              hint={DECK_ACTION_HINTS.repeat}
+              label={lastKey ? `Again ${lastKey.label}` : "Again"}
+              icon={RotateCcw}
+              disabled={!lastKey}
+              onClick={() => lastKey && onSendKey(lastKey)}
+            />
+            <DeckAction
+              hint={DECK_ACTION_HINTS.command}
+              label="Key…"
+              icon={ChevronRight}
+              onClick={() => setMode("command")}
+            />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Props let the same terminal serve two roles: the global Terminal tab (no
+ * props — a free-form shell named by localStorage), and a session's own
+ * terminal (`sessionId`), which attaches to a dedicated persistent tmux session
+ * whose shell starts in that session's worktree.
+ */
+export function TermView({
+  sessionId,
+  label,
+  onClose,
+}: {
+  sessionId?: string;
+  label?: string;
+  onClose?: () => void;
+} = {}) {
   const [termSession, setTermSession] = useState(() => localStorage.getItem("lfg_term_session") || "main");
   const hostRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -469,21 +836,36 @@ export function TermView() {
   const [pasteInput, setPasteInput] = useState(false);
   const [keyboardActive, setKeyboardActive] = useState(false);
   const [copiedLink, setCopiedLink] = useState<string | null>(null);
-  const [customKey, setCustomKey] = useState("");
-  const [customKeyInvalid, setCustomKeyInvalid] = useState(false);
+  // The vi menu. Closed by default — that's the whole point of the redesign.
+  const [deckOpen, setDeckOpen] = useState(false);
+  const [deckSticky, setDeckSticky] = useState(
+    () => localStorage.getItem(DECK_STICKY_KEY) === "1",
+  );
+  const [lastKey, setLastKey] = useState<DeckKey | null>(null);
   const lpTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lpStart = useRef<{ x: number; y: number } | null>(null);
+  const lpFromBottomEdge = useRef(false);
   const pasteInputRef = useRef<HTMLInputElement>(null);
-  const customKeyInputRef = useRef<HTMLInputElement>(null);
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const keyboardActiveRef = useRef(false);
-  const keyboardWasActiveAtPointerDownRef = useRef(false);
+  const deckOpenRef = useRef(false);
+  // Whether the shell had keyboard focus when the deck was summoned, so closing
+  // the deck puts you back exactly where you were instead of typing into a void.
+  const resumeFocusRef = useRef(false);
+
+  // Which shell this view is attached to. A session terminal is keyed by the
+  // session id (server-side it resolves to that session's worktree); the global
+  // Terminal tab keeps its free-form localStorage-named shell.
+  const connTarget = sessionId
+    ? `sessionId=${encodeURIComponent(sessionId)}`
+    : `session=${encodeURIComponent(termSession)}`;
 
   useEffect(() => {
+    if (sessionId) return;
     const onSession = () => setTermSession(localStorage.getItem("lfg_term_session") || "main");
     window.addEventListener("lfg:term-session", onSession);
     return () => window.removeEventListener("lfg:term-session", onSession);
-  }, []);
+  }, [sessionId]);
 
   const setTerminalKeyboardActive = useCallback((active: boolean) => {
     keyboardActiveRef.current = active;
@@ -503,11 +885,28 @@ export function TermView() {
     }
   }, []);
 
+  const openDeck = useCallback(() => {
+    if (deckOpenRef.current) return;
+    deckOpenRef.current = true;
+    // Remember whether we were "in insert mode" so closing restores it, and drop
+    // shell focus while the menu is up (on a phone that also gets the software
+    // keyboard out of the way, which is most of the screen).
+    resumeFocusRef.current = keyboardActiveRef.current;
+    blurTerminalKeyboard(termRef.current);
+    setTerminalKeyboardActive(false);
+    setDeckOpen(true);
+  }, [setTerminalKeyboardActive]);
+
   const onTouchStart = useCallback(
     (e: ReactTouchEvent) => {
       const t = e.touches[0];
       if (!t) return;
       lpStart.current = { x: t.clientX, y: t.clientY };
+      // A touch that starts within the bottom strip of the terminal arms the
+      // swipe-up gesture that summons the key deck — the same grab-from-the-edge
+      // affordance as the handle it sits behind.
+      const rect = hostRef.current?.getBoundingClientRect();
+      lpFromBottomEdge.current = !!rect && t.clientY >= rect.bottom - 36;
       cancelLongPress();
       lpTimer.current = setTimeout(
         () => setPasteAt({ x: t.clientX, y: t.clientY }),
@@ -521,10 +920,18 @@ export function TermView() {
     (e: ReactTouchEvent) => {
       const t = e.touches[0];
       if (!t || !lpStart.current) return;
+      const dy = lpStart.current.y - t.clientY;
+      if (lpFromBottomEdge.current && dy > 28 && Math.abs(t.clientX - lpStart.current.x) < 48) {
+        lpFromBottomEdge.current = false;
+        lpStart.current = null;
+        cancelLongPress();
+        openDeck();
+        return;
+      }
       if (Math.hypot(t.clientX - lpStart.current.x, t.clientY - lpStart.current.y) > 12)
         cancelLongPress();
     },
-    [cancelLongPress],
+    [cancelLongPress, openDeck],
   );
 
   // Read the clipboard and type it into the PTY (no trailing Enter — paste
@@ -552,29 +959,75 @@ export function TermView() {
     focusTerminalKeyboard(termRef.current);
   }, [sendRaw]);
 
-  const submitCustomKey = useCallback((e?: FormEvent<HTMLFormElement>) => {
-    e?.preventDefault();
-    const sequence = parseTerminalKey(customKey);
-    if (sequence == null) {
-      setCustomKeyInvalid(true);
-      customKeyInputRef.current?.focus();
-      return;
-    }
-    sendRaw(sequence);
-    setCustomKey("");
-    setCustomKeyInvalid(false);
-    focusTerminalKeyboard(termRef.current);
-  }, [customKey, sendRaw]);
+  // ---- vi menu plumbing (openDeck lives above, the touch handlers need it) ----
 
-  const toggleKeyboard = useCallback((wasActive = keyboardActiveRef.current) => {
-    if (wasActive) {
-      blurTerminalKeyboard(termRef.current);
-      setTerminalKeyboardActive(false);
-    } else {
+  const closeDeck = useCallback(() => {
+    deckOpenRef.current = false;
+    setDeckOpen(false);
+    if (resumeFocusRef.current) {
       focusTerminalKeyboard(termRef.current);
       setTerminalKeyboardActive(true);
     }
   }, [setTerminalKeyboardActive]);
+
+  const enterInsertMode = useCallback(() => {
+    resumeFocusRef.current = true;
+    deckOpenRef.current = false;
+    setDeckOpen(false);
+    focusTerminalKeyboard(termRef.current);
+    setTerminalKeyboardActive(true);
+  }, [setTerminalKeyboardActive]);
+
+  const toggleDeckSticky = useCallback(() => {
+    setDeckSticky((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(DECK_STICKY_KEY, next ? "1" : "0");
+      } catch {}
+      return next;
+    });
+  }, []);
+
+  // A key fired from the deck closes it again unless it's stuck open — the
+  // common case is one key (^C, Tab, ↑) and straight back to a full-height
+  // terminal. Stick it when you're arrowing through history.
+  const afterDeckAction = useCallback(() => {
+    if (!deckSticky) closeDeck();
+  }, [deckSticky, closeDeck]);
+
+  const sendDeckKey = useCallback(
+    (key: DeckKey) => {
+      sendRaw(key.sequence);
+      setLastKey(key);
+      afterDeckAction();
+    },
+    [sendRaw, afterDeckAction],
+  );
+
+  const sendDeckSequence = useCallback(
+    (sequence: string) => {
+      sendRaw(sequence);
+      afterDeckAction();
+    },
+    [sendRaw, afterDeckAction],
+  );
+
+  // ⌃⇧K summons the menu. Ctrl+Shift+<letter> is safe to steal: it isn't a
+  // distinct control code, so no TUI underneath can be listening for it.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || !e.shiftKey || e.metaKey || e.altKey) return;
+      if (e.key !== "K" && e.key !== "k") return;
+      const host = hostRef.current;
+      if (!host || !host.isConnected) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (deckOpenRef.current) closeDeck();
+      else openDeck();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [openDeck, closeDeck]);
 
   const copyLink = useCallback(async (url: string) => {
     try {
@@ -612,9 +1065,7 @@ export function TermView() {
     const connect = () => {
       if (disposed || !term) return;
       const proto = location.protocol === "https:" ? "wss:" : "ws:";
-      const url = `${proto}//${location.host}/api/term?session=${encodeURIComponent(
-        termSession,
-      )}&cols=${term.cols}&rows=${term.rows}`;
+      const url = `${proto}//${location.host}/api/term?${connTarget}&cols=${term.cols}&rows=${term.rows}`;
       const ws = new WebSocket(url);
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
@@ -699,7 +1150,9 @@ export function TermView() {
       termRef.current = null;
       wsRef.current = null;
     };
-  }, [sendRaw]);
+    // Re-attaching to a different shell (another session's terminal, or a new
+    // free-form name) rebuilds the terminal and its socket.
+  }, [sendRaw, connTarget]);
 
   // Detect links by polling tmux's logical buffer (wrapped lines rejoined), so
   // long URLs survive — the rendered stream breaks them at every wrap. Cheap
@@ -708,7 +1161,7 @@ export function TermView() {
     let alive = true;
     const poll = async () => {
       try {
-        const r = await lfgFetch(`/api/term/scan?session=${encodeURIComponent(termSession)}`);
+        const r = await lfgFetch(`/api/term/scan?${connTarget}`);
         const d = await r.json();
         if (alive && Array.isArray(d.urls) && d.urls.length)
           setLinks((prev) => mergeUrls(prev, d.urls));
@@ -720,7 +1173,7 @@ export function TermView() {
       alive = false;
       clearInterval(iv);
     };
-  }, [termSession]);
+  }, [connTarget]);
 
   // Drop any pending long-press timer if the tab unmounts mid-press.
   useEffect(() => cancelLongPress, [cancelLongPress]);
@@ -744,22 +1197,62 @@ export function TermView() {
   }, []);
 
   return (
-    <div className="flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-[#0b0b0d]">
-      <div className="flex items-center gap-2 border-b border-white/10 px-3 py-1.5 text-xs text-white/60">
-        <TerminalSquare className="size-3.5" />
-        <span className="font-medium">terminal · {termSession}</span>
+    <div className="relative flex h-full flex-col overflow-hidden rounded-2xl border border-border bg-[#0b0b0d]">
+      {/* One slim strip is the terminal's entire permanent chrome — everything
+          else lives in the deck, summoned only when it's wanted. */}
+      <div className="flex items-center gap-2 border-b border-white/10 px-2.5 py-1 text-[11px] text-white/55">
+        <TerminalSquare className="size-3.5 shrink-0" />
+        <span className="min-w-0 truncate font-medium text-white/75">
+          {label ?? `terminal · ${termSession}`}
+        </span>
         <span
-          className={`ml-auto inline-flex items-center gap-1 ${
+          className={`inline-flex shrink-0 items-center gap-1 ${
             status === "open"
               ? "text-emerald-400"
               : status === "closed"
                 ? "text-destructive"
                 : "text-white/50"
           }`}
+          title={`terminal ${status}`}
         >
           <span className="size-1.5 rounded-full bg-current" />
-          {status}
+          <span className="hidden sm:inline">{status}</span>
         </span>
+        <div className="ml-auto flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={() => (deckOpen ? closeDeck() : openDeck())}
+            style={{ touchAction: "manipulation" }}
+            aria-pressed={deckOpen}
+            aria-label="Terminal keys"
+            title="Terminal keys (⌃⇧K)"
+            className={`flex h-6 items-center gap-1 rounded-md px-1.5 text-[11px] font-medium ${
+              deckOpen ? "bg-white text-black" : "bg-white/10 text-white/70 active:bg-white/25"
+            }`}
+          >
+            <Keyboard className="size-3.5" />
+            <span className="hidden sm:inline">Keys</span>
+            <kbd
+              className={`hidden font-mono text-[9px] md:inline ${
+                deckOpen ? "text-black/45" : "text-white/35"
+              }`}
+            >
+              ⌃⇧K
+            </kbd>
+          </button>
+          {onClose ? (
+            <button
+              type="button"
+              onClick={onClose}
+              style={{ touchAction: "manipulation" }}
+              aria-label="Close terminal"
+              title="Close terminal"
+              className="grid size-6 place-items-center rounded-md bg-white/10 text-white/60 active:bg-white/25"
+            >
+              <X className="size-3.5" />
+            </button>
+          ) : null}
+        </div>
       </div>
       <div
         ref={hostRef}
@@ -830,103 +1323,36 @@ export function TermView() {
         </div>
       ) : null}
 
-      {/* On-screen control keys — a terminal is unusable on a phone without them. */}
-      <div className="grid gap-2 border-t border-white/10 bg-[#0b0b0d] px-2 py-2">
-        <div className="flex gap-2 overflow-x-auto pb-0.5">
-          {HELPER_KEY_GROUPS.map((group) => (
-            <div key={group.id} className="flex shrink-0 items-center gap-1">
-              <span className="px-1 text-[10px] font-semibold uppercase text-white/35">
-                {group.label}
-              </span>
-              {group.keys.map((key) => (
-                <button
-                  type="button"
-                  key={key.id}
-                  onClick={() => sendRaw(key.sequence)}
-                  style={{ touchAction: "manipulation" }}
-                  aria-label={key.ariaLabel}
-                  title={key.title ?? key.ariaLabel}
-                  className="grid h-8 min-w-8 place-items-center rounded-md bg-white/10 px-2 text-xs font-semibold text-white/85 active:bg-white/25"
-                >
-                  {key.label}
-                </button>
-              ))}
-            </div>
-          ))}
-        </div>
-        <div className="flex min-w-0 items-center gap-1.5">
-          <form
-            onSubmit={submitCustomKey}
-            className={`flex min-w-0 flex-1 items-center gap-1 rounded-lg border px-2 py-1 ${
-              customKeyInvalid
-                ? "border-red-400/70 bg-red-500/10"
-                : "border-white/10 bg-white/[0.04]"
-            }`}
-          >
-            <span className="shrink-0 text-[10px] font-semibold uppercase text-white/35">Key</span>
-            <input
-              ref={customKeyInputRef}
-              value={customKey}
-              onChange={(e) => {
-                setCustomKey(e.target.value);
-                setCustomKeyInvalid(false);
-              }}
-              placeholder="ctrl+p"
-              inputMode="text"
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-              aria-label="Custom terminal key"
-              aria-invalid={customKeyInvalid}
-              style={{ fontSize: 16 }}
-              className="min-w-0 flex-1 bg-transparent px-1 py-1 text-sm text-white outline-none placeholder:text-white/25"
-            />
-            <button
-              type="submit"
-              style={{ touchAction: "manipulation" }}
-              className="grid size-7 shrink-0 place-items-center rounded-md bg-white/10 text-white/85 active:bg-white/25"
-              aria-label="Send custom terminal key"
-              title="Send custom terminal key"
-            >
-              <SendHorizontal className="size-3.5" />
-            </button>
-          </form>
-          <button
-            type="button"
-            onPointerDown={() => {
-              keyboardWasActiveAtPointerDownRef.current = keyboardActiveRef.current;
-            }}
-            onClick={(e) =>
-              toggleKeyboard(
-                e.detail === 0
-                  ? keyboardActiveRef.current
-                  : keyboardWasActiveAtPointerDownRef.current,
-              )
-            }
-            style={{ touchAction: "manipulation" }}
-            aria-pressed={keyboardActive}
-            aria-label={keyboardActive ? "hide keyboard" : "show keyboard"}
-            title={keyboardActive ? "Hide keyboard" : "Show keyboard"}
-            className={`flex h-9 shrink-0 items-center gap-1 rounded-lg px-2.5 text-xs font-medium active:bg-white/25 ${
-              keyboardActive ? "bg-white text-black" : "bg-white/10 text-white/80"
-            }`}
-          >
-            {keyboardActive ? <KeyboardOff className="size-3.5" /> : <Keyboard className="size-3.5" />}
-            <span className="hidden sm:inline">Keyboard</span>
-          </button>
-          <button
-            type="button"
-            onClick={doPaste}
-            style={{ touchAction: "manipulation" }}
-            aria-label="Paste terminal input"
-            title="Paste terminal input"
-            className="flex h-9 shrink-0 items-center gap-1 rounded-lg bg-white/10 px-2.5 text-xs font-medium text-white/80 active:bg-white/25"
-          >
-            <ClipboardPaste className="size-3.5" />
-            <span className="hidden sm:inline">Paste</span>
-          </button>
-        </div>
-      </div>
+      {/* Grab handle: the one always-visible hint that there are more keys, and
+          the target the bottom-edge swipe-up starts from. 10px of chrome
+          instead of the ~110px toolbar it replaces. */}
+      {!deckOpen ? (
+        <button
+          type="button"
+          onClick={openDeck}
+          style={{ touchAction: "manipulation" }}
+          aria-label="Show terminal keys"
+          title="Terminal keys (⌃⇧K, or swipe up)"
+          className="absolute inset-x-0 bottom-0 z-20 flex h-6 items-end justify-center pb-1"
+        >
+          <span className="h-1 w-10 rounded-full bg-white/20" />
+        </button>
+      ) : null}
+
+      <KeyDeck
+        open={deckOpen}
+        sticky={deckSticky}
+        lastKey={lastKey}
+        onSendKey={sendDeckKey}
+        onSendSequence={sendDeckSequence}
+        onPaste={() => {
+          void doPaste();
+          afterDeckAction();
+        }}
+        onInsert={enterInsertMode}
+        onToggleSticky={toggleDeckSticky}
+        onClose={closeDeck}
+      />
 
       {/* Long-press / right-click → floating Paste button at the touch point. */}
       {pasteAt ? (

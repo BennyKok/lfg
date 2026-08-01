@@ -987,6 +987,72 @@ type ViewerArtifact = {
 
 const ArtifactViewerContext = createContext<(artifact: ViewerArtifact) => void>(() => {});
 
+// Per-session terminal: pull up a real shell already sitting in the session's
+// worktree, without leaving the session you're reading. Pass a session id to
+// open it, null to close.
+const SessionTerminalContext = createContext<(sessionId: string | null) => void>(() => {});
+
+// A sheet rather than a full page: dev work at a terminal is usually a glance
+// (git status, a test run, a tail) alongside the transcript that prompted it,
+// so the session stays visible behind it.
+//
+// Deliberately NOT closed by a bare Escape — Escape belongs to whatever TUI is
+// running in the shell. We only take it when focus is outside the terminal.
+function SessionTerminalOverlay({
+  sessionId,
+  session,
+  onClose,
+}: {
+  sessionId: string;
+  session: Session | null;
+  onClose: () => void;
+}) {
+  const surfaceRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      const active = document.activeElement;
+      if (active && surfaceRef.current?.contains(active)) return;
+      onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const name = session?.title || session?.project || "session";
+  const where = session?.cwd ? session.cwd.split("/").filter(Boolean).slice(-1)[0] : null;
+
+  return (
+    <div className="fixed inset-0 z-[95] flex flex-col justify-end">
+      <button
+        type="button"
+        aria-label="Close terminal"
+        onClick={onClose}
+        className="absolute inset-0 bg-black/50 backdrop-blur-[2px]"
+      />
+      <div
+        ref={surfaceRef}
+        className="lfg-card-in relative mx-2 mb-2 h-[78dvh] max-h-[calc(100dvh-3.5rem)] min-h-0 shadow-2xl"
+        style={{ marginBottom: "calc(0.5rem + var(--lfg-safe-bottom, 0px))" }}
+      >
+        <Suspense
+          fallback={
+            <div className="grid h-full place-items-center rounded-2xl border border-border bg-[#0b0b0d] text-xs text-white/50">
+              Loading terminal…
+            </div>
+          }
+        >
+          <TermView
+            sessionId={sessionId}
+            label={where ? `${name} · ~/${where}` : name}
+            onClose={onClose}
+          />
+        </Suspense>
+      </div>
+    </div>
+  );
+}
+
 function ArtifactViewerPage({
   artifact,
   onClose,
@@ -4049,6 +4115,8 @@ export function App() {
   const mainRef = useRef<HTMLElement>(null);
   // Full-page native artifact viewer (no popups/new tabs).
   const [viewerArtifact, setViewerArtifact] = useState<ViewerArtifact | null>(null);
+  // Session id whose terminal is pulled up over the app, or null.
+  const [terminalSid, setTerminalSid] = useState<string | null>(null);
   // The viewer participates in browser history: opening pushes a state so the
   // back button / swipe-back closes the viewer and returns to the page you
   // were on (feed, chat, gallery) instead of leaving the app.
@@ -6124,6 +6192,7 @@ export function App() {
     <AskProvider>
     <TranscriptViewContext.Provider value={transcriptViewPreference}>
     <ArtifactViewerContext.Provider value={openArtifactViewer}>
+    <SessionTerminalContext.Provider value={setTerminalSid}>
     <div
       ref={rootRef}
       inert={loading}
@@ -6642,6 +6711,14 @@ export function App() {
       <Toaster position="bottom-center" />
     </div>
     {loading ? <AppStartupStatus /> : null}
+    {terminalSid ? (
+      <SessionTerminalOverlay
+        sessionId={terminalSid}
+        session={sessions.find((s) => s.sessionId === terminalSid) ?? null}
+        onClose={() => setTerminalSid(null)}
+      />
+    ) : null}
+    </SessionTerminalContext.Provider>
     </ArtifactViewerContext.Provider>
     </TranscriptViewContext.Provider>
     </AskProvider>
@@ -9656,9 +9733,12 @@ function RailStage({
     [appDialog, bySid, closeColumn, onRemove, onRefresh],
   );
 
+  const openTerminal = useContext(SessionTerminalContext);
+
   // Latest values for the global key handler, so it binds once but never reads
   // stale state.
   const kb = useRef({
+    openTerminal,
     orderedSids,
     cursor,
     preview,
@@ -9680,6 +9760,7 @@ function RailStage({
     onOpenSettings,
   });
   kb.current = {
+    openTerminal,
     orderedSids,
     cursor,
     preview,
@@ -9826,6 +9907,13 @@ function RailStage({
           if (cur) {
             e.preventDefault();
             focusInto(cur);
+          }
+          return;
+        case "t":
+          // Pull up this session's shell, already in its worktree.
+          if (cur) {
+            e.preventDefault();
+            s.openTerminal(cur);
           }
           return;
         case "p":
@@ -10337,6 +10425,7 @@ function ShortcutsHelp({ onClose }: { onClose: () => void }) {
     ["o", "Open cursored session"],
     ["c", "New session"],
     [",", "Open Settings"],
+    ["t", "Terminal in this session's worktree"],
     ["p", "Pin / unpin cursored session"],
     ["x", "Close cursored column"],
     ["Shift+E", "End cursored session"],
@@ -12237,6 +12326,7 @@ function SessionActionsMenu({
     close,
   } = useSessionActions({ session, users, onRefresh, onRemove, onError });
   const transcriptView = useContext(TranscriptViewContext);
+  const openTerminal = useContext(SessionTerminalContext);
 
   return (
     <>
@@ -12361,6 +12451,11 @@ function SessionActionsMenu({
               Rename
             </DropdownMenuItem>
           ) : null}
+          <DropdownMenuItem disabled={!sid} onClick={() => sid && openTerminal(sid)}>
+            <TerminalSquare className="size-4" />
+            <span className="flex-1">Terminal</span>
+            <kbd className="shrink-0 font-mono text-[10px] text-muted-foreground">t</kbd>
+          </DropdownMenuItem>
           <DropdownMenuItem disabled={!sid} onClick={() => setTokenUsageOpen(true)}>
             <Gauge className="size-4" />
             Token usage

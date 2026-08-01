@@ -4,6 +4,24 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 1, 2026 - Per-session terminals and a vi key menu (v0.1.178)
+
+- Every session now has its own terminal. Press `t` on the focused session (or
+  pick Terminal from its ⋮ menu) to pull up a real shell already sitting in that
+  session's worktree — no `cd`, no hunting for the path. It's a persistent tmux
+  session per agent session, so it survives deploys and reconnects with your
+  scrollback and any long-running command intact.
+- The terminal is full-bleed now. The permanent on-screen key toolbar (about
+  110px of chrome that sat there whether or not you needed it) is gone; all that
+  remains is one slim status strip.
+- The extra keys moved into a vi-style menu you summon with ⌃⇧K, the Keys
+  button, or a swipe up from the bottom edge. It's modal like vi: `h j k l` for
+  arrows, `e` Esc, `t` Tab, `r` ⏎, `c` ^C, `d` ^D, `p`/`n` for history, `0`/`$`
+  for line ends, `g`/`G`, `u`/`f` to page, `i` to hand focus back to the shell,
+  `P` to paste, `.` to repeat the last key, `:` to type any key spec (`ctrl+p`,
+  `f5`, `alt+.`), `s` to stick the menu open, `q` to close. Every key is also a
+  tap target with its hint shown, so phones just tap.
+
 ## August 1, 2026 - A much smaller server (v0.1.177)
 
 - The server now starts about 130 MB lighter. Image encoding (sharp) and the
