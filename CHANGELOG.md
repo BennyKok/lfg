@@ -4,6 +4,16 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 1, 2026 - One tick in the project picker (v0.1.180)
+
+- The Projects sheet no longer shows a green tick next to "All projects" and a
+  named project at the same time. Each row decided its own tick from a separate
+  piece of state, and the composer legitimately holds both — with the live view
+  unfiltered it still has to pick a concrete folder for the next session — so
+  the single-choice list ended up with two answers. The tick now always follows
+  the project your agent will actually work in, and "All projects" claims it
+  only when no specific folder is on the hook.
+
 ## August 1, 2026 - Terminal keyboard fixes (v0.1.179)
 
 - The pulled-up session terminal no longer jumps around when the on-screen
