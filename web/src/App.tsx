@@ -186,6 +186,7 @@ import {
   Trash2,
   UserRound,
   X,
+  Ellipsis,
 } from "lucide-react";
 import { toast } from "@/lib/notify";
 import { haptic } from "@/lib/haptics";
@@ -5769,6 +5770,23 @@ export function App() {
     onChange: (value) => updateSettings({ transcriptView: value }),
   }), [settings.transcriptView, updateSettings]);
 
+  const redoOnboarding = useCallback(async () => {
+    try {
+      const response = await api<{ state: OnboardingState }>("/api/onboarding", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          steps: { profile: false, agents: false, repo: false, firstSession: false },
+          completed: false,
+        }),
+      });
+      setOnboarding(response.state);
+      setShowOnboarding(true);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Couldn't restart onboarding");
+    }
+  }, []);
+
   const refreshCodingAgents = useCallback(async (opts: { refreshModels?: boolean } = {}) => {
     const agentsPath = opts.refreshModels ? "/api/coding-agents?refreshModels=1" : "/api/coding-agents";
     // Every caller invokes this fire-and-forget (`void refreshCodingAgents()`),
@@ -6340,6 +6358,8 @@ export function App() {
             tz={schedTz}
             onEdit={setEditingAgent}
             onRunNow={runAutoNow}
+            settings={settings}
+            onSettingsChange={updateSettings}
           />
         ) : null}
         {tab === "usage" ? <UsagePage /> : null}
@@ -6399,6 +6419,21 @@ export function App() {
             <BrowserProfiles />
           </Suspense>
         ) : null}
+        {tab === "storage" ? <StoragePage /> : null}
+        {tab === "more" ? (
+          <MoreView
+            dark={dark}
+            toggleTheme={toggleTheme}
+            user={userFilter !== "__all" && userFilter !== "__unassigned" ? userFilter : null}
+            onOpenTerminal={() => setTab("term")}
+            onOpenBrowser={() => setTab("browser")}
+            onOpenUsage={() => setTab("usage")}
+            onOpenChangelog={() => setTab("changelog")}
+            onRedoOnboarding={redoOnboarding}
+            extTabs={extNavTabs}
+            onOpenExt={(id) => setTab(id)}
+          />
+        ) : null}
         {extNavTabs.some((t) => t.id === tab) ? (
           extNavTabs.find((t) => t.id === tab)!.render()
         ) : null}
@@ -6411,35 +6446,15 @@ export function App() {
         tab !== "changelog" &&
         tab !== "term" &&
         tab !== "browser" &&
+        tab !== "storage" &&
+        tab !== "more" &&
         !extNavTabs.some((t) => t.id === tab) ? (
           <SettingsView
-            dark={dark}
-            toggleTheme={toggleTheme}
             user={userFilter !== "__all" && userFilter !== "__unassigned" ? userFilter : null}
-            onOpenTerminal={() => setTab("term")}
-            onOpenBrowser={() => setTab("browser")}
             onOpenCodingAgents={() => setTab("coding-agents")}
             onOpenAuto={() => setTab("auto")}
-            onOpenUsage={() => setTab("usage")}
-            onOpenChangelog={() => setTab("changelog")}
-            onRedoOnboarding={async () => {
-              try {
-                const response = await api<{ state: OnboardingState }>("/api/onboarding", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({
-                    steps: { profile: false, agents: false, repo: false, firstSession: false },
-                    completed: false,
-                  }),
-                });
-                setOnboarding(response.state);
-                setShowOnboarding(true);
-              } catch (e) {
-                toast.error(e instanceof Error ? e.message : "Couldn't restart onboarding");
-              }
-            }}
-            extTabs={extNavTabs}
-            onOpenExt={setTab}
+            onOpenStorage={() => setTab("storage")}
+            onOpenMore={() => setTab("more")}
             settings={settings}
             onSettingsChange={updateSettings}
             connection={useWsLive ? wsLiveStream.connection : null}
@@ -18791,9 +18806,80 @@ function AgentConcurrencySettingsSection({
       <p className="px-4 text-xs text-muted-foreground">
         The limit counts agents actively working (a turn in flight) — the intensive ones — not idle open sessions. New agents past the limit (or while paused) are rejected; in-flight agents keep running. The systemd slice is the hard memory bound.
       </p>
+    </section>
+  );
+}
+
+/* Storage & performance — its own page, reached from Settings. Keeps the
+   one-pager calm: a headline capacity read here rather than four live gauges
+   on the settings root. Disk totals come from the same /api/server/stats
+   poll that backs the capacity section. */
+function StoragePage() {
+  const stats = useServerStats(true);
+  const diskTotal = stats?.disk?.totalBytes ?? null;
+  const diskFree = stats?.disk?.freeBytes ?? null;
+  const diskUsed =
+    diskTotal != null && diskFree != null ? Math.max(0, diskTotal - diskFree) : null;
+  const diskPct =
+    diskUsed != null && diskTotal != null && diskTotal > 0
+      ? Math.min(100, Math.round((diskUsed / diskTotal) * 100))
+      : null;
+
+  return (
+    <div className="mx-auto max-w-xl space-y-8 pb-10">
+      <div className="px-1">
+        <h1 className="text-lg font-semibold leading-tight">Storage &amp; performance</h1>
+        <p className="text-sm text-muted-foreground">This computer</p>
+      </div>
+
+      <section className="space-y-2">
+        <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Storage
+        </h2>
+        <div className="overflow-hidden rounded-2xl border border-border bg-card/40">
+          <div className="px-4 pt-4">
+            <div className="text-2xl font-semibold tabular-nums tracking-tight">
+              {diskUsed != null ? formatBytes(diskUsed) : "—"}
+              {diskTotal != null ? (
+                <span className="text-sm font-medium text-muted-foreground">
+                  {" "}of {formatBytes(diskTotal)} used
+                </span>
+              ) : null}
+            </div>
+            <div className="mt-1 text-xs text-muted-foreground">
+              {diskFree != null
+                ? `${formatBytes(diskFree)} available`
+                : "Capacity unavailable on this filesystem"}
+            </div>
+          </div>
+          <div
+            className="mx-4 mb-4 mt-3 h-4 overflow-hidden rounded-md bg-foreground/[0.08]"
+            role="progressbar"
+            aria-label="Disk usage"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={diskPct ?? 0}
+          >
+            <div
+              className={cn(
+                "h-full rounded-md transition-all duration-300 ease-ios",
+                diskPct != null && diskPct >= 90
+                  ? "bg-destructive"
+                  : diskPct != null && diskPct >= 75
+                    ? "bg-amber-500"
+                    : "bg-primary",
+              )}
+              style={{ width: `${diskPct ?? 0}%` }}
+            />
+          </div>
+        </div>
+        <p className="px-4 text-xs text-muted-foreground">
+          Whole-filesystem usage for the volume holding LFG&apos;s data directory.
+        </p>
+      </section>
 
       <ServerPerformancePanel stats={stats} />
-    </section>
+    </div>
   );
 }
 
@@ -18805,12 +18891,6 @@ function ServerPerformancePanel({ stats }: { stats: ServerStats | null }) {
     : 0;
   const sliceCur = stats?.memory.sliceCurrentBytes ?? null;
   const sliceMax = stats?.memory.sliceMaxBytes ?? null;
-  const diskTotal = stats?.disk?.totalBytes ?? null;
-  const diskFree = stats?.disk?.freeBytes ?? null;
-  const diskUsed = diskTotal != null && diskFree != null ? Math.max(0, diskTotal - diskFree) : null;
-  const diskPct = diskUsed != null && diskTotal != null && diskTotal > 0
-    ? Math.min(100, Math.round((diskUsed / diskTotal) * 100))
-    : null;
 
   const rows: { icon: ReactNode; label: string; value: string; sub?: string; pct?: number | null }[] = [
     {
@@ -18831,21 +18911,12 @@ function ServerPerformancePanel({ stats }: { stats: ServerStats | null }) {
       value: stats ? `${hostPct}%` : "—",
       sub: stats ? `${formatBytes(hostUsed)} of ${formatBytes(stats.memory.hostTotalBytes)}` : undefined,
     },
-    {
-      icon: <HardDrive className="size-4" />,
-      label: "Host disk",
-      value: diskPct != null ? `${diskPct}%` : "—",
-      sub: diskUsed != null && diskTotal != null
-        ? `${formatBytes(diskUsed)} of ${formatBytes(diskTotal)}`
-        : "capacity unavailable",
-      pct: diskPct,
-    },
   ];
 
   return (
-    <div className="space-y-2 pt-3">
+    <section className="space-y-2">
       <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-        Server performance
+        Performance
       </h2>
       <div className="overflow-hidden rounded-2xl border border-border bg-card/40 divide-y divide-border">
         {rows.map((row) => (
@@ -18881,7 +18952,7 @@ function ServerPerformancePanel({ stats }: { stats: ServerStats | null }) {
           </div>
         ))}
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -20435,41 +20506,25 @@ function LfgUpdateSection() {
 }
 
 function SettingsView({
-  dark,
-  toggleTheme,
   user,
   settings,
   onSettingsChange,
-  onOpenTerminal,
-  onOpenBrowser,
   onOpenCodingAgents,
   onOpenAuto,
-  onOpenUsage,
-  onOpenChangelog,
-  onRedoOnboarding,
-  extTabs,
-  onOpenExt,
+  onOpenStorage,
+  onOpenMore,
   connection,
 }: {
-  dark: boolean;
-  toggleTheme: () => void;
   user: string | null;
   settings: GlobalSettings;
   onSettingsChange: (patch: Partial<GlobalSettings>) => Promise<void>;
-  onOpenTerminal: () => void;
-  onOpenBrowser: () => void;
   onOpenCodingAgents: () => void;
   onOpenAuto: () => void;
-  onOpenUsage: () => void;
-  onOpenChangelog: () => void;
-  onRedoOnboarding: () => Promise<void>;
-  extTabs: ExtensionNavTab[];
-  onOpenExt: (id: string) => void;
+  onOpenStorage: () => void;
+  onOpenMore: () => void;
   connection: ConnectionState | null;
 }) {
   const initial = (user ?? "").trim().slice(0, 1).toUpperCase() || "?";
-  const audioMode = useAudioMode();
-  const uiFeedback = useUiFeedbackPrefs();
 
   return (
     <div className="mx-auto max-w-xl space-y-8 pb-10">
@@ -20544,41 +20599,12 @@ function SettingsView({
         </p>
       </section>
 
-      {/* Usage — opens as its own page. */}
+      {/* Computer — in standalone LFG this box IS the computer, so the row is
+          static. When these sections are mounted by a host (omg) this is the
+          slot that becomes a machine switcher. */}
       <section className="space-y-2">
         <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Usage
-        </h2>
-        <div className="overflow-hidden rounded-2xl border border-border bg-card/40">
-          <button
-            type="button"
-            onClick={onOpenUsage}
-            className="flex w-full items-center justify-between gap-4 px-4 py-2.5 text-left transition-colors duration-150 ease-ios hover:bg-foreground/[0.03] active:bg-foreground/[0.06]"
-          >
-            <div className="flex items-center gap-3">
-              <span className="flex size-7 items-center justify-center rounded-[7px] bg-primary text-white">
-                <Activity className="size-4" />
-              </span>
-              <span className="text-sm font-medium">Usage &amp; limits</span>
-            </div>
-            <ChevronRight className="size-4 text-muted-foreground/60" />
-          </button>
-        </div>
-      </section>
-
-      <TimeZoneSettingsSection settings={settings} onChange={onSettingsChange} />
-
-      <AgentConcurrencySettingsSection
-        settings={settings}
-        onChange={onSettingsChange}
-      />
-
-      <PwaInstallSettingsSection />
-
-      {/* Auto agents — opens as its own page. */}
-      <section className="space-y-2">
-        <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Automation
+          Computer
         </h2>
         <div className="overflow-hidden rounded-2xl border border-border bg-card/40 divide-y divide-border">
           <button
@@ -20603,19 +20629,113 @@ function SettingsView({
               <span className="flex size-7 items-center justify-center rounded-[7px] bg-primary text-white">
                 <CalendarClock className="size-4" />
               </span>
-              <span className="text-sm font-medium">Auto agents</span>
+              <span className="text-sm font-medium">Schedules</span>
+            </div>
+            <ChevronRight className="size-4 text-muted-foreground/60" />
+          </button>
+          <button
+            type="button"
+            onClick={onOpenStorage}
+            className="flex w-full items-center justify-between gap-4 px-4 py-2.5 text-left transition-colors duration-150 ease-ios hover:bg-foreground/[0.03] active:bg-foreground/[0.06]"
+          >
+            <div className="flex items-center gap-3">
+              <span className="flex size-7 items-center justify-center rounded-[7px] bg-foreground text-background">
+                <HardDrive className="size-4" />
+              </span>
+              <span className="text-sm font-medium">Storage &amp; performance</span>
             </div>
             <ChevronRight className="size-4 text-muted-foreground/60" />
           </button>
         </div>
       </section>
 
-      {/* Tools — open as their own pages. */}
+      <AgentConcurrencySettingsSection
+        settings={settings}
+        onChange={onSettingsChange}
+      />
+
+      <LfgUpdateSection />
+
+      {/* More — the long tail lives on its own page so this one stays scannable. */}
+      <section className="space-y-2">
+        <div className="overflow-hidden rounded-2xl border border-border bg-card/40">
+          <button
+            type="button"
+            onClick={onOpenMore}
+            className="flex w-full items-center justify-between gap-4 px-4 py-2.5 text-left transition-colors duration-150 ease-ios hover:bg-foreground/[0.03] active:bg-foreground/[0.06]"
+          >
+            <div className="flex items-center gap-3">
+              <span className="flex size-7 items-center justify-center rounded-[7px] bg-muted text-foreground/70">
+                <Ellipsis className="size-4" />
+              </span>
+              <span>
+                <span className="block text-sm font-medium">More</span>
+                <span className="block text-xs text-muted-foreground">
+                  Tools, appearance, notifications, voice, help
+                </span>
+              </span>
+            </div>
+            <ChevronRight className="size-4 text-muted-foreground/60" />
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+/* Everything that doesn't need to be on the settings root. Same sections as
+   before, regrouped by who they belong to: the computer, this device, or help. */
+function MoreView({
+  dark,
+  toggleTheme,
+  user,
+  onOpenTerminal,
+  onOpenBrowser,
+  onOpenUsage,
+  onOpenChangelog,
+  onRedoOnboarding,
+  extTabs,
+  onOpenExt,
+}: {
+  dark: boolean;
+  toggleTheme: () => void;
+  user: string | null;
+  onOpenTerminal: () => void;
+  onOpenBrowser: () => void;
+  onOpenUsage: () => void;
+  onOpenChangelog: () => void;
+  onRedoOnboarding: () => Promise<void>;
+  extTabs: ExtensionNavTab[];
+  onOpenExt: (id: string) => void;
+}) {
+  const audioMode = useAudioMode();
+  const uiFeedback = useUiFeedbackPrefs();
+
+  return (
+    <div className="mx-auto max-w-xl space-y-8 pb-10">
+      <div className="px-1">
+        <h1 className="text-lg font-semibold leading-tight">More</h1>
+      </div>
+
+      {/* On this computer */}
       <section className="space-y-2">
         <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Tools
+          On this computer
         </h2>
         <div className="overflow-hidden rounded-2xl border border-border bg-card/40 divide-y divide-border">
+          <button
+            type="button"
+            onClick={onOpenUsage}
+            className="flex w-full items-center justify-between gap-4 px-4 py-2.5 text-left transition-colors duration-150 ease-ios hover:bg-foreground/[0.03] active:bg-foreground/[0.06]"
+          >
+            <div className="flex items-center gap-3">
+              <span className="flex size-7 items-center justify-center rounded-[7px] bg-primary text-white">
+                <Activity className="size-4" />
+              </span>
+              <span className="text-sm font-medium">Provider limits</span>
+            </div>
+            <ChevronRight className="size-4 text-muted-foreground/60" />
+          </button>
           <button
             type="button"
             onClick={onOpenTerminal}
@@ -20645,6 +20765,8 @@ function SettingsView({
         </div>
       </section>
 
+      <VoiceSettingsSection />
+
       {/* Extension tabs — each opens as its own page. */}
       {extTabs.length ? (
         <section className="space-y-2">
@@ -20672,12 +20794,14 @@ function SettingsView({
         </section>
       ) : null}
 
-      {/* Display */}
+      <PwaInstallSettingsSection />
+
+      {/* This device — browser-local, never synced to the server. */}
       <section className="space-y-2">
         <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Display
+          This device
         </h2>
-        <div className="overflow-hidden rounded-2xl border border-border bg-card/40">
+        <div className="overflow-hidden rounded-2xl border border-border bg-card/40 divide-y divide-border">
           <div className="flex items-center justify-between gap-4 px-4 py-2.5">
             <div className="flex items-center gap-3">
               <span className="flex size-7 items-center justify-center rounded-[7px] bg-primary text-white">
@@ -20691,45 +20815,15 @@ function SettingsView({
               aria-label="Toggle dark mode"
             />
           </div>
-        </div>
-        <p className="px-4 text-xs text-muted-foreground">
-          Follows your system appearance until you set it here.
-        </p>
-      </section>
-
-      {/* Audio */}
-      <section className="space-y-2">
-        <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Audio
-        </h2>
-        <div className="overflow-hidden rounded-2xl border border-border bg-card/40">
           <div className="flex items-center justify-between gap-4 px-4 py-2.5">
             <div className="flex items-center gap-3">
-              <span className="flex size-7 items-center justify-center rounded-[7px] bg-primary text-white">
-                <Radio className="size-4" />
+              <span className="flex size-7 items-center justify-center rounded-[7px] bg-destructive text-white">
+                <Bell className="size-4" />
               </span>
-              <span className="text-sm font-medium">Audio mode · auto-play replies</span>
+              <span className="text-sm font-medium">Push notifications</span>
             </div>
-            <Switch
-              checked={audioMode}
-              onCheckedChange={setAudioModeEnabled}
-              aria-label="Toggle audio mode"
-            />
+            <PushBell user={user} />
           </div>
-        </div>
-        <p className="px-4 text-xs text-muted-foreground">
-          Auto-plays replies aloud as they stream and keeps the session
-          conversational — heavy work is delegated to a subagent so a mis-heard word
-          can't quietly run the wrong thing.
-        </p>
-      </section>
-
-      {/* Feedback — UI sound effects + haptics */}
-      <section className="space-y-2">
-        <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Feedback
-        </h2>
-        <div className="overflow-hidden rounded-2xl border border-border bg-card/40">
           <div className="flex items-center justify-between gap-4 px-4 py-2.5">
             <div className="flex items-center gap-3">
               <span className="flex size-7 items-center justify-center rounded-[7px] bg-primary text-white">
@@ -20756,72 +20850,33 @@ function SettingsView({
               aria-label="Toggle haptic feedback"
             />
           </div>
-        </div>
-        <p className="px-4 text-xs text-muted-foreground">
-          Plays subtle clicks on taps, toggles, sends and tab switches, with a
-          matching vibration on supported devices. Turn either off here.
-        </p>
-      </section>
-
-      {/* Notifications */}
-      <section className="space-y-2">
-        <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Notifications
-        </h2>
-        <div className="divide-y divide-border overflow-hidden rounded-2xl border border-border bg-card/40">
           <div className="flex items-center justify-between gap-4 px-4 py-2.5">
             <div className="flex items-center gap-3">
-              <span className="flex size-7 items-center justify-center rounded-[7px] bg-destructive text-white">
-                <Bell className="size-4" />
+              <span className="flex size-7 items-center justify-center rounded-[7px] bg-primary text-white">
+                <Radio className="size-4" />
               </span>
-              <span className="text-sm font-medium">Push notifications</span>
+              <span className="text-sm font-medium">Audio mode · auto-play replies</span>
             </div>
-            <PushBell user={user} />
+            <Switch
+              checked={audioMode}
+              onCheckedChange={setAudioModeEnabled}
+              aria-label="Toggle audio mode"
+            />
           </div>
         </div>
         <p className="px-4 text-xs text-muted-foreground">
-          Mark all read in Notifications clears the app icon dot without
-          deleting notification history.
+          Stored in this browser only — they don&apos;t follow you to other devices.
+          Audio mode auto-plays replies aloud and delegates heavy work to a subagent
+          so a mis-heard word can&apos;t quietly run the wrong thing.
         </p>
       </section>
 
-      <VoiceSettingsSection />
-
-      <LfgUpdateSection />
-
-      {/* Setup — reopens the full walkthrough without deleting existing data. */}
+      {/* Help */}
       <section className="space-y-2">
         <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Setup
+          Help
         </h2>
-        <div className="overflow-hidden rounded-2xl border border-border bg-card/40">
-          <button
-            type="button"
-            onClick={() => void onRedoOnboarding()}
-            className="flex w-full items-center justify-between gap-4 px-4 py-2.5 text-left transition-colors duration-150 ease-ios hover:bg-foreground/[0.03] active:bg-foreground/[0.06]"
-          >
-            <div className="flex items-center gap-3">
-              <span className="flex size-7 items-center justify-center rounded-[7px] bg-primary text-white">
-                <RotateCcw className="size-4" />
-              </span>
-              <span>
-                <span className="block text-sm font-medium">Redo onboarding</span>
-                <span className="block text-xs text-muted-foreground">
-                  Revisit setup without deleting your existing data
-                </span>
-              </span>
-            </div>
-            <ChevronRight className="size-4 text-muted-foreground/60" />
-          </button>
-        </div>
-      </section>
-
-      {/* About */}
-      <section className="space-y-2">
-        <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          About
-        </h2>
-        <div className="overflow-hidden rounded-2xl border border-border bg-card/40">
+        <div className="overflow-hidden rounded-2xl border border-border bg-card/40 divide-y divide-border">
           <button
             type="button"
             onClick={onOpenChangelog}
@@ -20832,6 +20887,24 @@ function SettingsView({
                 <ScrollText className="size-4" />
               </span>
               <span className="text-sm font-medium">Changelog</span>
+            </div>
+            <ChevronRight className="size-4 text-muted-foreground/60" />
+          </button>
+          <button
+            type="button"
+            onClick={() => void onRedoOnboarding()}
+            className="flex w-full items-center justify-between gap-4 px-4 py-2.5 text-left transition-colors duration-150 ease-ios hover:bg-foreground/[0.03] active:bg-foreground/[0.06]"
+          >
+            <div className="flex items-center gap-3">
+              <span className="flex size-7 items-center justify-center rounded-[7px] bg-primary text-white">
+                <RotateCcw className="size-4" />
+              </span>
+              <span>
+                <span className="block text-sm font-medium">Setup guide</span>
+                <span className="block text-xs text-muted-foreground">
+                  Revisit setup without deleting your existing data
+                </span>
+              </span>
             </div>
             <ChevronRight className="size-4 text-muted-foreground/60" />
           </button>
@@ -20847,19 +20920,29 @@ function AutoManageView({
   tz,
   onEdit,
   onRunNow,
+  settings,
+  onSettingsChange,
 }: {
   autoAgents: AutoAgent[];
   findings: AutoFinding[];
   tz: string;
   onEdit: (agent: AutoAgent | "new") => void;
   onRunNow: (id: string) => void;
+  settings?: GlobalSettings;
+  onSettingsChange?: (patch: Partial<GlobalSettings>) => Promise<void>;
 }) {
   const openByAgent = (id: string) => findings.filter((f) => f.agentId === id).length;
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-2">
+      <div className="px-1 pb-2">
+        <h1 className="text-lg font-semibold leading-tight">Schedules</h1>
+        <p className="text-sm text-muted-foreground">
+          Prompts that run on a timer on this computer
+        </p>
+      </div>
       {autoAgents.length === 0 ? (
         <div className="rounded-xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">
-          No auto agents yet.
+          No schedules yet.
         </div>
       ) : (
         autoAgents.map((a) => (
@@ -20939,8 +21022,16 @@ function AutoManageView({
         onClick={() => onEdit("new")}
         className="mt-1 flex items-center justify-center gap-2 rounded-2xl border border-dashed border-border py-3 text-sm font-medium text-muted-foreground hover:text-foreground"
       >
-        <Plus className="size-4" /> New auto agent
+        <Plus className="size-4" /> New schedule
       </button>
+
+      {/* Timezone lives here rather than in Settings: schedules are the only
+          thing it affects, so it reads as part of scheduling. */}
+      {settings && onSettingsChange ? (
+        <div className="mt-6">
+          <TimeZoneSettingsSection settings={settings} onChange={onSettingsChange} />
+        </div>
+      ) : null}
     </div>
   );
 }

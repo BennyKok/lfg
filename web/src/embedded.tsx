@@ -42,6 +42,70 @@ function initialPath(sessionId?: string | null): string {
 }
 
 /**
+ * Pages a host can mount on their own, without the surrounding session UI.
+ *
+ * These are the machine-owned settings: what the box has installed, what it
+ * runs on a timer, and what it's using. A host that has its own account and
+ * plan UI mounts these underneath it rather than reimplementing them, which
+ * is what keeps the two products from drifting into different answers for
+ * the same setting.
+ */
+export type LfgSettingsPage =
+  | "settings"
+  | "coding-agents"
+  | "auto"
+  | "storage"
+  | "more";
+
+export interface LfgSettingsSurfaceProps {
+  transport: LfgTransport;
+  assetBaseUrl?: string;
+  /** Which page to mount. Defaults to the settings root. */
+  page?: LfgSettingsPage;
+  className?: string;
+  errorSink?: LfgErrorSink;
+}
+
+/**
+ * A single LFG settings page mounted inside another React product.
+ *
+ * Same app, same endpoints, same components as the standalone settings page —
+ * only the entry route differs. The host supplies the transport, so which
+ * machine these settings belong to is entirely the host's decision.
+ */
+export function LfgSettingsSurface({
+  transport,
+  assetBaseUrl,
+  page = "settings",
+  className,
+  errorSink,
+}: LfgSettingsSurfaceProps) {
+  configureLfgTransport(transport, { assetBaseUrl, errorSink });
+  const [router] = useState<AnyRouter>(() =>
+    createLfgRouter(
+      createMemoryHistory({ initialEntries: [`/${page}?embed=true`] }),
+    ),
+  );
+
+  useLayoutEffect(() => {
+    document.documentElement.dataset.lfgAppSurface = "";
+    return () => {
+      delete document.documentElement.dataset.lfgAppSurface;
+    };
+  }, []);
+
+  return (
+    <div className={className} data-lfg-app-surface="" data-lfg-settings-surface={page}>
+      <RootErrorBoundary>
+        <AppDialogProvider>
+          <RouterProvider router={router} />
+        </AppDialogProvider>
+      </RootErrorBoundary>
+    </div>
+  );
+}
+
+/**
  * The exact LFG web application mounted inside another React product.
  *
  * A memory router keeps LFG's internal page state private to the surface while
