@@ -65,7 +65,15 @@ json.version = process.env.NEXT;
 fs.writeFileSync("package.json", JSON.stringify(json, null, 2) + "\n");
 '
 bun install --frozen-lockfile >/dev/null 2>&1 || true  # refresh lock metadata if needed
-git add package.json CHANGELOG.md bun.lock package-lock.json 2>/dev/null || true
+# Stage each path on its own. `git add a b missing` fails the WHOLE invocation
+# with exit 128 and stages nothing, so one absent optional file (the npm
+# lockfiles are gone — bun.lock is the only lockfile now) used to silently leave
+# the version bump uncommitted while `|| true` swallowed the error.
+for f in package.json CHANGELOG.md bun.lock package-lock.json; do
+  [ -e "$f" ] && git add "$f"
+done
+# Fail loudly rather than tagging a release whose version bump never landed.
+git diff --cached --quiet && die "Nothing staged for $TAG - the version bump did not apply."
 git commit -m "chore: release $TAG"
 git tag -a "$TAG" -m "$TAG"
 git push origin main "$TAG"
