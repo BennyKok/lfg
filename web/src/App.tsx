@@ -4496,7 +4496,10 @@ export function App() {
       // Undo any latched pinch scale so the visual height is comparable to
       // layout px — a zoomed viewport reports a proportionally smaller height.
       const scale = vv.scale && vv.scale > 0 ? vv.scale : 1;
-      const measured = vv.height * scale;
+      // The visual viewport legitimately exceeds the layout viewport for a beat
+      // while iOS retracts its toolbars, but only by about a toolbar's worth —
+      // cap the slack so a wild reading can't stretch the shell off-screen.
+      const measured = Math.min(vv.height * scale, layoutHeight + 120);
       // Keyboard height ≈ layout height − visual height; 120px clears URL-bar
       // jitter without missing a real keyboard (~250px+).
       const kb = Math.max(0, layoutHeight - measured);
