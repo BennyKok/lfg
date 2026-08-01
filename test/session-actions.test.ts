@@ -58,6 +58,18 @@ describe("session lifecycle actions", () => {
     expect(doubleConfirm).toContain("slide-in-from-bottom-1");
   });
 
+  test("labels the mobile swipe action and confirmation as archive", () => {
+    const card = section("const SessionCard = memo(", "const ChatStream = memo(");
+
+    expect(card).toContain('aria-label="Archive session"');
+    expect(card).toContain("<Archive");
+    expect(card).toContain("Archive");
+    expect(card).toContain('confirmLabel: "Archive session"');
+    expect(card).toContain("can be resumed later from Recent sessions");
+    expect(card).not.toContain('aria-label="Delete session"');
+    expect(card).not.toContain('confirmLabel: "End session"');
+  });
+
   test("offers Continue as a create-then-archive fork mode", () => {
     const dropdown = section(
       "function SessionActionsMenu(",

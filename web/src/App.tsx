@@ -5774,7 +5774,7 @@ export function App() {
     }
   }
 
-  // Direct bulk clear: ends every idle in-scope session in one request. The
+  // Direct bulk clear: archives every idle in-scope session in one request. The
   // Manage Sessions templates below spawn an agent to exercise judgement; this
   // is the plumbing version for "just clear them" — no LLM involved.
   async function clearIdleSessions() {
@@ -5785,11 +5785,11 @@ export function App() {
       return;
     }
     const confirmed = await appDialog.confirm({
-      title: `End ${targets.length} idle session${targets.length === 1 ? "" : "s"}?`,
+      title: `Archive ${targets.length} idle session${targets.length === 1 ? "" : "s"}?`,
       description: busyCount
-        ? `${busyCount} session${busyCount === 1 ? " is" : "s are"} still working and will be left running.`
-        : "They stop immediately and disappear from the live view.",
-      confirmLabel: "End sessions",
+        ? `${busyCount} session${busyCount === 1 ? " is" : "s are"} still working and will be left running. The idle sessions can be resumed later from Recent sessions.`
+        : "They will leave the live view and can be resumed later from Recent sessions.",
+      confirmLabel: "Archive sessions",
       destructive: true,
     });
     if (!confirmed) return;
@@ -5801,10 +5801,10 @@ export function App() {
       const res = await closeAllSessionsRequest(ids, "live_clear_idle");
       const closed = res.closed?.length ?? 0;
       const failed = res.failed?.length ?? 0;
-      if (failed) toast.warning(`Ended ${closed}, ${failed} could not be closed`);
-      else toast.success(`Ended ${closed} session${closed === 1 ? "" : "s"}`);
+      if (failed) toast.warning(`Archived ${closed}, ${failed} could not be archived`);
+      else toast.success(`Archived ${closed} session${closed === 1 ? "" : "s"}`);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not clear sessions");
+      toast.error(e instanceof Error ? e.message : "Could not archive sessions");
     } finally {
       await refreshSessions().catch(() => {});
     }
@@ -9747,9 +9747,9 @@ function RailStage({
       const session = sid ? bySid.get(sid) : null;
       if (!sid || !session) return;
       const confirmed = await appDialog.confirm({
-        title: `End ${titleForSession(session)}?`,
-        description: "The session will stop and disappear from the live view.",
-        confirmLabel: "End session",
+        title: `Archive ${titleForSession(session)}?`,
+        description: "The session will leave the live view and can be resumed later from Recent sessions.",
+        confirmLabel: "Archive session",
         destructive: true,
       });
       if (!confirmed) return;
@@ -9758,7 +9758,7 @@ function RailStage({
         await closeSessionRequest(sid, "live_keyboard_shift_e");
         onRemove(sid);
       } catch (e) {
-        toast.error(e instanceof Error ? e.message : "Couldn't end session");
+        toast.error(e instanceof Error ? e.message : "Couldn't archive session");
       } finally {
         // Outside the try — an onRefresh rejection here would escape the
         // handler entirely rather than being reported by the catch above.
@@ -13755,7 +13755,7 @@ const SessionCard = memo(function SessionCard({
     }
   }
 
-  // ── mobile gestures: tap-header-to-collapse + iOS swipe-to-delete ─────────
+  // ── mobile gestures: tap-header-to-collapse + iOS swipe-to-archive ────────
   // Fall back to the list payload's last message when we aren't streaming this
   // card (collapsed) so the collapsed preview line still shows something.
   const latest = latestLine(messages) || plainPreviewText(session.last?.text ?? "");
@@ -13782,8 +13782,8 @@ const SessionCard = memo(function SessionCard({
   const [collapsed, setCollapsed] = useState<boolean>(() => (sid ? isCollapsedSid(sid) : false));
   const [headH, setHeadH] = useState(44);
   const [swipeOpen, setSwipeOpen] = useState(false);
-  const [swipeIntent, setSwipeIntent] = useState<"delete" | null>(null);
-  // True only while a horizontal swipe is in progress. The red delete action is
+  const [swipeIntent, setSwipeIntent] = useState<"archive" | null>(null);
+  // True only while a horizontal swipe is in progress. The red archive action is
   // kept out of the paint tree unless this or swipeOpen is set — otherwise it
   // sits behind every card and bleeds at the edges during fast momentum scroll.
   const [swiping, setSwiping] = useState(false);
@@ -13792,10 +13792,10 @@ const SessionCard = memo(function SessionCard({
     startX: 0, startY: 0, x: 0, w: 0,
     dragging: false, decided: false, horizontal: false, justSwiped: false,
   });
-  const openRef = useRef<"none" | "delete">("none");
+  const openRef = useRef<"none" | "archive">("none");
   const OPEN = 116;    // resting reveal width once snapped open — wide enough to
-                       // leave a left gap before the icon + "Delete" label
-  const COMMIT = 0.55; // drag past this fraction of the card → delete on release
+                       // leave a left gap before the icon + "Archive" label
+  const COMMIT = 0.55; // drag past this fraction of the card → archive on release
 
   // Measure the header so a collapsed card animates down to exactly its height.
   useEffect(() => {
@@ -13843,16 +13843,16 @@ const SessionCard = memo(function SessionCard({
     el.style.transform = [tx, ty].filter(Boolean).join(" ") || "";
   };
 
-  async function deleteSession() {
+  async function archiveSession() {
     if (!sid) return;
     onRemove(sid); // drop the card now; the tombstone survives the next poll
-    // Fire-and-forget (see the setTimeout in commitDelete), so nothing is left
+    // Fire-and-forget (see the setTimeout in commitArchive), so nothing is left
     // to catch a rejection: swallow here. Racing the card away against a
     // session that already ended 404s with "session not found", which used to
     // surface as an unhandledrejection even though the swipe did what the user
     // wanted — the card is gone and the refresh below reconciles the truth.
     try {
-      await closeSessionRequest(sid, "mobile_swipe_delete");
+      await closeSessionRequest(sid, "mobile_swipe_archive");
     } catch {
       /* already gone — the refresh below is the source of truth */
     } finally {
@@ -13860,16 +13860,16 @@ const SessionCard = memo(function SessionCard({
     }
   }
 
-  async function commitDelete() {
+  async function commitArchive() {
     const el = sectionRef.current;
     if (!sid) {
       closeSwipe();
       return;
     }
     const confirmed = await appDialog.confirm({
-      title: `End ${titleForSession(session)}?`,
-      description: "The session will stop and disappear from the live view.",
-      confirmLabel: "End session",
+      title: `Archive ${titleForSession(session)}?`,
+      description: "The session will leave the live view and can be resumed later from Recent sessions.",
+      confirmLabel: "Archive session",
       destructive: true,
     });
     if (!confirmed) {
@@ -13884,7 +13884,7 @@ const SessionCard = memo(function SessionCard({
       el.style.transform = `translateX(-${el.offsetWidth}px)`;
       el.style.opacity = "0";
     }
-    window.setTimeout(() => void deleteSession(), 280);
+    window.setTimeout(() => void archiveSession(), 280);
   }
 
   function closeSwipe() {
@@ -13919,18 +13919,18 @@ const onTouchStart = (e: ReactTouchEvent) => {
       d.decided = true;
       d.horizontal = Math.abs(mx) > Math.abs(my);
       if (d.horizontal) {
-        setSwiping(true); // horizontal swipe → reveal the delete action behind it
+        setSwiping(true); // horizontal swipe → reveal the archive action behind it
       } else {
         d.dragging = false; // vertical intent → let the transcript/page scroll
         return;
       }
     }
     if (d.horizontal) {
-      let nx = (openRef.current === "delete" ? -OPEN : 0) + mx;
+      let nx = (openRef.current === "archive" ? -OPEN : 0) + mx;
       if (nx < -d.w) nx = -d.w;
       if (nx > 0) nx = 0;
       d.x = nx;
-      setSwipeIntent(nx < -6 ? "delete" : null);
+      setSwipeIntent(nx < -6 ? "archive" : null);
       setTransform(nx, 0);
       return;
     }
@@ -13951,14 +13951,14 @@ const onTouchStart = (e: ReactTouchEvent) => {
       setSwiping(false);
       d.justSwiped = Math.abs(d.x) > 6;
       if (d.x <= -d.w * COMMIT) {
-        void commitDelete();
+        void commitArchive();
         return;
       }
-      const nextOpen = d.x <= -OPEN * 0.5 ? "delete" : "none";
+      const nextOpen = d.x <= -OPEN * 0.5 ? "archive" : "none";
       if (nextOpen !== "none" && openRef.current === "none") haptic("selection");
       openRef.current = nextOpen;
-      setSwipeOpen(nextOpen === "delete");
-      setTransform(nextOpen === "delete" ? -OPEN : 0, 0);
+      setSwipeOpen(nextOpen === "archive");
+      setTransform(nextOpen === "archive" ? -OPEN : 0, 0);
       return;
     }
   };
@@ -14017,20 +14017,20 @@ const onTouchStart = (e: ReactTouchEvent) => {
 
   return (
     <div className={cn("relative min-w-0 md:static", variant === "stage" && "md:h-full")}>
-      {/* swipe-to-delete action revealed behind the card (mobile only) */}
+      {/* swipe-to-archive action revealed behind the card (mobile only) */}
       <button
         type="button"
-        aria-label="Delete session"
+        aria-label="Archive session"
         tabIndex={swipeOpen ? 0 : -1}
-        onClick={() => void commitDelete()}
+        onClick={() => void commitArchive()}
         className={cn(
           "absolute inset-0 flex items-center justify-end gap-2 rounded-xl bg-destructive pr-6 text-sm font-semibold text-white md:hidden",
-          swipeOpen || swipeIntent === "delete" ? "" : "hidden", // out of the paint tree unless mid-swipe
+          swipeOpen || swipeIntent === "archive" ? "" : "hidden", // out of the paint tree unless mid-swipe
           swipeOpen ? "" : "pointer-events-none",
         )}
       >
-        <Trash2 className="size-5" />
-        Delete
+        <Archive className="size-5" />
+        Archive
       </button>
       <section
         ref={sectionRef}
