@@ -58,7 +58,7 @@ import {
   computeSessionFilePatch,
 } from "../session-diff.ts";
 import { reportClientError, listClientErrors } from "../client-errors.ts";
-import { getAllUsage } from "../usage.ts";
+import { getAllUsage, getProviderUsage, listUsageProviders } from "../usage.ts";
 import { sessionTokenUsage } from "../session-token-usage.ts";
 import {
   vapidPublicKey,
@@ -3757,11 +3757,32 @@ export async function cmdServe() {
         return err(405, "method not allowed");
       }
 
+      // The usage sources on this box — one per Claude account plus each other
+      // provider — with no network calls. Clients fetch this first to lay out
+      // their rings, then pull each source independently below.
+      if (path === "/api/usage/providers") {
+        return json({ providers: listUsageProviders() });
+      }
+
+      // One source, fetched on its own. This is what makes a single ring (the
+      // composer's) or a single account's refresh cost one round-trip instead
+      // of a full sweep of every provider.
+      {
+        const m = path.match(/^\/api\/usage\/(.+)$/);
+        if (m) {
+          const id = decodeURIComponent(m[1]);
+          const force = url.searchParams.get("force") === "1";
+          const provider = await getProviderUsage(id, { force });
+          if (!provider) return err(404, `unknown usage provider ${id}`);
+          return json({ provider });
+        }
+      }
+
       // Combined usage/limits across every agent provider (Claude, Codex,
       // Grok, OpenCode) for the Settings → Usage page. Each provider is
-      // self-cached for 60s inside getAllUsage().
+      // self-cached for 60s, so this only pays for whatever has gone stale.
       if (path === "/api/usage") {
-        return json({ providers: await getAllUsage() });
+        return json({ providers: await getAllUsage({ force: url.searchParams.get("force") === "1" }) });
       }
 
       // Claude subscription usage (5-hour + 7-day windows) via the OAuth usage

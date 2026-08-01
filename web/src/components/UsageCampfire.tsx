@@ -22,24 +22,20 @@ import { Flame } from "lucide-react";
 import NumberFlow, { NumberFlowGroup } from "@number-flow/react";
 import { cn } from "@/lib/utils";
 import { haptic } from "@/lib/haptics";
-import { lfgAssetUrl, lfgFetch } from "@/lib/lfg-client";
+import { lfgAssetUrl } from "@/lib/lfg-client";
+import {
+  useUsageFeed,
+  type ProviderUsage,
+  type UsageProviderRef,
+  type UsageWindow,
+} from "@/lib/usage";
 
 // ── public types (mirror /api/usage) ────────────────────────────────────────
 
-export type UsageWindow = {
-  label: string;
-  pct: number | null;
-  resetsAt: number | null;
-};
+export type { ProviderUsage, UsageProviderRef, UsageWindow };
 
-export type ProviderUsage = {
-  kind: string;
-  label: string;
-  available: boolean;
-  plan?: string | null;
-  note?: string;
-  windows?: UsageWindow[];
-};
+/** What one arc slot renders: the source, plus its usage once that source lands. */
+type ArcEntry = UsageProviderRef & { usage: ProviderUsage | null };
 
 // ── open bus (avoids wrapping the whole App tree) ───────────────────────────
 
@@ -243,8 +239,31 @@ function maxUsagePct(p: ProviderUsage): number | null {
  */
 const ARC_X_SCALE_MOBILE = 1.02;
 const ARC_X_SCALE_DESKTOP = 1.18;
-/** Half the width of an agent node plus breathing room, in px. */
-const ARC_NODE_HALF_W = { mobile: 40, desktop: 58 } as const;
+
+/**
+ * How big one agent node may be, given how many share the arc. Multi-account
+ * Claude turns "four or five agents" into seven or eight, and at the original
+ * fixed size a phone-width arc ran its labels straight through each other.
+ */
+function nodeMetrics(count: number, mobile: boolean) {
+  const tier = count >= 8 ? 2 : count >= 6 ? 1 : 0;
+  return mobile
+    ? [
+        { width: 73.6, logo: 46, ring: 15, pct: 14 },
+        { width: 56, logo: 36, ring: 13, pct: 12.5 },
+        { width: 48, logo: 30, ring: 12, pct: 11.5 },
+      ][tier]
+    : [
+        { width: 105.6, logo: 64, ring: 18, pct: 18 },
+        { width: 88, logo: 54, ring: 16, pct: 16 },
+        { width: 76, logo: 44, ring: 14, pct: 14 },
+      ][tier];
+}
+
+/** Half a node's width plus breathing room — how close the arc may run to the edge. */
+function arcNodeHalfWidth(count: number, mobile: boolean): number {
+  return nodeMetrics(count, mobile).width / 2 + (mobile ? 3 : 5);
+}
 
 function arcLayout(
   count: number,
@@ -259,12 +278,19 @@ function arcLayout(
   const xScale = mobile ? ARC_X_SCALE_MOBILE : ARC_X_SCALE_DESKTOP;
   const yScale = mobile ? 0.78 : 0.82;
   const yLift = mobile ? -radius * 0.18 : -radius * 0.04;
+  const startX = Math.cos(start) * radius * xScale;
+  const endX = Math.cos(end) * radius * xScale;
   return Array.from({ length: count }, (_, i) => {
     const t = count === 1 ? 0.5 : i / (count - 1);
-    const a = start + (end - start) * t;
+    // Spaced evenly along x, then lifted onto the same ellipse — stepping by
+    // equal *angle* crowds both ends of an ellipse together, and horizontal
+    // spacing is what decides whether two labels collide.
+    const x = startX + (endX - startX) * t;
+    const nx = Math.max(-1, Math.min(1, x / (radius * xScale)));
     return {
-      x: Math.cos(a) * radius * xScale,
-      y: Math.sin(a) * radius * yScale + yLift,
+      x,
+      // acos gives the upper half of the ellipse; CSS +y is down, so negate.
+      y: -Math.sin(Math.acos(nx)) * radius * yScale + yLift,
     };
   });
 }
@@ -342,14 +368,18 @@ function MiniRings({
 export function UsageCampfireHost({
   onSelectAgent,
 }: {
-  /** Clicking an agent picks it in the composer and opens it. */
-  onSelectAgent?: (kind: string) => void;
+  /**
+   * Clicking an agent picks it in the composer and opens it. Claude reports one
+   * entry per connected account, so the account rides along with the kind.
+   */
+  onSelectAgent?: (kind: string, accountId?: string) => void;
 } = {}) {
   const [open, setOpen] = useState(false);
-  const [providers, setProviders] = useState<ProviderUsage[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [radius, setRadius] = useState(160);
+  // Each source is fetched on its own, so Claude 1's numbers land without
+  // waiting on Grok's billing round-trip or a walk of the Codex sessions tree.
+  const feed = useUsageFeed({ enabled: open, refreshMs: 30_000 });
 
   // Bus subscription
   useEffect(() => {
@@ -449,35 +479,6 @@ export function UsageCampfireHost({
     return () => window.removeEventListener("keydown", onKey);
   }, [open]);
 
-  // Fetch when opened; refresh while visible.
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const res = await lfgFetch("/api/usage");
-        const data = (await res.json().catch(() => ({}))) as {
-          providers?: ProviderUsage[];
-        };
-        if (cancelled) return;
-        if (!res.ok) {
-          setError("Couldn't load usage");
-          return;
-        }
-        setProviders(data.providers ?? []);
-        setError(null);
-      } catch {
-        if (!cancelled) setError("Couldn't load usage");
-      }
-    };
-    void load();
-    const refresh = window.setInterval(() => void load(), 30_000);
-    return () => {
-      cancelled = true;
-      window.clearInterval(refresh);
-    };
-  }, [open]);
-
   // Live countdown tick.
   useEffect(() => {
     if (!open) return;
@@ -486,14 +487,16 @@ export function UsageCampfireHost({
     return () => window.clearInterval(t);
   }, [open]);
 
-  // Responsive arc radius.
+  // Responsive arc radius. A crowded arc uses smaller nodes, which lets the
+  // ends run closer to the screen edge — so the count feeds the measurement.
+  const slotCount = feed.refs?.length ?? 4;
   useEffect(() => {
     if (!open) return;
     const measure = () => {
       const w = window.innerWidth;
       const h = window.innerHeight;
       const mobile = w < 768;
-      const halfNode = mobile ? ARC_NODE_HALF_W.mobile : ARC_NODE_HALF_W.desktop;
+      const halfNode = arcNodeHalfWidth(slotCount, mobile);
       const xScale = mobile ? ARC_X_SCALE_MOBILE : ARC_X_SCALE_DESKTOP;
       // Widest the arc may be before the end nodes collide with the edge.
       const maxByWidth = (w / 2 - halfNode - 8) / xScale;
@@ -503,7 +506,7 @@ export function UsageCampfireHost({
     measure();
     window.addEventListener("resize", measure);
     return () => window.removeEventListener("resize", measure);
-  }, [open]);
+  }, [open, slotCount]);
 
   // Body scroll lock while open.
   useEffect(() => {
@@ -521,8 +524,10 @@ export function UsageCampfireHost({
 
   return createPortal(
     <CampfireOverlay
-      providers={providers}
-      error={error}
+      refs={feed.refs}
+      providers={feed.providers}
+      loading={feed.loading}
+      error={feed.error}
       now={now}
       radius={radius}
       onClose={close}
@@ -535,29 +540,50 @@ export function UsageCampfireHost({
 // ── overlay ─────────────────────────────────────────────────────────────────
 
 function CampfireOverlay({
+  refs,
   providers,
+  loading: feedLoading,
   error,
   now,
   radius,
   onClose,
   onSelectAgent,
 }: {
-  providers: ProviderUsage[] | null;
+  refs: UsageProviderRef[] | null;
+  providers: ProviderUsage[];
+  loading: boolean;
   error: string | null;
   now: number;
   radius: number;
   onClose: () => void;
-  onSelectAgent?: (kind: string) => void;
+  onSelectAgent?: (kind: string, accountId?: string) => void;
 }) {
-  // Only agents that actually report usage. An unconfigured provider has nothing
-  // to plot, and a row of greyed-out placeholders was the noisiest thing on the
-  // arc — it read as "broken" rather than "not set up".
-  const ordered = useMemo(() => {
-    if (!providers) return [];
-    return providers
-      .filter((p) => p.available && (p.windows?.length ?? 0) > 0)
-      .sort((a, b) => a.label.localeCompare(b.label));
-  }, [providers]);
+  // Slots come from the source directory, which arrives before any usage does —
+  // so the arc lays out once, at the right size, and each agent fills in when
+  // its own request lands rather than after the slowest one.
+  //
+  // Once everything has answered we drop the sources with nothing to plot: an
+  // unconfigured provider has nothing to show, and a row of greyed-out
+  // placeholders was the noisiest thing on the arc — it read as "broken"
+  // rather than "not set up".
+  const ordered = useMemo<ArcEntry[]>(() => {
+    if (!refs) return [];
+    const byId = new Map(providers.map((p) => [p.id, p]));
+    const plottable = (p: ProviderUsage | null) =>
+      Boolean(p?.available && (p.windows?.length ?? 0) > 0);
+    const entries = refs
+      .map((ref) => ({ ...ref, usage: byId.get(ref.id) ?? null }))
+      // Claude accounts sort together and in number order; everything else by name.
+      .sort(
+        (a, b) =>
+          a.kind.localeCompare(b.kind) ||
+          (a.accountNumber ?? 0) - (b.accountNumber ?? 0) ||
+          a.label.localeCompare(b.label),
+      );
+    return feedLoading
+      ? entries.filter((entry) => !entry.usage || plottable(entry.usage))
+      : entries.filter((entry) => plottable(entry.usage));
+  }, [refs, providers, feedLoading]);
 
   const [mobile, setMobile] = useState(
     () => typeof window !== "undefined" && window.innerWidth < 768,
@@ -570,8 +596,17 @@ function CampfireOverlay({
     return () => mq.removeEventListener("change", sync);
   }, []);
 
-  const loading = providers == null && !error;
-  // Lay the skeleton out on the same arc so the real agents don't jump on arrival.
+  // Provider families showing more than one node (i.e. multiple Claude
+  // accounts), which are the ones whose icons need a number to tell apart.
+  const numberedKinds = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const entry of ordered) counts.set(entry.kind, (counts.get(entry.kind) ?? 0) + 1);
+    return new Set([...counts].filter(([, n]) => n > 1).map(([kind]) => kind));
+  }, [ordered]);
+
+  // Nothing to lay out until the directory arrives; after that the slot count is
+  // final, so an agent resolving never shifts its neighbours.
+  const loading = refs == null && !error;
   const nodeCount = loading ? 4 : ordered.length;
   const positions = useMemo(
     () => arcLayout(nodeCount, radius, mobile),
@@ -579,7 +614,8 @@ function CampfireOverlay({
   );
 
   // Hovering (or tapping) an agent retargets the centre readout to that agent.
-  const [focusKind, setFocusKind] = useState<string | null>(null);
+  // Keyed by source id, not kind — two Claude accounts are two separate nodes.
+  const [focusId, setFocusId] = useState<string | null>(null);
   // Whether this device can hover at all. Checked as a capability rather than
   // inferred from pointer events, which don't reliably report a usable
   // pointerType under touch emulation and on some mobile browsers.
@@ -595,23 +631,32 @@ function CampfireOverlay({
   }, []);
   // Which agent a touch has armed for launch (see the click handler).
   const armedRef = useRef<string | null>(null);
-  const focused = useMemo(
-    () => ordered.find((p) => p.kind === focusKind) ?? null,
-    [ordered, focusKind],
+  const focusedEntry = useMemo(
+    () => ordered.find((entry) => entry.id === focusId) ?? null,
+    [ordered, focusId],
   );
-  const heroReset = useMemo(
-    () => soonestReset(focused ? [focused] : ordered, now),
-    [focused, ordered, now],
+  const focused = focusedEntry?.usage ?? null;
+  // The hero reads whatever has landed so far — a Claude account that answered
+  // first shouldn't be excluded from "next restore" because Grok is still out.
+  const heroScope = useMemo<ProviderUsage[]>(
+    () =>
+      focused
+        ? [focused]
+        : ordered
+            .map((entry) => entry.usage)
+            .filter((usage): usage is ProviderUsage => usage != null),
+    [focused, ordered],
   );
+  const heroReset = useMemo(() => soonestReset(heroScope, now), [heroScope, now]);
   const heroLabel = useMemo(() => {
     if (heroReset == null) return null;
-    for (const p of focused ? [focused] : ordered) {
+    for (const p of heroScope) {
       for (const w of p.windows ?? []) {
         if (w.resetsAt === heroReset) return `${p.label} · ${w.label}`;
       }
     }
     return null;
-  }, [focused, ordered, heroReset]);
+  }, [heroScope, heroReset]);
 
   // Not every provider reports a reset time. Rather than answer a hover with
   // "No upcoming resets reported", fall back to what that agent DOES know —
@@ -621,9 +666,10 @@ function CampfireOverlay({
     focused != null && heroReset == null && focusHeadline?.pct != null;
 
   const stageCenterY = mobile ? "60%" : "55%";
-  const logoSize = mobile ? 46 : 64;
-  const ringSize = mobile ? 15 : 18;
-  const skeletonSize = mobile ? 46 : 64;
+  const metrics = nodeMetrics(nodeCount, mobile);
+  const logoSize = metrics.logo;
+  const ringSize = metrics.ring;
+  const skeletonSize = metrics.logo;
 
   return (
     <div
@@ -724,7 +770,7 @@ function CampfireOverlay({
           </div>
           <p
             className="min-h-[1.15rem] max-w-[16rem] text-[12px] sm:text-[13px]"
-            style={{ color: focused ? TONE.label : TONE.soft }}
+            style={{ color: focusedEntry ? TONE.label : TONE.soft }}
           >
             {error
               ? error
@@ -734,17 +780,19 @@ function CampfireOverlay({
                   ? `${focused.label} · ${focusHeadline.label}`
                   : heroLabel
                     ? heroLabel
-                    : ordered.length
-                      ? "No upcoming resets reported"
-                      : "No agents reporting usage"}
+                    : focusedEntry && !focused
+                      ? `Reading ${focusedEntry.label}…`
+                      : ordered.length
+                        ? "No upcoming resets reported"
+                        : "No agents reporting usage"}
           </p>
           <p className="mt-0.5 text-[10px]" style={{ color: TONE.faint }}>
             {canHover
               ? onSelectAgent
                 ? "Click an agent to start a session · Shift or Esc to close"
                 : "Shift to close · Esc"
-              : focused && onSelectAgent
-                ? `Tap ${focused.label} again to start a session`
+              : focusedEntry && onSelectAgent
+                ? `Tap ${focusedEntry.label} again to start a session`
                 : "Tap outside to close"}
           </p>
         </div>
@@ -782,27 +830,30 @@ function CampfireOverlay({
           : null}
 
         {/* Agents on the arc — no card chrome, just the meter and its numbers */}
-        {ordered.map((p, i) => {
+        {ordered.map((entry, i) => {
+          const p = entry.usage;
           const pos = positions[i] ?? { x: 0, y: 0 };
-          const headline = headlineWindow(p);
-          const maxPct = headline?.pct ?? maxUsagePct(p);
-          const windows = p.windows ?? [];
-          const isFocused = focusKind === p.kind;
-          const dimmed = focusKind != null && !isFocused;
+          const headline = p ? headlineWindow(p) : null;
+          const maxPct = headline?.pct ?? (p ? maxUsagePct(p) : null);
+          const isFocused = focusId === entry.id;
+          const dimmed = focusId != null && !isFocused;
+          // This source hasn't answered yet — the slot is already in its final
+          // place, so it spins in place rather than pushing anything around.
+          const resolving = p == null;
           return (
             <button
-              key={p.kind}
+              key={entry.id}
               type="button"
-              aria-label={`${p.label} usage${maxPct == null ? "" : `, ${Math.round(maxPct)} percent`}${onSelectAgent ? " — start a session" : ""}`}
+              aria-label={`${entry.label} usage${maxPct == null ? "" : `, ${Math.round(maxPct)} percent`}${onSelectAgent ? " — start a session" : ""}`}
               // Mouse drives focus by hover. Touch can't hover — and a tap emits
               // its own enter/leave pair that would immediately undo the focus —
               // so touch/pen toggle on pointerdown instead.
               onPointerEnter={(e) => {
-                if (e.pointerType === "mouse") setFocusKind(p.kind);
+                if (e.pointerType === "mouse") setFocusId(entry.id);
               }}
               onPointerLeave={(e) => {
                 if (e.pointerType === "mouse") {
-                  setFocusKind((c) => (c === p.kind ? null : c));
+                  setFocusId((c) => (c === entry.id ? null : c));
                 }
               }}
               onClick={(e) => {
@@ -817,25 +868,28 @@ function CampfireOverlay({
                 // on the same agent starts the session. Pointer devices keep
                 // one-click, because hovering already showed you everything.
                 //
-                // Armed state is tracked separately from `focusKind`: tapping
+                // Armed state is tracked separately from `focusId`: tapping
                 // also focuses the button, so onFocus would have already marked
                 // it focused by the time this runs, and the first tap would look
                 // like the second.
-                if (!canHover && armedRef.current !== p.kind) {
-                  armedRef.current = p.kind;
-                  setFocusKind(p.kind);
+                if (!canHover && armedRef.current !== entry.id) {
+                  armedRef.current = entry.id;
+                  setFocusId(entry.id);
                   return;
                 }
                 armedRef.current = null;
-                onSelectAgent(p.kind);
+                onSelectAgent(entry.kind, entry.accountId);
                 onClose();
               }}
-              onFocus={() => setFocusKind(p.kind)}
-              onBlur={() => setFocusKind((c) => (c === p.kind ? null : c))}
+              onFocus={() => setFocusId(entry.id)}
+              onBlur={() => setFocusId((c) => (c === entry.id ? null : c))}
               className={cn(
-                "lfg-campfire-arc-item absolute z-20 flex w-[4.6rem] select-none flex-col items-center gap-1 rounded-2xl px-1 py-1.5 sm:w-[6.6rem]",
+                "lfg-campfire-arc-item absolute z-20 flex select-none flex-col items-center gap-1 rounded-2xl px-1 py-1.5",
                 onSelectAgent ? "cursor-pointer" : "cursor-default",
-                "outline-none transition-[opacity,transform] duration-200 ease-out",
+                // left/top animate too: when the last source lands, any slot
+                // with nothing to plot drops out and the arc glides closed
+                // instead of snapping.
+                "outline-none transition-[opacity,transform,left,top] duration-300 ease-out",
                 "focus-visible:ring-2 focus-visible:ring-orange-300/50",
               )}
               style={
@@ -843,6 +897,7 @@ function CampfireOverlay({
                   "--lfg-arc-x": `${pos.x}px`,
                   "--lfg-arc-y": `${pos.y}px`,
                   "--lfg-arc-scale": isFocused ? 1.07 : 1,
+                  width: metrics.width,
                   left: `calc(50% + ${pos.x}px)`,
                   top: `calc(${stageCenterY} + ${pos.y}px)`,
                   transform:
@@ -854,38 +909,57 @@ function CampfireOverlay({
               }
             >
               {/* The logo leads — it's the thing you aim at to start a session. */}
-              <img
-                src={agentIconSrc(p.kind)}
-                alt=""
-                className="rounded-xl"
-                style={{
-                  width: logoSize,
-                  height: logoSize,
-                  // drop-shadow, not box-shadow: several agent marks are
-                  // transparent SVGs, and a box shadow would draw a rectangle
-                  // behind the artwork instead of tracing it.
-                  filter: isFocused
-                    ? "drop-shadow(0 0 10px rgba(255,180,90,0.5)) drop-shadow(0 6px 14px rgba(0,0,0,0.5))"
-                    : "drop-shadow(0 4px 10px rgba(0,0,0,0.4))",
-                  transition: "filter 200ms ease-out",
-                }}
-              />
+              <span className="relative inline-flex">
+                <img
+                  src={agentIconSrc(entry.kind)}
+                  alt=""
+                  className="rounded-xl"
+                  style={{
+                    width: logoSize,
+                    height: logoSize,
+                    // drop-shadow, not box-shadow: several agent marks are
+                    // transparent SVGs, and a box shadow would draw a rectangle
+                    // behind the artwork instead of tracing it.
+                    filter: isFocused
+                      ? "drop-shadow(0 0 10px rgba(255,180,90,0.5)) drop-shadow(0 6px 14px rgba(0,0,0,0.5))"
+                      : "drop-shadow(0 4px 10px rgba(0,0,0,0.4))",
+                    transition: "filter 200ms ease-out",
+                  }}
+                />
+                {/* Same numbered badge the composer puts on its Claude icons.
+                    Only earns its space once two accounts share one mark. */}
+                {entry.accountNumber != null && numberedKinds.has(entry.kind) ? (
+                  <span
+                    className="absolute -bottom-0.5 -right-0.5 flex size-[1.15em] items-center justify-center rounded-full text-[10px] font-semibold tabular-nums sm:text-[11px]"
+                    style={{
+                      background: "rgba(24,16,10,0.92)",
+                      color: TONE.label,
+                      boxShadow: "0 0 0 1.5px rgba(24,16,10,0.92)",
+                    }}
+                    aria-hidden
+                  >
+                    {entry.accountNumber}
+                  </span>
+                ) : null}
+              </span>
               <div
                 className="w-full truncate text-center text-[10px] font-medium sm:text-[11px]"
                 style={{ color: TONE.label }}
               >
-                {p.label}
+                {entry.label}
               </div>
               {/* Compact meter beside its own number — the ring and the digits
                   describe the same window, so they read as one unit. */}
               <div className="flex items-center justify-center gap-1.5">
-                {headline ? (
+                {resolving ? (
+                  <SpinnerRing size={ringSize} delayMs={i * 120} />
+                ) : headline ? (
                   <MiniRings windows={[headline]} size={ringSize} />
                 ) : null}
                 <span
                   className="font-semibold leading-none tabular-nums"
                   style={{
-                    fontSize: mobile ? 14 : 18,
+                    fontSize: metrics.pct,
                     color: pctColor(maxPct),
                   }}
                 >

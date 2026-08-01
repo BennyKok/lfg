@@ -4,6 +4,25 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 1, 2026 - Usage follows your Claude accounts (v0.1.169)
+
+- Usage now reports one entry per connected Claude account. The campfire view
+  (Shift, or long-press the composer rings) shows a numbered node per account,
+  and Settings → Usage lists each account's own 5-hour and 7-day windows instead
+  of collapsing every login into a single "Claude" row.
+- Picking an account on the campfire arc starts the next session on that
+  account, rather than on whichever one the composer was last left on.
+- The composer's activity rings show the selected account's limits and re-read
+  them when you switch accounts — previously they always showed the first
+  account's numbers.
+- Each usage source is now fetched independently instead of through one combined
+  request. Surfaces that need a single ring make a single request (~135ms rather
+  than ~300ms+ on this box), the campfire fills in agent by agent as each source
+  answers instead of waiting on the slowest, and one account's refresh no longer
+  re-walks the Codex sessions tree or re-hits Grok's billing API.
+- A crowded arc now sizes and spaces its nodes to fit, so six or more agents
+  (which multiple Claude accounts make routine) no longer overlap on a phone.
+
 ## July 31, 2026 - Multiple Claude accounts (v0.1.168)
 
 - Connect multiple Claude subscriptions from Coding agents settings. Each login

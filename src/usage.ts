@@ -1,7 +1,9 @@
 // Cross-provider usage / rate-limit reporting for the Settings → Usage page.
 //
 // Each agent kind exposes its limits differently:
-//   - Claude  : live OAuth usage endpoint (5-hour + 7-day utilization).
+//   - Claude  : live OAuth usage endpoint (5-hour + 7-day utilization), once
+//               per connected Claude account — each numbered account is its own
+//               subscription with its own windows.
 //   - Codex   : no public usage API, but the CLI persists the server's
 //               rate-limit snapshot into each session rollout. We read the
 //               newest rollout and surface its last `rate_limits` block, plus
@@ -11,14 +13,17 @@
 //               ~/.grok/auth.json (same token the CLI uses for /usage).
 //   - OpenCode: estimated from local opencode.db spend vs Go plan caps.
 //
-// Results are cached for 60s so reopening Settings doesn't hammer Anthropic or
-// re-walk the Codex sessions tree.
+// Every source is fetched and cached independently (60s TTL, keyed by provider
+// id), so a caller that only needs one ring — the composer, or a single-account
+// refresh — pays for that source alone instead of waiting on a Grok round-trip
+// and a walk of the Codex sessions tree.
 
 import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
 import { claudeOauthToken } from "./claude-creds.ts";
+import { claudeAccountConfigDir, connectedClaudeAccounts } from "./claude-accounts.ts";
 
 export type UsageWindow = {
   label: string;
@@ -28,9 +33,22 @@ export type UsageWindow = {
   resetsAt: number | null;
 };
 
-export type ProviderUsage = {
+/**
+ * One usage source. `kind` is the provider family (what maps to an agent icon);
+ * `id` is the individual source, which for Claude is per-account — two connected
+ * Claude accounts are two entries with the same `kind` and different `id`s.
+ */
+export type UsageProviderRef = {
+  id: string;
   kind: string;
   label: string;
+  /** Claude account backing this entry, when the provider is multi-account. */
+  accountId?: string;
+  accountLabel?: string;
+  accountNumber?: number;
+};
+
+export type ProviderUsage = UsageProviderRef & {
   /** True when we have real usage numbers to show. */
   available: boolean;
   /** Subscription plan name when known (e.g. Codex "prolite"). */
@@ -65,10 +83,15 @@ function decodeJwt(token: unknown): Record<string, unknown> | null {
 
 // ---------------------------------------------------------------- Claude ----
 
-async function claudeUsage(): Promise<ProviderUsage> {
-  const base = { kind: "claude", label: "Claude", plan: null as string | null };
+async function claudeUsage(ref: UsageProviderRef): Promise<ProviderUsage> {
+  const base = { ...ref, plan: null as string | null };
   try {
-    const token = claudeOauthToken();
+    // Each numbered account keeps its own credentials under its own config dir,
+    // so the token — and therefore the usage window — is per account.
+    const configDir = ref.accountId ? claudeAccountConfigDir(ref.accountId) : null;
+    if (ref.accountId && !configDir)
+      return { ...base, available: false, note: "Account is no longer on this box" };
+    const token = claudeOauthToken(configDir ?? undefined);
     if (!token) return { ...base, available: false, note: "Not signed in on this box" };
     const r = await fetch("https://api.anthropic.com/api/oauth/usage", {
       headers: { Authorization: `Bearer ${token}`, "anthropic-beta": "oauth-2025-04-20" },
@@ -155,7 +178,7 @@ function windowLabel(minutes: number | undefined, fallback: string): string {
   return `${minutes} min`;
 }
 
-async function codexUsage(): Promise<ProviderUsage> {
+async function codexUsage(ref: UsageProviderRef): Promise<ProviderUsage> {
   let plan: string | null = null;
   try {
     const auth = await Bun.file(join(HOME, ".codex", "auth.json")).json();
@@ -167,7 +190,7 @@ async function codexUsage(): Promise<ProviderUsage> {
   } catch {
     /* not signed in / unreadable */
   }
-  const base = { kind: "codex", label: "Codex", plan };
+  const base = { ...ref, plan };
   try {
     const newest = await newestFile(join(HOME, ".codex", "sessions"), ".jsonl");
     if (!newest)
@@ -302,8 +325,8 @@ async function grokFetchBilling(token: string): Promise<{
   return { monthly, weekly };
 }
 
-async function grokUsage(): Promise<ProviderUsage> {
-  const base = { kind: "grok", label: "Grok", plan: null as string | null };
+async function grokUsage(ref: UsageProviderRef): Promise<ProviderUsage> {
+  const base = { ...ref, plan: null as string | null };
   try {
     const authPath = join(HOME, ".grok", "auth.json");
     const authRoot = (await Bun.file(authPath).json()) as Record<string, GrokAuthEntry>;
@@ -395,8 +418,8 @@ async function grokUsage(): Promise<ProviderUsage> {
 
 // -------------------------------------------------------------- OpenCode ----
 
-function staticProvider(kind: string, label: string, note: string): ProviderUsage {
-  return { kind, label, available: false, plan: null, note };
+function staticProvider(ref: UsageProviderRef, note: string): ProviderUsage {
+  return { ...ref, available: false, plan: null, note };
 }
 
 function compactCount(n: number): string {
@@ -496,8 +519,8 @@ function opencodeGoWindows(): UsageWindow[] | null {
   }
 }
 
-async function opencodeUsage(): Promise<ProviderUsage> {
-  const base = { kind: "opencode", label: "OpenCode", plan: null as string | null };
+async function opencodeUsage(ref: UsageProviderRef): Promise<ProviderUsage> {
+  const base = { ...ref, plan: null as string | null };
   try {
     const auth = await Bun.file(join(HOME, ".local", "share", "opencode", "auth.json")).json();
     const hasGo = typeof auth?.["opencode-go"]?.key === "string" && auth["opencode-go"].key.length > 0;
@@ -526,19 +549,87 @@ async function opencodeUsage(): Promise<ProviderUsage> {
 
 // ----------------------------------------------------------- aggregation ----
 
-let cache: { at: number; data: ProviderUsage[] } | null = null;
+const CACHE_TTL_MS = 60_000;
 
-export async function getAllUsage(): Promise<ProviderUsage[]> {
-  if (cache && Date.now() - cache.at < 60_000) return cache.data;
-  const data = await Promise.all([
-    claudeUsage(),
-    codexUsage(),
-    grokUsage(),
-    Promise.resolve(
-      staticProvider("hermes", "Hermes", "Usage is stored in Hermes' own state database"),
-    ),
-    opencodeUsage(),
-  ]);
-  cache = { at: Date.now(), data };
-  return data;
+/** Sources that are always present, whatever is signed in. */
+const STATIC_PROVIDERS: UsageProviderRef[] = [
+  { id: "codex", kind: "codex", label: "Codex" },
+  { id: "grok", kind: "grok", label: "Grok" },
+  { id: "hermes", kind: "hermes", label: "Hermes" },
+  { id: "opencode", kind: "opencode", label: "OpenCode" },
+];
+
+/**
+ * The usage sources on this box, without touching the network. Cheap enough to
+ * call per request — it lets a client render the right set of rings (including
+ * one per Claude account) before any of the slow collectors have answered.
+ */
+export function listUsageProviders(): UsageProviderRef[] {
+  const accounts = connectedClaudeAccounts();
+  // A single account keeps the plain "Claude" label — the numbered labels only
+  // earn their space once there's more than one to tell apart.
+  const claude: UsageProviderRef[] = accounts.length
+    ? accounts.map((account) => ({
+        id: `claude:${account.id}`,
+        kind: "claude",
+        label: accounts.length > 1 ? account.label : "Claude",
+        accountId: account.id,
+        accountLabel: account.label,
+        accountNumber: account.number,
+      }))
+    : [{ id: "claude", kind: "claude", label: "Claude" }];
+  return [...claude, ...STATIC_PROVIDERS];
+}
+
+function collect(ref: UsageProviderRef): Promise<ProviderUsage> {
+  if (ref.kind === "claude") return claudeUsage(ref);
+  if (ref.kind === "codex") return codexUsage(ref);
+  if (ref.kind === "grok") return grokUsage(ref);
+  if (ref.kind === "opencode") return opencodeUsage(ref);
+  return Promise.resolve(
+    staticProvider(ref, "Usage is stored in Hermes' own state database"),
+  );
+}
+
+const cache = new Map<string, { at: number; data: ProviderUsage }>();
+const inflight = new Map<string, Promise<ProviderUsage>>();
+
+function loadProvider(ref: UsageProviderRef, force: boolean): Promise<ProviderUsage> {
+  if (!force) {
+    const hit = cache.get(ref.id);
+    if (hit && Date.now() - hit.at < CACHE_TTL_MS) return Promise.resolve(hit.data);
+    // Two clients opening the campfire at once should share one round-trip.
+    const pending = inflight.get(ref.id);
+    if (pending) return pending;
+  }
+  const run = collect(ref)
+    .then((data) => {
+      cache.set(ref.id, { at: Date.now(), data });
+      return data;
+    })
+    .finally(() => {
+      if (inflight.get(ref.id) === run) inflight.delete(ref.id);
+    });
+  inflight.set(ref.id, run);
+  return run;
+}
+
+/** Usage for one source, or null when the id is unknown (e.g. removed account). */
+export async function getProviderUsage(
+  id: string,
+  options: { force?: boolean } = {},
+): Promise<ProviderUsage | null> {
+  const ref = listUsageProviders().find((entry) => entry.id === id);
+  if (!ref) return null;
+  return loadProvider(ref, options.force ?? false);
+}
+
+export async function getAllUsage(
+  options: { force?: boolean } = {},
+): Promise<ProviderUsage[]> {
+  const refs = listUsageProviders();
+  // Drop cache entries for accounts that have since been removed.
+  const live = new Set(refs.map((ref) => ref.id));
+  for (const id of cache.keys()) if (!live.has(id)) cache.delete(id);
+  return Promise.all(refs.map((ref) => loadProvider(ref, options.force ?? false)));
 }

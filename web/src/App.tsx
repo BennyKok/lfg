@@ -294,6 +294,13 @@ import {
 import { PwaInstallCallout, PwaInstallSettingsSection } from "./components/pwa-install";
 import { UsageCampfireHost, useUsageRingLongPress } from "./components/UsageCampfire";
 import {
+  invalidateUsageProviders,
+  useProviderUsage,
+  useUsageFeed,
+  type ProviderUsage,
+  type UsageWindow,
+} from "./lib/usage";
+import {
   configuredAgentOptions,
   type AgentAccessMode,
 } from "./lib/coding-agent-options";
@@ -4176,6 +4183,8 @@ export function App() {
   // usage campfire). The nonce lets the same agent be re-requested.
   const [agentRequest, setAgentRequest] = useState<{
     kind: AgentKind;
+    /** Which Claude account to compose on, when the request names one. */
+    accountId?: string;
     nonce: number;
   } | null>(null);
   const [composerFocusNonce, setComposerFocusNonce] = useState(0);
@@ -5741,6 +5750,9 @@ export function App() {
         "/api/coding-agents/claude/accounts",
         { method: "POST" },
       );
+      // The usage surfaces memoize the source directory; a new account has to
+      // show up as its own ring rather than after the memo expires.
+      invalidateUsageProviders();
       await refreshCodingAgents();
       await loginCodingAgent("aisdk", undefined, account.id);
     } catch (e) {
@@ -5759,6 +5771,7 @@ export function App() {
     if (!confirmed) return;
     try {
       await api(`/api/coding-agents/claude/accounts/${account.id}`, { method: "DELETE" });
+      invalidateUsageProviders();
       if (localStorage.getItem("lfg_claude_account") === account.id) {
         localStorage.removeItem("lfg_claude_account");
       }
@@ -5774,6 +5787,9 @@ export function App() {
     setCodingAgentAuth(null);
     setCodingAgentAuthInlineSid(null);
     if (inlineSid) setCodingAgentAuthCompletedSid(inlineSid);
+    // A finished login flips an account to connected, which changes the set of
+    // usage sources.
+    invalidateUsageProviders();
     await refreshCodingAgents({ refreshModels: true });
   }
 
@@ -6392,7 +6408,7 @@ export function App() {
       <VoiceSetupDialog />
       {/* Shift toggles the all-agent usage campfire; long-press rings on mobile. */}
       <UsageCampfireHost
-        onSelectAgent={(usageKind) => {
+        onSelectAgent={(usageKind, usageAccountId) => {
           // The usage feed reports one entry per provider; the composer may offer
           // both a CLI and an ai-sdk agent for that provider. Prefer the ai-sdk
           // path (the default agent path), then fall back to the CLI one, and
@@ -6420,7 +6436,13 @@ export function App() {
             toast.error("That agent isn't configured on this box");
             return;
           }
-          setAgentRequest((prev) => ({ kind, nonce: (prev?.nonce ?? 0) + 1 }));
+          setAgentRequest((prev) => ({
+            kind,
+            // Picking "Claude 2" on the arc should compose on Claude 2, not on
+            // whichever account the composer happened to be left on.
+            accountId: kind === "aisdk" ? usageAccountId : undefined,
+            nonce: (prev?.nonce ?? 0) + 1,
+          }));
           // Mobile composer is always mounted and expands in place; desktop opens
           // the drawer.
           if (isMobile) {
@@ -6849,13 +6871,6 @@ function UserFilterMenu({
 // ring per limit window (Claude → 5-hour + weekly; Codex → its own windows;
 // etc). Provider-agnostic — it just renders whatever windows it's handed.
 const USAGE_RING_COLORS = ["#fb923c", "#38bdf8", "#a78bfa", "#34d399"];
-// Which usage provider (from /api/usage) backs a given agent kind. The ai-sdk
-// variants share the underlying provider account with their CLI counterpart.
-function usageProviderKind(agent: AgentKind): string {
-  if (agent === "aisdk") return "claude";
-  if (agent === "codex-aisdk") return "codex";
-  return agent;
-}
 
 function activityRingOrder(windows: UsageWindow[]): UsageWindow[] {
   const rank = (label: string) => {
@@ -15573,7 +15588,7 @@ function NewSessionDialog({
   codingAgents?: CodingAgentInfo[];
   // Set when a surface outside the composer picks the agent for it (the usage
   // campfire). The nonce lets the same agent be requested more than once.
-  agentRequest?: { kind: AgentKind; nonce: number } | null;
+  agentRequest?: { kind: AgentKind; accountId?: string; nonce: number } | null;
 }) {
   const catalog = useAgentModelCatalog();
   const accessMode = useContext(AgentAccessModeContext);
@@ -15606,7 +15621,6 @@ function NewSessionDialog({
     () => readPromptDraft("new-session")?.text ?? "",
   );
   const [pendingUploads, setPendingUploads] = useState<ComposerAttachment[]>([]);
-  const [usage, setUsage] = useState<ProviderUsage | null>(null);
   const [pendingCreates, setPendingCreates] = useState(0);
   const [error, setError] = useState<string | null>(null);
   // Shared composer file plumbing (same hook the chat and fork composers use).
@@ -16100,14 +16114,14 @@ function NewSessionDialog({
     );
   }
 
-  useEffect(() => {
-    if (!open) return;
-    setUsage(null);
-    const wantKind = usageProviderKind(agent);
-    api<{ providers: ProviderUsage[] }>("/api/usage")
-      .then((payload) => setUsage(payload.providers.find((p) => p.kind === wantKind) ?? null))
-      .catch(() => setUsage(null));
-  }, [open, agent]);
+  // One ring, one request: the composer asks only for the source behind the
+  // agent it's showing, and re-asks when the Claude account changes — each
+  // account has its own limits, so switching must re-read them.
+  const { usage } = useProviderUsage({
+    agent,
+    accountId: agent === "aisdk" ? claudeAccountId : null,
+    enabled: open,
+  });
 
   useEffect(() => {
     if (!models.includes(model)) setModel(models[0]);
@@ -16153,6 +16167,10 @@ function NewSessionDialog({
     if (appliedAgentNonce.current === agentRequest.nonce) return;
     appliedAgentNonce.current = agentRequest.nonce;
     setAgent(agentRequest.kind);
+    if (agentRequest.accountId) {
+      setClaudeAccountId(agentRequest.accountId);
+      localStorage.setItem("lfg_claude_account", agentRequest.accountId);
+    }
     setModel(
       localStorage.getItem(`lfg_model_${agentRequest.kind}`) ||
         defaultModelFor(agentRequest.kind),
@@ -19183,16 +19201,6 @@ function CodingAgentsPage({
   );
 }
 
-type UsageWindow = { label: string; pct: number | null; resetsAt: number | null };
-type ProviderUsage = {
-  kind: string;
-  label: string;
-  available: boolean;
-  plan?: string | null;
-  note?: string;
-  windows?: UsageWindow[];
-};
-
 function fmtReset(ms: number | null): string {
   if (!ms) return "";
   const diff = ms - Date.now();
@@ -19236,26 +19244,14 @@ function UsageBar({ w }: { w: UsageWindow }) {
 }
 
 function UsageLimitsSection() {
-  const [providers, setProviders] = useState<ProviderUsage[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
-
-  const load = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      const d = await api<{ providers: ProviderUsage[] }>("/api/usage");
-      setProviders(d.providers);
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't load usage");
-    } finally {
-      setRefreshing(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
+  // Rows come from the source directory and fill in one by one, so a Claude
+  // account that answers fast isn't held behind a slow provider — and each
+  // connected account gets its own row with its own windows.
+  const { refs, providers, error, refreshing, refresh } = useUsageFeed();
+  const byId = useMemo(
+    () => new Map(providers.map((provider) => [provider.id, provider])),
+    [providers],
+  );
 
   return (
     <section className="space-y-2">
@@ -19265,7 +19261,7 @@ function UsageLimitsSection() {
         </h2>
         <button
           type="button"
-          onClick={() => void load()}
+          onClick={refresh}
           disabled={refreshing}
           className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
         >
@@ -19274,50 +19270,55 @@ function UsageLimitsSection() {
         </button>
       </div>
       <div className="overflow-hidden rounded-2xl border border-border bg-card/40 divide-y divide-border">
-        {providers == null && !error ? (
+        {refs == null && !error ? (
           <div className="px-4 py-6 text-center text-sm text-muted-foreground">Loading…</div>
         ) : error ? (
           <div className="px-4 py-6 text-center text-sm text-destructive">{error}</div>
         ) : (
-          providers!.map((p) => (
-            <div key={p.kind} className="flex flex-col gap-2.5 px-4 py-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <span className="flex size-7 items-center justify-center rounded-[7px] border border-border bg-background">
-                    <img
-                      src={agentIconSrc(p.kind)}
-                      alt={agentIconAlt(p.kind)}
-                      className="size-4"
-                    />
-                  </span>
-                  <span className="text-sm font-medium">{p.label}</span>
-                  {p.plan ? (
-                    <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                      {p.plan}
+          refs!.map((ref) => {
+            const p = byId.get(ref.id);
+            return (
+              <div key={ref.id} className="flex flex-col gap-2.5 px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <span className="flex size-7 items-center justify-center rounded-[7px] border border-border bg-background">
+                      <img
+                        src={agentIconSrc(ref.kind)}
+                        alt={agentIconAlt(ref.kind)}
+                        className="size-4"
+                      />
                     </span>
+                    <span className="text-sm font-medium">{ref.label}</span>
+                    {p?.plan ? (
+                      <span className="rounded-full bg-secondary px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                        {p.plan}
+                      </span>
+                    ) : null}
+                  </div>
+                  {p && !p.available ? (
+                    <span className="text-xs text-muted-foreground/70">unavailable</span>
                   ) : null}
                 </div>
-                {!p.available ? (
-                  <span className="text-xs text-muted-foreground/70">unavailable</span>
-                ) : null}
+                {!p ? (
+                  <p className="pl-10 text-xs text-muted-foreground">Reading limits…</p>
+                ) : p.available && p.windows?.length ? (
+                  <div className="space-y-2 pl-10">
+                    {p.windows.map((w) => (
+                      <UsageBar key={w.label} w={w} />
+                    ))}
+                  </div>
+                ) : (
+                  <p className="pl-10 text-xs text-muted-foreground">{p.note ?? "No data"}</p>
+                )}
               </div>
-              {p.available && p.windows?.length ? (
-                <div className="space-y-2 pl-10">
-                  {p.windows.map((w) => (
-                    <UsageBar key={w.label} w={w} />
-                  ))}
-                </div>
-              ) : (
-                <p className="pl-10 text-xs text-muted-foreground">{p.note ?? "No data"}</p>
-              )}
-            </div>
-          ))
+            );
+          })
         )}
       </div>
       <p className="px-4 text-xs text-muted-foreground">
-        Claude reads the live subscription usage endpoint; Codex reflects the latest rate-limit
-        snapshot from its most recent session; Grok pulls monthly and weekly credits from the
-        cli-chat-proxy billing API. Press{" "}
+        Claude reads the live subscription usage endpoint once per connected account; Codex
+        reflects the latest rate-limit snapshot from its most recent session; Grok pulls monthly
+        and weekly credits from the cli-chat-proxy billing API. Press{" "}
         <kbd className="rounded bg-muted px-1 font-mono text-[10px]">Shift</kbd> anywhere (or
         long-press the composer activity rings) for the campfire view of every agent.
       </p>
