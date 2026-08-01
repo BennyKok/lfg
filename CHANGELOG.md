@@ -4,6 +4,29 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 1, 2026 - Settings, regrouped (v0.1.172)
+
+- Settings is a one-pager now. It used to be seventeen sections in a single
+  scroll that mixed your account, this machine and this browser with no
+  ordering, so finding anything meant reading all of it. It now goes account,
+  connection, **Computer** (Coding agents · Schedules · Storage & performance),
+  agent capacity, updates, More.
+- **Storage & performance** is a new page. Disk capacity was already being
+  reported, but only as a fourth gauge row buried in settings; it is now a
+  headline read — how much of the disk is gone, how much is left — above CPU,
+  agent-slice and host memory. Four live gauges no longer greet you on the
+  settings root.
+- **More** holds the long tail: provider limits, terminal, browser profiles,
+  voice, extensions, install, and the browser-local preferences (dark mode,
+  push, sound, haptics, audio mode) grouped under "This device" and labelled
+  as not synced — because they never were.
+- **Auto agents are now Schedules**, with a proper page title, and the timezone
+  control moved onto that page. Schedules are the only thing it affects, so it
+  had no business sitting on its own in settings.
+- Hosts embedding LFG can now mount these settings pages directly via
+  `LfgSettingsSurface` from `@lfg-dev/app`, underneath their own account and
+  plan UI, instead of reimplementing them and drifting.
+
 ## August 1, 2026 - A calmer session rail (v0.1.171)
 
 - The Claude account number now sits bottom-right on every agent icon in the
