@@ -90,10 +90,21 @@ function codingAgent(
 }
 
 describe("OpenCode catalog default", () => {
-  test("uses only a runnable anonymous model as the cold fallback", () => {
-    expect(OPENCODE_MODELS).toEqual(["opencode/deepseek-v4-flash-free"]);
+  test("offers every credential-free anonymous model as the cold fallback", () => {
+    // Before the first successful `opencode models` run the picker renders this
+    // list verbatim. It must not under-report OpenCode Zen's free tier: a
+    // one-entry fallback made new accounts believe a single free model existed.
+    expect(OPENCODE_MODELS.length).toBeGreaterThan(1);
+    for (const model of OPENCODE_MODELS) expect(model).toMatch(/^opencode\/.+-free$/);
+    expect(OPENCODE_MODELS).toContain("opencode/deepseek-v4-flash-free");
     expect(MODEL_OPTIONS.opencode.defaultModel).toBe("opencode/deepseek-v4-flash-free");
     expect(defaultModelForAgent("opencode")).toBe("opencode/deepseek-v4-flash-free");
+  });
+
+  test("keeps every cold-fallback model selectable for an anonymous account", () => {
+    expect(accessibleModelsForAgent("opencode", [...OPENCODE_MODELS], false)).toEqual([
+      ...OPENCODE_MODELS,
+    ]);
   });
 
   test("replaces stale fallback providers with successful live discovery", () => {
@@ -107,7 +118,7 @@ describe("OpenCode catalog default", () => {
     expect(discoveredModelsOrFallback(
       OPENCODE_MODELS,
       { ok: false, models: [] },
-    )).toEqual(["opencode/deepseek-v4-flash-free"]);
+    )).toEqual([...OPENCODE_MODELS]);
   });
 
   test("selects a live free model when no user-owned account is connected", () => {
