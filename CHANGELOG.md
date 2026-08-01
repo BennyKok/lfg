@@ -13,6 +13,11 @@ Recent product updates and deployment notes.
 - The number only appears once a second account is connected — with one login
   there is nothing to disambiguate — and sits opposite the busy/idle dot so
   neither signal covers the other.
+- Fixed returning to LFG from another app sometimes leaving the UI packed into
+  the top slice of the screen with dead space below, until a pinch or rotate
+  forced a relayout. A shrunken viewport now only counts as a soft keyboard when
+  something is actually focused, and the shell re-samples instead of latching a
+  mid-animation reading from iOS.
 
 ## August 1, 2026 - Usage follows your Claude accounts (v0.1.169)
 
