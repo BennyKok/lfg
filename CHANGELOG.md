@@ -4,6 +4,19 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 1, 2026 - A much smaller server (v0.1.177)
+
+- The server now starts about 130 MB lighter. Image encoding (sharp) and the
+  browser engine (playwright) used to be loaded the moment the server booted,
+  even though most servers never encode an image or drive a browser. They are
+  loaded the first time they are actually needed instead, which takes a fresh
+  server from roughly 306 MB to 176 MB of memory.
+- Small machines benefit most. On a 512 MiB free-plan Cloud Computer the old
+  footprint left too little room to run a coding agent beside LFG, and agents
+  could be killed by the guest shortly after launch. There is now room for both.
+- Nothing about image previews, shipped-post media or saved browser logins
+  changes — the first use of each pays the load once and then reuses it.
+
 ## August 1, 2026 - Voice composers that stay in place (v0.1.176)
 
 - The home and live-session chat composers now share the same growing textarea
