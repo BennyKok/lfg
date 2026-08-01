@@ -9,7 +9,7 @@ import {
   shouldPrioritizeSession,
 } from "./lib/app-search";
 import type { AppSearch } from "./lib/app-search";
-import { isEmbedded, readLocationEmbedFlag } from "./lib/embed";
+import { isBareSurface, isEmbedded, readLocationEmbedFlag } from "./lib/embed";
 import {
   embeddedConnectOptions,
   shouldShowEmbeddedConnectGate,
@@ -598,8 +598,6 @@ type Message = {
   name?: string;
   mimeType?: string;
   size?: number;
-  width?: number;
-  height?: number;
   caption?: string;
   alt?: string;
   version?: number;
@@ -865,12 +863,10 @@ const AGENT_THINKING_LEVELS: Record<AgentKind, string[]> = {
   aisdk: ["low", "medium", "high", "xhigh", "max"],
   codex: ["none", "minimal", "low", "medium", "high", "xhigh"],
   "codex-aisdk": ["none", "minimal", "low", "medium", "high", "xhigh"],
-  // grok's CLI exits on anything above high, so these are all it can take.
-  grok: ["low", "medium", "high"],
+  grok: ["low", "medium", "high", "xhigh", "max"],
   cursor: ["low", "medium", "high", "xhigh", "max"],
   opencode: [],
-  // pi's own list, straight from its --thinking help. It has a real "off".
-  pi: ["off", "minimal", "low", "medium", "high", "xhigh"],
+  pi: ["low", "medium", "high", "xhigh", "max"],
   // copilot's CLI exposes no reasoning-effort knob (thinkingLevelsForAgent
   // returns null for it, same as opencode), so the selector stays hidden.
   copilot: [],
@@ -4098,6 +4094,9 @@ export function App() {
   // default to all sessions. `?embed=1` is the explicit contract; framing alone
   // is enough as a defence-in-depth signal.
   const embedded = isEmbedded(deepLinkSearch);
+  // Host-mounted single page: suppress every piece of LFG shell chrome the
+  // host already renders (header, brand, nav, composer).
+  const bare = isBareSurface();
   // Session deep-links win over filter/identity work so the target card opens
   // as soon as bootstrap returns sessions.
   const prioritizeSession = shouldPrioritizeSession(deepLinkSearch) || !!sessionDeepLinkRef.current;
@@ -6151,6 +6150,7 @@ export function App() {
           single fade backdrop and a single measured height (see
           --lfg-mobile-header-height) instead of the header alone reserving
           space and the callout landing on top of the first row. */}
+      {bare ? null : (
       <div
         ref={setMobileChromeEl}
         className={cn(
@@ -6274,6 +6274,7 @@ export function App() {
         </div>
       ) : null}
       </div>
+      )}
 
       <main
         ref={mainRef}
@@ -6466,7 +6467,7 @@ export function App() {
         ) : null}
       </main>
 
-      {!callOpen ? (
+      {!callOpen && !bare ? (
         <>
           {isMobile &&
           !viewerArtifact &&
@@ -14970,8 +14971,6 @@ function MessageBubble({
             <AuthenticatedArtifactImage
               path={message.url}
               alt={message.alt || label}
-              width={message.width}
-              height={message.height}
               zoomable
               className="block max-h-[24rem] w-auto max-w-full self-center bg-muted object-contain"
             />
@@ -20531,23 +20530,28 @@ function SettingsView({
   connection: ConnectionState | null;
 }) {
   const initial = (user ?? "").trim().slice(0, 1).toUpperCase() || "?";
+  // A host mounting this page renders the signed-in account itself — and its
+  // account is the real one, where ours is only a per-device session tag. Two
+  // identity blocks on one page is worse than none.
+  const bare = isBareSurface();
 
   return (
     <div className="mx-auto max-w-xl space-y-8 pb-10">
-      {/* Account */}
-      <div className="flex items-center gap-3.5 px-1">
-        <div className="flex size-12 shrink-0 items-center justify-center rounded-full bg-secondary text-lg font-semibold text-muted-foreground">
-          {initial}
-        </div>
-        <div className="min-w-0">
-          <div className="truncate text-lg font-semibold leading-tight">
-            {user ?? "No user selected"}
+      {bare ? null : (
+        <div className="flex items-center gap-3.5 px-1">
+          <div className="flex size-12 shrink-0 items-center justify-center rounded-full bg-secondary text-lg font-semibold text-muted-foreground">
+            {initial}
           </div>
-          <div className="text-sm text-muted-foreground">
-            {user ? "Signed in on this device" : "Pick your name in the top filter"}
+          <div className="min-w-0">
+            <div className="truncate text-lg font-semibold leading-tight">
+              {user ?? "No user selected"}
+            </div>
+            <div className="text-sm text-muted-foreground">
+              {user ? "Signed in on this device" : "Pick your name in the top filter"}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Live browser-to-server RTT, measured over the same socket that carries
           session updates. This is intentionally dynamic rather than a cached

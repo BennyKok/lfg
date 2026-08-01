@@ -89,28 +89,8 @@ MAIN_ROOT="$(
 [ -n "$MAIN_ROOT" ] || die "could not find the main worktree"
 [ "$SESSION_ROOT" != "$MAIN_ROOT" ] || die "run this from the isolated session worktree, not main"
 
-# Serialize landings repo-wide. `flock` is util-linux and absent on macOS, where
-# the script died with "flock: command not found" before touching anything.
-#
-# macOS ships BSD `lockf` instead, but only its command-wrapping form is usable:
-# its fd form (`lockf 9`) takes a per-process lock that is dropped the moment
-# lockf exits, so the shell is left holding nothing. Linux `flock 9` works
-# because the lock lives on the open file description the shell shares with it.
-#
-# So re-exec the whole script under whichever locker exists and let it own the
-# lock for our lifetime — which also keeps flock's release-on-death behaviour on
-# both platforms. LFG_LAND_LOCK_HELD stops the re-exec recursing; everything
-# above this point is read-only git plumbing, so running it twice is harmless.
-LAND_LOCK="$COMMON_DIR/lfg-land.lock"
-if [ -z "${LFG_LAND_LOCK_HELD:-}" ]; then
-  if command -v flock >/dev/null 2>&1; then
-    exec env LFG_LAND_LOCK_HELD=1 flock "$LAND_LOCK" "$0" "$@"
-  elif command -v lockf >/dev/null 2>&1; then
-    exec env LFG_LAND_LOCK_HELD=1 lockf -k "$LAND_LOCK" "$0" "$@"
-  else
-    die "need flock (util-linux) or lockf (BSD/macOS) to serialize landing"
-  fi
-fi
+exec 9>"$COMMON_DIR/lfg-land.lock"
+flock 9
 
 [ -z "$(git -C "$SESSION_ROOT" status --porcelain)" ] \
   || die "session worktree has uncommitted changes; commit them first"

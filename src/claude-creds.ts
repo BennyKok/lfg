@@ -50,25 +50,8 @@ function readCredsKeychain(): ClaudeCreds | null {
   }
 }
 
-/**
- * Drop the Keychain cache. Test seam: the 60s TTL is process-wide, so without
- * this a token read by one test stays visible to the next.
- */
-export function resetClaudeCredsCacheForTests(): void {
-  cached = null;
-}
-
-/**
- * Claude subscription OAuth access token, or null when not signed in.
- *
- * `readKeychain` is injectable for tests only. Unlike the credentials file, the
- * Keychain is not scoped to $HOME, so a test that points HOME at an empty temp
- * directory still sees the developer's real login and cannot assert a miss.
- */
-export function claudeOauthToken(
-  configDir?: string,
-  readKeychain: () => ClaudeCreds | null = readCredsKeychain,
-): string | null {
+/** Claude subscription OAuth access token, or null when not signed in. */
+export function claudeOauthToken(configDir?: string): string | null {
   // The Linux credentials file is cheap to read and can appear while LFG is
   // running after a browser login. Read it before the Keychain cache so a
   // completed first-run connection is visible on the very next status poll.
@@ -81,7 +64,7 @@ export function claudeOauthToken(
   if (process.platform !== "darwin") return null;
 
   if (cached && Date.now() - cached.at < TTL_MS) return cached.token;
-  const creds = readKeychain();
+  const creds = readCredsKeychain();
   const token = creds?.claudeAiOauth?.accessToken ?? null;
   cached = { token, at: Date.now() };
   return token;

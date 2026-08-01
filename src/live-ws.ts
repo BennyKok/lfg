@@ -288,23 +288,6 @@ type SidTail = {
   transcriptDbPolling: boolean;
 };
 
-// Live view of the active support instance's sid tails, so out-of-band callers
-// can ask "is anyone actually looking at this session right now?". Read through
-// a pointer rather than a mirrored Set — a parallel copy would drift the moment
-// a socket closed on a path that forgot to update it.
-let activeSidTails: Map<string, SidTail> | null = null;
-
-/**
- * True when a live WebSocket is currently subscribed to this session's
- * transcript — i.e. the user has it open. Used to keep push notifications quiet
- * about a session already on screen. Tails are torn down as soon as their last
- * socket goes (see cleanupSidTail), so this can't report a stale yes.
- */
-export function isSessionWatched(sid: string): boolean {
-  const tail = activeSidTails?.get(sid);
-  return !!tail && tail.sockets.size > 0;
-}
-
 export function createLiveWsSupport(opts: {
   evlog?: Evlog;
   getAgentRun?: (runId: string) => AgentRunSnapshot | null;
@@ -314,7 +297,6 @@ export function createLiveWsSupport(opts: {
   const evlog = opts.evlog ?? defaultEvlog;
   const sockets = new WeakMap<LiveWs, SocketState>();
   const sidTails = new Map<string, SidTail>();
-  activeSidTails = sidTails;
   const channelStates = new Map<string, ChannelState>();
   const agentRunUnsubs = new Map<string, () => void>();
   const summaryTails = new Map<string, SummaryTail>();

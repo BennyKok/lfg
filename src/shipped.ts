@@ -222,7 +222,7 @@ export async function addShipPost(input: {
     const optimized = await optimizeImageForStore(item.path);
     try {
       media.push(
-        (await createImageArtifact({ sessionId, path: optimized.path, caption: item.caption })).id,
+        createImageArtifact({ sessionId, path: optimized.path, caption: item.caption }).id,
       );
     } finally {
       if (optimized.temp) rmSync(optimized.path, { force: true });

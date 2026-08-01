@@ -130,10 +130,7 @@ function DrawerContent({
         // overflowing the viewport; callers already carry their own inner
         // scroll containers.
         className={cn("max-h-[85dvh] overflow-hidden", className)}
-        // h-full rather than a second max-height: the wrapper fills the popup
-        // instead of growing past it, so the caller's height class stays
-        // authoritative and footers can't be pushed out of reach.
-        innerClassName="flex h-full min-h-0 flex-col overflow-hidden p-4"
+        innerClassName="block max-h-[85dvh] overflow-y-auto p-4"
         {...(props as React.ComponentProps<typeof DialogContent>)}
       >
         {children}

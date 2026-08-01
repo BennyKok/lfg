@@ -6,29 +6,20 @@ import { PATHS } from "./config.ts";
 import type { ImageArtifact } from "./artifacts.ts";
 
 const PREVIEWS_DIR = join(PATHS.data, "artifacts", "previews");
-const PREVIEW_VERSION = "v2";
+const PREVIEW_VERSION = "v1";
 
 /**
  * Two bounded sizes, cached independently on disk.
  *
  * `preview` is the in-transcript/lightbox size. `thumb` exists because the
- * Notification Center renders media as a 52px square: serving the transcript
+ * Notification Center renders media as a 52px square: serving the 1200px
  * preview there meant ~65 KB of image per row to paint a postage stamp, and a
  * compact feed puts a lot of rows on screen at once.
  */
 export type ImagePreviewVariant = "preview" | "thumb";
 const VARIANT_WIDTH: Record<ImagePreviewVariant, number> = {
-  // Transcript cards top out around 544 CSS pixels. 1080 keeps a crisp 2x
-  // result while avoiding the extra pixels and bytes of the former 1200px
-  // preview. A lower WebP quality is visually equivalent at card size and
-  // materially quicker to transfer/decode.
-  preview: 1080,
+  preview: 1200,
   thumb: 160,
-};
-
-const VARIANT_QUALITY: Record<ImagePreviewVariant, number> = {
-  preview: 68,
-  thumb: 64,
 };
 
 // Coalesce simultaneous requests for a new image. The finished files provide
@@ -53,19 +44,10 @@ async function createImagePreview(
   await mkdir(PREVIEWS_DIR, { recursive: true });
   const temporaryPath = `${outputPath}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    const image = sharp(artifact.filePath, { animated: false }).rotate();
-    await image
-      .resize(
-        variant === "preview"
-          ? {
-              width: VARIANT_WIDTH.preview,
-              height: VARIANT_WIDTH.preview,
-              fit: "inside",
-              withoutEnlargement: true,
-            }
-          : { width: VARIANT_WIDTH.thumb, withoutEnlargement: true },
-      )
-      .webp({ quality: VARIANT_QUALITY[variant], effort: 3, smartSubsample: true })
+    await sharp(artifact.filePath, { animated: false })
+      .rotate()
+      .resize({ width: VARIANT_WIDTH[variant], withoutEnlargement: true })
+      .webp({ quality: 76, effort: 4, smartSubsample: true })
       .toFile(temporaryPath);
     await rename(temporaryPath, outputPath);
     return outputPath;
@@ -83,7 +65,7 @@ export async function getOrCreateImagePreview(
   if (await Bun.file(outputPath).exists()) return outputPath;
 
   // Keyed by variant too, or a thumb request would be handed the in-flight
-  // transcript generation and cache the wrong bytes under the thumb name.
+  // 1200px generation and cache the wrong bytes under the thumb name.
   const key = `${artifact.id}:${variant}`;
   const active = pending.get(key);
   if (active) return active;

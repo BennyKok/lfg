@@ -61,8 +61,7 @@ function validSkillItem(item: SkillCatalogItem): boolean {
     !!item.name.trim() &&
     !!item.trigger.trim() &&
     !/\s/.test(item.trigger) &&
-    // SKILL.md for skills, <command>.md for plugin commands.
-    item.path.endsWith(".md")
+    item.path.endsWith("SKILL.md")
   );
 }
 
@@ -90,60 +89,6 @@ async function findSkillFiles(root: string, maxDepth = 6): Promise<string[]> {
   return out;
 }
 
-/**
- * Plugin *commands* — `<plugin>/<version>/commands/**\/*.md`. The agent offers
- * these exactly like skills (`/ralph-loop:help`), so omitting them left the
- * app's list disagreeing with what could actually be run. Note some plugins
- * ship commands and no skills at all.
- */
-async function findPluginCommandFiles(root: string, maxDepth = 8): Promise<string[]> {
-  const out: string[] = [];
-  async function walk(dir: string, depth: number, inCommands: boolean) {
-    if (depth > maxDepth) return;
-    let entries: Dirent[];
-    try {
-      entries = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    await Promise.all(
-      entries.map(async (e) => {
-        // AppleDouble sidecars (`._foo.md`) sit next to the real file on
-        // anything that has touched a Mac volume; they are not commands.
-        if (e.name.startsWith("._")) return;
-        const full = join(dir, e.name);
-        if (e.isDirectory()) {
-          if (e.name.startsWith(".git")) return;
-          await walk(full, depth + 1, inCommands || e.name === "commands");
-          return;
-        }
-        if (inCommands && e.isFile() && e.name.toLowerCase().endsWith(".md")) out.push(full);
-      }),
-    );
-  }
-  await walk(root, 0, false);
-  return out;
-}
-
-/**
- * "<plugin>:<command>" for a plugin command path, mirroring how the agent
- * addresses it. Nested command dirs namespace with ":" the same way the agent
- * does (commands/tasks/build.md -> notion:tasks:build).
- */
-function pluginCommandTrigger(commandPath: string): string | null {
-  const parts = commandPath.split(/[\\/]+/);
-  const cacheIdx = parts.lastIndexOf("cache");
-  const cmdIdx = parts.indexOf("commands", cacheIdx >= 0 ? cacheIdx : 0);
-  if (cacheIdx < 0 || cmdIdx < 0 || cacheIdx + 3 > cmdIdx) return null;
-  const plugin = parts[cacheIdx + 2];
-  const name = parts
-    .slice(cmdIdx + 1)
-    .join(":")
-    .replace(/\.md$/i, "");
-  if (!plugin || !name) return null;
-  return name.startsWith(`${plugin}:`) ? name : `${plugin}:${name}`;
-}
-
 function pluginSkillTrigger(skillPath: string, name: string): string {
   const parts = skillPath.split(/[\\/]+/);
   const skillsIdx = parts.lastIndexOf("skills");
@@ -161,12 +106,10 @@ async function buildSkillCatalog(repoRoots: string[] = []): Promise<SkillCatalog
   const selfRepo = PATHS.root;
   // Installed-plugin caches. Skills found under these get a "plugin:name"
   // trigger (see pluginSkillTrigger); everything else is addressed by bare name.
-  // These are also the only roots scanned for plugin commands.
-  const pluginRoots: { root: string; source: SkillCatalogItem["source"] }[] = [
-    { root: join(codexHome, "plugins", "cache"), source: "codex" },
-    { root: join(claudeHome, "plugins", "cache"), source: "claude" },
+  const pluginCacheRoots = [
+    join(codexHome, "plugins", "cache"),
+    join(claudeHome, "plugins", "cache"),
   ];
-  const pluginCacheRoots = pluginRoots.map((r) => r.root);
   const roots: { root: string; source: SkillCatalogItem["source"] }[] = [
     { root: join(codexHome, "skills"), source: "codex" },
     { root: join(codexHome, "plugins", "cache"), source: "codex" },
@@ -193,23 +136,13 @@ async function buildSkillCatalog(repoRoots: string[] = []): Promise<SkillCatalog
     roots.push({ root: join(cwd, "skills"), source: "agent" });
     roots.push({ root: join(cwd, "packages", "skills", "skills"), source: "agent" });
   }
-  const skillFiles = (
+  const files = (
     await Promise.all(
       [...new Map(roots.map((r) => [`${r.source}:${r.root}`, r])).values()].map(async (r) =>
-        (await findSkillFiles(r.root)).map((path) => ({ ...r, path, command: false })),
+        (await findSkillFiles(r.root)).map((path) => ({ ...r, path })),
       ),
     )
   ).flat();
-  // Commands come second so a plugin that ships both a skill and a command of
-  // the same name keeps the skill — it carries the richer frontmatter.
-  const commandFiles = (
-    await Promise.all(
-      pluginRoots.map(async (r) =>
-        (await findPluginCommandFiles(r.root)).map((path) => ({ ...r, path, command: true })),
-      ),
-    )
-  ).flat();
-  const files = [...skillFiles, ...commandFiles];
   const seen = new Set<string>();
   const items: SkillCatalogItem[] = [];
   for (const file of files) {
@@ -220,27 +153,14 @@ async function buildSkillCatalog(repoRoots: string[] = []): Promise<SkillCatalog
       continue;
     }
     const fm = parseSkillFrontmatter(raw);
-    let name: string;
-    let trigger: string;
-    if (file.command) {
-      // A command's identity is its path — the frontmatter carries only a
-      // description, never a name.
-      const commandTrigger = pluginCommandTrigger(file.path);
-      if (!commandTrigger) continue;
-      trigger = commandTrigger;
-      name = commandTrigger.slice(commandTrigger.indexOf(":") + 1);
-    } else {
-      name = fm.name || file.path.split(/[\\/]+/).at(-2) || "skill";
-      // Namespace every plugin-provided skill as "plugin:name", whichever
-      // agent's cache it came from. Beyond matching how the agent addresses
-      // them, this is what keeps two plugins that ship the same skill name from
-      // colliding on `key` below and having one silently dropped.
-      trigger = pluginCacheRoots.some((root) => file.path.startsWith(root))
-        ? pluginSkillTrigger(file.path, name)
-        : name;
-    }
-    // Dedup also collapses a plugin installed at two versions (the cache keeps
-    // the old directory around), which would otherwise list the same command twice.
+    const name = fm.name || file.path.split(/[\\/]+/).at(-2) || "skill";
+    // Namespace every plugin-provided skill as "plugin:name", whichever agent's
+    // cache it came from. Beyond matching how the agent addresses them, this is
+    // what keeps two plugins that ship the same skill name from colliding on
+    // `key` below and having one silently dropped.
+    const trigger = pluginCacheRoots.some((root) => file.path.startsWith(root))
+      ? pluginSkillTrigger(file.path, name)
+      : name;
     const key = `${file.source}:${trigger}`;
     if (seen.has(key)) continue;
     seen.add(key);
