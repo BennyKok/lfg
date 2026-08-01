@@ -4,6 +4,16 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 1, 2026 - Mounted settings sit flush with their host (v0.1.181)
+
+- A settings page mounted in another product no longer carries LFG's own page
+  layout with it. It was still applying a side gutter, a top inset reserving
+  space for the header bare mode had already removed, and an absolutely
+  positioned scroll box — all of which exist to accommodate LFG's chrome. The
+  visible result was cards sitting inset from the host's own cards on the same
+  page, with a gap above them.
+
+
 ## August 1, 2026 - One tick in the project picker (v0.1.180)
 
 - The Projects sheet no longer shows a green tick next to "All projects" and a
