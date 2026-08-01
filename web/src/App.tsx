@@ -11079,6 +11079,10 @@ type SkillTextareaProps = Omit<
   textareaRef?: Ref<HTMLTextAreaElement>;
   showSkillButton?: boolean;
   insetEnd?: boolean;
+  // Bump only for changes that should keep the newest text visible (voice
+  // partials/finals). A nonce instead of a boolean prevents later manual edits
+  // in the middle of a long draft from being pulled back to the bottom.
+  scrollToEndNonce?: number;
 };
 
 function SkillTextarea({
@@ -11088,10 +11092,12 @@ function SkillTextarea({
   textareaRef,
   showSkillButton = false,
   insetEnd = false,
+  scrollToEndNonce = 0,
   ...props
 }: SkillTextareaProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const fieldRef = useRef<HTMLTextAreaElement | null>(null);
+  const followedScrollNonceRef = useRef(scrollToEndNonce);
   const [skillSuggest, setSkillSuggest] = useState<SlashSkillState | null>(null);
 
   // CSS `field-sizing: content` is still flaky across browsers (and loses to
@@ -11116,8 +11122,13 @@ function SkillTextarea({
   );
 
   useLayoutEffect(() => {
-    resizeField();
-  }, [value, resizeField]);
+    const field = fieldRef.current;
+    resizeField(field);
+    if (field && followedScrollNonceRef.current !== scrollToEndNonce) {
+      field.scrollTop = field.scrollHeight;
+      followedScrollNonceRef.current = scrollToEndNonce;
+    }
+  }, [value, resizeField, scrollToEndNonce]);
 
   function sync(target: HTMLTextAreaElement) {
     setSkillSuggest(slashSkillAt(target.value, target.selectionStart));
@@ -11202,6 +11213,21 @@ function SkillTextarea({
   );
 }
 
+// Shared growing field for the home and live-session chat composers. Keeping
+// the cap here prevents the two entry points from drifting back to different
+// viewport-relative heights, while SkillTextarea owns the resize/follow logic.
+function ComposerTextarea({ className, ...props }: SkillTextareaProps) {
+  return (
+    <SkillTextarea
+      {...props}
+      className={cn(
+        "max-h-40 min-w-0 flex-1 resize-none overflow-y-auto [field-sizing:fixed] md:max-h-36",
+        className,
+      )}
+    />
+  );
+}
+
 // Shared transcript page loader used to warm the cache ahead of a session open.
 async function loadTranscriptPage(sid: string) {
   const page = await api<{ messages: Message[]; nextBefore?: number | null }>(
@@ -11245,6 +11271,7 @@ function SessionChat({
   // send reads as the turn springing out of the input into the transcript.
   const [launching, setLaunching] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const [dictationScrollNonce, setDictationScrollNonce] = useState(0);
   // Shared composer file plumbing (same hook the new-session and fork composers
   // use): eager uploads, drag & drop, paste, annotate.
   const files = useComposerAttachments({
@@ -11304,6 +11331,13 @@ function SessionChat({
       });
     },
     [session.project, session.title, sid, stashContext],
+  );
+  const setDictatedMessageText = useCallback(
+    (text: string, base: string) => {
+      setMessageText(base.trim() ? `${base.trimEnd()} ${text}` : text);
+      setDictationScrollNonce((nonce) => nonce + 1);
+    },
+    [setMessageText],
   );
 
   // SessionChat can be reused as the focused card changes. Recover that
@@ -11595,11 +11629,12 @@ function SessionChat({
               <Paperclip className="size-4" />
             </Button>
             <div className="relative min-w-0 flex-1">
-              <SkillTextarea
+              <ComposerTextarea
                 textareaRef={messageInputRef}
                 data-composer-sid={sid}
                 value={messageText}
                 onValueChange={setMessageText}
+                scrollToEndNonce={dictationScrollNonce}
                 showSkillButton
                 insetEnd
                 onPaste={files.onPasteFiles}
@@ -11619,10 +11654,9 @@ function SessionChat({
                 disabled={sending}
                 rows={1}
                 className={cn(
-                  // Height is driven by SkillTextarea's scrollHeight resize
-                  // (field-sizing:fixed so CSS content-sizing doesn't fight it).
-                  // Rest at one line; max-h caps growth before the transcript.
-                  "lfg-gfield min-h-11 max-h-40 min-w-0 resize-none overflow-y-auto rounded-2xl border-transparent px-4 py-3 text-base leading-5 shadow-sm transition-[background-color,border-color,box-shadow] duration-300 ease-ios placeholder:text-muted-foreground [field-sizing:fixed] md:min-h-9 md:max-h-36 md:rounded-[1.125rem] md:px-3.5 md:py-2 md:text-sm",
+                  // Height and follow-scroll are owned by ComposerTextarea.
+                  // Rest at one line; the shared cap stops before the transcript.
+                  "lfg-gfield min-h-11 rounded-2xl border-transparent px-4 py-3 text-base leading-5 shadow-sm transition-[background-color,border-color,box-shadow] duration-300 ease-ios placeholder:text-muted-foreground md:min-h-9 md:rounded-[1.125rem] md:px-3.5 md:py-2 md:text-sm",
                 )}
               />
               <MicButton
@@ -11630,12 +11664,8 @@ function SessionChat({
                 className="absolute bottom-1.5 right-1.5 z-10 size-8 md:bottom-1"
                 baseText={messageText}
                 onRecordingChange={onDictatingChange}
-                onText={(text, base) =>
-                  setMessageText(base.trim() ? `${base.trimEnd()} ${text}` : text)
-                }
-                onInterim={(text, base) =>
-                  setMessageText(base.trim() ? `${base.trimEnd()} ${text}` : text)
-                }
+                onText={setDictatedMessageText}
+                onInterim={setDictatedMessageText}
                 onAutoSubmit={(text, base) => {
                   const combined = base.trim() ? `${base.trimEnd()} ${text}` : text;
                   void sendMessage(undefined, combined);
@@ -11665,12 +11695,8 @@ function SessionChat({
               onSend={() => void sendMessage()}
               onQueue={() => void sendMessage(undefined, undefined, "queue")}
               onRecordingChange={onDictatingChange}
-              onText={(text, base) =>
-                setMessageText(base.trim() ? `${base.trimEnd()} ${text}` : text)
-              }
-              onInterim={(text, base) =>
-                setMessageText(base.trim() ? `${base.trimEnd()} ${text}` : text)
-              }
+              onText={setDictatedMessageText}
+              onInterim={setDictatedMessageText}
               onAutoSubmit={(text, base) => {
                 const combined = base.trim() ? `${base.trimEnd()} ${text}` : text;
                 void sendMessage(undefined, combined);
@@ -15803,6 +15829,7 @@ function NewSessionDialog({
   const [prompt, setPromptState] = useState(
     () => readPromptDraft("new-session")?.text ?? "",
   );
+  const [dictationScrollNonce, setDictationScrollNonce] = useState(0);
   const [pendingUploads, setPendingUploads] = useState<ComposerAttachment[]>([]);
   const [pendingCreates, setPendingCreates] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -16144,12 +16171,6 @@ function NewSessionDialog({
       }
     };
   }, [variant, !onProjectSwipe]);
-  useLayoutEffect(() => {
-    const textarea = fieldRef.current?.querySelector("textarea");
-    if (!textarea) return;
-    textarea.scrollTop = textarea.scrollHeight;
-  }, [prompt]);
-
   useEffect(() => {
     // On desktop the resume picker replaces the new-session dialog, so the
     // dialog is intentionally closed while this request is in flight.
@@ -16689,17 +16710,18 @@ function NewSessionDialog({
         className={cn(
           "lfg-gfield relative rounded-2xl",
           // Inline: a single row with the agent icon, field, and mic all
-          // vertically centered, with a touch more breathing room.
+          // pinned to the bottom while the shared textarea grows upward.
           variant === "inline"
-            ? "flex items-center gap-1.5 overflow-visible px-2.5 py-2"
+            ? "flex items-end gap-1.5 overflow-visible px-2.5 py-2"
             : "relative px-2 py-1",
         )}
         ref={fieldRef}
       >
         {variant === "inline" ? agentPopover : null}
-        <SkillTextarea
+        <ComposerTextarea
           value={prompt}
           onValueChange={setPrompt}
+          scrollToEndNonce={dictationScrollNonce}
           onPaste={files.onPasteFiles}
           onKeyDown={(e) => {
             if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
@@ -16709,7 +16731,7 @@ function NewSessionDialog({
           }}
           placeholder={attachments.length ? "Add a note for the files…" : "Describe the task for a new session…"}
           className={cn(
-            "max-h-[32dvh] resize-none overflow-y-auto border-0 bg-transparent text-base leading-relaxed shadow-none focus-visible:border-0 focus-visible:ring-0",
+            "border-0 bg-transparent text-base leading-relaxed shadow-none focus-visible:border-0 focus-visible:ring-0",
             variant === "inline"
               ? "min-h-9 flex-1 px-1 py-1.5"
               : "min-h-40 max-h-[42dvh] px-1 py-1 pr-10",
@@ -16720,12 +16742,14 @@ function NewSessionDialog({
           className={cn("size-9 shrink-0", variant !== "inline" && "absolute bottom-1 right-1")}
           silenceMs={2500}
           baseText={prompt}
-          onText={(text, base) =>
-            setPrompt(base.trim() ? `${base.trimEnd()} ${text}` : text)
-          }
-          onInterim={(text, base) =>
-            setPrompt(base.trim() ? `${base.trimEnd()} ${text}` : text)
-          }
+          onText={(text, base) => {
+            setPrompt(base.trim() ? `${base.trimEnd()} ${text}` : text);
+            setDictationScrollNonce((nonce) => nonce + 1);
+          }}
+          onInterim={(text, base) => {
+            setPrompt(base.trim() ? `${base.trimEnd()} ${text}` : text);
+            setDictationScrollNonce((nonce) => nonce + 1);
+          }}
           onAutoSubmit={(text, base) => {
             const combined = base.trim() ? `${base.trimEnd()} ${text}` : text;
             void submit(undefined, combined);
