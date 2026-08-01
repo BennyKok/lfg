@@ -1,4 +1,4 @@
-import { claudeEffortFor, grokBin } from "../../tmux.ts";
+import { grokBin, grokEffortFor } from "../../tmux.ts";
 
 export async function pipeToGrokCli(
   prompt: string,
@@ -26,7 +26,7 @@ export async function pipeToGrokCli(
     "--verbatim",
   ];
   if (opts.writable) argv.push("--always-approve");
-  const effort = claudeEffortFor(opts.thinkingLevel);
+  const effort = grokEffortFor(opts.thinkingLevel);
   if (effort) argv.push("--effort", effort);
   argv.push("-p", prompt);
 

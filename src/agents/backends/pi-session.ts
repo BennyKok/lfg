@@ -42,6 +42,20 @@ import { join } from "node:path";
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 
+// Kept local rather than imported from tmux.ts: that module drags in the
+// serve/tmux dependency graph this harness deliberately stays clear of.
+// pi keeps the "off"/"minimal" the Claude vocabulary collapses into "low", and
+// clamps anything above its xhigh ceiling so a level stored while pi shared the
+// Claude list still means "as high as this agent goes".
+function piThinkingFor(level?: string): string | undefined {
+  if (!level) return undefined;
+  if (level === "off" || level === "none") return "off";
+  if (level === "minimal") return "minimal";
+  if (["low", "medium", "high", "xhigh"].includes(level)) return level;
+  if (level === "max") return "xhigh";
+  return undefined;
+}
+
 function arg(argv: string[], name: string): string | undefined {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : undefined;
@@ -171,7 +185,11 @@ export async function cmdPiSession(argv: string[]): Promise<void> {
   }
   const { RpcClient } = await import("@mariozechner/pi-coding-agent");
   const rpcArgs: string[] = [];
-  if (thinkingLevel) rpcArgs.push("--thinking", thinkingLevel);
+  // pi's own vocabulary (off|minimal|low|medium|high|xhigh), so translate rather
+  // than forward. It answers an unknown level with a warning and then carries on
+  // at its default, which makes a mismatch a setting that silently does nothing.
+  const piThinking = piThinkingFor(thinkingLevel);
+  if (piThinking) rpcArgs.push("--thinking", piThinking);
   if (resumeSessionId) rpcArgs.push("--session", resumeSessionId);
   rpcArgs.push(...agentProfileCliArgs(profile));
   const client = new RpcClient({
