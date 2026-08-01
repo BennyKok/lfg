@@ -4362,14 +4362,61 @@ export function App() {
       clear();
       return;
     }
+    // A shrunken visual viewport only means "soft keyboard" if something that
+    // can raise one actually has focus. Returning from the app switcher, iOS
+    // hands back a mid-animation visual viewport (sometimes with a pinch scale
+    // still latched); read naively that looks exactly like a keyboard, and
+    // because <html> is sized from --lfg-app-height the whole document stays
+    // locked into the top slice of the screen until the next pinch or rotate.
+    const keyboardCapableFocus = () => {
+      const el = document.activeElement as HTMLElement | null;
+      if (!el || el === document.body || el === document.documentElement) return false;
+      const tag = el.tagName;
+      // IFRAME counts: focus may sit in embedded content we can't inspect.
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "IFRAME") return true;
+      return el.isContentEditable === true;
+    };
+    let disposed = false;
+    let staleRetries = 0;
+    const timers = new Set<number>();
+    const later = (fn: () => void, ms: number) => {
+      const id = window.setTimeout(() => {
+        timers.delete(id);
+        if (!disposed) fn();
+      }, ms);
+      timers.add(id);
+    };
     const sync = () => {
-      // Keyboard height ≈ layout height − visual height. `innerHeight` is the
-      // layout viewport (doesn't shrink for the keyboard on iOS); 120px clears
-      // URL-bar jitter without missing a real keyboard (~250px+).
-      const kb = Math.max(0, window.innerHeight - vv.height);
-      const open = kb > 120;
+      if (disposed) return;
+      // The layout viewport doesn't shrink for the keyboard on iOS, so it is the
+      // honest ceiling for how tall the shell may be.
+      const layoutHeight = Math.max(
+        window.innerHeight || 0,
+        document.documentElement.clientHeight || 0,
+      );
+      // Undo any latched pinch scale so the visual height is comparable to
+      // layout px — a zoomed viewport reports a proportionally smaller height.
+      const scale = vv.scale && vv.scale > 0 ? vv.scale : 1;
+      const measured = vv.height * scale;
+      // Keyboard height ≈ layout height − visual height; 120px clears URL-bar
+      // jitter without missing a real keyboard (~250px+).
+      const kb = Math.max(0, layoutHeight - measured);
+      const shrunk = kb > 120;
+      const open = shrunk && keyboardCapableFocus();
+      // Shrunk with nothing focused is a stale measurement, not a keyboard:
+      // keep the shell at the layout viewport and re-sample until WebKit
+      // settles, instead of squeezing the app into part of the screen.
+      const stale = shrunk && !open;
+      if (stale) {
+        if (staleRetries < 10) {
+          staleRetries += 1;
+          later(sync, 150);
+        }
+      } else {
+        staleRetries = 0;
+      }
       const el = rootRef.current;
-      const visualHeight = Math.ceil(vv.height);
+      const visualHeight = Math.ceil(stale ? layoutHeight : measured);
       const rawVisualTopPx = Math.max(
         0,
         Math.round(
@@ -4382,7 +4429,9 @@ export function App() {
           ),
         ),
       );
-      const visualTopPx = open || tab === "term" ? rawVisualTopPx : 0;
+      // A stale foreground-return measurement takes its scroll offset with it —
+      // don't translate the shell by it.
+      const visualTopPx = stale ? 0 : open || tab === "term" ? rawVisualTopPx : 0;
       const measuredHeight = `${visualHeight}px`;
       const offsetTop = `${visualTopPx}px`;
       document.documentElement.style.setProperty("--lfg-app-height", measuredHeight);
@@ -4410,7 +4459,7 @@ export function App() {
       // just above the keyboard via --lfg-orb-stack-bottom.
       document.documentElement.style.setProperty(
         "--lfg-keyboard-height",
-        `${Math.round(kb)}px`,
+        `${open ? Math.round(kb) : 0}px`,
       );
       document.documentElement.classList.toggle("lfg-keyboard-open", open);
       setKeyboardOpen(open);
@@ -4422,25 +4471,37 @@ export function App() {
     // visualViewport resize on iOS. Sample across the frames where WebKit settles
     // its viewport metrics; this mimics the relayout a manual pinch/zoom caused.
     const resync = () => {
+      staleRetries = 0;
       sync();
       requestAnimationFrame(sync);
       requestAnimationFrame(() => requestAnimationFrame(sync));
-      window.setTimeout(sync, 80);
-      window.setTimeout(sync, 250);
-      window.setTimeout(sync, 750);
-      window.setTimeout(sync, 1500);
+      // Out past 1.5s: iOS occasionally settles its metrics only after the
+      // app-switcher animation and any restored keyboard have both finished.
+      for (const ms of [80, 250, 750, 1500, 2500]) later(sync, ms);
     };
     const onVisible = () => {
       if (document.visibilityState === "visible") resync();
     };
     window.addEventListener("pageshow", resync);
     window.addEventListener("focus", resync);
+    // Rotating or resizing while backgrounded lands with metrics nobody
+    // announced on the visualViewport; and the first touch after a return is a
+    // free chance to self-heal if every other signal was missed.
+    window.addEventListener("resize", resync, { passive: true });
+    window.addEventListener("orientationchange", resync, { passive: true });
+    window.addEventListener("pointerdown", sync, { passive: true, capture: true });
     document.addEventListener("visibilitychange", onVisible);
     return () => {
+      disposed = true;
+      for (const id of timers) window.clearTimeout(id);
+      timers.clear();
       vv.removeEventListener("resize", sync);
       vv.removeEventListener("scroll", sync);
       window.removeEventListener("pageshow", resync);
       window.removeEventListener("focus", resync);
+      window.removeEventListener("resize", resync);
+      window.removeEventListener("orientationchange", resync);
+      window.removeEventListener("pointerdown", sync, { capture: true } as EventListenerOptions);
       document.removeEventListener("visibilitychange", onVisible);
       clear();
     };
