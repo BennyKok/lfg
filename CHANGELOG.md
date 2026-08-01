@@ -4,6 +4,17 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 1, 2026 - Cloud workspaces can update themselves again (v0.1.184)
+
+- LFG running in an OMG cloud workspace can now take updates. It restarts
+  itself there by exiting into the loop OMG keeps it alive with, but it was
+  looking for that loop at a path OMG no longer uses, so it concluded no
+  restart was possible and turned down every update before downloading it —
+  leaving each workspace pinned to whatever version it was created with. The
+  four free-tier workspaces we checked were sixteen releases behind, which
+  means none of the recent memory and reliability work had ever reached them.
+  Update now works from the Settings page as it does everywhere else.
+
 ## August 1, 2026 - One MCP server for the whole box (v0.1.183)
 
 - Running several Claude sessions at once no longer costs a duplicate
