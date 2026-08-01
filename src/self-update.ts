@@ -39,8 +39,35 @@ export type ReleaseInstall = {
 
 type CommandResult = { ok: boolean; stdout: string; stderr: string };
 
-const OMG_SERVE_SCRIPT = ".omg/agent-serve.sh";
-const OMG_SERVE_PID = ".omg/agent-serve.pid";
+/**
+ * OMG sandboxes have no user systemd, so they supervise `lfg serve` with a
+ * plain `while true; do <serve>; sleep 2; done` shell loop. Exiting is
+ * therefore how LFG restarts itself there — but only if a supervisor really is
+ * watching, so each layout pairs its marker files with a token that must appear
+ * in the supervisor's /proc cmdline. Without that check a recycled PID could
+ * make LFG exit into nothing.
+ *
+ * Two layouts exist because OMG changed the convention. Both are still in the
+ * field: guests baked from an older template run the legacy one, and a guest
+ * only moves to the current one when its template is re-baked.
+ */
+const OMG_SUPERVISORS = [
+  {
+    // Current: the template writes ~/.omg/template/bootstrap.sh, which nohups
+    // the restart loop with a sentinel argv entry so it can identify its own
+    // supervisor across a cold boot.
+    script: ".omg/template/bootstrap.sh",
+    pidFile: ".omg/template/start.pid",
+    marker: "omg-template-supervisor",
+  },
+  {
+    // Legacy: the agent-template catalog's ~/.omg/agent-serve.sh loop, which
+    // has no sentinel, so the script path in the cmdline is the marker.
+    script: ".omg/agent-serve.sh",
+    pidFile: ".omg/agent-serve.pid",
+    marker: ".omg/agent-serve.sh",
+  },
+] as const;
 
 async function run(
   cmd: string[],
@@ -213,24 +240,26 @@ function omgSupervisorRestartCommand(
   platform: string = process.platform,
 ): string[] | null {
   if (platform !== "linux") return null;
-  const script = join(home, OMG_SERVE_SCRIPT);
-  const pidFile = join(home, OMG_SERVE_PID);
-  if (!existsSync(script) || !existsSync(pidFile)) return null;
-  try {
-    const supervisorPid = Number.parseInt(readFileSync(pidFile, "utf8").trim(), 10);
-    if (!Number.isSafeInteger(supervisorPid) || supervisorPid <= 1) return null;
-    const cmdline = readFileSync(join(procRoot, String(supervisorPid), "cmdline"), "utf8")
-      .replaceAll("\0", " ");
-    if (!cmdline.includes(OMG_SERVE_SCRIPT)) return null;
-    for (const kill of ["/usr/bin/kill", "/bin/kill"]) {
-      try {
-        accessSync(kill, constants.X_OK);
-        // The OMG-owned loop observes this process exit and starts the updated
-        // foreground command again after its normal two-second backoff.
-        return [kill, "-TERM", String(currentPid)];
-      } catch {}
-    }
-  } catch {}
+  for (const layout of OMG_SUPERVISORS) {
+    if (!existsSync(join(home, layout.script))) continue;
+    if (!existsSync(join(home, layout.pidFile))) continue;
+    try {
+      const raw = readFileSync(join(home, layout.pidFile), "utf8").trim();
+      const supervisorPid = Number.parseInt(raw, 10);
+      if (!Number.isSafeInteger(supervisorPid) || supervisorPid <= 1) continue;
+      const cmdline = readFileSync(join(procRoot, String(supervisorPid), "cmdline"), "utf8")
+        .replaceAll("\0", " ");
+      if (!cmdline.includes(layout.marker)) continue;
+      for (const kill of ["/usr/bin/kill", "/bin/kill"]) {
+        try {
+          accessSync(kill, constants.X_OK);
+          // The OMG-owned loop observes this process exit and starts the updated
+          // foreground command again after its normal two-second backoff.
+          return [kill, "-TERM", String(currentPid)];
+        } catch {}
+      }
+    } catch {}
+  }
   return null;
 }
 

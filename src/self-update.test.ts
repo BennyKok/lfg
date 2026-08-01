@@ -147,6 +147,66 @@ describe("restart command", () => {
     expect(command?.[0].endsWith("/kill")).toBe(true);
   });
 
+  test("recognizes the current OMG template supervisor", () => {
+    // What an OMG guest actually looks like today: ~/.omg/template/bootstrap.sh
+    // nohups the restart loop and records its pid, and the loop carries the
+    // `omg-template-supervisor` sentinel as its last argv entry.
+    const root = mkdtempSync(join(tmpdir(), "lfg-omg-restart-"));
+    cleanup.push(root);
+    const home = join(root, "home");
+    const procRoot = join(root, "proc");
+    const supervisorPid = 556;
+    mkdirSync(join(home, ".omg", "template"), { recursive: true });
+    mkdirSync(join(procRoot, String(supervisorPid)), { recursive: true });
+    writeFileSync(join(home, ".omg", "template", "bootstrap.sh"), "#!/bin/sh\n");
+    writeFileSync(join(home, ".omg", "template", "start.pid"), `${supervisorPid}\n`);
+    writeFileSync(
+      join(procRoot, String(supervisorPid), "cmdline"),
+      "/bin/bash\0-lc\0while true; do lfg serve; sleep 2; done\0omg-template-supervisor\0",
+    );
+
+    const command = restartCommand("linux", home, procRoot);
+    expect(command?.slice(1)).toEqual(["-TERM", String(process.pid)]);
+    expect(command?.[0].endsWith("/kill")).toBe(true);
+  });
+
+  test("does not trust a stale OMG template pidfile", () => {
+    const root = mkdtempSync(join(tmpdir(), "lfg-omg-restart-"));
+    cleanup.push(root);
+    const home = join(root, "home");
+    const procRoot = join(root, "proc");
+    mkdirSync(join(home, ".omg", "template"), { recursive: true });
+    mkdirSync(join(procRoot, "556"), { recursive: true });
+    writeFileSync(join(home, ".omg", "template", "bootstrap.sh"), "#!/bin/sh\n");
+    writeFileSync(join(home, ".omg", "template", "start.pid"), "556\n");
+    // A recycled pid: the supervisor died and something else took its number.
+    writeFileSync(join(procRoot, "556", "cmdline"), "unrelated-process\0");
+
+    expect(restartCommand("linux", home, procRoot)).toBeNull();
+  });
+
+  test("falls through to the legacy layout when the current one is absent", () => {
+    // A guest baked from an older template has only the legacy loop; the new
+    // marker files must not shadow it.
+    const root = mkdtempSync(join(tmpdir(), "lfg-omg-restart-"));
+    cleanup.push(root);
+    const home = join(root, "home");
+    const procRoot = join(root, "proc");
+    mkdirSync(join(home, ".omg", "template"), { recursive: true });
+    mkdirSync(join(procRoot, "4242"), { recursive: true });
+    // bootstrap.sh exists but its supervisor is gone — the legacy one is live.
+    writeFileSync(join(home, ".omg", "template", "bootstrap.sh"), "#!/bin/sh\n");
+    writeFileSync(join(home, ".omg", "agent-serve.sh"), "#!/bin/sh\n");
+    writeFileSync(join(home, ".omg", "agent-serve.pid"), "4242\n");
+    writeFileSync(
+      join(procRoot, "4242", "cmdline"),
+      `bash\0${join(home, ".omg", "agent-serve.sh")}\0`,
+    );
+
+    const command = restartCommand("linux", home, procRoot);
+    expect(command?.slice(1)).toEqual(["-TERM", String(process.pid)]);
+  });
+
   test("does not trust a stale OMG supervisor pidfile", () => {
     const root = mkdtempSync(join(tmpdir(), "lfg-omg-restart-"));
     cleanup.push(root);
