@@ -4,6 +4,25 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 1, 2026 - Terminal keyboard fixes (v0.1.179)
+
+- The pulled-up session terminal no longer jumps around when the on-screen
+  keyboard opens. It was sized against the full screen height, which iOS does
+  not shrink for the keyboard — it shrinks the visible area and scrolls the page
+  instead — so the sheet got shoved under the keyboard and dragged along by that
+  scroll. It now sits in the real visible area, and takes the whole of it while
+  you're typing so you get more terminal rather than a squeezed one.
+- The terminal stops flickering during that keyboard animation. It was
+  re-fitting the grid and repainting the pane on every viewport sample, most of
+  which report the same size; identical sizes are now ignored.
+- The mobile new-session composer no longer rides the keyboard up and down
+  behind the terminal sheet — it's hidden while a terminal is up, the same way
+  it already hides behind the artifact viewer.
+- Typing in the terminal no longer auto-capitalises. Mobile keyboards treated
+  Ghostty's input as prose and sentence-cased it, turning `git status` into
+  `Git status`. Autocorrect, predictions and spellcheck are off too: it types
+  lowercase and Shift means Shift.
+
 ## August 1, 2026 - Per-session terminals and a vi key menu (v0.1.178)
 
 - Every session now has its own terminal. Press `t` on the focused session (or

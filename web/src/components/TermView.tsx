@@ -302,9 +302,32 @@ function terminalInput(term: TerminalInstance | null) {
   return (term as GhosttyWithInput | null)?.textarea ?? null;
 }
 
+// Ghostty's hidden input is a plain <textarea>, so mobile keyboards apply their
+// prose defaults to it: capitalise the first letter of a "sentence", autocorrect
+// words, offer predictions. In a shell that's actively wrong — `Git status`,
+// `Ls`, and a "corrected" flag are all just errors. Type lowercase and let Shift
+// mean Shift, the way a keyboard behaves in a terminal app.
+function tameTerminalInput(term: TerminalInstance | null) {
+  const input = terminalInput(term);
+  if (!input) return;
+  input.setAttribute("autocapitalize", "none");
+  input.setAttribute("autocorrect", "off");
+  input.setAttribute("autocomplete", "off");
+  input.setAttribute("spellcheck", "false");
+  // The property assignment matters too: WebKit reads the IDL attribute, and it
+  // does not always reflect a late setAttribute on an already-focused field.
+  try {
+    (input as HTMLTextAreaElement).autocapitalize = "none";
+    (input as HTMLTextAreaElement).spellcheck = false;
+  } catch {}
+}
+
 function focusTerminalKeyboard(term: TerminalInstance | null) {
   if (!term) return;
   term.focus();
+  // Re-assert on every focus: ghostty recreates/reconfigures the input, and the
+  // casing hint has to be in place *before* the keyboard comes up to take.
+  tameTerminalInput(term);
   // Mobile browsers are more reliable about opening the soft keyboard for a
   // real text input than for Ghostty's contenteditable/canvas wrapper.
   terminalInput(term)?.focus();
@@ -1104,6 +1127,7 @@ export function TermView({
       term.loadAddon(fit);
       term.open(hostRef.current);
       cleanupMouseReporting = installMouseReporting(hostRef.current, term, sendRaw);
+      tameTerminalInput(term);
       const textarea = terminalInput(term);
       const onInputFocus = () => setTerminalKeyboardActive(true);
       const onInputBlur = () => setTerminalKeyboardActive(false);
@@ -1132,7 +1156,23 @@ export function TermView({
           ws.send(JSON.stringify({ t: "resize", cols, rows }));
       });
 
-      ro = new ResizeObserver(() => {
+      // Refit only when the box really changed size. iOS republishes viewport
+      // metrics many times while the soft keyboard animates (and the app shell
+      // re-samples deliberately for a settle window afterwards), and each
+      // refit reflows the grid, resizes the pty and makes tmux repaint the
+      // pane — which reads as the terminal flickering up and down. Sub-pixel
+      // and no-op notifications are the common case, so drop them.
+      let lastW = 0;
+      let lastH = 0;
+      ro = new ResizeObserver((entries) => {
+        const box = entries[entries.length - 1]?.contentRect;
+        if (box) {
+          const w = Math.round(box.width);
+          const h = Math.round(box.height);
+          if (w === lastW && h === lastH) return;
+          lastW = w;
+          lastH = h;
+        }
         try { fit?.fit(); } catch {}
       });
       ro.observe(hostRef.current);

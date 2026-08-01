@@ -317,6 +317,20 @@ html.lfg-keyboard-open {
 }
 
 @layer components {
+  /* The pulled-up session terminal. It sits in a band that is already exactly
+     the visible viewport, so a percentage is measured against the space above
+     the keyboard rather than the whole screen. Leaving a strip of the session
+     showing is nice when you're reading along, but once you're typing that
+     strip is wasted — with the keyboard up, take the whole band. */
+  .lfg-term-sheet {
+    height: 78%;
+    margin-bottom: calc(0.5rem + var(--lfg-safe-bottom, 0px));
+  }
+  html.lfg-keyboard-open .lfg-term-sheet {
+    height: 100%;
+    margin-bottom: 0;
+  }
+
   .markdown {
     color: var(--foreground);
     font-size: 16px;

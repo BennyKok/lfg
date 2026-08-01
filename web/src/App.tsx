@@ -1023,7 +1023,20 @@ function SessionTerminalOverlay({
   const where = session?.cwd ? session.cwd.split("/").filter(Boolean).slice(-1)[0] : null;
 
   return (
-    <div className="fixed inset-0 z-[95] flex flex-col justify-end">
+    // Pinned to the *visual* viewport, not the layout one. iOS keeps the layout
+    // viewport full-height when the soft keyboard opens and instead shrinks the
+    // visual viewport and scrolls the page to reveal the focused field — so a
+    // `fixed inset-0` sheet sized in dvh gets shoved under the keyboard and then
+    // dragged around by that scroll. The app shell already measures the real
+    // visible band every frame and publishes it; ride those vars so the sheet
+    // just sits still. (Desktop, where the vars are absent, falls back to dvh.)
+    <div
+      className="fixed inset-x-0 z-[95] flex flex-col justify-end"
+      style={{
+        top: "var(--lfg-visual-offset-top, 0px)",
+        height: "var(--lfg-visual-height, 100dvh)",
+      }}
+    >
       <button
         type="button"
         aria-label="Close terminal"
@@ -1032,8 +1045,10 @@ function SessionTerminalOverlay({
       />
       <div
         ref={surfaceRef}
-        className="lfg-card-in relative mx-2 mb-2 h-[78dvh] max-h-[calc(100dvh-3.5rem)] min-h-0 shadow-2xl"
-        style={{ marginBottom: "calc(0.5rem + var(--lfg-safe-bottom, 0px))" }}
+        // No `mb-*` utility here: Tailwind utilities outrank the components
+        // layer, so it would win over the keyboard-open rule in lfg-term-sheet.
+        // The class owns the bottom margin in both states.
+        className="lfg-card-in lfg-term-sheet relative mx-2 min-h-0 shadow-2xl"
       >
         <Suspense
           fallback={
@@ -4377,6 +4392,10 @@ export function App() {
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const tab: string = pathnameToTab(pathname);
+  // A terminal is on screen — as the Terminal tab, or pulled up over any tab.
+  // Both need the same soft-keyboard treatment: the shell pinned to the visible
+  // band and translated past the scroll iOS applies to reveal the focused field.
+  const terminalSurface = tab === "term" || terminalSid !== null;
   // Backwards-compatible with the old `useState` API: accepts a literal tab id
   // (a built-in page or an extension tab) or an updater `(current) => next`, and
   // navigates to the matching path. Kept identity-stable (reads the current tab
@@ -4608,7 +4627,7 @@ export function App() {
       );
       // A stale foreground-return measurement takes its scroll offset with it —
       // don't translate the shell by it.
-      const visualTopPx = stale ? 0 : open || tab === "term" ? rawVisualTopPx : 0;
+      const visualTopPx = stale ? 0 : open || terminalSurface ? rawVisualTopPx : 0;
       const measuredHeight = `${visualHeight}px`;
       const offsetTop = `${visualTopPx}px`;
       document.documentElement.style.setProperty("--lfg-app-height", measuredHeight);
@@ -4622,14 +4641,16 @@ export function App() {
         // the keyboard is closed, always override `h-dvh` with the measured
         // visual viewport so foreground-return stale `dvh` cannot leave a white
         // strip until the next pinch/zoom/layout event.
-        if (tab === "term" || !open || (tab === "live" && isMobile)) {
+        if (terminalSurface || !open || (tab === "live" && isMobile)) {
           el.style.height = measuredHeight;
         } else {
           el.style.height = "";
         }
-        // Only Terminal gets translated for keyboard offset. A translateY(0)
-        // still creates a containing block that would reparent fixed nav chrome.
-        el.style.transform = tab === "term" && visualTopPx ? `translateY(${visualTopPx}px)` : "";
+        // Only a terminal surface gets translated for keyboard offset. A
+        // translateY(0) still creates a containing block that would reparent
+        // fixed nav chrome.
+        el.style.transform =
+          terminalSurface && visualTopPx ? `translateY(${visualTopPx}px)` : "";
       }
       // Publish the live keyboard height + a flag on <html> so toasts and the
       // dictation pill (portaled to <body>, outside rootRef) can hike up to sit
@@ -4682,7 +4703,7 @@ export function App() {
       document.removeEventListener("visibilitychange", onVisible);
       clear();
     };
-  }, [isMobile, loading, tab]);
+  }, [isMobile, loading, tab, terminalSurface]);
 
   const loadCore = useCallback(async () => {
     const payload = await fetchBootstrap<BootstrapPayload>();
@@ -6166,6 +6187,11 @@ export function App() {
     isMobile &&
     !callOpen &&
     !viewerArtifact &&
+    // The pulled-up terminal covers the page and owns the keyboard. Leaving the
+    // composer mounted underneath means it rides the keyboard up and down (and
+    // repads <main> as it goes) behind the sheet — motion you can see through
+    // the backdrop, for a control you can't reach.
+    !terminalSid &&
     (tab === "live" || tab === "notifications" || tab === "artifacts");
   // The mobile scroll surface is absolutely positioned, so it escapes the app
   // shell's host-inset padding and would otherwise run its content underneath
@@ -6542,15 +6568,15 @@ export function App() {
 
       {!callOpen && !bare ? (
         <>
-          {isMobile &&
-          !viewerArtifact &&
-          (tab === "live" || tab === "notifications" || tab === "artifacts") ? (
+          {mobileComposerVisible ? (
             // Mobile bottom composer: the create flow lives inline, anchored at
             // the bottom (same component as the desktop drawer,
             // `variant="inline"`). It persists across the swipeable pages
             // (Live / Shipped / Artifacts) so you can kick off a session — and
-            // swipe between pages — from anywhere. Hidden while the full-page
-            // artifact viewer is open so it cannot stack above the content.
+            // swipe between pages — from anywhere. Hidden behind any full-page
+            // surface (artifact viewer, pulled-up terminal) so it cannot stack
+            // above the content — `mobileComposerVisible` is the single source
+            // of truth, shared with the <main> padding that reserves its space.
             // The orb lives in the top nav.
             <NewSessionDialog
               variant="inline"
