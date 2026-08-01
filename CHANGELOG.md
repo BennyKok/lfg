@@ -4,6 +4,20 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 1, 2026 - Security patches for the graph we actually ship (v0.1.182)
+
+- Patched the vulnerable transitive dependencies in the bundle: `fast-uri`,
+  `hono`, `body-parser`, `protobufjs`, `brace-expansion`, and `@hono/node-server`
+  (unblocked by moving `@modelcontextprotocol/sdk` to 1.30.x, which widens its
+  own range rather than forcing a major on a package that never agreed to one).
+- Removed three stale `package-lock.json` files. Nothing installed from them —
+  every path here uses bun — but `npm ci` would have quietly built a mid-July
+  dependency graph, and they were the only thing Dependabot could see, so its 20
+  alerts described a tree nobody ships.
+- Added a `bun audit` workflow on push, PR, and a weekly schedule, so the real
+  lockfile is watched and new high-severity advisories fail the build. Accepted
+  exceptions are explicit and the full report is always printed.
+
 ## August 1, 2026 - Mounted settings sit flush with their host (v0.1.181)
 
 - A settings page mounted in another product no longer carries LFG's own page
