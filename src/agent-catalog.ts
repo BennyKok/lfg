@@ -86,23 +86,6 @@ const MODEL_CATALOG_KEYS: CodingAgentKind[] = [
 
 export const CODEX_THINKING_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh"] as const;
 export const CLAUDE_THINKING_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
-/**
- * What grok's CLI accepts. It rejects anything else outright —
- *
- *   --effort/--reasoning-effort: unknown effort level 'xhigh'; use one of: high, medium, low
- *
- * — and that is a hard exit, so offering a level grok can't take stops the
- * session launching at all rather than just being ignored. Verified against
- * grok 0.2.114.
- */
-export const GROK_THINKING_LEVELS = ["low", "medium", "high"] as const;
-/**
- * What pi's CLI lists in `pi --help`. pi differs from grok twice over: it warns
- * and carries on at its own default rather than exiting, so a mismatch is a
- * setting that silently never applies; and it has a real "off" and "minimal"
- * that the Claude vocabulary has to collapse.
- */
-export const PI_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
 export const PICKER_THINKING_LEVELS = ["low", "medium", "high", "xhigh"] as const;
 
 export type ModelCatalogItem = {
@@ -416,11 +399,7 @@ export function resolveModelForAgent(
 }
 
 export function thinkingLevelsForAgent(agent: string): readonly string[] | null {
-  if (agent === "claude" || agent === "aisdk") return CLAUDE_THINKING_LEVELS;
-  // grok and pi drive their own CLIs with narrower vocabularies; offering more
-  // hands the user a level that either kills the session or does nothing.
-  if (agent === "grok") return GROK_THINKING_LEVELS;
-  if (agent === "pi") return PI_THINKING_LEVELS;
+  if (agent === "claude" || agent === "aisdk" || agent === "grok" || agent === "pi") return CLAUDE_THINKING_LEVELS;
   if (agent === "codex" || agent === "codex-aisdk") return CODEX_THINKING_LEVELS;
   if (agent === "cursor") return CURSOR_THINKING_LEVELS;
   return null;

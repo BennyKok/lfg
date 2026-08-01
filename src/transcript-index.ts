@@ -36,8 +36,6 @@ type IndexedMessageRow = {
   artifact_name?: string | null;
   artifact_mime_type?: string | null;
   artifact_size?: number | null;
-  artifact_width?: number | null;
-  artifact_height?: number | null;
   artifact_caption?: string | null;
   artifact_alt?: string | null;
   artifact_title?: string | null;
@@ -119,8 +117,6 @@ const ARTIFACT_MESSAGE_SELECT = `
   a.name AS artifact_name,
   a.mime_type AS artifact_mime_type,
   a.size AS artifact_size,
-  a.width AS artifact_width,
-  a.height AS artifact_height,
   a.caption AS artifact_caption,
   a.alt AS artifact_alt,
   a.title AS artifact_title,
@@ -133,8 +129,8 @@ function upsertArtifactRow(d: Database, artifact: ImageArtifact): void {
   d.query(`
     INSERT INTO artifacts (
       id, session_id, media, created_at, updated_at, file_path, name, mime_type,
-      size, width, height, caption, alt, title, version, source_path, source_mtime_ms, refresh_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      size, caption, alt, title, version, source_path, source_mtime_ms, refresh_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(id) DO UPDATE SET
       session_id = excluded.session_id,
       media = excluded.media,
@@ -144,8 +140,6 @@ function upsertArtifactRow(d: Database, artifact: ImageArtifact): void {
       name = excluded.name,
       mime_type = excluded.mime_type,
       size = excluded.size,
-      width = excluded.width,
-      height = excluded.height,
       caption = excluded.caption,
       alt = excluded.alt,
       title = excluded.title,
@@ -163,8 +157,6 @@ function upsertArtifactRow(d: Database, artifact: ImageArtifact): void {
     artifact.name,
     artifact.mimeType,
     artifact.size,
-    artifact.width ?? null,
-    artifact.height ?? null,
     artifact.caption ?? null,
     artifact.alt ?? null,
     artifact.title ?? null,
@@ -500,8 +492,6 @@ function init(busyTimeoutMs = TRANSCRIPT_BUSY_TIMEOUT_MS) {
         name TEXT NOT NULL,
         mime_type TEXT NOT NULL,
         size INTEGER NOT NULL,
-        width INTEGER,
-        height INTEGER,
         caption TEXT,
         alt TEXT,
         title TEXT,
@@ -531,8 +521,6 @@ function init(busyTimeoutMs = TRANSCRIPT_BUSY_TIMEOUT_MS) {
         name TEXT NOT NULL,
         mime_type TEXT NOT NULL,
         size INTEGER NOT NULL,
-        width INTEGER,
-        height INTEGER,
         caption TEXT,
         alt TEXT,
         title TEXT,
@@ -544,18 +532,6 @@ function init(busyTimeoutMs = TRANSCRIPT_BUSY_TIMEOUT_MS) {
       CREATE INDEX IF NOT EXISTS artifacts_session_created
         ON artifacts(session_id, created_at);
     `);
-  }
-  // Add image geometry before the later artifact backfills run. Keeping this
-  // separate from the v11 version bump lets an installation migrate through
-  // every intervening transcript schema safely in one startup.
-  if (version < 11) {
-    const columns = d.query<{ name: string }, []>("PRAGMA table_info(artifacts)").all();
-    if (!columns.some((column) => column.name === "width")) {
-      d.exec("ALTER TABLE artifacts ADD COLUMN width INTEGER");
-    }
-    if (!columns.some((column) => column.name === "height")) {
-      d.exec("ALTER TABLE artifacts ADD COLUMN height INTEGER");
-    }
   }
   if (version < 6) {
     const columns = d.query<{ name: string }, []>("PRAGMA table_info(transcript_messages)").all();
@@ -691,12 +667,6 @@ function init(busyTimeoutMs = TRANSCRIPT_BUSY_TIMEOUT_MS) {
       d.exec("PRAGMA user_version = 10");
     }).immediate();
   }
-  if (version < 11) {
-    // Seed dimensions already present in the durable artifact manifest. Older
-    // image records remain nullable and render with the legacy placeholder.
-    for (const artifact of listAllArtifacts()) upsertArtifactRow(d, artifact);
-    d.exec("PRAGMA user_version = 11");
-  }
   d.exec(`CREATE UNIQUE INDEX IF NOT EXISTS transcript_artifact_message_unique
     ON transcript_messages(message_id)
     WHERE message_id LIKE 'artifact-%'`);
@@ -773,8 +743,6 @@ function rowMessage(row: IndexedMessageRow): SessionMsg | ImageArtifactMessage {
       name: row.artifact_name || row.text,
       mimeType: row.artifact_mime_type || "application/octet-stream",
       size: row.artifact_size ?? 0,
-      width: row.artifact_width ?? undefined,
-      height: row.artifact_height ?? undefined,
       caption: row.artifact_caption ?? undefined,
       alt: row.artifact_alt ?? undefined,
       title: row.artifact_title ?? undefined,

@@ -217,19 +217,7 @@ async function sendOne(sub: PushSubscription): Promise<{ gone: boolean }> {
     },
   });
   // 404/410 = subscription expired/unsubscribed → caller prunes it.
-  const gone = res.status === 404 || res.status === 410;
-  // Anything else non-2xx is a real failure we can do nothing about here, but
-  // silence makes it undebuggable: a 403 (the VAPID key no longer matches the
-  // one the browser subscribed with, e.g. after data/push/vapid.json was
-  // regenerated) otherwise presents as "notifications just stopped" with
-  // nothing in the logs to explain it.
-  if (!res.ok && !gone) {
-    const detail = (await res.text().catch(() => "")).slice(0, 200);
-    console.warn(
-      `[push] ${aud} rejected delivery: ${res.status} ${res.statusText}${detail ? ` — ${detail}` : ""}`,
-    );
-  }
-  return { gone };
+  return { gone: res.status === 404 || res.status === 410 };
 }
 
 /**
@@ -254,11 +242,8 @@ export async function notifyAll(
       try {
         const { gone } = await sendOne(sub);
         if (gone) dead.push(sub.endpoint);
-      } catch (e) {
-        // Transient network error to one push service — don't retry here (the
-        // next notify will), but say so, otherwise a push service we can't
-        // reach at all looks identical to having nothing to send.
-        console.warn(`[push] delivery failed: ${e instanceof Error ? e.message : String(e)}`);
+      } catch {
+        // transient network error to one push service — ignore, try next time
       }
     }),
   );

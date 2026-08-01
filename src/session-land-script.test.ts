@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { deployedHeadPath } from "./session-landing.ts";
@@ -23,10 +23,7 @@ describe("serialized session landing script", () => {
   });
 
   test("preserves two concurrent session commits on main", async () => {
-    // realpath: on macOS tmpdir() is /var/... which is a symlink to /private/var/...,
-    // and the shell reports the resolved path in $PWD. Without this the recorded
-    // build directories never string-match the paths built from tmpdir() here.
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "lfg-land-race-")));
+    const root = mkdtempSync(join(tmpdir(), "lfg-land-race-"));
     roots.push(root);
     const remote = join(root, "remote.git");
     const main = join(root, "main");

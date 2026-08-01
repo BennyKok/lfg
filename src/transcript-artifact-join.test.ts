@@ -3,7 +3,6 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import sharp from "sharp";
 import { PATHS } from "./config.ts";
 import { createImageArtifact, deleteArtifact, publishHtmlArtifact } from "./artifacts.ts";
 import {
@@ -39,10 +38,8 @@ describe("joined artifact + transcript reads", () => {
 
   test("page reads return full media fields via JOIN (not a second hydrate pass)", async () => {
     const source = join(root, "shot.png");
-    await sharp({
-      create: { width: 640, height: 360, channels: 3, background: "#336699" },
-    }).png().toFile(source);
-    const artifact = await createImageArtifact({
+    writeFileSync(source, "fake-png-bytes");
+    const artifact = createImageArtifact({
       sessionId: SESSION,
       path: source,
       caption: "Join me",
@@ -63,8 +60,6 @@ describe("joined artifact + transcript reads", () => {
       name?: string;
       mimeType?: string;
       size?: number;
-      width?: number;
-      height?: number;
       caption?: string;
       alt?: string;
     };
@@ -74,35 +69,8 @@ describe("joined artifact + transcript reads", () => {
     expect(msg.name).toBe("shot.png");
     expect(msg.mimeType).toBe("image/png");
     expect(msg.size).toBe(artifact.size);
-    expect(msg.width).toBe(640);
-    expect(msg.height).toBe(360);
     expect(msg.caption).toBe("Join me");
     expect(msg.alt).toBe("alt text");
-  });
-
-  test("v10 artifact tables gain nullable image dimensions in place", async () => {
-    // Build the current schema, then reproduce the exact pre-dimensions shape.
-    await indexedMessagePage(sessionIndexKey(SESSION), SESSION);
-    resetTranscriptIndexConnectionForTests();
-    const raw = new Database(join(PATHS.data, "transcript-index.sqlite"));
-    raw.exec("ALTER TABLE artifacts DROP COLUMN width");
-    raw.exec("ALTER TABLE artifacts DROP COLUMN height");
-    raw.exec("PRAGMA user_version = 10");
-    raw.close();
-    resetTranscriptIndexConnectionForTests();
-
-    await indexedMessagePage(sessionIndexKey(SESSION), SESSION);
-    resetTranscriptIndexConnectionForTests();
-    const migrated = new Database(join(PATHS.data, "transcript-index.sqlite"));
-    const columns = migrated
-      .query<{ name: string }, []>("PRAGMA table_info(artifacts)")
-      .all()
-      .map((column) => column.name);
-    expect(columns).toContain("width");
-    expect(columns).toContain("height");
-    expect(migrated.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version)
-      .toBe(11);
-    migrated.close();
   });
 
   test("append order is sequential (no fractional timestamp offsets)", async () => {
@@ -111,7 +79,7 @@ describe("joined artifact + transcript reads", () => {
     for (const name of ["a.png", "b.png", "c.png"]) {
       const source = join(root, name);
       writeFileSync(source, `bytes-${name}`);
-      const artifact = await createImageArtifact({ sessionId: SESSION, path: source, caption: name });
+      const artifact = createImageArtifact({ sessionId: SESSION, path: source, caption: name });
       ids.push(artifact.id);
       indexArtifactMessage(path, SESSION, artifact);
     }
@@ -130,7 +98,7 @@ describe("joined artifact + transcript reads", () => {
     indexSessionMessagesDirect(SESSION, [{ id: "before", role: "assistant", kind: "text", text: "before", ts: 1 }]);
     const source = join(root, "middle.png");
     writeFileSync(source, "bytes");
-    const artifact = await createImageArtifact({ sessionId: SESSION, path: source });
+    const artifact = createImageArtifact({ sessionId: SESSION, path: source });
     indexArtifactMessage(path, SESSION, artifact);
     indexSessionMessagesDirect(SESSION, [{ id: "after", role: "assistant", kind: "text", text: "after", ts: 3 }]);
 
@@ -145,7 +113,7 @@ describe("joined artifact + transcript reads", () => {
   test("a live artifact event is emitted only after its joined row commits", async () => {
     const source = join(root, "live.png");
     writeFileSync(source, "bytes");
-    const artifact = await createImageArtifact({ sessionId: SESSION, path: source });
+    const artifact = createImageArtifact({ sessionId: SESSION, path: source });
     const events: string[] = [];
     const unsubscribe = subscribeIndexedArtifactMessages((event) => events.push(event.message.id!));
     indexArtifactMessage(sessionIndexKey(SESSION), SESSION, artifact);
@@ -158,7 +126,7 @@ describe("joined artifact + transcript reads", () => {
   test("a missing JOIN never falls back to a second store or renders an empty card", async () => {
     const source = join(root, "repair.png");
     writeFileSync(source, "bytes");
-    const artifact = await createImageArtifact({ sessionId: SESSION, path: source });
+    const artifact = createImageArtifact({ sessionId: SESSION, path: source });
     const path = sessionIndexKey(SESSION);
     indexArtifactMessage(path, SESSION, artifact);
     resetTranscriptIndexConnectionForTests();
@@ -178,7 +146,7 @@ describe("joined artifact + transcript reads", () => {
   test("stored gallery media is not implicitly inserted into a transcript", async () => {
     const source = join(root, "gallery.png");
     writeFileSync(source, "bytes");
-    await createImageArtifact({ sessionId: SESSION, path: source });
+    createImageArtifact({ sessionId: SESSION, path: source });
 
     expect((await indexedMessagePage(sessionIndexKey(SESSION), SESSION)).messages).toEqual([]);
   });
@@ -259,7 +227,7 @@ describe("joined artifact + transcript reads", () => {
   test("removeIndexedArtifact drops both joined tables", async () => {
     const source = join(root, "gone.png");
     writeFileSync(source, "x");
-    const artifact = await createImageArtifact({ sessionId: SESSION, path: source });
+    const artifact = createImageArtifact({ sessionId: SESSION, path: source });
     const path = sessionIndexKey(SESSION);
     indexArtifactMessage(path, SESSION, artifact);
     // Durable store + index must both go, or the next page read would backfill.

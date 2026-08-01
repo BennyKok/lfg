@@ -9,7 +9,6 @@ import {
 } from "node:fs";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
-import sharp from "sharp";
 import { PATHS } from "./config.ts";
 import type { SessionMsg } from "./sessions.ts";
 
@@ -82,9 +81,6 @@ export type ImageArtifact = {
   name: string;
   mimeType: string;
   size: number;
-  /** Intrinsic display dimensions after applying EXIF orientation. */
-  width?: number;
-  height?: number;
   caption?: string;
   alt?: string;
   // Updatable artifacts (html): version bumps on every re-publish so live-ws
@@ -104,8 +100,6 @@ export type ImageArtifactMessage = SessionMsg & {
   name: string;
   mimeType: string;
   size: number;
-  width?: number;
-  height?: number;
   caption?: string;
   alt?: string;
   version?: number;
@@ -200,7 +194,6 @@ function createMediaArtifact(
     alt?: string;
   },
   media: MediaKind,
-  dimensions?: { width: number; height: number },
 ): ImageArtifact {
   const sessionId = input.sessionId.trim();
   if (!UUID.test(sessionId)) throw new Error("sessionId must be a UUID");
@@ -240,19 +233,7 @@ function createMediaArtifact(
       now - artifact.createdAt <= RETRY_DEDUPE_MS
     )
     .sort((a, b) => b.createdAt - a.createdAt)[0];
-  if (existing) {
-    // A retry can be the first call made by a dimensions-aware server for an
-    // artifact written moments earlier by an older process. Enrich that stable
-    // record instead of preserving a layout-shifting legacy payload.
-    if (dimensions && (!existing.width || !existing.height)) {
-      const enriched = { ...existing, ...dimensions };
-      const index = readIndexForUpdate();
-      index[existing.id] = enriched;
-      writeIndex(index);
-      return enriched;
-    }
-    return existing;
-  }
+  if (existing) return existing;
 
   const dir = filesDir();
   mkdirSync(dir, { recursive: true });
@@ -272,8 +253,6 @@ function createMediaArtifact(
     name: basename(sourcePath),
     mimeType,
     size: st.size,
-    width: dimensions?.width,
-    height: dimensions?.height,
     caption,
     alt,
   };
@@ -283,24 +262,13 @@ function createMediaArtifact(
   return artifact;
 }
 
-export async function createImageArtifact(input: {
+export function createImageArtifact(input: {
   sessionId: string;
   path: string;
   caption?: string;
   alt?: string;
-}): Promise<ImageArtifact> {
-  // Read dimensions once while publishing so every later transcript/API read
-  // can reserve the final aspect ratio without decoding the image again.
-  // Sharp reports stored pixel dimensions; orientations 5-8 rotate the image
-  // a quarter turn when browsers/previews display it, so swap the axes.
-  const metadata = await sharp(input.path, { animated: false }).metadata().catch(() => null);
-  if (!metadata?.width || !metadata.height) return createMediaArtifact(input, "image");
-  const quarterTurn =
-    metadata.orientation != null && metadata.orientation >= 5 && metadata.orientation <= 8;
-  return createMediaArtifact(input, "image", {
-    width: quarterTurn ? metadata.height : metadata.width,
-    height: quarterTurn ? metadata.width : metadata.height,
-  });
+}): ImageArtifact {
+  return createMediaArtifact(input, "image");
 }
 
 export function createVideoArtifact(input: {
@@ -481,8 +449,6 @@ export function imageArtifactToMessage(artifact: ImageArtifact): ImageArtifactMe
     name: artifact.name,
     mimeType: artifact.mimeType,
     size: artifact.size,
-    width: artifact.width,
-    height: artifact.height,
     caption: artifact.caption,
     alt: artifact.alt,
     version: artifact.version,
