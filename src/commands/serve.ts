@@ -227,8 +227,8 @@ import {
   claudeAccountIdForSession,
   createClaudeAccount,
   listClaudeAccounts,
+  pickClaudeAccountForNewSession,
   removeClaudeAccount,
-  resolveClaudeAccount,
 } from "../claude-accounts.ts";
 import {
   AUTO_AGENT_BACKENDS,
@@ -4423,7 +4423,10 @@ export async function cmdServe() {
         const requestedClaudeAccountId = body?.claudeAccountId?.trim() || undefined;
         const selectedClaudeAccount =
           agent === "claude" || agent === "aisdk"
-            ? resolveClaudeAccount(requestedClaudeAccountId)
+            ? await pickClaudeAccountForNewSession({
+                explicitAccountId: requestedClaudeAccountId,
+                readCapacity: (account) => getProviderUsage(`claude:${account.id}`),
+              })
             : null;
         if ((agent === "claude" || agent === "aisdk") && requestedClaudeAccountId && !selectedClaudeAccount) {
           return err(400, "Claude account is missing or not connected");

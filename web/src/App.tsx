@@ -952,13 +952,22 @@ function configuredLaunchOptions(
   if (!accounts?.length) return base;
   return base.flatMap((option) =>
     option.key === "aisdk"
-      ? accounts.map((account) => ({
-          ...option,
-          label: account.label,
-          selectorId: `aisdk:${account.id}`,
-          accountId: account.id,
-          badge: account.number,
-        }))
+      ? [
+          {
+            ...option,
+            label: "Claude · Auto",
+            selectorId: "aisdk:auto",
+          },
+          ...(accounts.length > 1
+            ? accounts.map((account) => ({
+                ...option,
+                label: account.label,
+                selectorId: `aisdk:${account.id}`,
+                accountId: account.id,
+                badge: account.number,
+              }))
+            : []),
+        ]
       : [option],
   );
 }
@@ -13347,9 +13356,7 @@ function ForkSessionDialog({
   const defaultModelFor = (key: AgentKind) => catalog.defaults[key] ?? AGENT_DEFAULT_MODEL[key];
   const defaultAgent = defaultForkAgent(session.agent, availableAgentOptions);
   const [agent, setAgent] = useState<AgentKind>(() => defaultAgent);
-  const [claudeAccountId, setClaudeAccountId] = useState(
-    () => localStorage.getItem("lfg_claude_account") || "",
-  );
+  const [claudeAccountId, setClaudeAccountId] = useState("");
   const [model, setModel] = useState(
     () =>
       localStorage.getItem(`lfg_fork_model_${defaultAgent}`) ||
@@ -13515,10 +13522,7 @@ function ForkSessionDialog({
             selectedId={selectedLaunchId}
             onSelect={(key, option) => {
               setAgent(key);
-              if (option?.accountId) {
-                setClaudeAccountId(option.accountId);
-                localStorage.setItem("lfg_claude_account", option.accountId);
-              }
+              if (key === "aisdk") setClaudeAccountId(option?.accountId ?? "");
               setModel(localStorage.getItem(`lfg_fork_model_${key}`) || defaultModelFor(key));
             }}
           />
@@ -15946,9 +15950,7 @@ function NewSessionDialog({
   const [agent, setAgent] = useState<AgentKind>(
     () => (localStorage.getItem("lfg_v2_agent") as AgentKind | null) || "aisdk",
   );
-  const [claudeAccountId, setClaudeAccountId] = useState(
-    () => localStorage.getItem("lfg_claude_account") || "",
-  );
+  const [claudeAccountId, setClaudeAccountId] = useState("");
   const [repo, setRepo] = useState(() => localStorage.getItem("lfg_v2_repo") || "");
   const [model, setModel] = useState(
     () =>
@@ -16465,7 +16467,9 @@ function NewSessionDialog({
   const { usage } = useProviderUsage({
     agent,
     accountId: agent === "aisdk" ? claudeAccountId : null,
-    enabled: open,
+    // Auto has no concrete account until the server makes the launch decision;
+    // showing account 1's ring here would falsely imply that it was selected.
+    enabled: open && (agent !== "aisdk" || !!claudeAccountId),
   });
 
   useEffect(() => {
@@ -16499,9 +16503,7 @@ function NewSessionDialog({
     );
     if (selected) return;
     const firstClaude = visibleAgentOptions.find((option) => option.key === "aisdk");
-    if (!firstClaude?.accountId) return;
-    setClaudeAccountId(firstClaude.accountId);
-    localStorage.setItem("lfg_claude_account", firstClaude.accountId);
+    setClaudeAccountId(firstClaude?.accountId ?? "");
   }, [agent, selectedLaunchId, visibleAgentOptions]);
 
   // An outside surface (the usage campfire) picked an agent for us. Keyed on the
@@ -16512,10 +16514,7 @@ function NewSessionDialog({
     if (appliedAgentNonce.current === agentRequest.nonce) return;
     appliedAgentNonce.current = agentRequest.nonce;
     setAgent(agentRequest.kind);
-    if (agentRequest.accountId) {
-      setClaudeAccountId(agentRequest.accountId);
-      localStorage.setItem("lfg_claude_account", agentRequest.accountId);
-    }
+    if (agentRequest.kind === "aisdk") setClaudeAccountId(agentRequest.accountId ?? "");
     setModel(
       localStorage.getItem(`lfg_model_${agentRequest.kind}`) ||
         defaultModelFor(agentRequest.kind),
@@ -16567,7 +16566,6 @@ function NewSessionDialog({
     localStorage.setItem("lfg_v2_agent", launchAgent);
     localStorage.setItem("lfg_v2_repo", selectedRepo);
     localStorage.setItem(`lfg_model_${launchAgent}`, launchModel);
-    if (launchClaudeAccountId) localStorage.setItem("lfg_claude_account", launchClaudeAccountId);
     if (agentSupportsThinking(launchAgent)) localStorage.setItem("lfg_thinking_level", launchThinkingLevel);
     if (launchAgent === "claude") localStorage.setItem("lfg_model", launchModel);
     if (launchUser) localStorage.setItem("lfg_user", launchUser);
@@ -16658,10 +16656,7 @@ function NewSessionDialog({
     setAgentIconDir(dir);
     setAgentIconNonce((n) => n + 1);
     setAgent(nextKey);
-    if (next.accountId) {
-      setClaudeAccountId(next.accountId);
-      localStorage.setItem("lfg_claude_account", next.accountId);
-    }
+    if (nextKey === "aisdk") setClaudeAccountId(next.accountId ?? "");
     setModel(localStorage.getItem(`lfg_model_${nextKey}`) || defaultModelFor(nextKey));
     feedback.swipe();
   };
@@ -16684,10 +16679,7 @@ function NewSessionDialog({
           return;
         }
         setAgent(key);
-        if (option?.accountId) {
-          setClaudeAccountId(option.accountId);
-          localStorage.setItem("lfg_claude_account", option.accountId);
-        }
+        if (key === "aisdk") setClaudeAccountId(option?.accountId ?? "");
         setModel(localStorage.getItem(`lfg_model_${key}`) || defaultModelFor(key));
       }}
     />

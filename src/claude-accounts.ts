@@ -22,6 +22,15 @@ export type ClaudeAccount = {
   createdAt: number;
 };
 
+export type ClaudeAccountCapacity = {
+  available: boolean;
+  windows?: { pct: number | null }[];
+};
+
+export type ClaudeAccountCapacityReader = (
+  account: ClaudeAccount,
+) => Promise<ClaudeAccountCapacity | null>;
+
 type StoredClaudeAccount = Omit<ClaudeAccount, "connected" | "removable"> & {
   configDir: string;
 };
@@ -153,6 +162,81 @@ export function resolveClaudeAccount(id?: string | null): ClaudeAccount | null {
     return account?.connected ? account : null;
   }
   return connectedClaudeAccounts()[0] ?? null;
+}
+
+type RankedClaudeAccount = {
+  account: ClaudeAccount;
+  // 0 = measured headroom, 1 = unknown (worth trying), 2 = measured exhausted.
+  tier: number;
+  peakUtilization: number;
+  totalUtilization: number;
+};
+
+function rankClaudeAccount(
+  account: ClaudeAccount,
+  capacity: ClaudeAccountCapacity | null,
+): RankedClaudeAccount {
+  const percentages = capacity?.available
+    ? (capacity.windows ?? [])
+        .map((window) => window.pct)
+        .filter((pct): pct is number => typeof pct === "number" && Number.isFinite(pct))
+        .map((pct) => Math.max(0, Math.min(100, pct)))
+    : [];
+  if (!percentages.length) {
+    return {
+      account,
+      tier: 1,
+      peakUtilization: Number.POSITIVE_INFINITY,
+      totalUtilization: Number.POSITIVE_INFINITY,
+    };
+  }
+  const peakUtilization = Math.max(...percentages);
+  return {
+    account,
+    tier: peakUtilization >= 100 ? 2 : 0,
+    peakUtilization,
+    totalUtilization: percentages.reduce((sum, pct) => sum + pct, 0),
+  };
+}
+
+/**
+ * Resolve the one concrete Claude account a new session will keep for life.
+ *
+ * An explicit account is authoritative and never touches usage. Auto launches
+ * compare every connected account concurrently, preferring the most headroom
+ * in its tightest window, then total headroom, then the stable account number.
+ * A failed/unknown reading remains a fallback ahead of an account known to be
+ * exhausted, so a temporary usage outage cannot make session creation
+ * impossible while still avoiding a subscription we know has no capacity.
+ */
+export async function pickClaudeAccountForNewSession(options: {
+  explicitAccountId?: string | null;
+  readCapacity: ClaudeAccountCapacityReader;
+}): Promise<ClaudeAccount | null> {
+  const explicitAccountId = options.explicitAccountId?.trim();
+  if (explicitAccountId) return resolveClaudeAccount(explicitAccountId);
+
+  const accounts = connectedClaudeAccounts();
+  if (accounts.length <= 1) return accounts[0] ?? null;
+
+  const ranked = await Promise.all(
+    accounts.map(async (account) => {
+      try {
+        return rankClaudeAccount(account, await options.readCapacity(account));
+      } catch {
+        return rankClaudeAccount(account, null);
+      }
+    }),
+  );
+  ranked.sort(
+    (a, b) =>
+      a.tier - b.tier ||
+      a.peakUtilization - b.peakUtilization ||
+      a.totalUtilization - b.totalUtilization ||
+      a.account.number - b.account.number ||
+      a.account.createdAt - b.account.createdAt,
+  );
+  return ranked[0]?.account ?? null;
 }
 
 export function removeClaudeAccount(id: string): boolean {
