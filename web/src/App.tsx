@@ -207,7 +207,10 @@ import {
 } from "./lib/transcript-view";
 import {
   ensureVoiceConfigured,
+  invalidateVoiceConfig,
+  prefetchVoiceConfig,
   showVoiceSetup,
+  voiceConfiguredCached,
   VoiceSetupDialog,
 } from "./voice-setup";
 import { fetchBootstrap } from "./bootstrap";
@@ -2300,7 +2303,11 @@ function joinTranscript(committed: string, partial: string): string {
     .join(" ");
 }
 
-type DictationState = "idle" | "recording" | "transcribing";
+// "starting" covers the window between the tap and the mic actually being live
+// (permission prompt, device open, AudioContext setup). It exists so the button
+// can show immediate feedback instead of sitting there looking idle/dead while
+// the browser decides — the single biggest reason a tap felt like "no response".
+type DictationState = "idle" | "starting" | "recording" | "transcribing";
 
 // RMS below this on a 4096-sample window counts as silence. Speech sits well
 // above (~0.05–0.2); room tone / mic hiss sits below. Fixed rather than
@@ -2344,6 +2351,55 @@ function recordingButtonStyle(level: number): CSSProperties {
 // (iOS standalone especially) shows on each fresh getUserMedia after a full
 // track.stop() — short enough that we don't sit on the mic indicator forever.
 const MIC_IDLE_RELEASE_MS = 60_000;
+
+// Mic capture constraints. Explicit rather than a bare `audio: true` so dictation
+// gets the browser's voice cleanup (echo cancel / noise suppression / AGC) the
+// same way the call path does, instead of whatever the UA happens to default to.
+const MIC_CONSTRAINTS: MediaStreamConstraints = {
+  audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+};
+
+// If getUserMedia hasn't resolved this fast, the browser is almost certainly
+// showing its permission prompt (or the OS is opening the device). Tell the user
+// that's what they're waiting on rather than leaving a silent spinner.
+const MIC_SLOW_PROMPT_MS = 1200;
+
+// Hard ceiling on mic acquisition. getUserMedia does NOT settle while a permission
+// prompt sits unanswered (and some UAs never settle at all if the device is wedged),
+// which would otherwise pin the UI in "starting" with no way back. We give up on the
+// *UI* at this point; if the grant lands afterwards we quietly park the stream so the
+// next tap reuses it instead of prompting again. Generous — a user reading the
+// prompt shouldn't be cut off.
+const MIC_ACQUIRE_TIMEOUT_MS = 30_000;
+
+// Race sentinels for the acquisition window. Distinct objects so they can never
+// collide with a real MediaStream or a boolean config answer.
+const ACQUIRE_ABORTED = Symbol("mic-acquire-aborted");
+const ACQUIRE_EXPIRED = Symbol("mic-acquire-expired");
+
+// Turn a getUserMedia rejection into something a human can act on. These used to
+// be swallowed by a bare `catch {}`, which is why a blocked mic, a missing
+// device, or a mic held by another app all looked identical: nothing happened.
+function micErrorMessage(err: unknown): string {
+  const name = (err as { name?: string } | null)?.name ?? "";
+  switch (name) {
+    case "NotAllowedError":
+    case "SecurityError":
+      // Denied at the prompt, or previously blocked for this origin so the
+      // browser auto-rejects without ever prompting again.
+      return "Mic blocked — allow microphone access for this site, then tap again";
+    case "NotFoundError":
+    case "OverconstrainedError":
+      return "No microphone found";
+    case "NotReadableError":
+    case "AbortError":
+      // The OS/another app has the device (very common on desktop with a call
+      // app open, and on iOS when a phone call is active).
+      return "Microphone is busy — close whatever else is using it and try again";
+    default:
+      return "Couldn't start the mic";
+  }
+}
 
 // Push-to-talk dictation with optional hands-free auto-send. Tap to record, tap
 // to stop. Audio streams live to the server's realtime-STT bridge
@@ -2415,6 +2471,15 @@ function useDictation(opts: {
   // the take (stop sees a null session and bails) AND leaks a live recording.
   const startingRef = useRef(false);
   const pendingStopRef = useRef<{ auto: boolean; discard: boolean } | null>(null);
+  // Bumped on every start() and on unmount. A getUserMedia grant that lands after
+  // we stopped waiting checks this before adopting itself, so it can never
+  // overwrite a newer acquisition's stream (which would orphan a live track that
+  // nothing holds a reference to any more) or attach to an unmounted hook.
+  const acquireEpochRef = useRef(0);
+  // Set while an acquisition is in flight; stop() calls it so a cancel collapses
+  // the wait immediately instead of the user staring at a spinner until the
+  // ceiling expires.
+  const abortAcquireRef = useRef<(() => void) | null>(null);
 
   // A single mic MediaStream is acquired lazily and then KEPT ALIVE across takes
   // rather than being stopped after each one. Re-running getUserMedia after a
@@ -2434,6 +2499,18 @@ function useDictation(opts: {
     streamRef.current = null;
     s?.getTracks().forEach((t) => t.stop());
   }, []);
+
+  // Silence the held mic and (re-)arm the idle release. EVERY path that abandons
+  // a take after the stream is open must call this, not just disable the track:
+  // a disabled-but-live track keeps the device open and the OS mic indicator lit,
+  // and start() clears the pending release before acquiring — so a bail that only
+  // disables would sit on the mic indefinitely, with each retry re-clearing the
+  // timer so it could never self-heal.
+  const parkStream = useCallback(() => {
+    streamRef.current?.getAudioTracks().forEach((t) => (t.enabled = false));
+    if (idleReleaseRef.current !== null) clearTimeout(idleReleaseRef.current);
+    idleReleaseRef.current = setTimeout(releaseStream, MIC_IDLE_RELEASE_MS) as unknown as number;
+  }, [releaseStream]);
 
   // Keep the callbacks in refs so the VAD interval / stop always see the latest
   // handlers without needing to tear down and recreate the audio session.
@@ -2474,7 +2551,18 @@ function useDictation(opts: {
         // No live session yet. If start() is still acquiring the mic, this is a
         // release that beat initialization — record the request so start() tears
         // down (and submits) the moment the session is ready instead of leaking it.
-        if (startingRef.current) pendingStopRef.current = { auto, discard };
+        if (startingRef.current) {
+          pendingStopRef.current = { auto, discard };
+          // Collapse the acquisition wait right now so the cancel is visibly
+          // honored at tap time; start() then runs its abandon path immediately.
+          abortAcquireRef.current?.();
+          // Stay in "starting", NOT "idle": the mic request is genuinely still in
+          // flight. Reporting "idle" here would let the gesture handlers (which
+          // only see `state`) arm a fresh hold that start()'s re-entrancy guard
+          // then silently swallows — the user feels the engage haptic, speaks,
+          // releases, and nothing is ever recorded or sent.
+          return;
+        }
         setState("idle");
         return;
       }
@@ -2588,24 +2676,166 @@ function useDictation(opts: {
     startingRef.current = true;
     pendingStopRef.current = null;
     capturedBaseRef.current = baseTextRef.current;
+    // Immediate feedback: the tap registered, we're opening the mic.
+    setState("starting");
+
+    // Config gate, fast path. If we ALREADY know the STT provider isn't set up,
+    // skip the mic entirely and pop the setup dialog. Crucially this is a
+    // synchronous cache read — the old code awaited a network round trip here on
+    // every tap, which both delayed the permission prompt (the "10 seconds then
+    // it asks" symptom) and burned the user activation getUserMedia needs.
+    if (voiceConfiguredCached("input") === false) {
+      startingRef.current = false;
+      setState("idle");
+      showVoiceSetup("input");
+      return;
+    }
+
+    // A new take cancels any pending idle-release so we keep the same grant.
+    if (idleReleaseRef.current !== null) {
+      clearTimeout(idleReleaseRef.current);
+      idleReleaseRef.current = null;
+    }
+
+    // ── The bounded, abortable "starting" window ──────────────────────────────
+    // EVERY await between here and `setState("recording")` runs under one shared
+    // deadline and one shared abort signal. Bounding only getUserMedia isn't
+    // enough: when a parked stream is reused the mic branch is skipped entirely,
+    // and the *config* fetch becomes the unbounded await — on exactly the asleep
+    // backend / dead tunnel this whole change exists to survive. Since stop() no
+    // longer resets the state mid-acquisition, an unbounded await here would pin
+    // the UI in "starting" with no escape.
+    //
+    // `abortWindow` lets stop() collapse the wait the moment the user cancels, so
+    // a tap on X is honored immediately instead of at the ceiling.
+    const epoch = ++acquireEpochRef.current;
+    let abortWindow!: () => void;
+    const aborted = new Promise<typeof ACQUIRE_ABORTED>((resolve) => {
+      abortWindow = () => resolve(ACQUIRE_ABORTED);
+    });
+    abortAcquireRef.current = abortWindow;
+    let deadline: number | undefined;
+    const expired = new Promise<typeof ACQUIRE_EXPIRED>((resolve) => {
+      deadline = window.setTimeout(() => resolve(ACQUIRE_EXPIRED), MIC_ACQUIRE_TIMEOUT_MS);
+    });
+    const guard = <T,>(p: Promise<T>) => Promise.race([p, aborted, expired]);
+    const closeWindow = () => {
+      clearTimeout(deadline);
+      if (abortAcquireRef.current === abortWindow) abortAcquireRef.current = null;
+    };
+    // Shared exit for every way this take is abandoned before it goes live.
+    const abandon = (message?: string) => {
+      closeWindow();
+      startingRef.current = false;
+      // Read through the declared type — TS otherwise control-flow-narrows this
+      // to the `null` assigned at the top of start(), unaware that stop() mutates
+      // it while we're awaiting.
+      const queued = pendingStopRef.current as { auto: boolean; discard: boolean } | null;
+      pendingStopRef.current = null;
+      setState("idle");
+      // A queued *discard* is still owed its callback so the caller can restore
+      // the composer to its pre-dictation text. Guarded: a throwing consumer
+      // must not escape as an unhandled rejection (the pendingStop bail sits
+      // outside both try blocks) or get re-reported as a mic error by the outer
+      // catch — abandon()'s own state mutations are already complete by here.
+      if (queued?.discard) {
+        try {
+          onCancelRef.current?.(capturedBaseRef.current);
+        } catch {
+          /* consumer's problem, not the mic's */
+        }
+      }
+      if (message) toast(message);
+    };
+
+    // ── Acquire the mic FIRST, with no await ahead of it ──────────────────────
+    // Everything above this point is synchronous on purpose: the getUserMedia
+    // call must happen inside the user-activation window opened by the tap, or
+    // Safari/iOS/PWA rejects it and the tap silently does nothing.
+    let stream = streamRef.current;
     try {
-      if (!(await ensureVoiceConfigured("input"))) {
-        startingRef.current = false;
-        return;
-      }
-      // A new take cancels any pending idle-release so we keep the same grant.
-      if (idleReleaseRef.current !== null) {
-        clearTimeout(idleReleaseRef.current);
-        idleReleaseRef.current = null;
-      }
-      // Reuse the held stream when its track is still live; only hit getUserMedia
-      // (the permission gate) when we have no usable stream. Re-enable the track,
-      // which stop() disabled while idle.
-      let stream = streamRef.current;
       if (!stream || !stream.getAudioTracks().some((t) => t.readyState === "live")) {
         stream?.getTracks().forEach((t) => t.stop());
-        stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        streamRef.current = null;
+        const request = navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
+        // Slow to resolve → usually the browser's permission prompt, sometimes
+        // just a slow device open (Bluetooth/USB). Worded to cover both. Skipped
+        // if the user already backed out during the wait.
+        const slowHint = window.setTimeout(() => {
+          if (startingRef.current && !pendingStopRef.current) {
+            toast("Waiting for the microphone… check for a permission prompt");
+          }
+        }, MIC_SLOW_PROMPT_MS);
+        let settled: MediaStream | typeof ACQUIRE_ABORTED | typeof ACQUIRE_EXPIRED;
+        try {
+          settled = await guard(request);
+        } finally {
+          clearTimeout(slowHint);
+        }
+        if (settled === ACQUIRE_ABORTED || settled === ACQUIRE_EXPIRED) {
+          // We've stopped waiting, but the grant may still land. Adopt it only if
+          // it's still ours to adopt — otherwise stop it, or it becomes an
+          // unreachable live track (parkStream only disables; releaseStream only
+          // ever stops whatever streamRef currently points at).
+          //
+          // An explicit user cancel is NOT adopted: someone who tapped X and then
+          // reflexively clicked "Allow" would otherwise be left with the mic held
+          // (indicator lit) for a full minute with nothing on screen saying so.
+          // A timeout is different — nobody said stop, so keep the grant and save
+          // the next tap a re-prompt.
+          const userCancelled = settled === ACQUIRE_ABORTED;
+          void request
+            .then((late) => {
+              const staleEpoch = acquireEpochRef.current !== epoch;
+              if (userCancelled || staleEpoch || streamRef.current || sessionRef.current) {
+                late.getTracks().forEach((t) => t.stop());
+                return;
+              }
+              streamRef.current = late;
+              parkStream();
+            })
+            .catch(() => {});
+          abandon(
+            settled === ACQUIRE_EXPIRED
+              ? "Microphone didn't respond — check for a blocked permission prompt"
+              : undefined,
+          );
+          return;
+        }
+        stream = settled;
         streamRef.current = stream;
+      }
+    } catch (err) {
+      // Previously swallowed — the actual cause of "I clicked and nothing happened".
+      abandon(micErrorMessage(err));
+      return;
+    }
+
+    // A stop() that landed while we were acquiring (quick tap-tap, or a released
+    // hold) means the user no longer wants this take. Bail before spinning up the
+    // audio graph and socket, and park the grant for next time.
+    if (pendingStopRef.current) {
+      parkStream();
+      abandon();
+      return;
+    }
+
+    try {
+      // Now that the mic is open, confirm the STT provider is actually usable.
+      // Off the critical path, so it can't delay the prompt. Cache-hit → instant.
+      // Guarded: this fetch is the unbounded one when a parked stream was reused.
+      const configured = await guard(ensureVoiceConfigured("input"));
+      if (configured === ACQUIRE_ABORTED || configured === ACQUIRE_EXPIRED) {
+        parkStream();
+        abandon(
+          configured === ACQUIRE_EXPIRED ? "Voice setup check timed out — try again" : undefined,
+        );
+        return;
+      }
+      if (!configured) {
+        parkStream();
+        abandon();
+        return;
       }
       stream.getAudioTracks().forEach((t) => (t.enabled = true));
       const Ctor =
@@ -2767,6 +2997,9 @@ function useDictation(opts: {
         rafRef.current = requestAnimationFrame(tick);
       };
       rafRef.current = requestAnimationFrame(tick);
+      // The take is live — the acquisition window is over, so drop its deadline
+      // and abort hook before anything else can fire them.
+      closeWindow();
       setState("recording");
       startingRef.current = false;
       // A release that fired during init queued a stop — run it now that the
@@ -2779,19 +3012,25 @@ function useDictation(opts: {
         pendingStopRef.current = null;
         void stop(queued.auto, queued.discard);
       }
-    } catch {
-      startingRef.current = false;
-      pendingStopRef.current = null;
-      setState("idle");
+    } catch (err) {
+      // Audio-graph / socket setup failed after the mic was already open. Park
+      // the grant and tell the user rather than silently snapping back to idle.
+      parkStream();
+      abandon(micErrorMessage(err));
     }
-  }, [silenceMs, stop]);
+  }, [silenceMs, stop, parkStream]);
 
   const toggle = useCallback(() => {
     if (state === "transcribing") return;
     // Tapping the button to stop submits the request (stop(auto=true) → routes
     // the transcript through onAutoSubmit), matching the silence-triggered and
     // release-to-send paths. Falls back to onText if no onAutoSubmit is wired.
-    if (sessionRef.current) void stop(true);
+    //
+    // `startingRef` is checked too: a second tap while the mic is still opening
+    // used to hit start()'s re-entrancy guard and do nothing at all, leaving the
+    // user stuck watching a spinner they couldn't dismiss. Now it queues the stop
+    // (stop() records it in pendingStopRef) so start() honors it on arrival.
+    if (sessionRef.current || startingRef.current) void stop(true);
     else void start();
   }, [state, start, stop]);
 
@@ -2804,8 +3043,19 @@ function useDictation(opts: {
   }, [state, stop]);
 
   // Fully release the held mic when the hook's owner unmounts, so we never leave
-  // a track (and its OS mic indicator) live after the UI is gone.
-  useEffect(() => releaseStream, [releaseStream]);
+  // a track (and its OS mic indicator) live after the UI is gone. Bumping the
+  // epoch matters as much as releasing: an in-flight getUserMedia can still
+  // resolve after unmount, and without this it would adopt itself onto the dead
+  // hook — a live track plus a 60s timer that releaseStream already ran past.
+  // With the bump, the late handler stops the tracks instead.
+  useEffect(
+    () => () => {
+      acquireEpochRef.current += 1;
+      abortAcquireRef.current?.();
+      releaseStream();
+    },
+    [releaseStream],
+  );
 
   return { state, toggle, start, stop, cancel, supported, level };
 }
@@ -2871,10 +3121,11 @@ const MicButton = forwardRef<
 
   // Escape dismisses an in-flight recording without transcribing/sending it —
   // the keyboard-accessible escape hatch for "the mic didn't catch that right."
-  // Scoped to only listen while actually recording so it doesn't shadow Escape
-  // handlers elsewhere in the app (closing dialogs, etc.) the rest of the time.
+  // Also armed while "starting", so a hung mic acquisition (unanswered permission
+  // prompt, device held by another app) can be backed out of. Scoped to those two
+  // states so it doesn't shadow Escape handlers elsewhere (dialogs, etc.).
   useEffect(() => {
-    if (state !== "recording") return;
+    if (state !== "recording" && state !== "starting") return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.preventDefault();
@@ -2951,10 +3202,11 @@ const MicButton = forwardRef<
   const onPointerMove = useCallback(
     (e: React.PointerEvent<HTMLButtonElement>) => {
       if (!pointerDown.current) return;
-      // Only matters once a recording is actually live — either this hold
-      // engaged one (holdFired) or the button was already tap-recording when
-      // the pointer went down.
-      if (!holdFired.current && state !== "recording") return;
+      // Only matters once a take is underway — either this hold engaged one
+      // (holdFired) or the button was already recording (or opening the mic)
+      // when the pointer went down. "starting" counts: the drag should arm even
+      // if the user starts moving before the mic finishes opening.
+      if (!holdFired.current && state !== "recording" && state !== "starting") return;
       const origin = dragOrigin.current;
       if (!origin) return;
       const dist = Math.hypot(e.clientX - origin.x, e.clientY - origin.y);
@@ -3085,7 +3337,9 @@ const MicButton = forwardRef<
     >
       {cancelArmed ? (
         <X className="size-4" />
-      ) : state === "transcribing" ? (
+      ) : state === "transcribing" || state === "starting" ? (
+        // "starting" spins too, so the tap visibly registers while the browser
+        // is prompting for / opening the mic instead of looking like a dead tap.
         <Loader2 className="size-4 animate-spin" />
       ) : (
         <Mic className="size-4" />
@@ -3132,9 +3386,10 @@ function ComposerSendButton({
 
   // Escape bails out of an in-progress push-to-talk hold without sending it —
   // the button itself can't offer a tap-to-cancel target while a pointer is
-  // captured on it mid-hold, so the keyboard is the only alternate path.
+  // captured on it mid-hold, so the keyboard is the only alternate path. Also
+  // armed while "starting" so a hung mic acquisition can be abandoned.
   useEffect(() => {
-    if (state !== "recording") return;
+    if (state !== "recording" && state !== "starting") return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.preventDefault();
@@ -3203,7 +3458,9 @@ function ComposerSendButton({
     (e: React.PointerEvent<HTMLButtonElement>) => {
       if (!pointerDown.current) return;
       if (holdFired.current === "queue") return;
-      if (!holdFired.current && state !== "recording") return;
+      // "starting" counts alongside "recording" (matching MicButton): the drag
+      // should arm even if the mic hasn't finished opening yet.
+      if (!holdFired.current && state !== "recording" && state !== "starting") return;
       const origin = dragOrigin.current;
       if (!origin) return;
       const dist = Math.hypot(e.clientX - origin.x, e.clientY - origin.y);
@@ -3241,8 +3498,10 @@ function ComposerSendButton({
         holdFired.current = null;
         return;
       }
-      if (holdFired.current === "voice" || state === "recording") {
+      if (holdFired.current === "voice" || state === "recording" || state === "starting") {
         // Hold engaged, released back on the button → send the spoken take.
+        // "starting" routes here too: stop() queues the request so start()
+        // honors it on arrival instead of the release being swallowed.
         holdFired.current = null;
         void stop(true);
         return;
@@ -3301,7 +3560,9 @@ function ComposerSendButton({
   }, [state]);
 
   const recording = state === "recording";
-  const transcribing = state === "transcribing";
+  // "starting" shares the spinner with "transcribing": both mean "we're on it,
+  // hold tight" — the mic opening is exactly as worth showing as the upload.
+  const transcribing = state === "transcribing" || state === "starting";
   // Nothing to send while idle → dim the control, but keep it interactive so
   // hold-to-talk still works on an empty composer.
   const dim = !canSend && state === "idle" && !sending;
@@ -6886,7 +7147,9 @@ function FloatingSessionAudio({
   // it — same escape hatch as the composer's mic button, for when the mic
   // didn't pick up what you meant to say.
   useEffect(() => {
-    if (dictation.state !== "recording") return;
+    // Also armed during "starting" — mic acquisition can hang on an unanswered
+    // permission prompt, and Escape must be able to back out of that too.
+    if (dictation.state !== "recording" && dictation.state !== "starting") return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       e.preventDefault();
@@ -6907,7 +7170,15 @@ function FloatingSessionAudio({
       ? Math.max(0, Math.min(100, (livePosition() / playback.duration) * 100))
       : 0;
   const recording = dictation.state === "recording";
-  const busy = playback.status === "loading" || sending || dictation.state === "transcribing";
+  const starting = dictation.state === "starting";
+  const busy =
+    playback.status === "loading" || sending || dictation.state === "transcribing";
+  // "starting" shows the spinner but must NOT disable the mic button: acquisition
+  // can hang indefinitely on an unanswered permission prompt, and this surface has
+  // no other cancel affordance while not recording — disabling it would leave the
+  // user staring at a spinner they cannot dismiss without reloading. A tap here
+  // routes through toggle() → stop(), which cancels the pending take.
+  const micBusy = busy && !starting;
 
   return (
     <div
@@ -6949,20 +7220,22 @@ function FloatingSessionAudio({
             <div className="truncate text-xs text-muted-foreground">
               {recording
                 ? "Listening for this session"
-                : dictation.state === "transcribing"
-                  ? "Transcribing..."
-                  : playback.text}
+                : dictation.state === "starting"
+                  ? "Opening the mic..."
+                  : dictation.state === "transcribing"
+                    ? "Transcribing..."
+                    : playback.text}
             </div>
           </div>
 
-          {recording ? (
+          {recording || starting ? (
             <button
               type="button"
               onClick={() => {
                 haptic("selection");
                 dictation.cancel();
               }}
-              aria-label="Cancel voice message"
+              aria-label={starting ? "Cancel opening the microphone" : "Cancel voice message"}
               title="Cancel (Esc)"
               className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
             >
@@ -6980,7 +7253,7 @@ function FloatingSessionAudio({
               haptic("medium");
               dictation.toggle();
             }}
-            disabled={!sid || busy}
+            disabled={!sid || micBusy}
             aria-label={recording ? "Stop and send voice message" : "Speak to this session"}
             title={recording ? "Stop and send (Esc to cancel)" : "Speak to this session"}
             className={cn(
@@ -6991,7 +7264,7 @@ function FloatingSessionAudio({
               busy && !recording && "opacity-60",
             )}
           >
-            {sending || dictation.state === "transcribing" ? (
+            {sending || dictation.state === "transcribing" || dictation.state === "starting" ? (
               <Loader2 className="size-4 animate-spin" />
             ) : (
               <Mic className="size-4" />
@@ -18852,6 +19125,10 @@ function VoiceSettingsSection() {
       });
       const d = (await r.json().catch(() => null)) as { settings?: VoiceConfig["settings"] } | null;
       if (d?.settings) setCfg((c) => (c ? { ...c, settings: d.settings! } : c));
+      // Switching provider changes what the mic path is allowed to do — drop the
+      // shared cache so the next dictation tap gates on the new selection.
+      invalidateVoiceConfig();
+      prefetchVoiceConfig();
     } catch {
       // keep the optimistic value; next load reconciles
     } finally {

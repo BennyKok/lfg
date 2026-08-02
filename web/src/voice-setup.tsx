@@ -50,19 +50,93 @@ export function showVoiceSetup(capability: VoiceCapability = "call") {
   window.dispatchEvent(new CustomEvent(SETUP_EVENT, { detail: { capability } }));
 }
 
-export async function ensureVoiceConfigured(capability: VoiceCapability): Promise<boolean> {
-  try {
-    const response = await lfgFetch("/api/voice/config", { cache: "no-store" });
-    if (!response.ok) return true;
-    const cfg = (await response.json()) as VoiceConfig;
-    if (voiceReady(cfg, capability)) return true;
-    showVoiceSetup(capability);
-    return false;
-  } catch {
-    // A health-check network failure should not replace the feature's own error
-    // handling. Only block when the server definitively reports a missing key.
-    return true;
+// ───────────────────────────────────────────────────────────────────────────
+// Config cache.
+//
+// This check used to run as a blocking `fetch(..., {cache:"no-store"})` on every
+// single mic tap, BEFORE the feature touched the microphone. Two ways that hurt:
+//
+//   * A slow/asleep backend (or a laggy tunnel) delayed getUserMedia by however
+//     long the round trip took — so the browser's permission prompt appeared
+//     seconds after the tap, looking like the app had hung.
+//   * Awaiting an arbitrary-length network call between the user's tap and
+//     getUserMedia burns the transient user activation that Safari/iOS (and an
+//     installed PWA especially) require. The mic request then rejects outright
+//     and the tap appears to do nothing.
+//
+// So: keep a short-lived cache, prefetch it at startup, and expose a SYNCHRONOUS
+// read for the hot path. Callers can gate on what we already know without ever
+// awaiting, and confirm afterwards.
+const CONFIG_TTL_MS = 30_000;
+let cached: { cfg: VoiceConfig; at: number } | null = null;
+let inflight: Promise<VoiceConfig | null> | null = null;
+// Bumped on every invalidation. A read that was already in flight when the
+// config changed (e.g. it started before a key was saved) is stale by the time
+// it lands, so it must not be shared with new callers or written to the cache.
+let generation = 0;
+
+async function fetchVoiceConfig(): Promise<VoiceConfig | null> {
+  if (inflight) return inflight;
+  const gen = generation;
+  inflight = (async () => {
+    try {
+      const response = await lfgFetch("/api/voice/config", { cache: "no-store" });
+      if (!response.ok) return null;
+      const cfg = (await response.json()) as VoiceConfig;
+      if (gen === generation) cached = { cfg, at: Date.now() };
+      return cfg;
+    } catch {
+      return null;
+    } finally {
+      if (gen === generation) inflight = null;
+    }
+  })();
+  return inflight;
+}
+
+/** Warm the cache so the first mic tap never has to wait on the network. */
+export function prefetchVoiceConfig(): void {
+  void fetchVoiceConfig();
+}
+
+/** Drop the cache — after saving a key, so the next check sees the new state. */
+export function invalidateVoiceConfig(): void {
+  cached = null;
+  // Abandon any in-flight read too: it was issued against the old config and
+  // would otherwise be handed to the very caller asking for the new one.
+  generation += 1;
+  inflight = null;
+}
+
+/**
+ * Synchronous, non-blocking answer from cache.
+ * `true` ready, `false` definitively not configured, `null` unknown (not cached
+ * yet or stale) — treat `null` as "go ahead, verify afterwards".
+ */
+export function voiceConfiguredCached(capability: VoiceCapability): boolean | null {
+  if (!cached) {
+    prefetchVoiceConfig();
+    return null;
   }
+  if (Date.now() - cached.at > CONFIG_TTL_MS) {
+    prefetchVoiceConfig(); // refresh in the background, answer from what we have
+  }
+  return voiceReady(cached.cfg, capability);
+}
+
+export async function ensureVoiceConfigured(capability: VoiceCapability): Promise<boolean> {
+  const known = voiceConfiguredCached(capability);
+  if (known !== null) {
+    if (!known) showVoiceSetup(capability);
+    return known;
+  }
+  const cfg = await fetchVoiceConfig();
+  // A health-check network failure should not replace the feature's own error
+  // handling. Only block when the server definitively reports a missing key.
+  if (!cfg) return true;
+  if (voiceReady(cfg, capability)) return true;
+  showVoiceSetup(capability);
+  return false;
 }
 
 export function VoiceSetupDialog() {
@@ -75,11 +149,20 @@ export function VoiceSetupDialog() {
   const [message, setMessage] = useState("");
 
   const load = useCallback(async () => {
-    const response = await lfgFetch("/api/voice/config", { cache: "no-store" });
-    if (!response.ok) throw new Error("Could not check voice configuration");
-    const next = (await response.json()) as VoiceConfig;
+    // Always a fresh read here (the dialog is where keys change), and it seeds
+    // the shared cache so the next mic tap answers instantly.
+    invalidateVoiceConfig();
+    const next = await fetchVoiceConfig();
+    if (!next) throw new Error("Could not check voice configuration");
     setCfg(next);
     return next;
+  }, []);
+
+  // Warm the shared config cache as soon as the app mounts (this dialog lives at
+  // the root). By the time anyone taps the mic the answer is already local, so
+  // the gate costs nothing and the permission prompt fires on the tap itself.
+  useEffect(() => {
+    prefetchVoiceConfig();
   }, []);
 
   useEffect(() => {
