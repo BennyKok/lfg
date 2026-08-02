@@ -4,6 +4,20 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - Sessions on a second Claude account get their tools back (v0.1.205)
+
+- Sessions running on any Claude account other than the first started with no
+  LFG tools at all — they could not narrate to the thread, ask you a question,
+  publish an artifact, or ship. Each extra account has its own Claude config
+  directory, but LFG only ever registered its MCP server into the default one,
+  so those sessions launched mute while Setup still showed "Claude MCP ·
+  registered".
+- Setup now registers into every account's config directory, seeds a newly added
+  account the moment you create it, and the Claude MCP check only turns green
+  when all of them are covered.
+- Embedded apps with two surfaces mounted at once (omg's Computer view behind
+  Settings) no longer lose all their styling when you close one of them.
+
 ## August 2, 2026 - Text-to-speech removed (v0.1.204)
 
 - Spoken replies are gone: audio mode, the floating audio player, the "speak
