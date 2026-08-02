@@ -4,6 +4,15 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - The app paints a third faster on a cold load (v0.1.209)
+
+- The AI SDK that powers the chat surface was in the bundle you download before
+  anything can render, even though nothing needs it until you open a session.
+  It now loads in the background just after first paint, and is already cached
+  by the time you open one.
+- On a cold 4G load: first contentful paint 1.40s → 0.93s, DOM content loaded
+  2.91s → 2.32s, and the entry bundle is 150 KB smaller.
+
 ## August 2, 2026 - The server stops re-reading itself every 2.5 seconds (v0.1.208)
 
 - Whenever a browser is open, LFG rebuilds its session list every 2.5 seconds to
