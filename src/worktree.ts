@@ -302,10 +302,6 @@ function worktreeSweepMinAgeMs(): number {
   return Number.isFinite(n) && n >= 0 ? n : 2 * 60_000;
 }
 
-export function worktreeSweepEnabled(): boolean {
-  return sessionWorktreeEnabled() && worktreeSweepIntervalMs() > 0;
-}
-
 let sweepTimer: ReturnType<typeof setInterval> | null = null;
 let sweeping = false;
 

@@ -30,8 +30,6 @@ export type ReleaseUpdateStatus = {
   restartSupported: boolean;
 };
 
-export type LfgUpdateStatus = SourceUpdateStatus | ReleaseUpdateStatus;
-
 export type ReleaseInstall = {
   repoSlug?: string;
   releaseAsset?: string;

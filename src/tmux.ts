@@ -481,45 +481,6 @@ export function panePidForSession(name: string): number | null {
   }
 }
 
-// Launch an interactive `claude` in a fresh detached tmux session so the rest
-// of lfg (session list, prompt detection, send/answer) can drive it. The
-// initial instruction is passed as claude's positional prompt arg (after a `--`
-// so the variadic --add-dir doesn't eat it), which the TUI auto-submits on
-// boot — robust, unlike send-keys which races the splash screen and silently
-// drops keys on a cold start. The instruction points at a brief file rather
-// than inlining a huge prompt.
-export function spawnAgentSession(opts: {
-  name: string;
-  cwd: string;
-  briefPath: string;
-}): { ok: boolean; error?: string } {
-  const dec = new TextDecoder();
-  ensureFolderTrusted(opts.cwd);
-  const create = Bun.spawnSync([
-    "tmux",
-    "new-session",
-    "-d",
-    "-s",
-    opts.name,
-    "-c",
-    opts.cwd,
-    ...claudeAccountLaunchCommand([
-      claudeBin(),
-      "--dangerously-skip-permissions",
-      "--add-dir",
-      reposRoot(),
-      // `--` terminates option parsing: --add-dir is variadic and otherwise
-      // greedily swallows the positional prompt as a second directory, leaving
-      // the TUI at an empty composer (the brief never gets submitted).
-      "--",
-      `Read the task brief at ${opts.briefPath} and carry it out end-to-end.`,
-    ]),
-  ]);
-  if (create.exitCode !== 0)
-    return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
-  return { ok: true };
-}
-
 // Start an interactive `claude` in a fresh detached tmux session that lfg
 // owns and drives. Like spawnAgentSession but for a user-initiated session: the
 // first prompt is optional (omit it to land at an empty composer). The caller

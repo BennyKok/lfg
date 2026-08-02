@@ -137,16 +137,6 @@ export function startMetricsSampler(): void {
   (timer as unknown as { unref?: () => void }).unref?.();
 }
 
-export function stopMetricsSampler(): void {
-  if (!timer) return;
-  clearInterval(timer);
-  timer = null;
-}
-
 export function getMetricsHistory(): MetricSample[] {
   return history.slice();
-}
-
-export function latestSample(): MetricSample | null {
-  return history.length ? history[history.length - 1]! : null;
 }

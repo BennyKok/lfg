@@ -43,10 +43,6 @@ export function actionsPathFor(agent: string, date: string): string {
   return join(reportDir(agent), `${date}.actions.jsonl`);
 }
 
-export function runlogPathFor(agent: string, date: string): string {
-  return join(reportDir(agent), `${date}.runlog`);
-}
-
 async function readContextFile(rel: string): Promise<string | null> {
   const p = join(PATHS.root, rel);
   const f = Bun.file(p);

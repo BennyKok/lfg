@@ -1104,24 +1104,6 @@ async function newestUnclaimedInCwd(
   return { path: best.path, id: best.id };
 }
 
-function inferCodexThreadForHarness(
-  e: { cwd: string; title?: string | null; createdAt: number },
-  threads: CodexThread[],
-  claimed: Set<string>,
-): CodexThread | null {
-  const minTime = (e.createdAt ?? 0) - 30_000;
-  const matches = threads
-    .filter(
-      (t) =>
-        t.cwd === e.cwd &&
-        !claimed.has(t.id) &&
-        (t.createdAt ?? 0) >= minTime &&
-        promptStartsWithTitle(t.firstUserText, e.title),
-    )
-    .sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
-  return matches[0] ?? null;
-}
-
 function inferCodexThreadForManaged(
   m: ManagedSession,
   threads: CodexThread[],
@@ -1466,10 +1448,6 @@ function normalizeCursorLineMessages(line: string): SessionMsg[] {
     }
   }
   return msgs;
-}
-
-export function normalizeLine(line: string): SessionMsg | null {
-  return normalizeLineMessages(line)[0] ?? null;
 }
 
 export function normalizeLineMessages(line: string): SessionMsg[] {

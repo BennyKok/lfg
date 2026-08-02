@@ -14,8 +14,6 @@ import {
   saveProfileState,
 } from "./profiles.ts";
 
-export type LoginSession = { id: string };
-
 // Viewport the human's login browser renders at. The client picks this (match
 // my screen / desktop / mobile) so the login page lays out the way they expect;
 // agents later replay the saved cookies in their own headless viewport.

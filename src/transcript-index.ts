@@ -2,7 +2,7 @@ import { mkdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { Database } from "bun:sqlite";
 import { PATHS } from "./config.ts";
-import { isCursorTurnEndedLine, normalizeLineMessages, type Session, type SessionMsg } from "./sessions.ts";
+import { isCursorTurnEndedLine, normalizeLineMessages, type SessionMsg } from "./sessions.ts";
 import { traceLog } from "./trace-log.ts";
 import {
   imageArtifactToMessage,
@@ -64,7 +64,6 @@ function dbPath(): string {
 }
 const INDEX_TEXT_MAX = 12_000;
 const INDEX_CHUNK_BYTES = 1024 * 1024;
-const BACKGROUND_LIMIT = 8;
 const WAL_CHECKPOINT_INTERVAL_MS = 30_000;
 const TRANSCRIPT_BUSY_TIMEOUT_MS = 15_000;
 
@@ -89,9 +88,6 @@ const FTS_MIRROR_INSERT = `
 let db: Database | null = null;
 let dbOpenedPath: string | null = null;
 let initialized = false;
-let backgroundRunning = false;
-let monitorStarted = false;
-let monitorRunning = false;
 let walCheckpointStarted = false;
 let walCheckpointRunning = false;
 const enqueued = new Set<string>();
@@ -1552,83 +1548,4 @@ export async function searchAllTranscriptIndexes(
       offset: row.byte_offset,
     })),
   };
-}
-
-export function warmTranscriptIndexes(sessions: Session[]): void {
-  if (backgroundRunning) return;
-  const targets = sessions
-    .filter((session) => session.sessionId && session.transcriptPath && !isSessionIndexKey(session.transcriptPath))
-    .slice(0, BACKGROUND_LIMIT) as Array<Session & { sessionId: string; transcriptPath: string }>;
-  if (!targets.length) return;
-  backgroundRunning = true;
-  (async () => {
-    try {
-      for (const session of targets) {
-        await indexTranscript(session.transcriptPath, session.sessionId).catch(() => null);
-      }
-    } finally {
-      backgroundRunning = false;
-    }
-  })();
-}
-
-export function startTranscriptMessageMonitor(fetchSessions: () => Promise<Session[]>): void {
-  if (monitorStarted) return;
-  monitorStarted = true;
-  const intervalMs = Math.max(500, Number(process.env.LFG_CHAT_DB_MONITOR_MS ?? 1200) || 1200);
-  const tick = async () => {
-    if (monitorRunning) return;
-    monitorRunning = true;
-    const started = performance.now();
-    try {
-      const sessions = await fetchSessions();
-      const targets = new Map<string, { sessionId: string; path: string }>();
-      for (const session of sessions) {
-        if (!session.sessionId || !session.transcriptPath) continue;
-        if (isSessionIndexKey(session.transcriptPath)) continue;
-        targets.set(session.transcriptPath, { sessionId: session.sessionId, path: session.transcriptPath });
-      }
-      let imported = 0;
-      let indexed = 0;
-      for (const target of targets.values()) {
-        try {
-          const result = await indexTranscript(target.path, target.sessionId);
-          imported++;
-          indexed += result.indexed;
-        } catch (err) {
-          const code = (err as { code?: string } | null)?.code;
-          if (code !== "ENOENT") {
-            traceLog("chat_db_monitor_error", {
-              sessionId: target.sessionId,
-              path: target.path,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
-      }
-      const durationMs = Math.round((performance.now() - started) * 1000) / 1000;
-      if (indexed || durationMs > 500 || process.env.LFG_TRACE_CHAT_MONITOR === "1") {
-        traceLog("chat_db_monitor_tick", {
-          sessions: sessions.length,
-          targets: targets.size,
-          imported,
-          indexed,
-          durationMs,
-        });
-      }
-    } catch (err) {
-      traceLog("chat_db_monitor_error", {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    } finally {
-      monitorRunning = false;
-    }
-  };
-  const loop = async () => {
-    await tick();
-    const timer = setTimeout(loop, intervalMs);
-    (timer as { unref?: () => void }).unref?.();
-  };
-  const timer = setTimeout(loop, intervalMs);
-  (timer as { unref?: () => void }).unref?.();
 }

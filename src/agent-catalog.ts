@@ -103,8 +103,6 @@ export const GROK_THINKING_LEVELS = ["low", "medium", "high"] as const;
  * that the Claude vocabulary has to collapse.
  */
 export const PI_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh"] as const;
-export const PICKER_THINKING_LEVELS = ["low", "medium", "high", "xhigh"] as const;
-
 export type ModelCatalogItem = {
   key: CodingAgentKind;
   label: string;

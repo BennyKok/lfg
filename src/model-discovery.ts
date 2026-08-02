@@ -354,16 +354,6 @@ export function readModelDiscoveryCacheSync(): ModelDiscoveryCache | null {
   return readCacheFile();
 }
 
-export function discoveredModelIdsByProviderSync(): Partial<Record<ProviderKey, string[]>> {
-  const cache = readCacheFile();
-  const out: Partial<Record<ProviderKey, string[]>> = {};
-  if (!cache) return out;
-  for (const [key, provider] of Object.entries(cache.providers) as Array<[ProviderKey, DiscoveredModelProvider | undefined]>) {
-    if (provider?.ok && provider.models.length) out[key] = provider.models;
-  }
-  return out;
-}
-
 export async function refreshModelCatalog(input: {
   reason?: string;
   scheduledRunAt?: number;
