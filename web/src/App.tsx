@@ -50,6 +50,7 @@ import {
 } from "./cron";
 import { liveTransportMode, useLiveSocket, type ConnectionState } from "./useLiveSocket";
 import {
+  LfgChatStreamOwnership,
   LfgChatTransport,
   appendLfgTranscriptEvent,
   lfgMessagesToUIMessages,
@@ -11615,7 +11616,19 @@ function SessionChat({
     resolveUpload,
     forgetAllUploads,
   } = files;
-  const chatStatusRef = useRef<ReturnType<typeof useChat<LfgChatMessage>>["status"]>("ready");
+  // The focused chat has two listeners on the same transcript subscription:
+  // useChat's transport (which turns live events into AI SDK chunks) and the
+  // passive listener below (which keeps externally-driven turns current).
+  // Claim ownership synchronously before sendChatMessage starts. Deriving this
+  // from chatStatus is racy: React can deliver the first transcript event after
+  // AbstractChat flips to "submitted" but before this component re-renders,
+  // so both listeners append the same assistant/thinking rows. Those duplicate
+  // UI messages then leak into the transcript cache and flash on a remount
+  // (notably Settings -> Home) until the history refetch replaces them.
+  // SessionChat is reused when the focused card changes. Ownership is scoped
+  // by sid so a still-finishing send in the old card cannot suppress an
+  // externally-driven event in the newly focused card.
+  const [ownedChatStreams] = useState(() => new LfgChatStreamOwnership());
   const chatTransport = useMemo(
     () =>
       sid
@@ -11667,10 +11680,6 @@ function SessionChat({
   useEffect(() => {
     setMessageTextState(readPromptDraft(stashContext)?.text ?? "");
   }, [stashContext]);
-
-  useEffect(() => {
-    chatStatusRef.current = chatStatus;
-  }, [chatStatus]);
 
   useEffect(() => {
     if (!sid) {
@@ -11751,7 +11760,7 @@ function SessionChat({
       if (event.type === "busy") setLiveBusy(event.busy);
       setMessages((current) => {
         const next = appendLfgTranscriptEvent(current, event, {
-          streamActive: chatStatusRef.current === "submitted" || chatStatusRef.current === "streaming",
+          streamActive: ownedChatStreams.owns(sid),
         });
         // Keep the cached page current so the next re-open paints the newest
         // state rather than a stale snapshot.
@@ -11759,7 +11768,7 @@ function SessionChat({
         return next;
       });
     });
-  }, [onError, onSubscribeTranscript, setMessages, sid]);
+  }, [onError, onSubscribeTranscript, ownedChatStreams, setMessages, sid]);
 
   const loadOlderMessages = useCallback(async () => {
     if (!sid || nextBefore == null) return false;
@@ -11833,22 +11842,25 @@ function SessionChat({
         await onRefresh();
         return;
       }
-      void sendChatMessage(
-        {
-          text: outgoingText,
-          metadata: {
-            lfgMessage: {
-              role: "user",
-              kind: "text",
+      void ownedChatStreams
+        .run(sid, () =>
+          sendChatMessage(
+            {
               text: outgoingText,
-              html: escapeHtml(outgoingText).replace(/\n/g, "<br>"),
-              ts: Date.now(),
-              pending: true,
+              metadata: {
+                lfgMessage: {
+                  role: "user",
+                  kind: "text",
+                  text: outgoingText,
+                  html: escapeHtml(outgoingText).replace(/\n/g, "<br>"),
+                  ts: Date.now(),
+                  pending: true,
+                },
+              },
             },
-          },
-        },
-        { body: { mode } },
-      )
+            { body: { mode } },
+          ),
+        )
         .then(() => setPromptStashStatus(stashed?.id, "sent"))
         .catch((err) => {
           setPromptStashStatus(stashed?.id, "draft");

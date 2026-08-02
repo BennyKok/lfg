@@ -50,6 +50,30 @@ export type LfgTranscriptSubscribe = (
   listener: (event: LfgTranscriptEvent) => void,
 ) => () => void;
 
+// A focused chat consumes transcript events twice: once through useChat's
+// transport and once through the passive subscription that also handles turns
+// started outside this browser. The transport must claim a locally-started
+// stream before it can emit its first event; React status is intentionally not
+// involved because its render notification can lag behind that event.
+export class LfgChatStreamOwnership {
+  readonly #counts = new Map<string, number>();
+
+  owns(sid: string): boolean {
+    return (this.#counts.get(sid) ?? 0) > 0;
+  }
+
+  async run<T>(sid: string, task: () => Promise<T>): Promise<T> {
+    this.#counts.set(sid, (this.#counts.get(sid) ?? 0) + 1);
+    try {
+      return await task();
+    } finally {
+      const remaining = (this.#counts.get(sid) ?? 1) - 1;
+      if (remaining > 0) this.#counts.set(sid, remaining);
+      else this.#counts.delete(sid);
+    }
+  }
+}
+
 type LfgChatTransportOptions = {
   sessionId: string;
   apiBase?: string;

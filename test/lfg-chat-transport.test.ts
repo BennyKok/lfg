@@ -3,7 +3,10 @@ import {
   createSameOriginTransport,
 } from "../packages/client/src/index.ts";
 import {
+  LfgChatStreamOwnership,
   LfgChatTransport,
+  appendLfgTranscriptEvent,
+  type LfgChatMessage,
   type LfgTranscriptEvent,
 } from "../web/src/lib/lfg-chat-transport.ts";
 import {
@@ -16,6 +19,54 @@ afterEach(() => {
 });
 
 describe("LfgChatTransport", () => {
+  test("claims stream ownership synchronously and scopes overlapping sends by session", async () => {
+    const ownership = new LfgChatStreamOwnership();
+    let finishFirst!: () => void;
+    let finishSecond!: () => void;
+
+    const first = ownership.run("session-1", () => new Promise<void>((resolve) => {
+      finishFirst = resolve;
+      expect(ownership.owns("session-1")).toBe(true);
+    }));
+    const second = ownership.run("session-1", () => new Promise<void>((resolve) => {
+      finishSecond = resolve;
+    }));
+
+    expect(ownership.owns("session-1")).toBe(true);
+    expect(ownership.owns("session-2")).toBe(false);
+    finishFirst();
+    await first;
+    expect(ownership.owns("session-1")).toBe(true);
+    finishSecond();
+    await second;
+    expect(ownership.owns("session-1")).toBe(false);
+  });
+
+  test("lets the active chat stream exclusively own assistant transcript events", () => {
+    const streamed: LfgChatMessage[] = [{
+      id: "sdk-generated-message",
+      role: "assistant",
+      parts: [{ type: "text", text: "One response", state: "done" }],
+    }];
+    const event: LfgTranscriptEvent = {
+      type: "message",
+      message: {
+        id: "durable-transcript-message",
+        role: "assistant",
+        kind: "text",
+        text: "One response",
+        ts: 10,
+      },
+    };
+
+    // useChat already owns this event through LfgChunkEmitter. The passive
+    // transcript listener must not append the durable form alongside it.
+    expect(appendLfgTranscriptEvent(streamed, event, { streamActive: true })).toBe(streamed);
+
+    // Externally-driven turns have no useChat stream and still land normally.
+    expect(appendLfgTranscriptEvent(streamed, event)).toHaveLength(2);
+  });
+
   test("routes feature sockets through the host-configured transport", async () => {
     const paths: string[] = [];
     const socket = {
