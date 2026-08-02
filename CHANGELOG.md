@@ -4,6 +4,20 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - The server stops re-reading itself every 2.5 seconds (v0.1.208)
+
+- Whenever a browser is open, LFG rebuilds its session list every 2.5 seconds to
+  keep the fleet status live — and that rebuild was re-reading and re-parsing
+  the entire session registry about eight times over, roughly 700 file reads per
+  rebuild. The server was spending around a tenth of its time in a blocking
+  rebuild, permanently, which made everything else feel intermittently sticky.
+- Entries are now cached and checked against the file's timestamp instead of
+  being re-read, so an unchanged session costs a stat rather than a read and a
+  parse. Rebuild time drops from 196ms to 45ms, and the worst pause it inflicts
+  on everything else from 176ms to 58ms.
+- Nothing about liveness changes: a session updated by another process is still
+  picked up on the very next poll.
+
 ## August 2, 2026 - Returning home no longer repeats replies (v0.1.207)
 
 - Opening Settings and returning Home could briefly render the same assistant
