@@ -31,6 +31,23 @@ const ARTIFACT_PALETTES: Record<ArtifactTheme, Record<string, string>> = {
 };
 
 /**
+ * Shorthands for the three tokens artifacts reach for most, published alongside
+ * the canonical names.
+ *
+ * An artifact that guesses `--lfg-artifact-bg` gets nothing back and silently
+ * falls through to its own hardcoded fallback — which is how a card ends up
+ * with LFG's dark surfaces and the artifact's light text. Answering the common
+ * guess costs three declarations. `muted-fg` is here because the near miss is
+ * the expensive one: `--lfg-artifact-muted` exists but is a *surface*, so text
+ * painted with it disappears into its own background.
+ */
+const ARTIFACT_ALIASES: Record<string, string> = {
+  bg: "background",
+  fg: "foreground",
+  "muted-fg": "muted-foreground",
+};
+
+/**
  * Theme bridge for scripted artifacts.
  *
  * Static artifacts inherit these values through their shadow host. A sandboxed
@@ -40,10 +57,26 @@ const ARTIFACT_PALETTES: Record<ArtifactTheme, Record<string, string>> = {
  * documents follow LFG automatically.
  */
 function artifactThemeBridge(theme: ArtifactTheme): string {
-  const variables = Object.entries(ARTIFACT_PALETTES[theme])
-    .map(([name, value]) => `--lfg-artifact-${name}:${value}`)
-    .join(";");
+  const palette = ARTIFACT_PALETTES[theme];
+  const variables = [
+    ...Object.entries(palette).map(([name, value]) => `--lfg-artifact-${name}:${value}`),
+    ...Object.entries(ARTIFACT_ALIASES).map(([alias, name]) => `--lfg-artifact-${alias}:${palette[name]}`),
+  ].join(";");
   return `<style id="lfg-artifact-theme">:root{color-scheme:${theme};${variables}}html,body{background:var(--lfg-artifact-surface);color:var(--lfg-artifact-foreground)}a{color:var(--lfg-artifact-accent)}</style>`;
+}
+
+/**
+ * Stamp the card's theme where CSS can select on it.
+ *
+ * A card is themed by LFG, not by the desktop, so `prefers-color-scheme` inside
+ * the frame answers the wrong question: a dark card on a light machine renders
+ * the artifact's light branch over dark surfaces. `data-theme` is the marker
+ * artifacts can key on instead, and it matches what the native renderer already
+ * rewrites `:root[data-theme=…]` into for the shadow path.
+ */
+function withThemeAttribute(tag: string, theme: ArtifactTheme): string {
+  if (/\sdata-theme\s*=/i.test(tag)) return tag;
+  return `${tag.replace(/\s*\/?>$/, "")} data-theme="${theme}">`;
 }
 
 /** Preserve the server's artifact sandbox and bridge the host theme into srcDoc. */
@@ -52,19 +85,24 @@ export function secureArtifactDocument(
   theme: ArtifactTheme = "light",
 ): string {
   const headContent = `${CSP_META}${artifactThemeBridge(theme)}`;
-  const head = html.match(/<head(?:\s[^>]*)?>/i);
+  const root = html.match(/<html(?:\s[^>]*)?>/i);
+  const themed = root?.index !== undefined
+    ? `${html.slice(0, root.index)}${withThemeAttribute(root[0], theme)}${html.slice(root.index + root[0].length)}`
+    : html;
+
+  const head = themed.match(/<head(?:\s[^>]*)?>/i);
   if (head?.index !== undefined) {
     const insertAt = head.index + head[0].length;
-    return `${html.slice(0, insertAt)}${headContent}${html.slice(insertAt)}`;
+    return `${themed.slice(0, insertAt)}${headContent}${themed.slice(insertAt)}`;
   }
 
-  const root = html.match(/<html(?:\s[^>]*)?>/i);
-  if (root?.index !== undefined) {
-    const insertAt = root.index + root[0].length;
-    return `${html.slice(0, insertAt)}<head>${headContent}</head>${html.slice(insertAt)}`;
+  const themedRoot = themed.match(/<html(?:\s[^>]*)?>/i);
+  if (themedRoot?.index !== undefined) {
+    const insertAt = themedRoot.index + themedRoot[0].length;
+    return `${themed.slice(0, insertAt)}<head>${headContent}</head>${themed.slice(insertAt)}`;
   }
 
-  return `<!doctype html><html><head>${headContent}</head><body>${html}</body></html>`;
+  return `<!doctype html><html data-theme="${theme}"><head>${headContent}</head><body>${themed}</body></html>`;
 }
 
 export function artifactRequestPath(

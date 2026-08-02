@@ -115,10 +115,12 @@ function useNativeArtifact(
  */
 function ArtifactShadowRoot({
   document: parsed,
+  theme,
   className,
   style,
 }: {
   document: NativeArtifactDocument;
+  theme: ArtifactTheme;
   className?: string;
   style?: React.CSSProperties;
 }) {
@@ -157,7 +159,10 @@ function ArtifactShadowRoot({
     root.innerHTML = adopted ? parsed.html : `<style>${css}</style>${parsed.html}`;
   }, [parsed]);
 
-  return <div ref={hostRef} className={className} style={style} />;
+  // The host carries the card's theme because `rewriteHostSelector` turns an
+  // artifact's `:root[data-theme="dark"]` into `:host([data-theme="dark"])` —
+  // a selector that matches nothing unless the attribute is actually here.
+  return <div ref={hostRef} data-theme={theme} className={className} style={style} />;
 }
 
 function ArtifactMessage({
@@ -247,7 +252,12 @@ export function NativeArtifact({
     );
   }
   return (
-    <ArtifactShadowRoot document={load.value.parsed} className={className} style={style} />
+    <ArtifactShadowRoot
+      document={load.value.parsed}
+      theme={theme}
+      className={className}
+      style={style}
+    />
   );
 }
 

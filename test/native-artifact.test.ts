@@ -135,6 +135,12 @@ describe("renderer selection", () => {
     expect(source).toContain("srcDoc={secureArtifactDocument(load.value.source, theme)}");
   });
 
+  test("the shadow host carries the theme its rewritten selectors ask for", () => {
+    // rewriteHostSelector turns :root[data-theme="dark"] into
+    // :host([data-theme="dark"]), which matches nothing without this attribute.
+    expect(source).toContain("data-theme={theme}");
+  });
+
   test("thumbnails never frame, however scripted the artifact", () => {
     // A browsing context per tile is exactly what the native path exists to
     // avoid, so a gallery preview stays native and is badged instead.

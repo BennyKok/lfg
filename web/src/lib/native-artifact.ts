@@ -229,6 +229,13 @@ export const NATIVE_ARTIFACT_BASE_CSS = `
   --lfg-artifact-accent: var(--primary, #007aff);
   --lfg-artifact-accent-foreground: var(--primary-foreground, #ffffff);
   --lfg-artifact-code-background: var(--code-bg, rgba(120, 120, 128, 0.08));
+  /* Shorthands for the three most-reached-for tokens, so an artifact that
+     guesses the short name gets the theme instead of silently falling through
+     to its own hardcoded fallback. muted-fg especially: --lfg-artifact-muted
+     is a surface, and text painted with it vanishes into its own background. */
+  --lfg-artifact-bg: var(--lfg-artifact-background);
+  --lfg-artifact-fg: var(--lfg-artifact-foreground);
+  --lfg-artifact-muted-fg: var(--lfg-artifact-muted-foreground);
   display: block;
   background: var(--lfg-artifact-surface);
   color: var(--lfg-artifact-foreground);

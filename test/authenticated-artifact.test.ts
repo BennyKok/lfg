@@ -43,8 +43,36 @@ describe("authenticated artifacts", () => {
 
   test("wraps fragments in a complete locked-down document", () => {
     const html = secureArtifactDocument("<main>ok</main>");
-    expect(html).toStartWith("<!doctype html><html><head>");
+    expect(html).toStartWith('<!doctype html><html data-theme="light"><head>');
     expect(html).toContain("<body><main>ok</main></body>");
+  });
+
+  test("stamps the card's theme where CSS can select on it", () => {
+    // A card is themed by LFG, not the desktop, so an artifact keying dark mode
+    // off prefers-color-scheme paints its light branch over dark surfaces.
+    const html = secureArtifactDocument(
+      '<!doctype html><html lang="en"><head></head><body>ok</body></html>',
+      "dark",
+    );
+    expect(html).toContain('<html lang="en" data-theme="dark">');
+  });
+
+  test("does not override a theme the artifact set for itself", () => {
+    const html = secureArtifactDocument(
+      '<html data-theme="light"><head></head><body>ok</body></html>',
+      "dark",
+    );
+    expect(html).toContain('<html data-theme="light">');
+    expect(html).not.toContain('data-theme="dark"');
+  });
+
+  test("publishes short aliases for the tokens artifacts reach for", () => {
+    const html = secureArtifactDocument("<main>ok</main>", "dark");
+    // The near miss is the expensive one: --lfg-artifact-muted is a surface, so
+    // text painted with it disappears into its own background.
+    expect(html).toContain("--lfg-artifact-muted-fg:rgba(235, 235, 245, 0.6)");
+    expect(html).toContain("--lfg-artifact-bg:#000000");
+    expect(html).toContain("--lfg-artifact-fg:#ffffff");
   });
 
   test("every artifact surface loads through the configured transport", () => {
