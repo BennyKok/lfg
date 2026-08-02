@@ -1034,9 +1034,18 @@ html.lfg-keyboard-open {
     max-height: 17rem;
     max-width: min(100%, 20rem);
     width: auto;
+    /* Set below: a lone image gets the bubble's full width. */
     border-radius: 14px;
     object-fit: cover;
     background: rgba(120, 120, 128, 0.16);
+  }
+
+  /* A single image widens to the bubble (the caption often sets a wider box,
+     and the leftover gap beside a lone thumbnail reads as a layout bug).
+     Multiple images keep the 20rem cap so they tile instead. The lightbox is
+     one tap away either way. */
+  .user-bubble-media-item:only-child {
+    max-width: 100%;
   }
 
   /* Attachments with no inline rendering (pdf, txt) keep their name visible. */
