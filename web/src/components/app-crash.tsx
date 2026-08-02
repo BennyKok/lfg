@@ -107,6 +107,42 @@ export function AppCrash({
       });
   };
 
+  // The stale-build case is not a crash report, it's a one-tap prompt. Giving
+  // it the error layout — a small left-aligned icon, a small title, a button
+  // crowded under both — made an otherwise empty screen read as cramped and
+  // half-broken. Centered column, room to breathe, one obvious CTA.
+  if (stale) {
+    return (
+      <div
+        className={cn(
+          "flex flex-col items-center justify-center bg-background p-6 text-foreground",
+          variant === "screen" ? "h-full min-h-dvh" : "rounded-xl border border-border/60 py-12",
+          className,
+        )}
+        role="alert"
+      >
+        <div className="flex w-full max-w-xs flex-col items-center text-center">
+          <span className="flex size-14 items-center justify-center rounded-2xl bg-brand/12 text-brand">
+            <RefreshCw className="size-6" aria-hidden />
+          </span>
+          <h1 className="mt-5 text-lg font-semibold tracking-tight">New version available</h1>
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            lfg updated while this tab was open. Reload to pick up the latest build.
+          </p>
+          <Button
+            size="lg"
+            variant="brand"
+            className="mt-7 w-full"
+            onClick={() => window.location.reload()}
+          >
+            <RefreshCw className="size-4" aria-hidden />
+            Reload
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div
       className={cn(
@@ -118,31 +154,18 @@ export function AppCrash({
     >
       <div className="w-full max-w-sm">
         <div className="flex items-center gap-2.5">
-          <span
-            className={cn(
-              "flex size-8 shrink-0 items-center justify-center rounded-xl",
-              stale ? "bg-brand/12 text-brand" : "bg-destructive/10 text-destructive",
-            )}
-          >
-            {stale ? (
-              <RefreshCw className="size-4" aria-hidden />
-            ) : (
-              <CircleAlert className="size-4" aria-hidden />
-            )}
+          <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-destructive/10 text-destructive">
+            <CircleAlert className="size-4" aria-hidden />
           </span>
-          <span className="text-sm font-semibold">
-            {stale ? "New version available" : "Something broke"}
-          </span>
+          <span className="text-sm font-semibold">Something broke</span>
         </div>
 
-        {!stale && (
-          <p className="mt-3 max-h-16 overflow-hidden break-words rounded-lg border border-border/60 bg-muted/40 px-3 py-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
-            {message}
-          </p>
-        )}
+        <p className="mt-3 max-h-16 overflow-hidden break-words rounded-lg border border-border/60 bg-muted/40 px-3 py-2 font-mono text-[11px] leading-relaxed text-muted-foreground">
+          {message}
+        </p>
 
         <div className="mt-3 flex items-center gap-2">
-          {reset && !stale && (
+          {reset && (
             <Button size="sm" variant="outline" onClick={reset}>
               <RotateCcw className="size-3.5" aria-hidden />
               Retry
@@ -152,41 +175,35 @@ export function AppCrash({
             <RefreshCw className="size-3.5" aria-hidden />
             Reload
           </Button>
-          {!stale && (
-            <Button
-              size="icon-sm"
-              variant="tint"
-              onClick={copy}
-              aria-label="Copy error details"
-              title="Copy error details"
-            >
-              {copied ? (
-                <Check className="size-3.5" aria-hidden />
-              ) : (
-                <Copy className="size-3.5" aria-hidden />
-              )}
-            </Button>
-          )}
+          <Button
+            size="icon-sm"
+            variant="tint"
+            onClick={copy}
+            aria-label="Copy error details"
+            title="Copy error details"
+          >
+            {copied ? (
+              <Check className="size-3.5" aria-hidden />
+            ) : (
+              <Copy className="size-3.5" aria-hidden />
+            )}
+          </Button>
         </div>
 
-        {!stale && (
-          <div className="mt-3 space-y-1.5 text-[11px] text-muted-foreground/80">
-            {/* Claim the report only when one was actually dispatched — a
-                reassuring lie here is worse than silence, because the user
-                stops telling us about a bug nobody received. */}
-            {reported && <div>Reported to lfg.</div>}
-            {(stack || componentStack) && (
-              <details>
-                <summary className="cursor-pointer select-none hover:text-foreground">
-                  Details
-                </summary>
-                <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/60 bg-muted/40 p-2 font-mono text-[10px] leading-relaxed">
-                  {details}
-                </pre>
-              </details>
-            )}
-          </div>
-        )}
+        <div className="mt-3 space-y-1.5 text-[11px] text-muted-foreground/80">
+          {/* Claim the report only when one was actually dispatched — a
+              reassuring lie here is worse than silence, because the user
+              stops telling us about a bug nobody received. */}
+          {reported && <div>Reported to lfg.</div>}
+          {(stack || componentStack) && (
+            <details>
+              <summary className="cursor-pointer select-none hover:text-foreground">Details</summary>
+              <pre className="mt-1.5 max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/60 bg-muted/40 p-2 font-mono text-[10px] leading-relaxed">
+                {details}
+              </pre>
+            </details>
+          )}
+        </div>
       </div>
     </div>
   );
