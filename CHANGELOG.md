@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - A roomier "new version" prompt (v0.1.192)
+
+- The post-deploy "New version available" screen no longer borrows the crash
+  layout. It gets a centered icon, a title you can read, a line explaining that
+  the app updated while your tab was open, and a full-width Reload button — no
+  longer a tiny cluster of controls stranded on an empty black screen.
+
 ## August 2, 2026 - Sent images are their own view (v0.1.191)
 
 - An attached image is no longer boxed inside the message bubble. The picture
