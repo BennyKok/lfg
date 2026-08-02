@@ -4073,7 +4073,12 @@ export async function cmdServe() {
             claudeAccountId?: string;
             agent?: "claude" | "codex" | "aisdk" | "codex-aisdk" | "opencode" | "grok" | "cursor" | "hermes" | "pi";
           } | null;
-          const source = (await listSessions()).find((s) => s.sessionId === sourceId);
+          // Cached: this read is pure metadata (cwd, project, title, owner) for
+          // a session that already exists, so a few seconds of staleness cannot
+          // change the answer — but an uncached rebuild costs a few hundred ms
+          // on the fork path, which the user waits through twice over because
+          // fork then creates through its own internal request.
+          const source = (await listSessionsCached()).find((s) => s.sessionId === sourceId);
           const cachedSource = getCachedResumableSession(sourceId);
           const transcript = await resolveTranscript(sourceId);
           if (!transcript) return err(404, "source session transcript not found");

@@ -23,11 +23,16 @@ export type SessionWorktree = {
   path: string;
 };
 
-function git(repo: string, args: string[]): { ok: boolean; out: string; err: string } {
+function git(
+  repo: string,
+  args: string[],
+  opts?: { timeoutMs?: number },
+): { ok: boolean; out: string; err: string } {
   const proc = Bun.spawnSync({
     cmd: ["git", "-C", repo, ...args],
     stdout: "pipe",
     stderr: "pipe",
+    ...(opts?.timeoutMs ? { timeout: opts.timeoutMs } : {}),
   });
   return {
     ok: proc.exitCode === 0,
@@ -77,6 +82,36 @@ export function shouldAutoWorktree(
   return isGitRepo(abs) && hasHeadCommit(abs);
 }
 
+// Refreshing origin/main before branching is a NETWORK round trip, and it runs
+// synchronously on the session-create path — so while it is in flight Bun's
+// single event loop serves nothing else: every other session's live stream,
+// every poll, every unrelated API call waits behind it.
+//
+// Two guards bound that cost without changing which ref a worktree is based on:
+//   • a short per-repo TTL, so a burst of creates (or a fork, which creates via
+//     its own internal request) pays for one fetch instead of one each;
+//   • a hard timeout, so an unreachable or crawling remote degrades to "branch
+//     from the main we already have" instead of stalling the whole server.
+//
+// Skipping is always safe: worktreeBaseRef below picks whichever main ref
+// exists and prefers a local main that is ahead, so the worst case is a base
+// that is up to a minute old — one rebase away, and exactly what a slightly
+// earlier create would have produced anyway.
+const FETCH_MAIN_TTL_MS = 60_000;
+const FETCH_MAIN_TIMEOUT_MS = 10_000;
+const lastMainFetchAt = new Map<string, number>();
+
+function fetchMainIfStale(repo: string): void {
+  const now = Date.now();
+  const last = lastMainFetchAt.get(repo);
+  if (last !== undefined && now - last < FETCH_MAIN_TTL_MS) return;
+  // Recorded BEFORE the call, so a remote that times out is retried on the same
+  // TTL as one that succeeds. Otherwise every create during an outage would pay
+  // the full timeout again.
+  lastMainFetchAt.set(repo, now);
+  git(repo, ["fetch", "--quiet", "origin", "main"], { timeoutMs: FETCH_MAIN_TIMEOUT_MS });
+}
+
 function worktreeBaseRef(repo: string): { ok: true; ref: string } | { ok: false; error: string } {
   const remoteMain = git(repo, ["rev-parse", "--verify", "--quiet", MAIN_REF]);
   const localMain = git(repo, ["rev-parse", "--verify", "--quiet", "main"]);
@@ -112,7 +147,7 @@ export function prepareSessionWorktree(
     return { ok: true, worktree: { repoRoot: absRoot, branch, path: wtPath } };
   }
 
-  git(absRoot, ["fetch", "--quiet", "origin", "main"]);
+  fetchMainIfStale(absRoot);
 
   // Base the worktree on whichever main is newer. Brand-new projects have no
   // remote yet, so local main must be a complete path rather than a fallback
