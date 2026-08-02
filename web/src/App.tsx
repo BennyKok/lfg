@@ -441,13 +441,6 @@ type ActionRow = {
   result?: { ok: boolean; summary: string };
 };
 
-type AgentReport = {
-  date: string;
-  raw: string;
-  html: string;
-  actions: ActionRow[];
-};
-
 type Session = {
   agent?: "claude" | "aisdk" | "codex" | "codex-aisdk" | "opencode" | "grok" | "cursor" | string;
   // Display-name override from a custom agent profile (server-side), when set.
@@ -4686,7 +4679,6 @@ export function App() {
     };
   }, [isMobile, mobileChromeEl]);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
-  const [agents, setAgents] = useState<Agent[]>([]);
   const [codingAgents, setCodingAgents] = useState<CodingAgentInfo[]>([]);
   const [codingAgentAuth, setCodingAgentAuth] = useState<CodingAgentAuthSession | null>(null);
   // Auth started from a blocked session stays inside that session's transcript
@@ -4730,12 +4722,6 @@ export function App() {
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [lfgVersion, setLfgVersion] = useState("unknown");
   const [repos, setRepos] = useState<Repo[]>([]);
-  // Legacy report-view selector — retained so the old AgentView effects compile,
-  // but the live UI now switches on `tab` (Live / Auto), so this stays "__live".
-  const [selected, setSelected] = useState("__live");
-  const [reports, setReports] = useState<ReportRef[]>([]);
-  const [report, setReport] = useState<AgentReport | null>(null);
-  const [selectedReportDate, setSelectedReportDate] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [newOpen, setNewOpen] = useState(false);
@@ -4753,7 +4739,6 @@ export function App() {
     nonce: number;
   } | null>(null);
   const [composerFocusNonce, setComposerFocusNonce] = useState(0);
-  const [runLog, setRunLog] = useState<string | null>(null);
   // Auto agents
   // Tabs are "live" | "settings" | "notifications" | "term" | "browser". Auto agents and runtime
   // extension nav-tabs now render inside the Settings page rather than as their
@@ -5096,7 +5081,6 @@ export function App() {
     ) {
       setShowOnboarding(true);
     }
-    setAgents(payload.agents ?? []);
     setCodingAgents(payload.codingAgents ?? []);
     setModelCatalog(buildAgentModelCatalog(payload.models));
     setSettings(payload.settings ?? {
@@ -5375,47 +5359,6 @@ export function App() {
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
   }, []);
-
-  useEffect(() => {
-    // (The router owns the URL now; this legacy effect only resets report
-    // state. `selected` is pinned to "__live" — see its declaration.)
-    if (selected === "__live") {
-      setReports([]);
-      setReport(null);
-      setSelectedReportDate(null);
-      return;
-    }
-    let cancelled = false;
-    api<{ agent: string; reports: ReportRef[] }>(`/api/agents/${selected}/reports`)
-      .then((payload) => {
-        if (cancelled) return;
-        setReports(payload.reports);
-        const date = payload.reports[0]?.date ?? null;
-        setSelectedReportDate(date);
-        if (!date) setReport(null);
-      })
-      .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selected]);
-
-  useEffect(() => {
-    if (selected === "__live" || !selectedReportDate) return;
-    let cancelled = false;
-    api<AgentReport>(`/api/agents/${selected}/reports/${selectedReportDate}`)
-      .then((payload) => {
-        if (!cancelled) setReport(payload);
-      })
-      .catch((e) => {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [selected, selectedReportDate]);
 
   // Once users load, pick a default profile to filter by (your saved profile,
   // else the first user) — runs once, so an explicit "All" later still sticks.
@@ -5912,70 +5855,6 @@ export function App() {
 
   function toggleTheme() {
     setThemePreference(!document.documentElement.classList.contains("dark"));
-  }
-
-  async function runAgent(agent: string) {
-    setRunLog("Starting agent run...");
-    try {
-      const start = await api<{ runId: string }>(`/api/agents/${agent}/run`, {
-        method: "POST",
-      });
-      if (useWsLive) {
-        const finalStatus = await new Promise<"done" | "failed">((resolve) => {
-          let stop: (() => void) | null = null;
-          const finish = (status: "done" | "failed", error?: string) => {
-            stop?.();
-            stop = null;
-            if (status === "done") setRunLog("Run finished.");
-            else setRunLog(`Run failed: ${error || "unknown error"}`);
-            resolve(status);
-          };
-          stop = wsLiveStream.watchAgentRun(start.runId, {
-            onSnapshot: (run) => {
-              if (run.logs.length) setRunLog(run.logs.join("\n"));
-              if (run.status !== "running") finish(run.status, run.error);
-            },
-            onEvent: (event) => {
-              if (event.type === "log") {
-                setRunLog((prev) => `${prev ?? ""}\n${event.line}`.trim());
-                return;
-              }
-              finish(event.status, event.error);
-            },
-            onError: (message) => {
-              finish("failed", message);
-            },
-          });
-        });
-        if (finalStatus === "done") {
-          const payload = await api<{ agent: string; reports: ReportRef[] }>(
-            `/api/agents/${agent}/reports`,
-          );
-          setReports(payload.reports);
-          if (payload.reports[0]) setSelectedReportDate(payload.reports[0].date);
-        }
-        return;
-      }
-      const events = new EventSource(`/api/agents/${agent}/runs/${start.runId}`);
-      events.addEventListener("log", (event) => {
-        setRunLog((prev) => `${prev ?? ""}\n${JSON.parse(event.data)}`.trim());
-      });
-      events.addEventListener("done", async () => {
-        events.close();
-        setRunLog("Run finished.");
-        const payload = await api<{ agent: string; reports: ReportRef[] }>(
-          `/api/agents/${agent}/reports`,
-        );
-        setReports(payload.reports);
-        if (payload.reports[0]) setSelectedReportDate(payload.reports[0].date);
-      });
-      events.addEventListener("failed", (event) => {
-        events.close();
-        setRunLog(`Run failed: ${event.data}`);
-      });
-    } catch (e) {
-      setRunLog(e instanceof Error ? e.message : String(e));
-    }
   }
 
   // ---- auto agent handlers ----
@@ -7133,71 +7012,6 @@ export function App() {
     </CodingAgentAuthContext.Provider>
     </CodingAgentsContext.Provider>
     </AgentAccessModeContext.Provider>
-  );
-}
-
-// Horizontal tab used in the top nav bar. Icon + label sit side by side; the
-// active tab gets a soft primary pill behind it.
-function TopTab({
-  active,
-  icon,
-  label,
-  onClick,
-}: {
-  active: boolean;
-  icon: ReactNode;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={() => {
-        if (!active) feedback.select();
-        onClick();
-      }}
-      aria-current={active ? "page" : undefined}
-      className={cn(
-        "flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-[13px] font-medium tracking-[-0.01em] transition-colors duration-200 ease-out",
-        active
-          ? "bg-primary/12 text-primary"
-          : "text-muted-foreground hover:text-foreground active:scale-[0.96]",
-      )}
-    >
-      {icon}
-      <span>{label}</span>
-    </button>
-  );
-}
-
-function TabButton({
-  active,
-  icon,
-  label,
-  meta,
-  onClick,
-}: {
-  active: boolean;
-  icon: React.ReactNode;
-  label: string;
-  meta?: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "flex h-8 shrink-0 items-center gap-1.5 rounded-full border px-2.5 text-xs font-semibold transition",
-        active
-          ? "border-foreground bg-foreground text-background"
-          : "border-border bg-muted/70 text-foreground",
-      )}
-    >
-      {icon}
-      <span className="max-w-32 truncate">{label}</span>
-      {meta ? <span className="text-[11px] opacity-70">{meta}</span> : null}
-    </button>
   );
 }
 
@@ -8630,57 +8444,6 @@ function useIsWide() {
     return () => mq.removeEventListener("change", sync);
   }, []);
   return wide;
-}
-
-// Smooths the busy→idle transition so the rail doesn't thrash. A session going
-// busy reflects instantly (you want to see work start), but going idle is held
-// for `delay` ms — a brief idle blip between tool calls won't bounce a row out
-// of the Working group and back. Returns a stabilized copy of busyBySid.
-function useStableBusy(busyBySid: Record<string, boolean>, delay = 2500) {
-  const [stable, setStable] = useState<Record<string, boolean>>(() => ({ ...busyBySid }));
-  const stableRef = useRef(stable);
-  stableRef.current = stable;
-  const timers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-
-  useEffect(() => {
-    const cur = stableRef.current;
-    const patch: Record<string, boolean> = {};
-    const createdTimers: ReturnType<typeof setTimeout>[] = [];
-    for (const sid of Object.keys(busyBySid)) {
-      const want = !!busyBySid[sid];
-      const shown = !!cur[sid];
-      if (want) {
-        // Busy now — cancel any pending demotion and reflect immediately.
-        if (timers.current[sid]) {
-          clearTimeout(timers.current[sid]);
-          delete timers.current[sid];
-        }
-        if (!shown) patch[sid] = true;
-      } else if (shown && !timers.current[sid]) {
-        // Wants idle while shown busy — hold the demotion behind a timer.
-        timers.current[sid] = setTimeout(() => {
-          delete timers.current[sid];
-          setStable((p) => ({ ...p, [sid]: false }));
-        }, delay);
-        createdTimers.push(timers.current[sid]);
-      } else if (!(sid in cur)) {
-        patch[sid] = false;
-      }
-    }
-    if (Object.keys(patch).length) setStable((p) => ({ ...p, ...patch }));
-    return () => {
-      for (const timer of createdTimers) clearTimeout(timer);
-    };
-  }, [busyBySid, delay]);
-
-  useEffect(() => {
-    const t = timers.current;
-    return () => {
-      for (const id of Object.values(t)) clearTimeout(id);
-    };
-  }, []);
-
-  return stable;
 }
 
 // Stable empty fallback. A fresh `[]` literal in a prop expression is a new
@@ -15493,237 +15256,6 @@ function PromptPanel({
         ))}
       </div>
     </div>
-  );
-}
-
-function AgentView({
-  agent,
-  reports,
-  report,
-  selectedDate,
-  runLog,
-  onSelectDate,
-  onRun,
-  onRefreshReport,
-}: {
-  agent: Agent | null;
-  reports: ReportRef[];
-  report: AgentReport | null;
-  selectedDate: string | null;
-  runLog: string | null;
-  onSelectDate: (date: string) => void;
-  onRun: (agent: string) => void;
-  onRefreshReport: () => Promise<void>;
-}) {
-  if (!agent) {
-    return <div className="rounded-xl border border-border bg-card p-6">Agent not found.</div>;
-  }
-
-  return (
-    <div className="mx-auto flex max-w-5xl flex-col gap-2">
-      <section className="rounded-xl border border-border bg-card p-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="min-w-0 flex-1">
-            <div className="text-base font-semibold leading-tight">{agent.title || agent.name}</div>
-            <div className="text-xs text-muted-foreground">
-              {agent.inputCount} inputs · last report {agent.lastReport?.date ?? "never"}
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button variant="brand" size="sm" onClick={() => onRun(agent.name)}>
-              <Play className="size-4" />
-              Run
-            </Button>
-          </div>
-        </div>
-        {runLog ? (
-          <pre className="mt-2 max-h-40 overflow-auto rounded-lg bg-muted p-2 text-xs text-muted-foreground">
-            {runLog}
-          </pre>
-        ) : null}
-      </section>
-
-      <div className="flex gap-1.5 overflow-x-auto">
-        {reports.map((item) => (
-          <button
-            key={item.date}
-            type="button"
-            onClick={() => onSelectDate(item.date)}
-            className={cn(
-              "h-7 shrink-0 rounded-full border px-2.5 text-xs font-semibold",
-              selectedDate === item.date
-                ? "border-foreground bg-foreground text-background"
-                : "border-border bg-muted",
-            )}
-          >
-            {item.date.slice(5)}
-          </button>
-        ))}
-      </div>
-
-      {report ? (
-        <>
-          <ActionsPanel report={report} agent={agent.name} onRefresh={onRefreshReport} />
-          <article className="markdown report-markdown rounded-xl border border-border bg-card p-3">
-            <MessageResponse>{report.raw}</MessageResponse>
-          </article>
-        </>
-      ) : (
-        <div className="rounded-xl border border-border bg-card p-8 text-center text-muted-foreground">
-          No report selected.
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ActionsPanel({
-  report,
-  agent,
-  onRefresh,
-}: {
-  report: AgentReport;
-  agent: string;
-  onRefresh: () => Promise<void>;
-}) {
-  const pending = report.actions.filter((action) => action.status === "pending");
-  const [selected, setSelected] = useState<string[]>([]);
-  const [busyMode, setBusyMode] = useState<"combined" | "separate" | null>(null);
-
-  useLayoutEffect(() => {
-    setSelected([]);
-  }, [report.date, agent]);
-
-  if (!report.actions.length) return null;
-
-  async function executeSelected() {
-    setBusyMode("separate");
-    try {
-      await Promise.all(
-        selected.map((id) =>
-          api("/api/actions/execute", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ agent, date: report.date, id }),
-          }),
-        ),
-      );
-      await onRefresh();
-      setSelected([]);
-    } finally {
-      setBusyMode(null);
-    }
-  }
-
-  async function executeCombined() {
-    setBusyMode("combined");
-    try {
-      await api("/api/actions/execute-combined", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent, date: report.date, ids: selected }),
-      });
-      await onRefresh();
-      setSelected([]);
-    } finally {
-      setBusyMode(null);
-    }
-  }
-
-  return (
-    <section className="rounded-xl border border-border bg-card p-3">
-      <div className="mb-2 flex flex-wrap items-center gap-2">
-        <div className="mr-auto">
-          <div className="text-sm font-semibold leading-tight">Actions</div>
-          <div className="text-xs text-muted-foreground">
-            {pending.length} ready · {report.actions.length} total
-          </div>
-        </div>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={!pending.length || !!busyMode}
-          onClick={() => setSelected(pending.map((action) => action.id))}
-        >
-          Select ready
-        </Button>
-        <Button
-          variant="secondary"
-          size="sm"
-          disabled={!selected.length || !!busyMode}
-          onClick={executeCombined}
-          title="Create one new session to resolve the selected actions together"
-        >
-          {busyMode === "combined" ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <GitFork className="size-4" />
-          )}
-          Group into session
-        </Button>
-        <Button
-          variant="brand"
-          size="sm"
-          disabled={!selected.length || !!busyMode}
-          onClick={executeSelected}
-          title="Create one new session per selected action"
-        >
-          {busyMode === "separate" ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <Play className="size-4" />
-          )}
-          Run separately
-        </Button>
-      </div>
-      {selected.length ? (
-        <div className="mb-2 text-xs text-muted-foreground">
-          {selected.length} selected · group starts one new resolving session
-        </div>
-      ) : null}
-      <div className="divide-y divide-border rounded-lg border border-border">
-        {report.actions.map((action) => {
-          const actionable = action.status === "pending";
-          const checked = selected.includes(action.id);
-          return (
-            <label
-              key={action.id}
-              className={cn(
-                "flex items-start gap-2 px-3 py-2 text-sm",
-                actionable ? "cursor-pointer" : "opacity-70",
-              )}
-            >
-              <input
-                type="checkbox"
-                disabled={!actionable}
-                checked={checked}
-                onChange={(e) =>
-                  setSelected((items) =>
-                    e.target.checked
-                      ? [...items, action.id]
-                      : items.filter((item) => item !== action.id),
-                  )
-                }
-              />
-              <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">{action.text}</span>
-              <Badge
-                variant={
-                  action.status === "done"
-                    ? "default"
-                    : action.status === "failed"
-                      ? "destructive"
-                      : action.status === "running"
-                        ? "secondary"
-                        : "outline"
-                }
-              >
-                {action.status}
-              </Badge>
-            </label>
-          );
-        })}
-      </div>
-    </section>
   );
 }
 
