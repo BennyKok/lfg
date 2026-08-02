@@ -11,6 +11,7 @@ import { RootErrorBoundary } from "./App";
 import { AppDialogProvider } from "./components/ui/app-dialog";
 import { configureLfgTransport, type LfgErrorSink } from "./lib/lfg-client";
 import { BareSurfaceProvider } from "./lib/bare-surface";
+import { claimSurfaceAttribute } from "./lib/surface-attribute";
 import { createLfgRouter } from "./router";
 
 export { createGrantTransport } from "@lfg-dev/client";
@@ -148,12 +149,9 @@ export function LfgSettingsSurface({
     void router.navigate({ to: `/${page}`, search: { embed: true }, replace: true });
   }, [router, page]);
 
-  useLayoutEffect(() => {
-    document.documentElement.dataset.lfgAppSurface = "";
-    return () => {
-      delete document.documentElement.dataset.lfgAppSurface;
-    };
-  }, []);
+  // Ref-counted: a host can have two surfaces alive at once, and the first one
+  // to unmount must not strip the stylesheet's anchor off the other.
+  useLayoutEffect(() => claimSurfaceAttribute(), []);
 
   return (
     <div className={className} data-lfg-app-surface="" data-lfg-settings-surface={page}>
@@ -198,12 +196,9 @@ export function LfgAppSurface({
     ),
   );
 
-  useLayoutEffect(() => {
-    document.documentElement.dataset.lfgAppSurface = "";
-    return () => {
-      delete document.documentElement.dataset.lfgAppSurface;
-    };
-  }, []);
+  // Ref-counted: a host can have two surfaces alive at once, and the first one
+  // to unmount must not strip the stylesheet's anchor off the other.
+  useLayoutEffect(() => claimSurfaceAttribute(), []);
 
   return (
     <div className={className} data-lfg-app-surface="">
