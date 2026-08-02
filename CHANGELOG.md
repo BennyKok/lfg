@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - Embedded chrome survives a settings visit (v0.1.203)
+
+- A host that mounts both surfaces no longer has its full app corrupted by
+  opening a settings page. "Renders inside the host's chrome" was a single
+  process-wide flag, so a settings page set it once and every later full-app
+  render lost its header, gutter and header inset until a hard reload. Each
+  mounted tree declares its own now.
+
 ## August 2, 2026 - Faster session create and fork (v0.1.202)
 
 - Starting a session no longer waits on a fetch from GitHub. Provisioning its
