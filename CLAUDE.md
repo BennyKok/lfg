@@ -24,6 +24,24 @@ To release:
 3. Releases are tagged from a clean, up-to-date `main` only — the script
    enforces this.
 
+## Dependency Advisories
+
+Dependabot can't read `bun.lock`, so `scripts/audit.ts` is our audit
+(`.github/workflows/audit.yml`: push, PR, Mondays 09:00 UTC). Both bun
+lockfiles are covered — root and `web/`.
+
+- Accepted advisories live in `scripts/audit-exceptions.json`, each with a
+  written reason and a hard `reviewBy` date.
+- The gate fails on: an unaccepted high/critical advisory, an entry past its
+  date, an entry no longer in the graph, and a `no-fix-available` entry
+  upstream has since fixed — including a fix shipped under a **renamed
+  successor package**.
+- Never add a bare `bun audit --ignore=` back to the workflow. That is what
+  this replaced: it spent two months hiding a fixable high-severity advisory
+  while CI stayed green, because a comment promising to revisit it is not a
+  check. A test fails if the flag reappears.
+- Re-record after a fix or a bump: `bun run audit:exceptions`.
+
 ## Local Repro Servers
 
 - Bind ad hoc repro/static servers to loopback only. Use

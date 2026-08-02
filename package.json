@@ -20,6 +20,8 @@
     "setup": "bun run src/cli.ts setup",
     "icons": "bun run scripts/generate-icons.ts",
     "test": "bun test",
+    "audit": "bun run scripts/audit.ts",
+    "audit:exceptions": "bun run scripts/audit.ts --update-exceptions",
     "build:packages": "bash scripts/pack-packages.sh --build-only",
     "pack:packages": "bash scripts/pack-packages.sh",
     "typecheck": "bun x tsc -p tsconfig.json --noEmit",

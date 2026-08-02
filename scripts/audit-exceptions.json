@@ -1,0 +1,49 @@
+{
+  "$comment": [
+    "Accepted dependency advisories. Enforced by scripts/audit.ts (`bun run audit`), which",
+    "fails CI on any high/critical advisory NOT listed here, on any entry past its reviewBy",
+    "date, on any entry no longer present in the graph, and on any `no-fix-available` entry",
+    "that upstream has since fixed — including a fix published under a renamed package.",
+    "",
+    "This replaced a bare `bun audit --ignore=GHSA-...` flag, which had no exit condition and",
+    "spent two months suppressing an advisory that had already been fixed upstream.",
+    "",
+    "justification values:",
+    "  no-fix-available  upstream has published no fixed release. Re-verified against the",
+    "                    GitHub advisory API on every run and fails the moment one appears,",
+    "                    including a fix shipped under a renamed successor package.",
+    "  backlog           a fix exists; the upgrade is queued. Bounded by reviewBy.",
+    "  not-exploitable   only reachable through a code path this repo does not use.",
+    "  pinned            the vulnerable version is deliberately pinned and the pin is load-bearing."
+  ],
+  "policy": {
+    "blockingSeverities": ["high", "critical"],
+    "defaultReviewDays": 90
+  },
+  "accepted": [
+    {
+      "ghsa": "GHSA-jfgx-wxx8-mp94",
+      "package": "@mariozechner/pi-coding-agent",
+      "root": ".",
+      "severity": "high",
+      "title": "Pi Agent: Predictable temporary extension install paths allow local privilege escalation on shared Linux hosts",
+      "vulnerableVersions": ">=0.50.0 <=0.73.1",
+      "justification": "backlog",
+      "reason": "Was accepted as no-fix-available while @mariozechner/pi-coding-agent 0.73.1 was the newest release. That is no longer why it is accepted: the package was renamed and the fix ships as @earendil-works/pi-coding-agent >= 0.78.1 (latest 0.83.0). Migrating means a rename plus a 0.73 -> 0.83 jump across the pi RPC backend that spawns `pi --mode rpc`, so it needs its own change with a real pi session exercised against it — not a drive-by bump in a CI commit. Exposure needs a hostile local user on the same host and LFG runs single-tenant.",
+      "acceptedOn": "2026-08-02",
+      "reviewBy": "2026-09-15"
+    },
+    {
+      "ghsa": "GHSA-jfgx-wxx8-mp94",
+      "package": "@mariozechner/pi-coding-agent",
+      "root": "web",
+      "severity": "high",
+      "title": "Pi Agent: Predictable temporary extension install paths allow local privilege escalation on shared Linux hosts",
+      "vulnerableVersions": ">=0.50.0 <=0.73.1",
+      "justification": "backlog",
+      "reason": "Same advisory as the root entry, reached through web/bun.lock. This lockfile was never audited before — the old command ran `bun audit` at the repository root only. Clears with the same @earendil-works migration.",
+      "acceptedOn": "2026-08-02",
+      "reviewBy": "2026-09-15"
+    }
+  ]
+}
