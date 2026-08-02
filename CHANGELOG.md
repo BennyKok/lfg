@@ -4,6 +4,23 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - Phone call and voice orb removed (v0.1.201)
+
+- The LiveKit phone-call screen and the voice orb are gone. The call UI had
+  already been unreachable — nothing could open it — while still shipping about
+  8 MB of 3D and realtime-audio libraries to every visitor. Audio mode, which
+  speaks the current session, already covers what the call was for.
+- The web bundle is roughly 8 MB smaller as a result.
+- Dictation, spoken replies, audio mode, the voice provider settings, and the
+  deep-think advisor behind "ask a question" all work exactly as before.
+- Setting a voice API key now tells you which half you just enabled ("Voice
+  messages are ready" / "Spoken replies are ready") instead of claiming all of
+  voice is ready when only one provider was configured.
+- Note for self-hosters: the GPU voice stacks under `deploy/` were only ever
+  reachable through the call path, so `TTS_UPSTREAM` / `STT_UPSTREAM` are no
+  longer read. Their READMEs now say so, and the TTS failover timer no longer
+  affects anything.
+
 ## August 2, 2026 - Mounted settings pages sit in the host's column (v0.1.200)
 
 - A settings page mounted inside another product now fills that product's
