@@ -11751,6 +11751,7 @@ function SessionChat({
   const [launching, setLaunching] = useState(false);
   const messageInputRef = useRef<HTMLTextAreaElement>(null);
   const [dictationScrollNonce, setDictationScrollNonce] = useState(0);
+  const [messageMultiline, setMessageMultiline] = useState(false);
   // Shared composer file plumbing (same hook the new-session and fork composers
   // use): eager uploads, drag & drop, paste, annotate.
   const files = useComposerAttachments({
@@ -12094,7 +12095,12 @@ function SessionChat({
             onAnnotate={files.setAnnotatingId}
             onRemove={removeAttachment}
           />
-          <div className="flex items-end gap-2">
+          <div
+            className={cn(
+              "flex gap-2",
+              messageMultiline ? "items-end" : "items-center",
+            )}
+          >
             <Button
               size="icon"
               type="button"
@@ -12113,6 +12119,7 @@ function SessionChat({
                 data-composer-sid={sid}
                 value={messageText}
                 onValueChange={setMessageText}
+                onMultilineChange={setMessageMultiline}
                 scrollToEndNonce={dictationScrollNonce}
                 showSkillButton
                 insetEnd

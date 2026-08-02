@@ -10,9 +10,11 @@ describe("shared composer growth and dictation follow-scroll", () => {
       '"max-h-40 min-w-0 flex-1 resize-none overflow-y-auto [field-sizing:fixed] md:max-h-36"',
     );
     expect(app).toContain('promptMultiline ? "items-end" : "items-center"');
+    expect(app).toContain('messageMultiline ? "items-end" : "items-center"');
     expect(app).toContain(
       'onMultilineChange={variant === "inline" ? setPromptMultiline : undefined}',
     );
+    expect(app).toContain("onMultilineChange={setMessageMultiline}");
   });
 
   test("voice updates explicitly follow the newest line without hijacking manual edits", async () => {
