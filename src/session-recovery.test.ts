@@ -6,6 +6,7 @@ import { PATHS } from "./config.ts";
 import { currentBootId, readEntry, writeEntry } from "./aisdk-registry.ts";
 import { addManaged, listManaged, resetManagedRegistryForTests } from "./managed.ts";
 import { reconcileCommandFileSessions } from "./session-recovery.ts";
+import { managedLaunchRow } from "./sessions.ts";
 
 describe("command-file session boot recovery", () => {
   const originalData = PATHS.data;
@@ -101,5 +102,33 @@ describe("command-file session boot recovery", () => {
     expect(result.recovered).toBe(1);
     const launch = JSON.parse(readFileSync(capture, "utf8")) as { cmd: string[] };
     expect(launch.cmd).toContain("--recovered-at");
+  });
+
+  test("does not surface a dead registry entry as an already-live managed session", () => {
+    const key = "44444444-4444-4444-8444-444444444444";
+    const managed = {
+      tmuxName: "lfg-dead-entry",
+      cwd: root,
+      createdAt: 1,
+      agent: "codex-aisdk" as const,
+      sessionId: key,
+      nativeSessionId: "55555555-5555-4555-8555-555555555555",
+      model: "gpt-5.6-sol",
+      launchState: "running" as const,
+    };
+    writeEntry({
+      sessionId: key,
+      agent: "codex",
+      harnessPid: 2147483647,
+      tmuxName: managed.tmuxName,
+      supervisor: "process",
+      bootId: currentBootId(),
+      cwd: root,
+      model: managed.model,
+      busy: true,
+      createdAt: 1,
+    });
+
+    expect(managedLaunchRow(managed, {}, {})).toBeNull();
   });
 });

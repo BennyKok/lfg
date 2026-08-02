@@ -390,7 +390,7 @@ function managedTitle(
   );
 }
 
-function managedLaunchRow(
+export function managedLaunchRow(
   m: ManagedSession,
   overrides: Record<string, string>,
   assigns: Record<string, string>,
@@ -400,7 +400,10 @@ function managedLaunchRow(
   if (!sessionId) return null;
   const agent = m.agent ?? "claude";
   const commandFile = isCommandFileAgent(agent);
-  const directEntry = commandFile ? findAisdkEntryByAnyId(sessionId) : null;
+  const candidateEntry = commandFile ? findAisdkEntryByAnyId(sessionId) : null;
+  const directEntry = candidateEntry && isPidAlive(candidateEntry.harnessPid)
+    ? candidateEntry
+    : null;
   if (!commandFile && !tmux.hasSession(m.tmuxName)) return null;
   if (commandFile && m.launchState !== "launching" && !directEntry) return null;
   const pid = commandFile ? (directEntry?.harnessPid ?? 0) : (tmux.panePid(m.tmuxName) ?? 0);
