@@ -203,6 +203,19 @@ function plottableUsage(p: ProviderUsage | null): boolean {
   return Boolean(p?.available && (p.windows?.length ?? 0) > 0);
 }
 
+/**
+ * An arc node is about 80px wide, so a caption only has room for two or three
+ * words — the full note stays as the hover title.
+ */
+function shortNote(note: string | null | undefined): string {
+  const n = note ?? "";
+  if (/401|403|sign-?in expired/i.test(n)) return "sign-in expired";
+  if (/429|rate limit/i.test(n)) return "rate limited";
+  if (/not signed in/i.test(n)) return "not signed in";
+  if (/no longer on this box/i.test(n)) return "account missing";
+  return "usage unavailable";
+}
+
 /** Window to feature on the arc card: highest utilization, then soonest reset. */
 function headlineWindow(p: ProviderUsage): UsageWindow | null {
   const windows = p.windows ?? [];
@@ -996,7 +1009,7 @@ function CampfireOverlay({
                   style={{ color: TONE.muted }}
                   title={p?.note ?? undefined}
                 >
-                  {p?.note ?? "usage unavailable"}
+                  {shortNote(p?.note)}
                 </div>
               ) : null}
             </button>
