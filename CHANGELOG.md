@@ -4,6 +4,15 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - Fewer whole-server freezes (v0.1.211)
+
+- Listing sessions ran `pgrep` twice, forking a process to ask the operating
+  system something it already publishes as files. LFG reads that directly now,
+  which is about ten times faster and, more importantly, doesn't block the
+  server while it happens. Today's log recorded 686 requests that took over a
+  second and 220 over five — during which nothing else moved, including live
+  streams and reconnects.
+
 ## August 2, 2026 - Reconnecting is quick again (v0.1.210)
 
 - Coming back to a tab that had gone stale — after sleep, or a long spell in
