@@ -89,7 +89,7 @@ register LFG's MCP server with it.
 | Grok | `grok` | |
 | Hermes | `hermes` | |
 | GitHub Copilot | `copilot` | Needs Node 22+ |
-| Pi | *bundled* | Ships with LFG (`@mariozechner/pi-coding-agent`); no separate install |
+| Pi | *bundled* | Ships with LFG (`@earendil-works/pi-coding-agent`); no separate install |
 
 OAuth-based agents need a one-time terminal or browser login. API-key providers
 read env vars such as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` from `.env`. Pi

@@ -27,8 +27,10 @@ To release:
 ## Dependency Advisories
 
 Dependabot can't read `bun.lock`, so `scripts/audit.ts` is our audit
-(`.github/workflows/audit.yml`: push, PR, Mondays 09:00 UTC). Both bun
-lockfiles are covered — root and `web/`.
+(`.github/workflows/audit.yml`: push, PR, Mondays 09:00 UTC). It reads the
+workspace graph, which covers `web/` — `bun audit` resolves the *workspace*
+lockfile, so auditing a member directory re-reads the root rather than that
+member's own bun.lock.
 
 - Accepted advisories live in `scripts/audit-exceptions.json`, each with a
   written reason and a hard `reviewBy` date.

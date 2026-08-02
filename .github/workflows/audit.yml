@@ -18,8 +18,13 @@ name: audit
 # scripts/audit.ts is that promise made executable: exceptions live in
 # scripts/audit-exceptions.json with a reason and a hard review date, and the
 # gate re-verifies every "no fix exists" claim against the GitHub advisory API
-# on each run. It also audits web/bun.lock — the dashboard bundle that ships to
-# browsers, which the old root-only command never looked at.
+# on each run.
+#
+# It audits the workspace graph, which covers web/ too: `bun audit` resolves the
+# *workspace* lockfile, so running it inside a member directory re-reads the
+# root rather than that member's own bun.lock. scripts/audit.ts asserts its
+# roots are genuinely distinct rather than letting a duplicate inflate the
+# coverage number.
 
 on:
   push:
@@ -61,10 +66,7 @@ jobs:
         run: |
           {
             echo '## bun audit — full report'
-            for dir in . web; do
-              echo "### $dir"
-              echo '```'
-              (cd "$dir" && bun audit 2>&1) || true
-              echo '```'
-            done
+            echo '```'
+            bun audit 2>&1 || true
+            echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

@@ -300,14 +300,14 @@ function hermesPath(): string | null {
 }
 
 // pi has no standalone-CLI requirement: the backend drives LFG's own bundled
-// copy of @mariozechner/pi-coding-agent over its RPC protocol (see
+// copy of @earendil-works/pi-coding-agent over its RPC protocol (see
 // agents/backends/pi-session.ts), with LFG_PI_PATH as an explicit override.
 // Detection therefore mirrors the harness's resolvePiCliPath() instead of
 // scanning PATH for a global binary.
 function piPath(): string | null {
   const override = process.env.LFG_PI_PATH;
   if (override && existsSync(override)) return override;
-  const bundled = join(PATHS.root, "node_modules", "@mariozechner", "pi-coding-agent", "dist", "cli.js");
+  const bundled = join(PATHS.root, "node_modules", "@earendil-works", "pi-coding-agent", "dist", "cli.js");
   return existsSync(bundled) ? bundled : null;
 }
 
@@ -531,7 +531,7 @@ function installCommandFor(kind: CodingAgentKind): string | null {
   if (kind === "cursor") return "curl -fsSL https://cursor.com/install | bash";
   if (kind === "hermes") return "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash";
   if (kind === "copilot") return "npm install -g @github/copilot";
-  // pi ships bundled with LFG (node_modules/@mariozechner/pi-coding-agent) —
+  // pi ships bundled with LFG (node_modules/@earendil-works/pi-coding-agent) —
   // there is nothing separate to install.
   if (kind === "pi") return null;
   return null;
@@ -917,7 +917,7 @@ export async function listSetupChecks(): Promise<SetupCheck[]> {
   }
   // No row for aisdk/codex-aisdk (they ride the Claude/Codex CLI registrations
   // above) and none for pi: pi is an RPC backend driving LFG's bundled
-  // @mariozechner/pi-coding-agent — it has no `pi mcp` registration surface, so
+  // @earendil-works/pi-coding-agent — it has no `pi mcp` registration surface, so
   // there is no LFG MCP to install or check for it.
   const optionalMcpAgents: Array<[string, string | null, boolean]> = [
     ["OpenCode", opencode, opencodeMcp],

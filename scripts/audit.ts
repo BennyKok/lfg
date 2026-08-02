@@ -23,9 +23,14 @@
 //    Every exception also carries a hard `reviewBy` date, so even a correctly
 //    justified one cannot be sat on indefinitely.
 //
-// 2. `bun audit` resolves one lockfile at a time, and this repo has two bun
-//    lockfiles. The old command ran at the root only, so `web/` — the dashboard
-//    bundle that actually ships to browsers — was never audited at all.
+// 2. `bun audit` resolves the *workspace* lockfile, not whichever bun.lock sits
+//    in the directory it was run from. That is subtle enough to have already
+//    produced a wrong answer here: `web` was briefly listed as a second audit
+//    root, and because `web` is a member of the root `workspaces` list, it just
+//    re-audited the root graph while the summary reported two lockfiles
+//    covered. assertRootsAreDistinct() now refuses to run in that state —
+//    inflated coverage is worse than none, because it is the number people
+//    trust.
 //
 // Run locally:
 //   bun run audit                 # the gate
@@ -46,10 +51,17 @@ export const EXCEPTIONS_PATH = join(SCRIPT_DIR, "audit-exceptions.json");
 /** Severities that fail the gate. Everything else is reported only. */
 export const BLOCKING_SEVERITIES = ["high", "critical"] as const;
 
-/** Every dependency graph `bun audit` can read here. One entry per bun lockfile. */
+/**
+ * Every distinct dependency graph `bun audit` can read here.
+ *
+ * "Distinct" is doing real work in that sentence. `bun audit` resolves the
+ * *workspace* lockfile, not whichever bun.lock happens to sit in the directory
+ * it is run from — so listing a workspace member here does not audit anything
+ * new, it audits the root a second time under a different label. assertRootsAreDistinct()
+ * below refuses to run in that state rather than reporting inflated coverage.
+ */
 export const AUDIT_ROOTS: { dir: string; why: string }[] = [
-  { dir: ".", why: "the CLI, agent backends and packages/* workspaces" },
-  { dir: "web", why: "the dashboard bundle served to browsers — its own lockfile, and previously unaudited" },
+  { dir: ".", why: "the workspace graph — the CLI, agent backends, packages/* and web/" },
 ];
 
 /**
@@ -62,7 +74,61 @@ export const EXCLUDED_LOCKFILES: { file: string; why: string }[] = [
     file: "mobile/package-lock.json",
     why: "npm lockfile — `bun audit` only reads bun.lock. Convert it to bun.lock and move it into AUDIT_ROOTS to bring the mobile app under the gate.",
   },
+  {
+    file: "web/bun.lock",
+    why: "`web` is a member of the root `workspaces` list, so `bun audit` run there resolves the ROOT lockfile and never reads this file — auditing it as a separate root double-counts the root graph. web/'s dependencies are already covered by the root audit. This lockfile is only consumed by `bun install` inside web/.",
+  },
 ];
+
+/** A workspace glob (`packages/*`, `web`, `!apps/landing`) as package.json spells it. */
+function workspaceGlobToRegExp(glob: string): RegExp {
+  const body = glob
+    .split("*")
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("[^/]*");
+  return new RegExp(`^${body}$`);
+}
+
+/**
+ * Does `dir` belong to the workspace rooted at `rootDir`? Negated globs win, the
+ * way bun treats them — `["apps/*", "!apps/landing"]` means apps/landing keeps
+ * its own graph and is a legitimate separate audit root.
+ */
+export function isWorkspaceMember(dir: string, workspaces: string[] | undefined): boolean {
+  if (!workspaces?.length) return false;
+  let member = false;
+  for (const glob of workspaces) {
+    const negated = glob.startsWith("!");
+    if (workspaceGlobToRegExp(negated ? glob.slice(1) : glob).test(dir)) member = !negated;
+  }
+  return member;
+}
+
+/**
+ * Fail loudly when a configured root is really the root graph wearing a hat.
+ * This is not hypothetical: `web` shipped in AUDIT_ROOTS on 2026-08-02 and
+ * spent its first hours re-auditing the root lockfile while the summary claimed
+ * two lockfiles were covered. Inflated coverage is worse than no coverage,
+ * because it is the number someone trusts.
+ */
+export function assertRootsAreDistinct(readPackageJson: (dir: string) => { workspaces?: string[] } | null): void {
+  const roots = AUDIT_ROOTS.map((r) => r.dir);
+  for (const parent of roots) {
+    const manifest = readPackageJson(parent);
+    if (!manifest?.workspaces) continue;
+    for (const child of roots) {
+      if (child === parent) continue;
+      const relative = parent === "." ? child : child.slice(parent.length + 1);
+      if (!isWorkspaceMember(relative, manifest.workspaces)) continue;
+      throw new Error(
+        `AUDIT_ROOTS lists "${child}", but it is a workspace member of "${parent}". ` +
+          "`bun audit` there resolves the workspace lockfile, so this root re-audits " +
+          `"${parent}" instead of adding coverage. Remove it, and record its lockfile in ` +
+          "EXCLUDED_LOCKFILES with the reason.",
+      );
+    }
+  }
+}
 
 export type Severity = "info" | "low" | "moderate" | "high" | "critical";
 
@@ -287,6 +353,15 @@ async function fetchAdvisory(ghsa: string, attempts = 3): Promise<AdvisoryRecord
  * Runner                                                              *
  * ------------------------------------------------------------------ */
 
+/** package.json for one audit root, or null when the directory has none. */
+export function readManifest(dir: string): { workspaces?: string[] } | null {
+  try {
+    return JSON.parse(readFileSync(join(REPO_ROOT, dir, "package.json"), "utf8")) as { workspaces?: string[] };
+  } catch {
+    return null;
+  }
+}
+
 export function loadExceptions(path = EXCEPTIONS_PATH): Exceptions {
   const exceptions = JSON.parse(readFileSync(path, "utf8")) as Exceptions;
   if (!Array.isArray(exceptions.accepted)) throw new Error(`${path}: missing "accepted" array`);
@@ -335,6 +410,8 @@ async function main() {
   const rewrite = args.includes("--update-exceptions");
   const offline = args.includes("--offline");
 
+  assertRootsAreDistinct(readManifest);
+
   const findings: Finding[] = [];
   for (const root of AUDIT_ROOTS) findings.push(...(await auditRoot(root.dir)));
 
@@ -368,6 +445,7 @@ async function main() {
 
   const invalidated: { entry: AcceptedEntry; why: string }[] = [];
   const fixAvailable: { entry: AcceptedEntry; fix: FixInfo }[] = [];
+  const unverified: AcceptedEntry[] = [];
   if (!offline) {
     // One advisory record covers every package it lists, so fetch per GHSA and
     // classify per entry.
@@ -388,7 +466,15 @@ async function main() {
     const unique = [...new Map(exceptions.accepted.map((e) => [`${e.ghsa}|${e.package}`, e])).values()];
     for (const entry of unique) {
       const advisory = advisories.get(entry.ghsa);
-      if (!advisory) continue;
+      // A lookup that failed is NOT a lookup that passed. Silently skipping it
+      // is precisely the shape of the bug this file exists to prevent: a check
+      // that quietly stops checking and still prints a green tick. (Seen for
+      // real — an unauthenticated local run hit GitHub's 60/hour limit and
+      // reported "no problems".)
+      if (!advisory) {
+        unverified.push(entry);
+        continue;
+      }
       const fix = classifyFix(advisory, entry.package);
       const why = fixInvalidatesAcceptance(entry, fix);
       if (why) invalidated.push({ entry, why });
@@ -398,7 +484,7 @@ async function main() {
 
   const lines: string[] = ["## Dependency advisory gate", ""];
   lines.push(
-    `Audited ${AUDIT_ROOTS.length} lockfiles: **${verdict.unaccepted.length + verdict.accepted.length}** high/critical, ${verdict.informational.length} lower-severity.`,
+    `Audited ${AUDIT_ROOTS.length} lockfile${AUDIT_ROOTS.length === 1 ? "" : "s"}: **${verdict.unaccepted.length + verdict.accepted.length}** high/critical, ${verdict.informational.length} lower-severity.`,
     "",
   );
 
@@ -446,6 +532,28 @@ async function main() {
       "",
       ...verdict.stale.map((e) => `- \`${e.package}\` (${e.root}) ${e.ghsa}`),
     ]);
+  }
+
+  // A `no-fix-available` claim is only true while something re-checks it, so an
+  // unverifiable one is not acceptable — it is unaudited. Other justifications
+  // do not rest on the lookup, so they degrade to a visible warning instead.
+  const unverifiedBlocking = unverified.filter((e) => e.justification === "no-fix-available");
+  if (unverified.length) {
+    const rows = unverified.map(
+      (e) => `- \`${e.package}\` ${e.ghsa} (${e.justification})`,
+    );
+    if (unverifiedBlocking.length) {
+      failed = true;
+      fail(`${unverifiedBlocking.length} \`no-fix-available\` exception${unverifiedBlocking.length === 1 ? "" : "s"} could not be verified`, [
+        "This justification is only valid while upstream is actually re-checked, so an",
+        "unreachable advisory API means unaudited, not fine. CI passes a GITHUB_TOKEN;",
+        "locally, the unauthenticated limit is 60/hour. Use `--offline` to skip deliberately.",
+        "",
+        ...rows,
+      ]);
+    } else {
+      lines.push(`### ⚠️ ${unverified.length} exception${unverified.length === 1 ? "" : "s"} could not be re-checked against the advisory API`, "", ...rows, "");
+    }
   }
 
   if (fixAvailable.length) {

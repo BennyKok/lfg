@@ -7,6 +7,9 @@ import {
   AUDIT_ROOTS,
   EXCLUDED_LOCKFILES,
   REPO_ROOT,
+  assertRootsAreDistinct,
+  isWorkspaceMember,
+  readManifest,
   type AcceptedEntry,
   type AdvisoryRecord,
   type Exceptions,
@@ -184,6 +187,41 @@ describe("exception exit conditions", () => {
         withdrawn: false,
       }),
     ).toBeNull();
+  });
+});
+
+describe("audit root distinctness", () => {
+  test("workspace globs decide membership, and a negation wins", () => {
+    expect(isWorkspaceMember("web", ["packages/*", "web"])).toBe(true);
+    expect(isWorkspaceMember("packages/client", ["packages/*"])).toBe(true);
+    // A single `*` must not cross a path separator.
+    expect(isWorkspaceMember("packages/a/b", ["packages/*"])).toBe(false);
+    expect(isWorkspaceMember("mobile", ["packages/*", "web"])).toBe(false);
+    // `!apps/landing` is why apps/landing is a legitimate separate audit root.
+    expect(isWorkspaceMember("apps/landing", ["apps/*", "!apps/landing"])).toBe(false);
+    expect(isWorkspaceMember("apps/web", ["apps/*", "!apps/landing"])).toBe(true);
+    expect(isWorkspaceMember("web", undefined)).toBe(false);
+  });
+
+  test("a root that is a workspace member of another root is rejected", () => {
+    // The real regression: `web` shipped in AUDIT_ROOTS and re-audited the root
+    // lockfile while the summary claimed two lockfiles were covered.
+    const manifests: Record<string, { workspaces?: string[] } | null> = {
+      ".": { workspaces: ["packages/*", "web"] },
+      web: {},
+    };
+    const originalRoots = [...AUDIT_ROOTS];
+    AUDIT_ROOTS.push({ dir: "web", why: "test" });
+    try {
+      expect(() => assertRootsAreDistinct((dir) => manifests[dir] ?? null)).toThrow(/workspace member/);
+    } finally {
+      AUDIT_ROOTS.length = 0;
+      AUDIT_ROOTS.push(...originalRoots);
+    }
+  });
+
+  test("the committed roots are genuinely distinct", () => {
+    expect(() => assertRootsAreDistinct(readManifest)).not.toThrow();
   });
 });
 

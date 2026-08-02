@@ -4,7 +4,7 @@
 // Claude/codex/opencode siblings (./aisdk-session.ts, ./codex-aisdk-session.ts,
 // ./opencode-aisdk-session.ts) it runs as a detached process,
 // and drives a multi-turn conversation through the OFFICIAL
-// @mariozechner/pi-coding-agent RpcClient: it spawns `pi --mode rpc` as a child
+// @earendil-works/pi-coding-agent RpcClient: it spawns `pi --mode rpc` as a child
 // process and speaks a typed JSONL protocol over its stdin/stdout. Auth is pi's
 // own file-based config (~/.pi/agent/{auth,models}.json): the API key comes
 // from the sandbox's ANTHROPIC_API_KEY env var (pi resolves that on its own),
@@ -39,8 +39,14 @@ import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { initialCmdOffset, readNewCmdLines, writeCursor } from "./cmd-tail.ts";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import type { AgentEvent } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
+// pi 0.83 narrowed the RpcClient listener from pi-agent-core's raw `AgentEvent`
+// to `AgentSessionEvent`, which the coding-agent package owns: it re-shapes
+// `agent_end` and adds session-level events (agent_settled, entry_appended,
+// compaction_*). Every event this file handles is carried through unchanged, so
+// taking the type from the package that actually emits it costs nothing and
+// drops a direct dependency on pi-agent-core.
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 
 // Kept local rather than imported from tmux.ts: that module drags in the
 // serve/tmux dependency graph this harness deliberately stays clear of.
@@ -75,7 +81,7 @@ const PI_PROFILE_DIR_ENV = "LFG_PI_PROFILE_DIR";
 // sandbox-specific binary install.
 function resolvePiCliPath(): string {
   if (process.env.LFG_PI_PATH) return process.env.LFG_PI_PATH;
-  return join(import.meta.dir, "../../../node_modules/@mariozechner/pi-coding-agent/dist/cli.js");
+  return join(import.meta.dir, "../../../node_modules/@earendil-works/pi-coding-agent/dist/cli.js");
 }
 
 // Model ids the sandbox's local LLM proxy accepts that are NOT part of pi's
@@ -184,7 +190,7 @@ export async function cmdPiSession(argv: string[]): Promise<void> {
         `${profile.displayName ? ` name=${JSON.stringify(profile.displayName)}` : ""}`,
     );
   }
-  const { RpcClient } = await import("@mariozechner/pi-coding-agent");
+  const { RpcClient } = await import("@earendil-works/pi-coding-agent");
   const rpcArgs: string[] = [];
   // pi's own vocabulary (off|minimal|low|medium|high|xhigh), so translate rather
   // than forward. It answers an unknown level with a warning and then carries on
@@ -253,7 +259,7 @@ export async function cmdPiSession(argv: string[]): Promise<void> {
   // matching _end event has the result.
   const pendingToolCalls = new Map<string, { nonce: string; args: unknown }>();
 
-  client.onEvent((event: AgentEvent) => {
+  client.onEvent((event: AgentSessionEvent) => {
     if (closing) return;
     if (event.type === "message_update") {
       const ev = event.assistantMessageEvent;
