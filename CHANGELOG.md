@@ -4,6 +4,21 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - Artifact cards follow your theme instead of your desktop (v0.1.206)
+
+- An artifact rendered in a dark card on a light machine kept its light
+  styling — dark surfaces with dark text — because it had no way to see which
+  theme the card was in. The renderer now stamps `data-theme` on the artifact
+  document (and on the shadow host, where theme selectors were already being
+  rewritten against an attribute nothing set), so an artifact can key its dark
+  styles off the card rather than off the desktop.
+- Artifacts that reach for the short token names (`--lfg-artifact-bg`, `-fg`,
+  `-muted-fg`) now get the theme instead of silently falling back to their own
+  hardcoded colors.
+- Fixed the perf report card itself, which had painted every axis label,
+  legend, caption and table header with a *surface* color — invisible in both
+  light and dark.
+
 ## August 2, 2026 - Sessions on a second Claude account get their tools back (v0.1.205)
 
 - Sessions running on any Claude account other than the first started with no
