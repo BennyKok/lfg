@@ -22,7 +22,7 @@ import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { Database } from "bun:sqlite";
-import { claudeOauthToken } from "./claude-creds.ts";
+import { claudeAccessToken } from "./claude-creds.ts";
 import { claudeAccountConfigDir, connectedClaudeAccounts } from "./claude-accounts.ts";
 
 export type UsageWindow = {
@@ -91,7 +91,7 @@ async function claudeUsage(ref: UsageProviderRef): Promise<ProviderUsage> {
     const configDir = ref.accountId ? claudeAccountConfigDir(ref.accountId) : null;
     if (ref.accountId && !configDir)
       return { ...base, available: false, note: "Account is no longer on this box" };
-    const token = claudeOauthToken(configDir ?? undefined);
+    const token = await claudeAccessToken(configDir ?? undefined);
     if (!token) return { ...base, available: false, note: "Not signed in on this box" };
     const r = await fetch("https://api.anthropic.com/api/oauth/usage", {
       headers: { Authorization: `Bearer ${token}`, "anthropic-beta": "oauth-2025-04-20" },
