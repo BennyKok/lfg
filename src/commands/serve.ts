@@ -2712,7 +2712,6 @@ export async function cmdServe() {
           sessions: sessionsTask,
           users: Promise.resolve(userRoster()),
           repos: reposTask,
-          skills: reposTask.then((repos) => listSkillCatalog(repos.map((repo) => repo.cwd))),
           autoAgents: listAutoAgents(),
           findings: listFindings("open"),
           onboarding: getOnboarding(),
@@ -2732,7 +2731,6 @@ export async function cmdServe() {
           sessions?: Awaited<ReturnType<typeof listSessionsCached>> | null;
           users?: ReturnType<typeof userRoster> | null;
           repos?: Awaited<ReturnType<typeof listRepos>> | null;
-          skills?: Awaited<ReturnType<typeof listSkillCatalog>> | null;
           autoAgents?: Awaited<ReturnType<typeof listAutoAgents>> | null;
           findings?: Awaited<ReturnType<typeof listFindings>> | null;
           onboarding?: Awaited<ReturnType<typeof getOnboarding>> | null;
@@ -2746,7 +2744,6 @@ export async function cmdServe() {
             sessions: boot.sessions ?? null,
             users: boot.users ?? null,
             repos: boot.repos ?? null,
-            skills: boot.skills ?? null,
             auto: {
               agents: boot.autoAgents
                 ? boot.autoAgents.map(withAutoAgentMeta)

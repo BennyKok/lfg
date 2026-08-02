@@ -4,6 +4,18 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - Reconnects stop waiting on settings (v0.1.196)
+
+- Reopening LFG no longer freezes every request while it boots five agent CLIs
+  to inspect MCP setup. Those checks now run only on the Coding agents page,
+  run together without blocking live sockets or the API, and finish roughly
+  three times faster when that page is opened.
+- The startup payload no longer carries the entire skill catalog before the
+  user asks for a skill. On this instance that removes about 106 KB over the
+  wire on every cold load; slash-skill suggestions still fetch it on demand.
+- The changelog moved out of the startup JavaScript and into its own on-demand
+  chunk, trimming another 32 KB of Brotli-compressed code from the cold path.
+
 ## August 2, 2026 - Session creation no longer looks stuck (v0.1.195)
 
 - Starting a session now replaces the composer with a clear, shimmering

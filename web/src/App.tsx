@@ -237,6 +237,9 @@ const VoiceCall = lazyWithReload("VoiceCall", () =>
   import("./voice-call").then((m) => ({ default: m.VoiceCall })),
 );
 const BrowserProfiles = lazyWithReload("BrowserProfiles", () => import("./BrowserProfiles"));
+const ChangelogPage = lazyWithReload("ChangelogPage", () =>
+  import("./ChangelogPage"),
+);
 import { Badge } from "@/components/ui/badge";
 import { ImageAnnotator } from "@/components/ImageAnnotator";
 import { SessionDiffBar } from "@/components/SessionDiffView";
@@ -273,7 +276,6 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
-import changelogMarkdown from "../../CHANGELOG.md?raw";
 import { useExtensionNavTabs } from "./lib/extensions";
 import type { ExtensionNavTab } from "./lib/extensions";
 import {
@@ -748,7 +750,6 @@ type BootstrapPayload = {
   sessions?: Session[] | null;
   users?: User[] | null;
   repos?: Repo[] | null;
-  skills?: SkillCatalogItem[] | null;
   auto?: { agents?: AutoAgent[] | null; tz?: string; findings?: AutoFinding[] | null };
   onboarding?: OnboardingState | null;
 };
@@ -1423,18 +1424,6 @@ function loadSkillCatalog(): Promise<SkillCatalogItem[]> {
       });
   }
   return skillCatalogPromise;
-}
-
-function seedSkillCatalog(skills: SkillCatalogItem[] | null | undefined): void {
-  if (!Array.isArray(skills)) return;
-  skillCatalogSnapshot = skills;
-  skillCatalogLoadedAt = Date.now();
-}
-
-function warmSkillCatalog(): void {
-  void loadSkillCatalog().catch(() => {
-    // Skill suggestions are optional; a failed warmup should not affect startup.
-  });
 }
 
 function slashSkillAt(value: string, cursor: number | null | undefined): SlashSkillState | null {
@@ -5049,7 +5038,6 @@ export function App() {
     setSessions(payload.sessions ?? []);
     setUsers(payload.users ?? []);
     setRepos(payload.repos ?? []);
-    seedSkillCatalog(payload.skills);
     setAutoAgents(payload.auto?.agents ?? []);
     setSchedTz(payload.settings?.timeZone ?? payload.auto?.tz ?? DEFAULT_SCHED_TZ);
     const findingList = payload.auto?.findings ?? [];
@@ -5269,7 +5257,10 @@ export function App() {
   }, [loadCore]);
 
   useEffect(() => {
-    if (loading) return;
+    // These checks boot each installed agent CLI. They belong exclusively to
+    // the Coding agents page; probing them after every app load made a normal
+    // reconnect spend seconds on settings data the user never opened.
+    if (loading || tab !== "coding-agents") return;
     let cancelled = false;
     let timer: number | null = null;
     const frame = requestAnimationFrame(() => {
@@ -5288,7 +5279,7 @@ export function App() {
       cancelAnimationFrame(frame);
       if (timer !== null) window.clearTimeout(timer);
     };
-  }, [loading]);
+  }, [loading, tab]);
 
   useEffect(() => {
     const id = setInterval(() => {
@@ -6843,7 +6834,9 @@ export function App() {
           </div>
         ) : null}
         {tab === "changelog" ? (
-          <ChangelogPage />
+          <Suspense fallback={<div className="py-10 text-center text-sm text-muted-foreground">Loading changelog…</div>}>
+            <ChangelogPage />
+          </Suspense>
         ) : null}
         {tab === "term" ? (
           <Suspense fallback={<div className="py-10 text-center text-sm text-muted-foreground">Loading terminal…</div>}>
@@ -20993,16 +20986,6 @@ function ShippedPage({
       ) : null}
         </>
       )}
-    </div>
-  );
-}
-
-function ChangelogPage() {
-  return (
-    <div className="mx-auto max-w-xl space-y-5 pb-10">
-      <article className="markdown rounded-2xl border border-border bg-card/40 px-4 py-4">
-        <MessageResponse>{changelogMarkdown}</MessageResponse>
-      </article>
     </div>
   );
 }

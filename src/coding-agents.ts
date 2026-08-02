@@ -351,6 +351,37 @@ function commandOutput(
   }
 }
 
+// Setup-status probes invoke each agent's CLI. Those processes can take more
+// than a second apiece to boot; running them with spawnSync freezes Bun's only
+// event loop and makes every unrelated API request look offline until all of
+// the probes finish. Keep the synchronous helper above for setup mutations,
+// where command ordering is intentional, but never use it on the read path.
+async function commandOutputAsync(
+  argv: string[],
+  env: Record<string, string | undefined> = process.env,
+): Promise<{ ok: boolean; text: string }> {
+  try {
+    const proc = Bun.spawn(argv, {
+      stdout: "pipe",
+      stderr: "pipe",
+      env,
+    });
+    const timeout = setTimeout(() => proc.kill(), 15_000);
+    try {
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      return { ok: exitCode === 0, text: `${stdout}${stderr}` };
+    } finally {
+      clearTimeout(timeout);
+    }
+  } catch (e) {
+    return { ok: false, text: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 function mcpCommandArgs(): string[] | null {
   const bun = bunPath();
   if (!bun) return null;
@@ -369,40 +400,40 @@ function mcpHttpUrl(): string {
   return `${localServeBaseUrl()}/mcp`;
 }
 
-function hasClaudeLfgMcp(): boolean {
+async function hasClaudeLfgMcp(): Promise<boolean> {
   const claude = claudePath();
   if (!claude) return false;
-  const out = commandOutput([claude, "mcp", "get", "lfg"]);
+  const out = await commandOutputAsync([claude, "mcp", "get", "lfg"]);
   if (!out.ok) return false;
   // Only the HTTP registration counts. A leftover stdio entry from an older
   // install reports as "not installed" so setup replaces it.
   return out.text.includes(mcpHttpUrl());
 }
 
-function hasCodexLfgMcp(): boolean {
+async function hasCodexLfgMcp(): Promise<boolean> {
   const codex = codexPath();
   const args = mcpCommandArgs();
   if (!codex || !args) return false;
-  const out = commandOutput([codex, "mcp", "get", "lfg"]);
+  const out = await commandOutputAsync([codex, "mcp", "get", "lfg"]);
   if (!out.ok) return false;
   return args.every((part) => out.text.includes(part));
 }
 
-function commandHasLfgMcp(binary: string | null): boolean {
+async function commandHasLfgMcp(binary: string | null): Promise<boolean> {
   if (!binary) return false;
-  const out = commandOutput([binary, "mcp", "list"]);
+  const out = await commandOutputAsync([binary, "mcp", "list"]);
   return out.ok && /\blfg\b/i.test(out.text);
 }
 
-function hasOpencodeLfgMcp(): boolean {
+function hasOpencodeLfgMcp(): Promise<boolean> {
   return commandHasLfgMcp(opencodePath());
 }
 
-function hasGrokLfgMcp(): boolean {
+function hasGrokLfgMcp(): Promise<boolean> {
   return commandHasLfgMcp(grokPath());
 }
 
-function hasCursorLfgMcp(): boolean {
+function hasCursorLfgMcp(): Promise<boolean> {
   return commandHasLfgMcp(cursorPath());
 }
 
@@ -815,6 +846,16 @@ export async function listSetupChecks(): Promise<SetupCheck[]> {
   const opencode = opencodePath();
   const grok = grokPath();
   const cursor = cursorPath();
+  // Launch the slow CLI probes together. More importantly, they yield the Bun
+  // event loop while running, so live sockets and ordinary API responses stay
+  // responsive even when this cache is cold.
+  const [claudeMcp, codexMcp, opencodeMcp, grokMcp, cursorMcp] = await Promise.all([
+    claude ? hasClaudeLfgMcp() : Promise.resolve(false),
+    codex ? hasCodexLfgMcp() : Promise.resolve(false),
+    opencode ? hasOpencodeLfgMcp() : Promise.resolve(false),
+    grok ? hasGrokLfgMcp() : Promise.resolve(false),
+    cursor ? hasCursorLfgMcp() : Promise.resolve(false),
+  ]);
   const checks: CodingAgentCheck[] = [
     { label: "Bun", ok: !!bunPath(), detail: bunPath() ?? "not found" },
     { label: "tmux", ok: !!which("tmux"), detail: which("tmux") ?? "not found" },
@@ -824,8 +865,8 @@ export async function listSetupChecks(): Promise<SetupCheck[]> {
   if (claude) {
     checks.push({
       label: "Claude MCP",
-      ok: hasClaudeLfgMcp(),
-      detail: hasClaudeLfgMcp() ? "registered" : "not registered",
+      ok: claudeMcp,
+      detail: claudeMcp ? "registered" : "not registered",
     });
   } else {
     checks.push({ label: "Claude MCP", ok: true, detail: "Claude CLI not installed" });
@@ -833,8 +874,8 @@ export async function listSetupChecks(): Promise<SetupCheck[]> {
   if (codex) {
     checks.push({
       label: "Codex MCP",
-      ok: hasCodexLfgMcp(),
-      detail: hasCodexLfgMcp() ? "registered" : "not registered",
+      ok: codexMcp,
+      detail: codexMcp ? "registered" : "not registered",
     });
   } else {
     checks.push({ label: "Codex MCP", ok: true, detail: "Codex CLI not installed" });
@@ -843,13 +884,12 @@ export async function listSetupChecks(): Promise<SetupCheck[]> {
   // above) and none for pi: pi is an RPC backend driving LFG's bundled
   // @mariozechner/pi-coding-agent — it has no `pi mcp` registration surface, so
   // there is no LFG MCP to install or check for it.
-  const optionalMcpAgents: Array<[string, string | null, () => boolean]> = [
-    ["OpenCode", opencode, hasOpencodeLfgMcp],
-    ["Grok", grok, hasGrokLfgMcp],
-    ["Cursor", cursor, hasCursorLfgMcp],
+  const optionalMcpAgents: Array<[string, string | null, boolean]> = [
+    ["OpenCode", opencode, opencodeMcp],
+    ["Grok", grok, grokMcp],
+    ["Cursor", cursor, cursorMcp],
   ];
-  for (const [label, binary, registered] of optionalMcpAgents) {
-    const ok = registered();
+  for (const [label, binary, ok] of optionalMcpAgents) {
     checks.push(binary
       ? { label: `${label} MCP`, ok, detail: ok ? "registered" : "not registered" }
       : { label: `${label} MCP`, ok: true, detail: `${label} CLI not installed` });
