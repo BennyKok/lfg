@@ -4,6 +4,18 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - Claude accounts you can actually see (v0.1.193)
+
+- Picking "Claude · Auto" in the agent picker now highlights it. The Auto entry
+  was the one option that never lit up, so the composer looked like nothing was
+  selected — and swiping to cycle agents or tapping to collapse the row didn't
+  work from Auto either.
+- The campfire no longer hides a Claude account it couldn't read. An account
+  whose usage lookup fails — expired sign-in, rate limit — keeps its place on
+  the arc, dimmed, with the reason underneath, instead of silently disappearing
+  and leaving you to wonder where the account went.
+- The composer's agent icon is centered when the composer is a single line.
+
 ## August 2, 2026 - A roomier "new version" prompt (v0.1.192)
 
 - The post-deploy "New version available" screen no longer borrows the crash
