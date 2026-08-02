@@ -12,6 +12,7 @@ import {
   mkdirSync,
   readdirSync,
   rmSync,
+  statSync,
   appendFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -103,14 +104,62 @@ export function cmdPath(sessionId: string): string {
 export function writeEntry(entry: AisdkEntry): void {
   mkdirSync(DIR, { recursive: true });
   writeFileSync(entryPath(entry.sessionId), JSON.stringify(entry, null, 2));
+  // Our own writes must be visible to our own next read, whatever the snapshot
+  // window says: a caller that writes and then lists is asking about the write
+  // it just made.
+  invalidateEntryCache(entryPath(entry.sessionId));
+}
+
+/**
+ * Parsed entries, keyed by path and validated against the file's mtime.
+ *
+ * Building the session list walks this registry about eight times — several
+ * direct listEntries() calls plus findEntryByAnyId, which scans the whole
+ * directory per lookup. With ~90 live sessions that was ~700 reads and ~700
+ * JSON.parse calls per rebuild, and it measured as 60% of the rebuild's CPU:
+ * the single largest cost in the whole session list, larger than every process
+ * and tmux scan combined.
+ *
+ * Caching on mtime rather than on a clock keeps this correct across processes.
+ * Harnesses write their own entries, so a timed cache could hide a busy flag
+ * that another process just flipped; a stat cannot. Nanosecond precision means
+ * two writes inside the same millisecond can't alias either. The stat still
+ * costs a syscall per file, but not a read and not a parse.
+ */
+type CachedEntry = { mtimeNs: bigint; size: bigint; entry: AisdkEntry };
+const entryCache = new Map<string, CachedEntry>();
+
+/** Drop what this process just changed, so its own next read goes to disk. */
+function invalidateEntryCache(path: string): void {
+  entryCache.delete(path);
+  snapshot = null;
+}
+
+function readEntryAt(path: string): AisdkEntry | null {
+  let mtimeNs: bigint;
+  let size: bigint;
+  try {
+    const st = statSync(path, { bigint: true });
+    mtimeNs = st.mtimeNs;
+    size = st.size;
+  } catch {
+    entryCache.delete(path);
+    return null;
+  }
+  const hit = entryCache.get(path);
+  if (hit && hit.mtimeNs === mtimeNs && hit.size === size) return hit.entry;
+  try {
+    const entry = JSON.parse(readFileSync(path, "utf8")) as AisdkEntry;
+    entryCache.set(path, { mtimeNs, size, entry });
+    return entry;
+  } catch {
+    entryCache.delete(path);
+    return null;
+  }
 }
 
 export function readEntry(sessionId: string): AisdkEntry | null {
-  try {
-    return JSON.parse(readFileSync(entryPath(sessionId), "utf8")) as AisdkEntry;
-  } catch {
-    return null;
-  }
+  return readEntryAt(entryPath(sessionId));
 }
 
 // Merge a partial update into an existing entry (e.g. flipping `busy`). No-op if
@@ -121,19 +170,47 @@ export function patchEntry(sessionId: string, patch: Partial<AisdkEntry>): void 
   writeEntry({ ...cur, ...patch });
 }
 
+/**
+ * One directory walk per burst.
+ *
+ * The mtime cache above removes the reads and the parses, but not the syscalls:
+ * eight walks over ~90 entries is still ~700 stats per session-list rebuild,
+ * and that measured as the largest remaining cost. This snapshot collapses the
+ * walks a single rebuild does into one.
+ *
+ * The window is deliberately far shorter than anything that polls this data —
+ * the session list rebuilds on a multi-second cadence and the live socket polls
+ * at 400ms — so an entry another process writes is still picked up on the very
+ * next poll, not a later one. Past the window the mtime check runs again, so
+ * this only ever collapses duplicate work inside one burst.
+ */
+const SNAPSHOT_WINDOW_MS = 50;
+let snapshot: { at: number; entries: AisdkEntry[] } | null = null;
+
 export function listEntries(): AisdkEntry[] {
+  const now = Date.now();
+  if (snapshot && now - snapshot.at < SNAPSHOT_WINDOW_MS) return snapshot.entries;
   let files: string[];
   try {
     files = readdirSync(DIR);
   } catch {
+    entryCache.clear();
+    snapshot = { at: now, entries: [] };
     return [];
   }
   const out: AisdkEntry[] = [];
+  const seen = new Set<string>();
   for (const f of files) {
     if (!f.endsWith(".json")) continue;
-    const e = readEntry(f.replace(/\.json$/, ""));
+    const path = join(DIR, f);
+    seen.add(path);
+    const e = readEntryAt(path);
     if (e) out.push(e);
   }
+  // Closed sessions delete their entry; drop their cached parse with them so
+  // this map tracks the directory instead of growing for the process's life.
+  for (const path of entryCache.keys()) if (!seen.has(path)) entryCache.delete(path);
+  snapshot = { at: now, entries: out };
   return out;
 }
 
@@ -156,6 +233,7 @@ export function removeEntry(sessionId: string): void {
   try {
     rmSync(entryPath(sessionId), { force: true });
   } catch {}
+  invalidateEntryCache(entryPath(sessionId));
   try {
     rmSync(cmdPath(sessionId), { force: true });
   } catch {}
