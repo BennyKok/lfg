@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  claudeConfigDirs,
   cleanAuthOutput,
   listCodingAgents,
   parseAuthOutput,
@@ -33,6 +34,28 @@ describe("LFG MCP config merging", () => {
         lfg: { command: "/usr/bin/bun", args: ["/opt/lfg/src/cli.ts", "mcp"] },
       },
     });
+  });
+});
+
+describe("Claude MCP config dirs", () => {
+  const dirs = (id: string) => `/data/claude-accounts/${id}`;
+
+  test("covers every extra account's config dir, not just the default", () => {
+    // A registration written only to the default dir leaves sessions bound to
+    // account two and three with no LFG tool surface at all.
+    expect(claudeConfigDirs([{ id: "default" }, { id: "two" }, { id: "three" }], dirs)).toEqual([
+      null,
+      "/data/claude-accounts/two",
+      "/data/claude-accounts/three",
+    ]);
+  });
+
+  test("is just the default when no extra accounts exist", () => {
+    expect(claudeConfigDirs([{ id: "default" }], dirs)).toEqual([null]);
+  });
+
+  test("skips accounts whose config dir cannot be resolved", () => {
+    expect(claudeConfigDirs([{ id: "gone" }], () => null)).toEqual([null]);
   });
 });
 

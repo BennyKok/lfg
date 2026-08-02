@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { PATHS, localServeBaseUrl } from "./config.ts";
 import { lfgCapabilityAccess } from "./lfg-capabilities.ts";
 import {
+  DEFAULT_CLAUDE_ACCOUNT_ID,
   claudeAccountConfigDir,
   connectedClaudeAccounts,
   listClaudeAccounts,
@@ -400,14 +401,48 @@ function mcpHttpUrl(): string {
   return `${localServeBaseUrl()}/mcp`;
 }
 
+/**
+ * Every Claude config dir a session can run under.
+ *
+ * `null` means "inherit this process's environment" — the default account,
+ * whose user config is `~/.claude.json`. Each *additional* connected account
+ * gets its own config dir, and its sessions run with `CLAUDE_CONFIG_DIR`
+ * pointed at it (see claudeAccountEnv). The Claude CLI reads user-scope MCP
+ * registrations out of `<config dir>/.claude.json`, so a registration written
+ * only to the default dir leaves every non-default account's sessions with no
+ * LFG tools at all — no lfg_output, no lfg_input, the whole agent<->human
+ * channel missing — while setup still reports "registered".
+ */
+export function claudeConfigDirs(
+  accounts: Pick<ClaudeAccount, "id">[] = listClaudeAccounts(),
+  resolveDir: (id: string) => string | null = claudeAccountConfigDir,
+): (string | null)[] {
+  const dirs: (string | null)[] = [null];
+  for (const account of accounts) {
+    if (account.id === DEFAULT_CLAUDE_ACCOUNT_ID) continue;
+    const dir = resolveDir(account.id);
+    if (dir && !dirs.includes(dir)) dirs.push(dir);
+  }
+  return dirs;
+}
+
+function claudeEnvFor(configDir: string | null): Record<string, string | undefined> {
+  return configDir ? { ...process.env, CLAUDE_CONFIG_DIR: configDir } : process.env;
+}
+
 async function hasClaudeLfgMcp(): Promise<boolean> {
   const claude = claudePath();
   if (!claude) return false;
-  const out = await commandOutputAsync([claude, "mcp", "get", "lfg"]);
-  if (!out.ok) return false;
-  // Only the HTTP registration counts. A leftover stdio entry from an older
-  // install reports as "not installed" so setup replaces it.
-  return out.text.includes(mcpHttpUrl());
+  // Registered means registered *everywhere a session can run*: one unregistered
+  // account dir is one account whose sessions launch mute.
+  const perDir = await Promise.all(claudeConfigDirs().map(async (configDir) => {
+    const out = await commandOutputAsync([claude, "mcp", "get", "lfg"], claudeEnvFor(configDir));
+    if (!out.ok) return false;
+    // Only the HTTP registration counts. A leftover stdio entry from an older
+    // install reports as "not installed" so setup replaces it.
+    return out.text.includes(mcpHttpUrl());
+  }));
+  return perDir.every(Boolean);
 }
 
 async function hasCodexLfgMcp(): Promise<boolean> {
@@ -916,12 +951,37 @@ export async function listSetupChecks(): Promise<SetupCheck[]> {
  * `mcp remove` first also migrates an older stdio registration, so an existing
  * install stops spawning a per-session `lfg mcp` child as soon as setup reruns.
  */
-function installClaudeMcp(claude: string): void {
-  commandOutput([claude, "mcp", "remove", "lfg", "-s", "user"]);
-  const out = commandOutput([
+async function installClaudeMcp(claude: string): Promise<void> {
+  // One remove+add pair per config dir, awaited rather than spawnSync'd: this
+  // loop grows with the number of Claude accounts, and each `claude` boot costs
+  // about a second — enough to visibly stall every live session if it froze the
+  // event loop. Ordering per dir still holds.
+  for (const configDir of claudeConfigDirs()) {
+    const env = claudeEnvFor(configDir);
+    await commandOutputAsync([claude, "mcp", "remove", "lfg", "-s", "user"], env);
+    const out = await commandOutputAsync([
+      claude, "mcp", "add", "-s", "user", "--transport", "http", "lfg", mcpHttpUrl(),
+    ], env);
+    if (!out.ok) throw new Error(out.text.trim() || "Claude MCP install failed");
+  }
+}
+
+/**
+ * Seed a freshly created Claude account's config dir with the LFG MCP
+ * registration, so its first session has the tool surface instead of waiting
+ * for someone to notice and rerun setup. Best effort: a missing Claude CLI or a
+ * failed registration must not fail account creation.
+ */
+export async function registerClaudeMcpForAccount(accountId: string): Promise<boolean> {
+  const claude = claudePath();
+  const configDir = claudeAccountConfigDir(accountId);
+  if (!claude || !configDir) return false;
+  const env = claudeEnvFor(configDir);
+  await commandOutputAsync([claude, "mcp", "remove", "lfg", "-s", "user"], env);
+  const out = await commandOutputAsync([
     claude, "mcp", "add", "-s", "user", "--transport", "http", "lfg", mcpHttpUrl(),
-  ]);
-  if (!out.ok) throw new Error(out.text.trim() || "Claude MCP install failed");
+  ], env);
+  return out.ok;
 }
 
 function installCodexMcp(codex: string, args: string[]): void {
@@ -1000,7 +1060,7 @@ export async function runSetupAction(key: string): Promise<void> {
     if (!claude && !codex && !opencode && !grok && !cursor) {
       throw new Error("Install a supported coding agent first, then register the LFG MCP server");
     }
-    if (claude) installClaudeMcp(claude);
+    if (claude) await installClaudeMcp(claude);
     if (codex) installCodexMcp(codex, args);
     if (opencode) await installOpencodeMcp(args);
     if (grok) installGrokMcp(grok, args);

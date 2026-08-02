@@ -222,6 +222,7 @@ import {
   getCodingAgentAuth,
   getCodingAgentSetupLog,
   loginCommandFor,
+  registerClaudeMcpForAccount,
   runCodingAgentSetup,
   runCodingAgentSetups,
   runSetupAction,
@@ -2264,7 +2265,12 @@ export async function cmdServe() {
         return json({ accounts: listClaudeAccounts() });
       }
       if (path === "/api/coding-agents/claude/accounts" && req.method === "POST") {
-        return json({ account: createClaudeAccount() });
+        const account = createClaudeAccount();
+        // The new account gets its own Claude config dir, so it needs its own
+        // copy of the LFG MCP registration — otherwise its first session starts
+        // with no lfg_output/lfg_input at all.
+        await registerClaudeMcpForAccount(account.id);
+        return json({ account });
       }
       {
         const m = path.match(/^\/api\/coding-agents\/claude\/accounts\/([a-f0-9-]+)$/);
