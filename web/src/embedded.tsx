@@ -10,7 +10,7 @@ import "./index.css";
 import { RootErrorBoundary } from "./App";
 import { AppDialogProvider } from "./components/ui/app-dialog";
 import { configureLfgTransport, type LfgErrorSink } from "./lib/lfg-client";
-import { setBareSurface } from "./lib/embed";
+import { BareSurfaceProvider } from "./lib/bare-surface";
 import { createLfgRouter } from "./router";
 
 export { createGrantTransport } from "@lfg-dev/client";
@@ -114,9 +114,9 @@ export function LfgSettingsSurface({
   className,
   errorSink,
 }: LfgSettingsSurfaceProps) {
-  // Set before the router mounts: the host owns the header, the back
-  // affordance and the account, so this surface renders sections only.
-  setBareSurface(true);
+  // The host owns the header, the back affordance and the account, so this
+  // surface renders sections only — declared to the tree below, not to a
+  // module global that a coexisting full-app surface would also read.
   configureLfgTransport(transport, { assetBaseUrl, errorSink });
   const [router] = useState<AnyRouter>(() =>
     createLfgRouter(
@@ -157,11 +157,13 @@ export function LfgSettingsSurface({
 
   return (
     <div className={className} data-lfg-app-surface="" data-lfg-settings-surface={page}>
-      <RootErrorBoundary>
-        <AppDialogProvider>
-          <RouterProvider router={router} />
-        </AppDialogProvider>
-      </RootErrorBoundary>
+      <BareSurfaceProvider bare>
+        <RootErrorBoundary>
+          <AppDialogProvider>
+            <RouterProvider router={router} />
+          </AppDialogProvider>
+        </RootErrorBoundary>
+      </BareSurfaceProvider>
     </div>
   );
 }
@@ -205,11 +207,13 @@ export function LfgAppSurface({
 
   return (
     <div className={className} data-lfg-app-surface="">
-      <RootErrorBoundary>
-        <AppDialogProvider>
-          <RouterProvider router={router} />
-        </AppDialogProvider>
-      </RootErrorBoundary>
+      <BareSurfaceProvider bare={false}>
+        <RootErrorBoundary>
+          <AppDialogProvider>
+            <RouterProvider router={router} />
+          </AppDialogProvider>
+        </RootErrorBoundary>
+      </BareSurfaceProvider>
     </div>
   );
 }

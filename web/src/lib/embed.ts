@@ -57,24 +57,24 @@ export function isEmbedded(
 // so LFG must not render its own: two brand marks and two identity blocks on
 // one page is exactly the duplication that mounting is supposed to remove.
 //
-// Module-level rather than context because the decision is made once, by the
-// package entry point, before any React tree exists — and it never changes for
-// the lifetime of that surface.
-let bareSurface = false;
-
-/** Called by the package entry point before the router mounts. */
-export function setBareSurface(value: boolean): void {
-  bareSurface = value;
-}
+// NOT a mutable module flag any more. It was one — set by the package entry
+// point before any React tree exists — which is correct for one surface per
+// document and wrong the moment a host mounts two. omg keeps the Computer
+// surface (full app) alive off-screen while you open Settings (a bare page), so
+// both exist at once and one global cannot describe both: opening settings once
+// left every later full-app render bare, stripped of its header, gutter and
+// header inset until a hard reload. Each tree declares its own now, through
+// BareSurfaceProvider in lib/bare-surface.tsx.
+//
+// What survives here is the URL escape hatch below, which belongs to the
+// document rather than to a tree.
 
 /**
- * True when LFG is rendering a single page inside a host's own chrome.
- *
- * `?bare=1` is honoured as well so the hosted layout can be inspected in a
- * plain browser, without building the package and mounting it in the host.
+ * `?bare=1` — inspect the hosted layout in a plain browser, without building
+ * the package and mounting it in a host. Prefer useBareSurface() in components:
+ * inside a surface the tree's own value wins, and this is only its fallback.
  */
 export function isBareSurface(): boolean {
-  if (bareSurface) return true;
   if (typeof window === "undefined") return false;
   try {
     return new URLSearchParams(window.location.search).get("bare") === "1";

@@ -373,3 +373,30 @@ describe("host-mounted page layout", () => {
     expect(css).not.toMatch(/^\s*\[data-lfg-page-column\]\s*\{/m);
   });
 });
+
+describe("bare is a property of a tree, not of the process", () => {
+  const embedded = require("node:fs").readFileSync("web/src/embedded.tsx", "utf8") as string;
+  const embed = require("node:fs").readFileSync("web/src/lib/embed.ts", "utf8") as string;
+  const app = require("node:fs").readFileSync("web/src/App.tsx", "utf8") as string;
+
+  test("two surfaces in one document cannot overwrite each other's chrome", () => {
+    // The regression: `bare` was a module-level boolean set by the entry point.
+    // A host that mounts BOTH surfaces shares one module instance, and omg keeps
+    // the Computer surface alive off-screen while you open Settings — so opening
+    // settings once left the flag true for the life of the SPA, and every later
+    // full-app render lost its header, gutter and header inset until a reload.
+    expect(embed).not.toContain("let bareSurface");
+    expect(embed).not.toContain("export function setBareSurface");
+    expect(embedded).not.toContain("setBareSurface(");
+
+    // Each surface declares its own, and components read the tree's value.
+    expect(embedded).toContain("<BareSurfaceProvider bare>");
+    expect(embedded).toContain("<BareSurfaceProvider bare={false}>");
+    expect(app).toContain("const bare = useBareSurface();");
+    expect(app).not.toContain("const bare = isBareSurface();");
+  });
+
+  test("?bare=1 still works for inspecting the hosted layout in a browser", () => {
+    expect(embed).toContain('get("bare") === "1"');
+  });
+});

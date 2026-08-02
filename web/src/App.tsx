@@ -9,7 +9,8 @@ import {
   shouldPrioritizeSession,
 } from "./lib/app-search";
 import type { AppSearch } from "./lib/app-search";
-import { isBareSurface, isEmbedded, readLocationEmbedFlag } from "./lib/embed";
+import { isEmbedded, readLocationEmbedFlag } from "./lib/embed";
+import { useBareSurface } from "./lib/bare-surface";
 import {
   embeddedConnectOptions,
   shouldShowEmbeddedConnectGate,
@@ -4588,7 +4589,7 @@ export function App() {
   const embedded = isEmbedded(deepLinkSearch);
   // Host-mounted single page: suppress every piece of LFG shell chrome the
   // host already renders (header, brand, nav, composer).
-  const bare = isBareSurface();
+  const bare = useBareSurface();
   // Session deep-links win over filter/identity work so the target card opens
   // as soon as bootstrap returns sessions.
   const prioritizeSession = shouldPrioritizeSession(deepLinkSearch) || !!sessionDeepLinkRef.current;
@@ -21439,7 +21440,7 @@ function SettingsView({
   // A host mounting this page renders the signed-in account itself — and its
   // account is the real one, where ours is only a per-device session tag. Two
   // identity blocks on one page is worse than none.
-  const bare = isBareSurface();
+  const bare = useBareSurface();
 
   return (
     <div className="mx-auto max-w-xl space-y-8 pb-10" data-lfg-page-column>
