@@ -36,7 +36,21 @@ import {
   isComputerHostResumeMessage,
   restartContinuousAnimations,
 } from "./embedded-animation-recovery";
-import { useChat } from "@ai-sdk/react";
+import { lazy } from "react";
+import { useLfgChat } from "./lib/chat-context";
+
+// Dynamic: this is what keeps the AI SDK out of the entry chunk. See
+// SessionChat and web/src/lib/chat-engine.tsx.
+const LfgChatEngine = lazy(() => import("./lib/chat-engine"));
+
+/** Warm the chat chunk once the app is idle, so opening a session never waits on it. */
+export function prefetchChatEngine(): void {
+  const run = () => void import("./lib/chat-engine");
+  const ric = (globalThis as { requestIdleCallback?: (cb: () => void, o?: { timeout: number }) => number })
+    .requestIdleCallback;
+  if (typeof ric === "function") ric(run, { timeout: 3000 });
+  else setTimeout(run, 1500);
+}
 import {
   DEFAULT_SCHED_TZ,
   DEFAULT_SIMPLE,
@@ -4494,6 +4508,9 @@ export function App() {
     window.addEventListener(THEME_CHANGE_EVENT, syncTheme);
     return () => window.removeEventListener(THEME_CHANGE_EVENT, syncTheme);
   }, []);
+  // The chat engine is a separate chunk so the AI SDK is not in the entry
+  // bundle; warm it while the app is idle so opening a session never waits.
+  useEffect(() => prefetchChatEngine(), []);
   const rootRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   // Full-page native artifact viewer (no popups/new tabs).
@@ -11324,16 +11341,7 @@ async function loadTranscriptPage(sid: string) {
   };
 }
 
-function SessionChat({
-  session,
-  busy,
-  prompt,
-  error,
-  onError,
-  onSubscribeTranscript,
-  onRefresh,
-  onDictatingChange,
-}: {
+type SessionChatProps = {
   session: Session;
   busy: boolean;
   prompt: SessionPrompt | null;
@@ -11342,7 +11350,64 @@ function SessionChat({
   onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
   onDictatingChange?: (recording: boolean) => void;
-}) {
+};
+
+/**
+ * The chat surface, with the AI SDK held one dynamic import away.
+ *
+ * `useChat` is the app's only runtime use of @ai-sdk/react, and it pulls `ai`,
+ * `@ai-sdk/*` and `zod` in behind it — 137 KB minified, 12.5% of the entry
+ * chunk, none of which the session list needs in order to paint. Rather than
+ * move this component and its ~1,400 lines of composer and transcript UI into
+ * another module, only the hook moves: the engine below owns `useChat` and
+ * publishes its state through context, and everything here reads it from there.
+ *
+ * The chunk is prefetched once the app is idle (see prefetchChatEngine), so in
+ * practice it is already cached by the time a session is opened and the
+ * fallback never renders.
+ */
+function SessionChat(props: SessionChatProps) {
+  const sid = props.session.sessionId;
+  const { onError, onSubscribeTranscript } = props;
+  const chatTransport = useMemo(
+    () =>
+      sid
+        ? new LfgChatTransport({ sessionId: sid, subscribeTranscript: onSubscribeTranscript })
+        : undefined,
+    [sid, onSubscribeTranscript],
+  );
+  const reportError = useCallback((message: string) => onError(message), [onError]);
+  return (
+    <Suspense fallback={<SessionChatSkeleton />}>
+      <LfgChatEngine
+        id={sid ?? "missing-session"}
+        transport={chatTransport}
+        onError={reportError}
+      >
+        <SessionChatBody {...props} />
+      </LfgChatEngine>
+    </Suspense>
+  );
+}
+
+function SessionChatSkeleton() {
+  return (
+    <div className="flex flex-1 items-center justify-center py-10 text-sm text-muted-foreground">
+      Loading chat…
+    </div>
+  );
+}
+
+function SessionChatBody({
+  session,
+  busy,
+  prompt,
+  error,
+  onError,
+  onSubscribeTranscript,
+  onRefresh,
+  onDictatingChange,
+}: SessionChatProps) {
   const sid = session.sessionId;
   const reviewingShipped = !!session.shippedReview;
   const stashContext = sid ? `session:${sid}` : "session:missing";
@@ -11392,21 +11457,8 @@ function SessionChat({
   // by sid so a still-finishing send in the old card cannot suppress an
   // externally-driven event in the newly focused card.
   const [ownedChatStreams] = useState(() => new LfgChatStreamOwnership());
-  const chatTransport = useMemo(
-    () =>
-      sid
-        ? new LfgChatTransport({
-            sessionId: sid,
-            subscribeTranscript: onSubscribeTranscript,
-          })
-        : undefined,
-    [sid, onSubscribeTranscript],
-  );
-  const chat = useChat<LfgChatMessage>({
-    id: sid ?? "missing-session",
-    transport: chatTransport,
-    onError: (err) => onError(err.message),
-  });
+  // Provided by the lazily-loaded engine wrapping this component.
+  const chat = useLfgChat();
   const { messages: uiMessages, setMessages, sendMessage: sendChatMessage, status: chatStatus } = chat;
   const chatMessages = useMemo(() => lfgUIMessagesToMessages(uiMessages), [uiMessages]);
   // Busy straight from the transcript subscription: the harness flips it the
