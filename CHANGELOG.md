@@ -4,6 +4,23 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - Reconnecting is quick again (v0.1.210)
+
+- Coming back to a tab that had gone stale — after sleep, or a long spell in
+  the background — made LFG wait a flat 2 seconds before it even started
+  reconnecting. It now gives the old connection half a second, which is already
+  generous against a server that answers in single-digit milliseconds.
+- Waking up or regaining the network now restarts the retry schedule. The first
+  attempt after a laptop wake usually fails because Wi-Fi hasn't come back yet,
+  and the next retry was using the delay it had wound up to before sleeping —
+  up to 12 seconds of sitting on "offline" over a perfectly good network.
+- Reconnecting no longer rebuilds transcript history the server then throws
+  away, and a tab that reconnects while another one is open now gets the
+  current session list immediately instead of waiting for something to change.
+- The shipped feed, artifact gallery, coding-agents page, resume sheet and
+  token-usage dialog now load only when opened, taking another 39 KB out of the
+  bundle you download before anything renders.
+
 ## August 2, 2026 - The app paints a third faster on a cold load (v0.1.209)
 
 - The AI SDK that powers the chat surface was in the bundle you download before
