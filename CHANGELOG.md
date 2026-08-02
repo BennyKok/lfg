@@ -4,6 +4,17 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - Every Claude account's usage, and a chip you can see (v0.1.197)
+
+- A Claude account whose access token had gone stale now reports its usage
+  again. Claude Code refreshes that token whenever it runs; LFG read the same
+  file without running the CLI, so an account that hadn't started a session in
+  the last few hours looked like it had no usage at all. LFG now refreshes the
+  token itself before asking.
+- The selected agent chip in the composer is actually visible in dark mode. It
+  was a #2c2c2e circle on a #1c1c1e sheet — sixteen levels of grey apart, which
+  on a phone reads as nothing being selected at all.
+
 ## August 2, 2026 - Reconnects stop waiting on settings (v0.1.196)
 
 - Reopening LFG no longer freezes every request while it boots five agent CLIs
