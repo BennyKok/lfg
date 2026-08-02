@@ -1008,55 +1008,51 @@ html.lfg-keyboard-open {
     color: var(--foreground);
   }
 
-  /* Images the user attached, shown above their text in the same bubble.
-     Right-aligned so a single image hugs the bubble's sent edge. */
-  .user-bubble-media {
+  /* Files the user attached: their own view above the text bubble, not bubble
+     content. Right-aligned to the sent edge, wrapping when there are several. */
+  .user-attachments {
     display: flex;
     flex-wrap: wrap;
     justify-content: flex-end;
     gap: 4px;
-    margin-bottom: 6px;
+    max-width: 85%;
   }
 
-  .user-bubble.is-media-only {
-    --user-bubble-padding: 4px;
+  /* Mid-send the picture is already local, so it stays fully visible and only
+     softens — matching the bubble's pending treatment. */
+  .user-attachments.is-pending {
+    opacity: 0.7;
   }
 
-  .user-bubble.is-media-only .user-bubble-media {
-    margin-bottom: 0;
-  }
-
-  .user-bubble-media-item {
+  .user-attachment-image {
     display: block;
     /* Big enough to recognize a screenshot at a glance — the common case is a
        UI capture the user wants to point at — without letting one attachment
        take over the transcript. Tap opens the full-size lightbox. */
-    max-height: 17rem;
-    max-width: min(100%, 20rem);
+    max-height: 20rem;
+    max-width: 100%;
     width: auto;
-    /* Set below: a lone image gets the bubble's full width. */
-    border-radius: 14px;
-    object-fit: cover;
+    border-radius: 18px;
     background: rgba(120, 120, 128, 0.16);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
   }
 
-  /* A single image widens to the bubble (the caption often sets a wider box,
-     and the leftover gap beside a lone thumbnail reads as a layout bug).
-     Multiple images keep the 20rem cap so they tile instead. The lightbox is
-     one tap away either way. */
-  .user-bubble-media-item:only-child {
-    max-width: 100%;
+  /* Several attachments tile instead of each claiming the full width. */
+  .user-attachment-image:not(:only-child) {
+    max-height: 15rem;
+    max-width: min(100%, 15rem);
   }
 
   /* Attachments with no inline rendering (pdf, txt) keep their name visible. */
-  .user-bubble-file {
+  .user-attachment-file {
     display: inline-flex;
     align-items: center;
     gap: 6px;
     max-width: 100%;
-    padding: 4px 10px;
-    border-radius: 12px;
-    background: rgba(120, 120, 128, 0.16);
+    padding: 6px 12px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: var(--card);
     font-size: 13px;
   }
 

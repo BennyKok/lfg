@@ -14817,17 +14817,30 @@ function renderableUserContent(
 // which a reboot clears). Still better than the raw path it replaces.
 function UserAttachmentChip({ name }: { name: string }) {
   return (
-    <span className="user-bubble-file" title={name}>
+    <span className="user-attachment-file" title={name}>
       <Paperclip className="size-3.5 shrink-0" />
       <span className="min-w-0 truncate">{name}</span>
     </span>
   );
 }
 
-// The files a user attached, rendered above their text in the same bubble.
-function UserAttachments({ attachments }: { attachments: MessageAttachment[] }) {
+/**
+ * The files a user attached, as their own view above the text bubble.
+ *
+ * Deliberately not inside the bubble: an image isn't a run of text with a
+ * background, and boxing it in bubble chrome made the caption and the picture
+ * read as one cramped card. Sent media gets its own frame and the words get
+ * theirs, the way every messaging client does it.
+ */
+function UserAttachments({
+  attachments,
+  pending,
+}: {
+  attachments: MessageAttachment[];
+  pending?: boolean;
+}) {
   return (
-    <div className="user-bubble-media relative z-[1]">
+    <div className={cn("user-attachments", pending && "is-pending")}>
       {attachments.map((att) =>
         att.url ? (
           <AuthenticatedArtifactImage
@@ -14836,7 +14849,7 @@ function UserAttachments({ attachments }: { attachments: MessageAttachment[] }) 
             alt={att.name}
             zoomable
             fallback={<UserAttachmentChip name={att.name} />}
-            className="user-bubble-media-item"
+            className="user-attachment-image"
           />
         ) : (
           <UserAttachmentChip key={att.path} name={att.name} />
@@ -14850,15 +14863,7 @@ function UserAttachments({ attachments }: { attachments: MessageAttachment[] }) 
 // clamp (~10 lines) it's truncated with a small "Show more" / "Show less"
 // toggle at the end. Content is injected HTML (pre-escaped user text), so the
 // clamp lives on an inner wrapper and the toggle sits beside it in the bubble.
-function UserBubble({
-  html,
-  attachments = [],
-  pending,
-}: {
-  html: string;
-  attachments?: MessageAttachment[];
-  pending?: boolean;
-}) {
+function UserBubble({ html, pending }: { html: string; pending?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -14891,23 +14896,17 @@ function UserBubble({
         // hugs content up to that cap so multi-line turns stay right-aligned.
         "msg-text markdown user-bubble text-base w-fit max-w-full",
         pending && "is-pending",
-        // Media with no caption gets a tighter bubble so the images read as the
-        // message rather than as decoration inside a mostly-empty one.
-        attachments.length > 0 && !html && "is-media-only",
       )}
     >
       <OrganicActivityEffect active={!!pending} className="user-bubble-organic" />
-      {attachments.length > 0 && <UserAttachments attachments={attachments} />}
-      {html ? (
-        <div
-          ref={bodyRef}
-          className={cn(
-            "user-bubble-body relative z-[1]",
-            !expanded && "user-bubble-clamp",
-          )}
-          dangerouslySetInnerHTML={{ __html: html }}
-        />
-      ) : null}
+      <div
+        ref={bodyRef}
+        className={cn(
+          "user-bubble-body relative z-[1]",
+          !expanded && "user-bubble-clamp",
+        )}
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
       {overflowing && (
         <button
           type="button"
@@ -15286,6 +15285,28 @@ function MessageBubble({
   }
 
   const isUser = message.role === "user";
+  if (isUser && userContent.attachments.length > 0) {
+    return (
+      <AiMessage
+        ref={sendMorphRef}
+        className={cn("msg", entering && "lfg-msg-in", message.pending && "lfg-user-send")}
+        from="user"
+      >
+        {/* w-full keeps MessageActions' 85% cap resolving against a definite
+            width (see its own note) now that a column sits between them. */}
+        <div className="flex w-full min-w-0 flex-col items-end gap-1.5">
+          <UserAttachments attachments={userContent.attachments} pending={message.pending} />
+          {/* A caption is optional: attach an image with nothing typed and the
+              picture is the whole message, with no empty bubble under it. */}
+          {userContent.html ? (
+            <MessageActions text={message.text || ""} isUser>
+              <UserBubble html={userContent.html} pending={message.pending} />
+            </MessageActions>
+          ) : null}
+        </div>
+      </AiMessage>
+    );
+  }
   return (
     <AiMessage
       ref={sendMorphRef}
@@ -15307,11 +15328,7 @@ function MessageBubble({
           // hugged to the right. Long turns collapse to ~10 lines with a
           // "Show more" toggle. Pending state is handled in the border so the
           // text stays steady while the send is in flight.
-          <UserBubble
-            html={userContent.html}
-            attachments={userContent.attachments}
-            pending={message.pending}
-          />
+          <UserBubble html={userContent.html} pending={message.pending} />
         ) : (
           // Assistant turns render markdown from the raw source via Streamdown,
           // which tolerates half-finished markdown mid-stream (no html injection).
