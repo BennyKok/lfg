@@ -1,6 +1,6 @@
 // Running Claude Code sessions: enumerate live `claude` processes and tail
 // their on-disk transcripts (~/.claude/projects/<proj>/<sessionId>.jsonl).
-import { readdir, readlink } from "node:fs/promises";
+import { readFile, readdir, readlink } from "node:fs/promises";
 import { statSync, readFileSync } from "node:fs";
 import { join, basename } from "node:path";
 import { panePidForSession, tmuxHasSession, tmuxTargetForPid, capturePane, isBusy } from "./tmux";
@@ -494,60 +494,79 @@ function managedLineage(m: ManagedSession | undefined): Pick<
 const UUID = /[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/;
 
 type ListedProc = { pid: number; cmd: string };
-type PgrepCache = { at: number; procs: ListedProc[] } | null;
+type ProcScanCache = { at: number; procs: ListedProc[] } | null;
 
-// Warm-refresh calls listSessions ~every 1.2s; a sub-1.2s TTL meant the pgrep
-// scans re-forked on every call. 2.5s keeps them warm across refreshes while
-// staying fresh enough to notice a new/dead agent process.
-const PGREP_SCAN_CACHE_TTL_MS = 2500;
+// Discovery is a file read, not a subprocess.
+//
+// `pgrep -af <binary>` costs ~30ms of *blocking* spawn on a busy box, and it is
+// only reading /proc and matching argv[0] — which we can do directly for ~2.5ms
+// without forking anything, and asynchronously, so a slow scan yields instead
+// of freezing the server. Two of these ran per session-list rebuild.
+//
+// The TTL stays: the scan is cheap now, but the answer changes only when an
+// agent process starts or dies, which is orders of magnitude rarer than the
+// rebuild rate.
+const PROC_SCAN_CACHE_TTL_MS = 2500;
 
-let claudePgrepCache: PgrepCache = null;
-let codexPgrepCache: PgrepCache = null;
-
-function parsePgrepProcs(out: string, binary: string): ListedProc[] {
-  const procs: ListedProc[] = [];
-  for (const line of out.split("\n")) {
-    const m = line.match(/^(\d+)\s+(.*)$/);
-    if (!m) continue;
-    const pid = Number(m[1]);
-    const cmd = m[2].trim();
-    const first = cmd.split(/\s+/)[0] ?? "";
-    if (basename(first) !== binary) continue;
-    procs.push({ pid, cmd });
-  }
-  return procs;
-}
+let claudeProcCache: ProcScanCache = null;
+let codexProcCache: ProcScanCache = null;
 
 function cloneListedProcs(procs: ListedProc[]): ListedProc[] {
   return procs.map((p) => ({ ...p }));
 }
 
-function cachedPgrepProcs(binary: string, cache: PgrepCache): { cache: PgrepCache; procs: ListedProc[] } {
+function commandBinary(argv0: string): string {
+  return argv0.slice(argv0.lastIndexOf("/") + 1);
+}
+
+async function scanProcs(binary: string): Promise<ListedProc[]> {
+  let entries: string[];
+  try {
+    entries = await readdir("/proc");
+  } catch {
+    return [];
+  }
+  const rows = await Promise.all(
+    entries.map(async (name) => {
+      // Numeric entries are the processes; everything else in /proc is state.
+      const code = name.charCodeAt(0);
+      if (code < 48 || code > 57) return null;
+      try {
+        // NUL-delimited argv. A kernel thread reads back empty.
+        const raw = await readFile(`/proc/${name}/cmdline`, "utf8");
+        const argv = raw.split("\0").filter(Boolean);
+        if (!argv.length || commandBinary(argv[0]) !== binary) return null;
+        return { pid: Number(name), cmd: argv.join(" ") };
+      } catch {
+        // Exited between readdir and read — normal, not an error.
+        return null;
+      }
+    }),
+  );
+  return rows.filter((row): row is ListedProc => row !== null);
+}
+
+async function cachedProcScan(
+  binary: string,
+  cache: ProcScanCache,
+): Promise<{ cache: ProcScanCache; procs: ListedProc[] }> {
   const now = performance.now();
-  if (cache && now - cache.at < PGREP_SCAN_CACHE_TTL_MS) {
+  if (cache && now - cache.at < PROC_SCAN_CACHE_TTL_MS) {
     return { cache, procs: cloneListedProcs(cache.procs) };
   }
-  let out = "";
-  try {
-    const r = Bun.spawnSync(["pgrep", "-af", binary]);
-    out = new TextDecoder().decode(r.stdout);
-  } catch {
-    const fresh = { at: now, procs: [] };
-    return { cache: fresh, procs: [] };
-  }
-  const fresh = { at: now, procs: parsePgrepProcs(out, binary) };
+  const fresh = { at: now, procs: await scanProcs(binary) };
   return { cache: fresh, procs: cloneListedProcs(fresh.procs) };
 }
 
-function listClaudeProcs(): ListedProc[] {
-  const r = cachedPgrepProcs("claude", claudePgrepCache);
-  claudePgrepCache = r.cache;
+async function listClaudeProcs(): Promise<ListedProc[]> {
+  const r = await cachedProcScan("claude", claudeProcCache);
+  claudeProcCache = r.cache;
   return r.procs;
 }
 
-function listCodexProcs(): ListedProc[] {
-  const r = cachedPgrepProcs("codex", codexPgrepCache);
-  codexPgrepCache = r.cache;
+async function listCodexProcs(): Promise<ListedProc[]> {
+  const r = await cachedProcScan("codex", codexProcCache);
+  codexProcCache = r.cache;
   return r.procs;
 }
 
@@ -1698,8 +1717,8 @@ export async function listSessions(): Promise<Session[]> {
   );
   const harnessPids = new Set(aisdkEntries.map((e) => e.harnessPid));
   const aisdkSessionIds = new Set(aisdkEntries.map((e) => e.sessionId));
-  const claudeProcs = profileSync(profile, "listClaudeProcs_pgrep_ms", () =>
-    listClaudeProcs().filter(
+  const claudeProcs = await profileAsync(profile, "listClaudeProcs_scan_ms", async () =>
+    (await listClaudeProcs()).filter(
       (p) => !isClosing(p.pid) && !harnessPids.has(ppidOf(p.pid) ?? -1),
     ),
   );
@@ -1858,7 +1877,7 @@ export async function listSessions(): Promise<Session[]> {
     });
   }
 
-  const codexProcs = profileSync(profile, "listCodexProcs_pgrep_ms", () => listCodexProcs());
+  const codexProcs = await profileAsync(profile, "listCodexProcs_scan_ms", () => listCodexProcs());
   profile?.count("codex_procs", codexProcs.length);
   const needsCodexThreads =
     codexProcs.some(
