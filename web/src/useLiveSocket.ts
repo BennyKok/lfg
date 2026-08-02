@@ -308,7 +308,15 @@ function reconcileSnapshotMessages(current: Message[], incoming: Message[]): Mes
 
 const BACKOFF_MIN_MS = 250;
 const BACKOFF_MAX_MS = 10_000;
-const VISIBILITY_PROBE_TIMEOUT_MS = 2_000;
+// How long a returning tab waits for its socket to answer a ping before giving
+// up on it and reconnecting.
+//
+// This used to be 2s, which was two orders of magnitude past the real budget:
+// the server answers a live socket in single-digit milliseconds, so anything
+// that has not replied in half a second is dead, not slow. Every foreground
+// return with a stale-OPEN socket — the state a laptop wakes up in — paid that
+// full timeout before it even started reconnecting.
+const VISIBILITY_PROBE_TIMEOUT_MS = 500;
 // Consecutive failed reconnect attempts after which we stop calling it a brief
 // "reconnecting" blip and surface the more alarming "offline" state instead.
 const OFFLINE_AFTER_ATTEMPTS = 5;
@@ -778,6 +786,15 @@ export function useLiveSocket(
 
     connectRef.current = connect;
 
+    // A wake-up signal (tab foregrounded, network back) invalidates the retry
+    // schedule: it was wound up against conditions that no longer hold. Both
+    // the delay and the attempt counter go back to square one so the UI does
+    // not keep claiming "offline" while a perfectly good network waits.
+    const resetBackoff = () => {
+      backoffRef.current = BACKOFF_MIN_MS;
+      reconnectsRef.current = 0;
+    };
+
     const onVisible = () => {
       if (typeof document === "undefined" || document.visibilityState !== "visible") return;
       const ws = wsRef.current;
@@ -787,6 +804,13 @@ export function useLiveSocket(
       );
       if (action === "connect") {
         pendingReconnectRef.current = false;
+        // Coming back to the tab is new information: whatever backoff we had
+        // wound up while it was hidden describes a network that no longer
+        // exists. Without this reset the first retry after a laptop wake — the
+        // one that fails because Wi-Fi has not re-associated yet — is followed
+        // by a wait at the 10s cap, so the app sits "offline" long after the
+        // network is back.
+        resetBackoff();
         connect();
         return;
       }
@@ -823,6 +847,7 @@ export function useLiveSocket(
     const onOnline = () => {
       pendingReconnectRef.current = false;
       openingRef.current = false;
+      resetBackoff();
       connect();
     };
     document.addEventListener("visibilitychange", onVisible);

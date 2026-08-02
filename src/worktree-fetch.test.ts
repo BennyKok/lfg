@@ -67,23 +67,25 @@ async function waitForOriginMain(work: string, want: string): Promise<string> {
 }
 
 describe("session worktree origin/main fetch", () => {
-  test("a create never waits for the network — it branches from the main on disk", async () => {
-    const { origin, work } = makeClonedRepo();
-    const clonedHead = git(work, "rev-parse", "origin/main");
-    // Advance origin BEFORE provisioning. The clone has not seen this commit,
-    // so branching from it would prove the create blocked on a fetch.
-    Bun.write(join(origin, "b.txt"), "second\n");
-    git(origin, "add", "b.txt");
-    git(origin, "commit", "-qm", "second");
-    const originHead = git(origin, "rev-parse", "HEAD");
-    expect(originHead).not.toBe(clonedHead);
+  test("a create does not wait for the network, however slow the remote is", async () => {
+    const { work } = makeClonedRepo();
+    const localHead = git(work, "rev-parse", "HEAD");
+    // A blackholed address: packets are dropped rather than refused, so the
+    // fetch hangs until its own 10s timeout. Waiting for it would be plainly
+    // visible here — which is what this used to do, and what the whole change
+    // is about. Asserting on elapsed time rather than on which ref got picked,
+    // because a fast remote can legitimately land its background refresh
+    // before the base ref is read.
+    git(work, "remote", "set-url", "origin", "https://10.255.255.1/hangs.git");
 
+    const started = performance.now();
     const result = await prepareSessionWorktree(work, newSessionName());
+    const elapsedMs = performance.now() - started;
+
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-
-    // The base is what was already on disk: the round trip is off this path.
-    expect(git(result.worktree.path, "rev-parse", "HEAD")).toBe(clonedHead);
+    expect(elapsedMs).toBeLessThan(3_000);
+    expect(git(result.worktree.path, "rev-parse", "HEAD")).toBe(localHead);
   });
 
   test("the refresh it kicks off in the background benefits the next create", async () => {

@@ -417,6 +417,21 @@ export function createLiveWsSupport(opts: {
     statusInterval = setInterval(() => void publishStatus(), 1000);
   };
 
+  /**
+   * Give a socket that just connected the fleet as it stands.
+   *
+   * The status loop only broadcasts when the rows *change*, and it does not
+   * restart for a socket that arrives while another one is already connected —
+   * so a reconnecting tab could wait for the next real fleet change before it
+   * saw any status at all. On a quiet fleet that wait is unbounded, and the
+   * list sits stale behind a working socket until the 5s REST poll catches it.
+   */
+  const sendStatusBaseline = async (ws: LiveWs) => {
+    noteListSessionsClientActivity();
+    const rows = (await listSessionsCached()).filter((s) => s.sessionId).map(slimStatus);
+    safeSend(ws, stamp(statusChannel(), { t: "status", rows }));
+  };
+
   const traceStallIfNeeded = (tail: SidTail, busy: boolean) => {
     const now = Date.now();
     if (!busy) {
@@ -711,19 +726,24 @@ export function createLiveWsSupport(opts: {
       tail.sockets.add(state.ws);
       return;
     }
-    let batchMessages: unknown[] = [];
-    let nextBefore: number | null = null;
-    if (tp) {
+    // Built inside the closure, because replayOrSnapshot only calls it when the
+    // ring replay misses. A reconnect that resumes cleanly used to pay for this
+    // anyway — a transcript catch-up, an indexed page read and a markdown
+    // render of the backlog — and then throw the whole ~20KB away. Resume is
+    // now zero-I/O, which matters most exactly when it fires: many channels
+    // re-subscribing at once on the same event loop.
+    let snapshotMessages = 0;
+    await replayOrSnapshot(state, channel, async () => {
+      if (!tp) return { t: "snapshot", sid, messages: [], nextBefore: null };
       await ensureChatTranscriptCaughtUp(tp, sid, "ws-subscribe");
       const backlog = await readBacklog(sid, tp);
-      batchMessages = backlog.messages;
-      nextBefore = backlog.nextBefore;
-    }
-    await replayOrSnapshot(state, channel, async () => ({ t: "snapshot", sid, messages: batchMessages, nextBefore }));
+      snapshotMessages = backlog.messages.length;
+      return { t: "snapshot", sid, messages: backlog.messages, nextBefore: backlog.nextBefore };
+    });
     evlog("ws_subscribe", {
       rid: state.rid,
       sid,
-      messages: batchMessages.length,
+      messages: snapshotMessages,
       durationMs: roundMs(performance.now() - t0),
     });
     const tail = await ensureSidTail(sid, tp);
@@ -855,6 +875,7 @@ export function createLiveWsSupport(opts: {
       openSockets.add(ws);
       evlog("ws_connect", { rid });
       ensureStatusLoop();
+      void sendStatusBaseline(ws);
       state.heartbeat = setInterval(() => {
         if (state.closed) return;
         if (Date.now() - state.lastTraffic > IDLE_CLOSE_MS) {
