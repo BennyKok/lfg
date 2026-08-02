@@ -16,6 +16,11 @@ Recent product updates and deployment notes.
   runs the Git commands that prepare its worktree. Provisioning now stays off
   the server event loop, and its remote refresh benefits the next session
   without blocking the one you just started.
+- Leaving an embedded settings page no longer strips the styling from another
+  surface the host still has mounted. Every packaged style is anchored to one
+  attribute on the document, and the first surface to unmount removed it —
+  so in a host with two surfaces alive, the visible one could drop to unstyled
+  markup. The attribute is reference counted now.
 
 ## August 2, 2026 - Artifact cards follow your theme instead of your desktop (v0.1.206)
 
