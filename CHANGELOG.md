@@ -4,6 +4,26 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - The mic responds on the first tap (v0.1.194)
+
+- Tapping the mic now opens it immediately. Every tap used to wait on a network
+  round trip before the microphone was even requested, so on a slow connection
+  the browser's permission prompt could appear ten seconds late — and on iOS and
+  installed PWAs that wait often broke the request outright, which is why so
+  many taps did nothing at all.
+- The mic button shows a spinner the moment you tap it, so it can never look
+  dead while the mic is opening. Tapping again backs out instead of doing
+  nothing, and Escape, the cancel X, and slide-to-cancel all work during that
+  window too.
+- A mic that can't start now says why — blocked permission, no microphone
+  found, or the device being held by another app — instead of failing silently.
+- Opening the mic can no longer hang indefinitely, and cancelling takes effect
+  the instant you tap rather than after the timeout.
+- Dictation no longer leaves the microphone held open (OS mic indicator lit)
+  when a take is abandoned partway through.
+- Dictation now asks for echo cancellation, noise suppression, and automatic
+  gain control, matching what voice calls already did.
+
 ## August 2, 2026 - Claude accounts you can actually see (v0.1.193)
 
 - Picking "Claude · Auto" in the agent picker now highlights it. The Auto entry
