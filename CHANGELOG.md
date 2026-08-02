@@ -4,6 +4,17 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - Sent images are their own view (v0.1.191)
+
+- An attached image is no longer boxed inside the message bubble. The picture
+  gets its own frame and the words keep theirs, stacked — the way every
+  messaging client does it. Sharing a screenshot with a caption no longer reads
+  as one cramped card.
+- Attach an image and type nothing and the picture is the whole message, with
+  no empty bubble under it. A lone image renders larger; several tile.
+- Attachments with nothing to show inline (a PDF, or an image whose bytes are
+  gone) now read as a proper file card rather than a tag inside a bubble.
+
 ## August 2, 2026 - Attached images show up as images (v0.1.190)
 
 - Screenshots you attach now render as thumbnails inside your own message
