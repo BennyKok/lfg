@@ -48,25 +48,6 @@ import {
   type SimpleFreq,
   type SimpleSchedule,
 } from "./cron";
-import {
-  livePosition,
-  pauseSpeaking,
-  resumeSpeaking,
-  speakText,
-  stopSpeaking,
-  useSpeechPlayback,
-} from "./voice-tts";
-import {
-  AUDIO_MODE_PRIMER,
-  endSpeech,
-  feedSpeech,
-  isAudioModeEnabled,
-  setAudioActiveSid,
-  setAudioModeEnabled,
-  stopSpeakingAll,
-  takePrimeToken,
-  useAudioMode,
-} from "./audio-mode";
 import { liveTransportMode, useLiveSocket, type ConnectionState } from "./useLiveSocket";
 import {
   LfgChatTransport,
@@ -655,7 +636,6 @@ type QueueMsg = {
 };
 
 type LoadOlderMessages = (sid: string) => Promise<boolean>;
-type StreamSummary = (sid: string, onChunk: (chunk: string) => void) => Promise<string>;
 
 type ComposerAttachment = {
   id: string;
@@ -4053,19 +4033,7 @@ function useLiveSessionStream(sessions: Session[], streamIds: string[]) {
       if (!payload || !active.has(payload.sid)) return;
       const sid = payload.sid;
       const part = payload.part;
-      // Audio mode: speak the active session's reply as it streams, and flush the
-      // buffered tail when the turn ends. Placed before the text-delta guard so
-      // text-end (which the guard drops) still finalizes speech.
-      if (part?.type === "text-end" && part.id) {
-        endSpeech(sid, part.id);
-      }
       if (part?.type !== "text-delta" || !part.id) return;
-      feedSpeech(
-        sid,
-        part.id,
-        part.reset ? (part.text ?? "") : (part.delta ?? ""),
-        !!part.reset,
-      );
       setLoadingBySid((prev) => ({ ...prev, [sid]: false }));
       const timers = thinkTimerRef.current;
       if (timers[sid]) {
@@ -6862,7 +6830,6 @@ export function App() {
               messagesBySid={liveStream.messagesBySid}
               busyBySid={liveStream.busyBySid}
               promptsBySid={liveStream.promptsBySid}
-              onStreamSummary={useWsLive ? wsLiveStream.streamSummary : undefined}
               onSubscribeTranscript={useWsLive ? wsLiveStream.subscribeTranscript : undefined}
               onRefresh={refreshSessions}
               onRenameSession={renameSession}
@@ -7090,13 +7057,6 @@ export function App() {
         }}
       />
 
-      <FloatingSessionAudio
-        onOptimisticMessage={liveStream.addOptimisticMessage}
-        onRemoveOptimisticMessage={liveStream.removeOptimisticMessage}
-        onTrackSendStatus={liveStream.trackSendStatus}
-        onRefresh={refreshSessions}
-      />
-
       <CodingAgentAuthDialog
         session={codingAgentAuthInlineSid ? null : codingAgentAuth}
         onSessionChange={setCodingAgentAuth}
@@ -7172,205 +7132,6 @@ export function App() {
     </CodingAgentAuthContext.Provider>
     </CodingAgentsContext.Provider>
     </AgentAccessModeContext.Provider>
-  );
-}
-
-function FloatingSessionAudio({
-  onOptimisticMessage,
-  onRemoveOptimisticMessage,
-  onTrackSendStatus,
-  onRefresh,
-}: {
-  onOptimisticMessage: (sid: string, text: string) => void;
-  onRemoveOptimisticMessage: (sid: string, text: string) => void;
-  onTrackSendStatus: (sid: string, text: string, initial?: QueueMsg | null) => void;
-  onRefresh: () => Promise<void>;
-}) {
-  const playback = useSpeechPlayback();
-  const [, forceTick] = useState(0);
-  const [sending, setSending] = useState(false);
-  const sid = playback.sessionId;
-
-  useEffect(() => {
-    if (playback.status !== "playing") return;
-    const timer = window.setInterval(() => forceTick((n) => n + 1), 250);
-    return () => window.clearInterval(timer);
-  }, [playback.status]);
-
-  const sendToSession = useCallback(
-    async (text: string) => {
-      const t = text.trim();
-      if (!sid || !t || sending) return;
-      setSending(true);
-      feedback.send();
-      try {
-        onOptimisticMessage(sid, t);
-        const sent = await api<{ msg?: QueueMsg }>(`/api/sessions/${sid}/send`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: t }),
-        });
-        onTrackSendStatus(sid, t, sent.msg ?? null);
-        await onRefresh();
-      } catch (e) {
-        onRemoveOptimisticMessage(sid, t);
-        toast.error("Could not send voice message", {
-          description: e instanceof Error ? e.message : String(e),
-        });
-      } finally {
-        setSending(false);
-      }
-    },
-    [sid, sending, onOptimisticMessage, onRefresh, onRemoveOptimisticMessage, onTrackSendStatus],
-  );
-
-  const dictation = useDictation({
-    baseText: "",
-    silenceMs: 1400,
-    onText: (text) => void sendToSession(text),
-    onAutoSubmit: (text) => void sendToSession(text),
-  });
-
-  // Escape dismisses an in-progress voice reply without transcribing/sending
-  // it — same escape hatch as the composer's mic button, for when the mic
-  // didn't pick up what you meant to say.
-  useEffect(() => {
-    // Also armed during "starting" — mic acquisition can hang on an unanswered
-    // permission prompt, and Escape must be able to back out of that too.
-    if (dictation.state !== "recording" && dictation.state !== "starting") return;
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      e.preventDefault();
-      haptic("selection");
-      dictation.cancel();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [dictation.state, dictation.cancel]);
-
-  if (playback.status === "idle") return null;
-
-  // Position is interpolated live (not part of the stable store snapshot); the
-  // forceTick interval above re-renders us every 250ms while playing so the bar
-  // advances smoothly.
-  const pct =
-    playback.duration > 0
-      ? Math.max(0, Math.min(100, (livePosition() / playback.duration) * 100))
-      : 0;
-  const recording = dictation.state === "recording";
-  const starting = dictation.state === "starting";
-  const busy =
-    playback.status === "loading" || sending || dictation.state === "transcribing";
-  // "starting" shows the spinner but must NOT disable the mic button: acquisition
-  // can hang indefinitely on an unanswered permission prompt, and this surface has
-  // no other cancel affordance while not recording — disabling it would leave the
-  // user staring at a spinner they cannot dismiss without reloading. A tap here
-  // routes through toggle() → stop(), which cancels the pending take.
-  const micBusy = busy && !starting;
-
-  return (
-    <div
-      className="fixed inset-x-0 bottom-[calc(var(--lfg-safe-bottom)+4.75rem)] z-[75] flex justify-center px-3 md:bottom-[calc(1.25rem+var(--lfg-safe-bottom))]"
-      role="region"
-      aria-label="Session audio controls"
-    >
-      <div className="w-full max-w-xl overflow-hidden rounded-2xl border border-border bg-background/92 shadow-[0_12px_40px_rgba(0,0,0,0.22)] backdrop-blur-xl">
-        <div className="h-1 bg-muted">
-          <div
-            className="h-full bg-primary transition-[width] duration-200"
-            style={{ width: `${pct}%` }}
-          />
-        </div>
-        <div className="flex items-center gap-2 px-2.5 py-2">
-          <button
-            type="button"
-            onClick={() =>
-              playback.status === "paused" ? void resumeSpeaking() : pauseSpeaking()
-            }
-            disabled={playback.status === "loading"}
-            aria-label={playback.status === "paused" ? "Resume summary" : "Pause summary"}
-            title={playback.status === "paused" ? "Resume" : "Pause"}
-            className="flex size-10 shrink-0 items-center justify-center rounded-full bg-foreground text-background disabled:opacity-50"
-          >
-            {playback.status === "loading" ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : playback.status === "paused" ? (
-              <Play className="size-4 fill-current" />
-            ) : (
-              <Pause className="size-4" />
-            )}
-          </button>
-
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-semibold">
-              {playback.title || "Session summary"}
-            </div>
-            <div className="truncate text-xs text-muted-foreground">
-              {recording
-                ? "Listening for this session"
-                : dictation.state === "starting"
-                  ? "Opening the mic..."
-                  : dictation.state === "transcribing"
-                    ? "Transcribing..."
-                    : playback.text}
-            </div>
-          </div>
-
-          {recording || starting ? (
-            <button
-              type="button"
-              onClick={() => {
-                haptic("selection");
-                dictation.cancel();
-              }}
-              aria-label={starting ? "Cancel opening the microphone" : "Cancel voice message"}
-              title="Cancel (Esc)"
-              className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted hover:text-foreground"
-            >
-              <X className="size-4" />
-            </button>
-          ) : null}
-
-          <button
-            type="button"
-            onClick={() => {
-              if (!sid) {
-                toast.error("No session attached to this audio");
-                return;
-              }
-              haptic("medium");
-              dictation.toggle();
-            }}
-            disabled={!sid || micBusy}
-            aria-label={recording ? "Stop and send voice message" : "Speak to this session"}
-            title={recording ? "Stop and send (Esc to cancel)" : "Speak to this session"}
-            className={cn(
-              "flex size-10 shrink-0 items-center justify-center rounded-full transition",
-              recording
-                ? "bg-destructive text-destructive-foreground"
-                : "bg-muted text-muted-foreground hover:text-foreground",
-              busy && !recording && "opacity-60",
-            )}
-          >
-            {sending || dictation.state === "transcribing" || dictation.state === "starting" ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <Mic className="size-4" />
-            )}
-          </button>
-
-          <button
-            type="button"
-            onClick={stopSpeakingAll}
-            aria-label="Close audio controls"
-            title="Close"
-            className="flex size-10 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
-          >
-            <X className="size-4" />
-          </button>
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -9161,7 +8922,6 @@ function LiveView({
   messagesBySid,
   busyBySid,
   promptsBySid,
-  onStreamSummary,
   onSubscribeTranscript,
   onRefresh,
   onRenameSession,
@@ -9209,7 +8969,6 @@ function LiveView({
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
-  onStreamSummary?: StreamSummary;
   onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
   onRenameSession: RenameSession;
@@ -9382,7 +9141,6 @@ function LiveView({
           messages={messagesBySid[session.sessionId ?? ""] ?? EMPTY_MESSAGES}
           busy={!!busyBySid[session.sessionId ?? ""]}
           prompt={promptsBySid[session.sessionId ?? ""] ?? null}
-          onStreamSummary={onStreamSummary}
           onSubscribeTranscript={onSubscribeTranscript}
           onRefresh={onRefresh}
           onRenameSession={onRenameSession}
@@ -9461,7 +9219,6 @@ function LiveView({
         messagesBySid={messagesBySid}
         busyBySid={busyBySid}
         promptsBySid={promptsBySid}
-        onStreamSummary={onStreamSummary}
         onSubscribeTranscript={onSubscribeTranscript}
         onRefresh={onRefresh}
         onRenameSession={onRenameSession}
@@ -9628,7 +9385,6 @@ function RailStage({
   messagesBySid,
   busyBySid,
   promptsBySid,
-  onStreamSummary,
   onSubscribeTranscript,
   onRefresh,
   onRenameSession,
@@ -9680,7 +9436,6 @@ function RailStage({
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
-  onStreamSummary?: StreamSummary;
   onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
   onRenameSession: RenameSession;
@@ -10554,7 +10309,6 @@ function RailStage({
             messages={messagesBySid[sid] ?? EMPTY_MESSAGES}
             busy={!!busyBySid[sid]}
             prompt={promptsBySid[sid] ?? null}
-            onStreamSummary={onStreamSummary}
             onSubscribeTranscript={onSubscribeTranscript}
             onRefresh={onRefresh}
             onRenameSession={onRenameSession}
@@ -12052,18 +11806,6 @@ function SessionChat({
     onError(null);
     setMessageTextState("");
     try {
-      // Audio mode: this session becomes the one we speak, and gets primed once
-      // to stay conversational + delegate heavy work to a subagent.
-      if (!reviewingShipped && isAudioModeEnabled()) {
-        setAudioActiveSid(sid);
-        if (takePrimeToken(sid)) {
-          await api(`/api/sessions/${sid}/send`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: AUDIO_MODE_PRIMER, mode: "queue" }),
-          }).catch(() => {});
-        }
-      }
       // Uploads started when the files were attached; this normally resolves
       // immediately and only actually waits for bytes still in flight.
       const uploaded = files.length ? await Promise.all(files.map(resolveUpload)) : [];
@@ -14026,7 +13768,6 @@ const SessionCard = memo(function SessionCard({
   messages,
   busy,
   prompt,
-  onStreamSummary,
   onSubscribeTranscript,
   onRefresh,
   onRenameSession,
@@ -14044,7 +13785,6 @@ const SessionCard = memo(function SessionCard({
   messages: Message[];
   busy: boolean;
   prompt: SessionPrompt | null;
-  onStreamSummary?: StreamSummary;
   onSubscribeTranscript?: LfgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
   onRenameSession: RenameSession;
@@ -14072,7 +13812,6 @@ const SessionCard = memo(function SessionCard({
   const catalog = useAgentModelCatalog();
   const isMobile = useIsMobile();
   const [error, setError] = useState<string | null>(null);
-  const [summarizing, setSummarizing] = useState(false);
   // Desktop double-click and the actions menu on every viewport edit in place.
   const [renamingInline, setRenamingInline] = useState(false);
 
@@ -14114,89 +13853,6 @@ const SessionCard = memo(function SessionCard({
       await onRefresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-    }
-  }
-
-  async function speakSummary() {
-    if (!sid || summarizing) return;
-    setSummarizing(true);
-    setError(null);
-    haptic("selection");
-    try {
-      stopSpeaking();
-
-      toast.message("Speaking session summary");
-      let pending = "";
-      let full = "";
-      let spoken = false;
-      let speech = Promise.resolve();
-      const title = titleForSession(session);
-
-      const enqueue = (text: string) => {
-        const t = text.replace(/\s+/g, " ").trim();
-        if (!t) return;
-        spoken = true;
-        speech = speech.then(() => speakText(t, { sessionId: sid, title }));
-      };
-      const drainSentences = (force = false) => {
-        for (;;) {
-          const m = pending.match(/^([\s\S]*?[.!?])(?:\s+|$)/);
-          if (!m) break;
-          enqueue(m[1]);
-          pending = pending.slice(m[0].length);
-        }
-        if (pending.length > 220) {
-          const cut = Math.max(
-            pending.lastIndexOf(",", 220),
-            pending.lastIndexOf(";", 220),
-            pending.lastIndexOf(" ", 220),
-          );
-          if (cut > 80) {
-            enqueue(pending.slice(0, cut));
-            pending = pending.slice(cut + 1);
-          }
-        }
-        if (force && pending.trim()) {
-          enqueue(pending);
-          pending = "";
-        }
-      };
-      const acceptChunk = (chunk: string) => {
-        if (!chunk) return;
-        full += chunk;
-        pending += chunk;
-        drainSentences();
-      };
-
-      if (onStreamSummary) {
-        full = await onStreamSummary(sid, acceptChunk);
-      } else {
-        const res = await lfgFetch(`/api/sessions/${encodeURIComponent(sid)}/summary/stream`, {
-          method: "POST",
-        });
-        if (!res.ok) {
-          const body = (await res.json().catch(() => null)) as { error?: string } | null;
-          throw new Error(body?.error || `summary failed (${res.status})`);
-        }
-        if (!res.body) throw new Error("No summary stream returned");
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          acceptChunk(decoder.decode(value, { stream: true }));
-        }
-        acceptChunk(decoder.decode());
-      }
-      drainSentences(true);
-      if (!spoken || !full.trim()) throw new Error("No summary returned");
-      await speech;
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
-      toast.error("Could not summarize session", { description: msg });
-    } finally {
-      setSummarizing(false);
     }
   }
 
@@ -14498,23 +14154,13 @@ const onTouchStart = (e: ReactTouchEvent) => {
           ref={headRef}
           className="flex min-h-[3.75rem] min-w-0 items-center gap-2 border-b border-border px-3 py-2"
         >
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              void speakSummary();
-            }}
-            disabled={!sid || summarizing}
-            aria-label={summarizing ? "Preparing session summary" : "Speak session summary"}
-            title={summarizing ? "Preparing summary..." : "Speak session summary"}
-            className="relative flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground outline-none hover:bg-muted disabled:cursor-wait disabled:opacity-70"
-          >
-            {busy || summarizing ? (
+          {/* Agent identity + busy indicator. This used to double as a hidden
+              "speak the session summary" button, which read as an avatar and
+              was removed with the TTS feature. */}
+          <div className="relative flex size-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground">
+            {busy ? (
               <Loader2
-                className={cn(
-                  "absolute inset-0 m-auto size-6 animate-spin",
-                  summarizing ? "text-primary" : "text-warning",
-                )}
+                className="absolute inset-0 m-auto size-6 animate-spin text-warning"
                 strokeWidth={1.75}
               />
             ) : null}
@@ -14525,13 +14171,13 @@ const onTouchStart = (e: ReactTouchEvent) => {
               session={session}
               className={cn(
                 "rounded-lg transition-all duration-300 ease-ios",
-                busy || summarizing ? "size-4" : "size-6",
+                busy ? "size-4" : "size-6",
               )}
               // The spinner takes over the icon's box while working, so the
               // number shrinks with it rather than floating off the artwork.
-              size={busy || summarizing ? "sm" : "md"}
+              size={busy ? "sm" : "md"}
             />
-          </button>
+          </div>
           {renamingInline ? (
             <SessionTitleInlineEditor
               initial={session.title?.trim() || titleForSession(session)}
@@ -19153,8 +18799,8 @@ function ScheduleSummary({ expr, tz }: { expr: string; tz: string }) {
 
 type ProviderOption = { id: string; label: string; available: boolean };
 type VoiceConfig = {
-  settings: { ttsProvider: string; sttProvider: string };
-  providers: { tts: ProviderOption[]; stt: ProviderOption[] };
+  settings: { sttProvider: string };
+  providers: { stt: ProviderOption[] };
 };
 
 function ProviderRow({
@@ -19242,8 +18888,7 @@ function VoiceSettingsSection() {
   };
 
   const selectedInput = cfg?.providers.stt.find((p) => p.id === cfg.settings.sttProvider);
-  const selectedOutput = cfg?.providers.tts.find((p) => p.id === cfg.settings.ttsProvider);
-  const needsSetup = !!cfg && (!selectedInput?.available || !selectedOutput?.available);
+  const needsSetup = !!cfg && !selectedInput?.available;
 
   return (
     <section className="space-y-2">
@@ -19251,14 +18896,6 @@ function VoiceSettingsSection() {
         Voice
       </h2>
       <div className="overflow-hidden rounded-2xl border border-border bg-card/40 divide-y divide-border">
-        <ProviderRow
-          icon={<Radio className="size-4" />}
-          label="Voice output"
-          value={cfg?.settings.ttsProvider}
-          options={cfg?.providers.tts}
-          onChange={(v) => void update({ ttsProvider: v })}
-          disabled={!cfg || saving}
-        />
         <ProviderRow
           icon={<Mic className="size-4" />}
           label="Voice input"
@@ -19269,8 +18906,7 @@ function VoiceSettingsSection() {
         />
       </div>
       <p className="px-4 text-xs text-muted-foreground">
-        Applies to every mic button and spoken reply. Greyed-out providers need an API key set on
-        the server.
+        Applies to every mic button. Greyed-out providers need an API key set on the server.
       </p>
       {needsSetup ? (
         <div className="px-4 pt-1">
@@ -19278,10 +18914,7 @@ function VoiceSettingsSection() {
             type="button"
             variant="outline"
             size="sm"
-            // "call" used to mean "needs both"; with that capability gone, open
-            // the dialog for whichever half is actually missing (input first,
-            // since dictation is the more commonly used one).
-            onClick={() => showVoiceSetup(!selectedInput?.available ? "input" : "output")}
+            onClick={() => showVoiceSetup("input")}
           >
             <KeyRound className="size-4" /> Set up voice API key
           </Button>
@@ -21625,7 +21258,6 @@ function MoreView({
   extTabs: ExtensionNavTab[];
   onOpenExt: (id: string) => void;
 }) {
-  const audioMode = useAudioMode();
   const uiFeedback = useUiFeedbackPrefs();
 
   return (
@@ -21767,24 +21399,9 @@ function MoreView({
               aria-label="Toggle haptic feedback"
             />
           </div>
-          <div className="flex items-center justify-between gap-4 px-4 py-2.5">
-            <div className="flex items-center gap-3">
-              <span className="flex size-7 items-center justify-center rounded-[7px] bg-primary text-white">
-                <Radio className="size-4" />
-              </span>
-              <span className="text-sm font-medium">Audio mode · auto-play replies</span>
-            </div>
-            <Switch
-              checked={audioMode}
-              onCheckedChange={setAudioModeEnabled}
-              aria-label="Toggle audio mode"
-            />
-          </div>
         </div>
         <p className="px-4 text-xs text-muted-foreground">
           Stored in this browser only — they don&apos;t follow you to other devices.
-          Audio mode auto-plays replies aloud and delegates heavy work to a subagent
-          so a mis-heard word can&apos;t quietly run the wrong thing.
         </p>
       </section>
 

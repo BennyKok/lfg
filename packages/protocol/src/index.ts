@@ -92,7 +92,6 @@ export type LfgLiveChannelKind =
   | "transcript"
   | "status"
   | "agent_run"
-  | "summary"
   | "resumable";
 
 export interface LfgLiveChannel {

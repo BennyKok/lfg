@@ -12,7 +12,9 @@ import {
 } from "@/components/ui/dialog";
 import { lfgFetch } from "@/lib/lfg-client";
 
-export type VoiceCapability = "input" | "output";
+// Only speech-to-text remains; TTS/spoken replies were removed. Kept as a type
+// (rather than inlined) so a future output capability slots back in cleanly.
+export type VoiceCapability = "input";
 
 type ProviderOption = {
   id: string;
@@ -23,17 +25,15 @@ type ProviderOption = {
 };
 
 export type VoiceConfig = {
-  settings: { ttsProvider: string; sttProvider: string };
-  providers: { tts: ProviderOption[]; stt: ProviderOption[] };
+  settings: { sttProvider: string };
+  providers: { stt: ProviderOption[] };
   setup: { envFile: string; restartCommand: string };
 };
 
 const SETUP_EVENT = "lfg:voice-setup";
 
-function selectedProvider(cfg: VoiceConfig, capability: VoiceCapability): ProviderOption | undefined {
-  const kind = capability === "input" ? "stt" : "tts";
-  const selected = capability === "input" ? cfg.settings.sttProvider : cfg.settings.ttsProvider;
-  return cfg.providers[kind].find((provider) => provider.id === selected);
+function selectedProvider(cfg: VoiceConfig, _capability: VoiceCapability): ProviderOption | undefined {
+  return cfg.providers.stt.find((provider) => provider.id === cfg.settings.sttProvider);
 }
 
 export function voiceReady(cfg: VoiceConfig, capability: VoiceCapability): boolean {
@@ -180,7 +180,7 @@ export function VoiceSetupDialog() {
 
   const providers = useMemo(() => {
     if (!cfg) return [];
-    const combined = capability === "output" ? cfg.providers.tts : cfg.providers.stt;
+    const combined = cfg.providers.stt;
     return [...new Map(combined.map((provider) => [provider.id, provider])).values()];
   }, [capability, cfg]);
   const provider = providers.find((item) => item.id === providerId) ?? providers[0];
@@ -190,8 +190,7 @@ export function VoiceSetupDialog() {
     setSaving(true);
     setMessage("");
     try {
-      const selection =
-        capability === "input" ? { sttProvider: provider.id } : { ttsProvider: provider.id };
+      const selection = { sttProvider: provider.id };
       const response = await lfgFetch("/api/voice/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -202,14 +201,7 @@ export function VoiceSetupDialog() {
       const next = await load();
       setApiKey("");
       if (voiceReady(next, capability)) {
-        // Scoped to the capability we just configured — with the old "call"
-        // variant gone, one save only ever satisfies one half, so claiming
-        // "voice is ready" would be wrong when the other half is still keyless.
-        setMessage(
-          capability === "input"
-            ? "API key saved. Voice messages are ready."
-            : "API key saved. Spoken replies are ready.",
-        );
+        setMessage("API key saved. Voice messages are ready.");
         window.setTimeout(() => setOpen(false), 700);
       } else {
         setMessage("API key saved, but this voice configuration is not ready yet.");
@@ -228,11 +220,9 @@ export function VoiceSetupDialog() {
           <div className="mb-1 flex size-10 items-center justify-center rounded-xl bg-primary text-primary-foreground">
             <KeyRound className="size-5" />
           </div>
-          <DialogTitle>Set up voice</DialogTitle>
+          <DialogTitle>Set up voice messages</DialogTitle>
           <DialogDescription>
-            {capability === "input"
-              ? "Voice messages need a speech-to-text API key."
-              : "Spoken replies need a text-to-speech API key."}
+            Voice messages need a speech-to-text API key.
           </DialogDescription>
         </DialogHeader>
 

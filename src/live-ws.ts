@@ -53,7 +53,7 @@ type HtmlMessage = {
   size?: number;
 };
 type LivePane = { sid: string; tp: string | null; target: string | null };
-type ChannelKind = "transcript" | "status" | "agent_run" | "summary" | "resumable";
+type ChannelKind = "transcript" | "status" | "agent_run" | "resumable";
 type Channel = { kind: ChannelKind; key: string; resumeFromSeq?: number };
 type AgentRunSnapshot = {
   id: string;
@@ -261,14 +261,6 @@ type ChannelState = {
   ring: Array<{ seq: number; frame: Record<string, unknown> }>;
 };
 
-type SummaryTail = {
-  sid: string;
-  started: boolean;
-  done: boolean;
-  text: string;
-  error: string | null;
-};
-
 type SidTail = {
   sid: string;
   sockets: Set<LiveWs>;
@@ -309,7 +301,6 @@ export function createLiveWsSupport(opts: {
   evlog?: Evlog;
   getAgentRun?: (runId: string) => AgentRunSnapshot | null;
   subscribeAgentRun?: (runId: string, cb: (event: AgentRunEvent) => void) => () => void;
-  streamSummary?: (sid: string, onChunk: (chunk: string) => void) => Promise<void>;
 } = {}) {
   const evlog = opts.evlog ?? defaultEvlog;
   const sockets = new WeakMap<LiveWs, SocketState>();
@@ -317,7 +308,6 @@ export function createLiveWsSupport(opts: {
   activeSidTails = sidTails;
   const channelStates = new Map<string, ChannelState>();
   const agentRunUnsubs = new Map<string, () => void>();
-  const summaryTails = new Map<string, SummaryTail>();
   const openSockets = new Set<LiveWs>();
   let statusInterval: ReturnType<typeof setInterval> | null = null;
   let lastStatusSig = "";
@@ -796,52 +786,6 @@ export function createLiveWsSupport(opts: {
     }
   };
 
-  const subscribeSummary = async (state: SocketState, channel: Channel, resync: boolean) => {
-    const id = channelId(channel);
-    const first = !state.subscribed.has(id);
-    if (!first && !resync) return;
-    if (first && state.subscribed.size >= SUBSCRIPTION_CAP) {
-      safeSend(state.ws, { t: "error", kind: channel.kind, key: channel.key, message: `subscription cap exceeded (${SUBSCRIPTION_CAP})` });
-      return;
-    }
-    state.subscribed.add(id);
-    let tail = summaryTails.get(channel.key);
-    if (tail?.done && channel.resumeFromSeq == null) {
-      tail = undefined;
-      summaryTails.delete(channel.key);
-    }
-    if (!tail) {
-      tail = { sid: channel.key, started: false, done: false, text: "", error: null };
-      summaryTails.set(channel.key, tail);
-    }
-    await replayOrSnapshot(state, channel, async () => ({
-      t: "snapshot",
-      text: tail.text,
-      done: tail.done,
-      error: tail.error,
-    }));
-    if (tail.started || tail.done) return;
-    tail.started = true;
-    if (!opts.streamSummary) {
-      tail.done = true;
-      tail.error = "summary stream unavailable";
-      publishChannelDelta(channel, { error: tail.error, done: true });
-      return;
-    }
-    void opts.streamSummary(channel.key, (chunk) => {
-      if (!chunk) return;
-      tail.text += chunk;
-      publishChannelDelta(channel, { chunk });
-    }).then(() => {
-      tail.done = true;
-      publishChannelDelta(channel, { done: true });
-    }).catch((e) => {
-      tail.done = true;
-      tail.error = e instanceof Error ? e.message : String(e);
-      publishChannelDelta(channel, { error: tail.error, done: true });
-    });
-  };
-
   const unsubscribeChannel = (state: SocketState, id: string) => {
     const channel = channelFromId(id);
     if (!channel) {
@@ -906,13 +850,6 @@ export function createLiveWsSupport(opts: {
         resumeFromSeq: typeof v.resumeFromSeq === "number" && Number.isFinite(v.resumeFromSeq) ? v.resumeFromSeq : undefined,
       };
     }
-    if (v.kind === "summary" && SID_RE.test(v.key)) {
-      return {
-        kind: "summary",
-        key: v.key,
-        resumeFromSeq: typeof v.resumeFromSeq === "number" && Number.isFinite(v.resumeFromSeq) ? v.resumeFromSeq : undefined,
-      };
-    }
     if ((v.kind === "status" || v.kind === "resumable") && v.key === "*") {
       return {
         kind: v.kind,
@@ -930,10 +867,6 @@ export function createLiveWsSupport(opts: {
     }
     if (channel.kind === "agent_run") {
       void subscribeAgentRun(state, channel, resync);
-      return;
-    }
-    if (channel.kind === "summary") {
-      void subscribeSummary(state, channel, resync);
       return;
     }
     state.subscribed.add(channelId(channel));
@@ -1008,9 +941,29 @@ export function createLiveWsSupport(opts: {
         return;
       }
       if (input.t === "subscribe") {
-        const channels = Array.isArray(input.channels)
-          ? input.channels.map(validChannel).filter((channel): channel is Channel => !!channel)
-          : [];
+        const requested = Array.isArray(input.channels) ? input.channels : [];
+        const channels = requested
+          .map(validChannel)
+          .filter((channel): channel is Channel => !!channel);
+        // A channel kind this server doesn't know MUST be answered, not silently
+        // dropped. A client cached from before a channel was retired (service
+        // worker keeps old bundles alive across deploys) otherwise waits forever
+        // on a subscription that will never produce a frame — its request promise
+        // never settles and its UI hangs mid-operation. An error frame lets the
+        // old client's existing error path reject and clean up.
+        if (channels.length !== requested.length) {
+          for (const raw of requested) {
+            if (validChannel(raw)) continue;
+            const v = raw as { kind?: unknown; key?: unknown };
+            safeSend(ws, {
+              t: "error",
+              kind: typeof v?.kind === "string" ? v.kind : undefined,
+              key: typeof v?.key === "string" ? v.key : undefined,
+              code: "unknown_channel",
+              message: "unknown or malformed channel",
+            });
+          }
+        }
         const ids = Array.isArray(input.ids)
           ? input.ids.filter((id): id is string => typeof id === "string" && SID_RE.test(id))
           : [];

@@ -204,7 +204,6 @@ import { projectName, reposRoot } from "../projects.ts";
 import { resolveSessionCwd, startWorktreeSweep } from "../worktree.ts";
 import { ensureConversationVisibleFrom } from "../claude-conversation.ts";
 import {
-  synthesizeTts,
   transcribeStt,
   getVoiceSettings,
   setVoiceSettings,
@@ -1486,211 +1485,8 @@ async function liveSessionIdsCached(): Promise<Set<string>> {
   return ids;
 }
 
-function compactForSpeech(text: string, max = 700): string {
-  const oneLine = text
-    .replace(/```[\s\S]*?```/g, "code block")
-    .replace(/[`*_#>\[\]()]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (oneLine.length <= max) return oneLine;
-  return `${oneLine.slice(0, max - 1).trim()}…`;
-}
-
-function clipSummaryText(text: string, max = 1200): string {
-  return text.replace(/\s+/g, " ").trim().slice(0, max);
-}
-
-const ANTHROPIC_MESSAGES_URL = "https://api.anthropic.com/v1/messages";
-
-function sessionSummaryTimeoutMs(): number {
-  const raw = Number(process.env.LFG_SESSION_SUMMARY_TIMEOUT_MS || "");
-  return Number.isFinite(raw) && raw > 0 ? Math.max(500, Math.min(15_000, raw)) : 2_500;
-}
-
 function claudeOauthToken(): string | null {
   return sharedClaudeOauthToken();
-}
-
-function sessionSummaryModel(): string {
-  return process.env.LFG_SESSION_SUMMARY_MODEL || process.env.LFG_VOICE_MODEL || "claude-haiku-4-5";
-}
-
-async function claudeSessionSummary(prompt: string): Promise<string | null> {
-  const token = claudeOauthToken();
-  if (!token) return null;
-  try {
-    const r = await fetch(ANTHROPIC_MESSAGES_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "anthropic-beta": "oauth-2025-04-20",
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model: sessionSummaryModel(),
-        max_tokens: 140,
-        system:
-          "Summarize the coding-agent session for spoken playback. Use 2 short sentences, no markdown. Say what was requested, what changed or happened, and any current blocker.",
-        messages: [{ role: "user", content: prompt }],
-      }),
-      signal: AbortSignal.timeout(sessionSummaryTimeoutMs()),
-    });
-    if (!r.ok) return null;
-    const data = (await r.json().catch(() => null)) as { content?: Array<{ type?: string; text?: string }> } | null;
-    return data?.content
-      ?.filter((b) => b?.type === "text")
-      .map((b) => b.text || "")
-      .join("")
-      .trim() || null;
-  } catch {
-    return null;
-  }
-}
-
-async function sessionSummaryContext(sessionId: string, transcriptPath: string): Promise<{
-  prompt: string;
-  fallback: string;
-}> {
-  const [msgs, live] = await Promise.all([
-    indexedRecentMessages(transcriptPath, sessionId, 64),
-    listSessionsCached().catch(() => []),
-  ]);
-  const session = live.find((s) => s.sessionId === sessionId) ?? null;
-  const relevant = msgs
-    .filter((m) => m.kind === "text" && m.text.trim() && (m.role === "user" || m.role === "assistant"))
-    .slice(-24);
-  const transcript = relevant
-    .map((m) => `${m.role}: ${clipSummaryText(m.text, 500)}`)
-    .join("\n");
-  const status = session
-    ? `${session.busy ? "working" : "idle"}${session.status === "blocked" ? `, blocked: ${session.statusDetail || session.statusReason || "needs attention"}` : ""}`
-    : "not currently live";
-  const title = session ? titleForSessionLike(session) : sessionId.slice(0, 8);
-  const lastUser = [...relevant].reverse().find((m) => m.role === "user")?.text || "";
-  const lastAssistant = [...relevant].reverse().find((m) => m.role === "assistant")?.text || "";
-  const parts = [
-    title ? `Session ${title}.` : "This session.",
-    lastUser ? `Last request: ${compactForSpeech(lastUser, 180)}.` : "",
-    lastAssistant ? `Latest update: ${compactForSpeech(lastAssistant, 260)}.` : "No assistant update is in the transcript yet.",
-    session?.status === "blocked"
-      ? `It is blocked: ${compactForSpeech(session.statusDetail || "needs attention", 120)}.`
-      : session?.busy
-        ? "It is working now."
-        : "It is idle now.",
-  ].filter(Boolean);
-  return {
-    prompt: `Session: ${title}\nStatus: ${status}\n\nRecent transcript:\n${transcript || "(no transcript text)"}`,
-    fallback: compactForSpeech(parts.join(" ")),
-  };
-}
-
-async function summarizeSessionForSpeech(sessionId: string, transcriptPath: string): Promise<{
-  summary: string;
-  generated: boolean;
-  model?: string;
-}> {
-  const ctx = await sessionSummaryContext(sessionId, transcriptPath);
-  const generated = await claudeSessionSummary(ctx.prompt);
-  if (generated) return { summary: compactForSpeech(generated), generated: true, model: sessionSummaryModel() };
-  return { summary: ctx.fallback, generated: false };
-}
-
-async function streamSessionSummaryForSpeech(sessionId: string, transcriptPath: string): Promise<Response> {
-  const ctx = await sessionSummaryContext(sessionId, transcriptPath);
-  const token = claudeOauthToken();
-  if (!token) return new Response(ctx.fallback, { headers: { "Content-Type": "text/plain; charset=utf-8" } });
-
-  const upstream = await fetch(ANTHROPIC_MESSAGES_URL, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "anthropic-beta": "oauth-2025-04-20",
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      model: sessionSummaryModel(),
-      max_tokens: 140,
-      stream: true,
-      system:
-        "Summarize the coding-agent session for spoken playback. Use 2 short sentences, no markdown. Say what was requested, what changed or happened, and any current blocker.",
-      messages: [{ role: "user", content: ctx.prompt }],
-    }),
-    signal: AbortSignal.timeout(15_000),
-  }).catch(() => null);
-
-  if (!upstream?.ok || !upstream.body) {
-    return new Response(ctx.fallback, { headers: { "Content-Type": "text/plain; charset=utf-8" } });
-  }
-
-  const encoder = new TextEncoder();
-  const decoder = new TextDecoder();
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      let buf = "";
-      try {
-        const reader = upstream.body!.getReader();
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          const lines = buf.split(/\r?\n/);
-          buf = lines.pop() ?? "";
-          for (const line of lines) {
-            if (!line.startsWith("data:")) continue;
-            const payload = line.slice(5).trim();
-            if (!payload) continue;
-            const ev = JSON.parse(payload) as any;
-            const delta = ev?.type === "content_block_delta" ? ev.delta : null;
-            if (delta?.type === "text_delta" && delta.text) {
-              controller.enqueue(encoder.encode(delta.text));
-            }
-          }
-        }
-      } catch {
-        if (!controller.desiredSize) return;
-      } finally {
-        controller.close();
-      }
-    },
-  });
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/plain; charset=utf-8",
-      "Cache-Control": "no-store",
-      "X-LFG-Summary-Model": sessionSummaryModel(),
-    },
-  });
-}
-
-async function streamSessionSummaryChunksForSpeech(sessionId: string, onChunk: (chunk: string) => void): Promise<void> {
-  const tp = await resolveTranscript(sessionId);
-  if (!tp) throw new Error("session transcript not found");
-  const res = await streamSessionSummaryForSpeech(sessionId, tp);
-  if (!res.ok) throw new Error(`summary failed (${res.status})`);
-  if (!res.body) throw new Error("No summary stream returned");
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    const chunk = decoder.decode(value, { stream: true });
-    if (chunk) onChunk(chunk);
-  }
-  const rest = decoder.decode();
-  if (rest) onChunk(rest);
-}
-
-function titleForSessionLike(session: { title?: string | null; lastUserText?: string | null; tmuxName?: string | null; project?: string | null; sessionId?: string | null }) {
-  return (
-    session.title ||
-    session.lastUserText ||
-    session.tmuxName ||
-    session.project ||
-    session.sessionId?.slice(0, 8) ||
-    "session"
-  );
 }
 
 // Compact, spoken-summary-friendly snapshot of every live session, injected into
@@ -1976,7 +1772,6 @@ export async function cmdServe() {
     evlog,
     getAgentRun: agentRunSnapshot,
     subscribeAgentRun,
-    streamSummary: streamSessionSummaryChunksForSpeech,
   });
   const server = Bun.serve<AppSocketData>({
     port: PORT,
@@ -2321,20 +2116,6 @@ export async function cmdServe() {
         }
       }
 
-      // ---- voice TTS proxy: synthesize via the configured cloud provider
-      // (ElevenLabs by default; see voice-providers.ts). The API key lives
-      // server-side (.env) so the browser never sees it; the client just plays
-      // the returned raw 24 kHz PCM.
-      if (path === "/api/voice/tts" && req.method === "POST") {
-        const body = (await req.json().catch(() => null)) as {
-          text?: string;
-          voice?: string;
-        } | null;
-        const text = body?.text?.trim();
-        if (!text) return err(400, "expected { text }");
-        return synthesizeTts(text, body?.voice);
-      }
-
       // ---- voice STT proxy: transcribe uploaded WAV audio via the configured
       // cloud provider (ElevenLabs Scribe by default); returns { text }. Keeps
       // the device thin (no local model). The provider is chosen in Settings
@@ -2345,10 +2126,10 @@ export async function cmdServe() {
         return transcribeStt(audio);
       }
 
-      // ---- voice provider config: which TTS/STT provider the proxies use.
-      // The selection lives server-side (data/voice-settings.json) because the
-      // Python worker's TTS/STT calls go agent→proxy and never see the browser;
-      // localStorage alone wouldn't reach them. Secrets stay server-side; POST
+      // ---- voice provider config: which STT provider the dictation proxies
+      // use. The selection lives server-side (data/voice-settings.json) so it is
+      // shared across browsers rather than pinned to one localStorage. Secrets
+      // stay server-side; POST
       // can persist a known provider's key to .env without returning it. GET
       // returns current settings + availability so the UI can grey out
       // unconfigured providers.
@@ -5510,30 +5291,6 @@ export async function cmdServe() {
           indexedMessages: results.reduce((sum, result) => sum + result.indexed, 0),
           results,
         });
-      }
-
-      {
-        // Streaming spoken summary for the dashboard shortcut. Haiku starts
-        // returning text before the full summary is done; the browser feeds
-        // completed sentences into TTS as they arrive.
-        const m = path.match(/^\/api\/sessions\/([0-9a-fA-F-]{36})\/summary\/stream$/);
-        if (m && req.method === "POST") {
-          const tp = await resolveTranscript(m[1]);
-          if (!tp) return err(404, "session transcript not found");
-          return streamSessionSummaryForSpeech(m[1], tp);
-        }
-      }
-
-      {
-        // Short spoken summary for the dashboard shortcut. The browser uses the
-        // returned text directly for TTS, so keep it plain and capped.
-        const m = path.match(/^\/api\/sessions\/([0-9a-fA-F-]{36})\/summary$/);
-        if (m && req.method === "POST") {
-          const tp = await resolveTranscript(m[1]);
-          if (!tp) return err(404, "session transcript not found");
-          const summary = await summarizeSessionForSpeech(m[1], tp);
-          return json({ id: m[1], ...summary });
-        }
       }
 
       {

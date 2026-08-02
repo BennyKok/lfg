@@ -1,8 +1,0 @@
-[Unit]
-Description=lfg orb TTS failover — point TTS_UPSTREAM at a working engine, verify audio
-After=lfg-stt-start.service network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/home/dev/repos/lfg/deploy/ops/lfg-tts-failover.sh

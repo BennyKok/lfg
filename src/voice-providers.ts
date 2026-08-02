@@ -1,16 +1,13 @@
-// Pluggable TTS/STT providers behind the /api/voice/{tts,stt} proxies. Both the
-// browser dictation path and the TTS playback path funnel through those two
-// endpoints, so switching provider here switches it everywhere. The internal
-// contract every adapter honours:
-//   TTS  → raw 24 kHz mono int16 PCM byte stream (no container/header)
+// Pluggable STT providers behind the /api/voice/{stt,stt-stream} proxies, so
+// switching provider here switches dictation everywhere. The internal contract
+// every adapter honours:
 //   STT  → JSON { text }   (input is octet-stream WAV)
-// NOTE: only the ElevenLabs and OpenAI adapters exist today. The self-hosted GPU
-// stacks under deploy/{gpu-stt,streaming-stt,parakeet-stt} are NOT reachable from
-// here — nothing reads TTS_UPSTREAM/STT_UPSTREAM/STT_WS_URL since the LiveKit
-// call worker was removed. Wiring one up means adding an adapter below.
-// Secrets (API keys / upstream tokens) stay server-side. Provider choices live
-// in data/voice-settings.json; keys entered in the setup dialog are written to
-// the server's .env file and are never returned to the browser.
+// Secrets (API keys) stay server-side. Provider choices live in
+// data/voice-settings.json; keys entered in the setup dialog are written to the
+// server's .env file and are never returned to the browser.
+// NOTE: text-to-speech was removed, so there is no TTS adapter here any more.
+// The self-hosted GPU stacks under deploy/*-stt are NOT reachable from here —
+// nothing reads STT_UPSTREAM/STT_WS_URL. Wiring one up means adding an adapter.
 
 import { chmod, mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
@@ -19,7 +16,6 @@ import { randomBytes } from "node:crypto";
 import { PATHS } from "./config.ts";
 
 export type VoiceSettings = {
-  ttsProvider: string;
   sttProvider: string;
 };
 
@@ -45,7 +41,6 @@ export type SttStreamBridge = {
 };
 
 const DEFAULTS: VoiceSettings = {
-  ttsProvider: "elevenlabs",
   sttProvider: "elevenlabs",
 };
 
@@ -58,22 +53,6 @@ const jres = (obj: unknown, status = 200) =>
   });
 const eres = (status: number, message: string) => jres({ error: message }, status);
 
-// Raw-PCM passthrough: the worker reads bytes verbatim, so the Content-Type is
-// cosmetic — we keep the original audio/wav label every consumer already expects.
-const pcm = (body: ReadableStream<Uint8Array> | null) =>
-  new Response(body, {
-    headers: { "Content-Type": "audio/wav", "Cache-Control": "no-store" },
-  });
-
-type TtsProvider = {
-  id: string;
-  label: string;
-  envVar: string;
-  accountUrl: string;
-  available: () => boolean;
-  synthesize: (text: string, voice?: string) => Promise<Response>;
-};
-
 type SttProvider = {
   id: string;
   label: string;
@@ -84,184 +63,6 @@ type SttProvider = {
   // Optional realtime path: open a streaming bridge for /api/voice/stt-stream.
   // Providers without realtime STT omit this and the proxy closes the socket.
   openStream?: (handlers: SttStreamHandlers) => SttStreamBridge | null;
-};
-
-// ---------------------------------------------------------------- TTS adapters
-
-// Transcode an mp3 stream to the worker's contract (raw 24 kHz mono s16le PCM)
-// via ffmpeg. We request mp3 rather than ElevenLabs' pcm_* formats because PCM
-// output is a paid-tier feature — mp3 works on every tier, and ffmpeg (already
-// on the box) normalizes it. ffmpeg reads the mp3 from stdin as chunks arrive
-// and we stream its stdout, so PCM starts flowing before the whole clip is
-// synthesized (no buffer-the-whole-utterance penalty).
-function mp3ToPcm24k(mp3: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
-  const proc = Bun.spawn({
-    cmd: [
-      "ffmpeg", "-hide_banner", "-loglevel", "error",
-      "-i", "pipe:0",
-      "-f", "s16le", "-acodec", "pcm_s16le", "-ac", "1", "-ar", "24000",
-      "pipe:1",
-    ],
-    stdin: mp3,
-    stdout: "pipe",
-    stderr: "ignore",
-  });
-  return proc.stdout;
-}
-
-// ElevenLabs TTS over the stream-input websocket (lower time-to-first-audio than
-// the batch /stream endpoint). We request native pcm_24000 — verified usable on
-// this account — so the worker gets raw 24 kHz mono int16 PCM directly, no ffmpeg
-// transcode in the hot path. Protocol:
-//   URL  : wss://…/v1/text-to-speech/{voice}/stream-input?model_id=…&output_format=pcm_24000
-//   auth : xi-api-key header
-//   c→s  : BOS {text:" ",voice_settings,generation_config} → {text:"<sentence>"} → EOS {text:""}
-//   s→c  : {audio:"<base64 pcm>"} chunks, then {isFinal:true}
-// The StreamAdapter in the worker calls /api/voice/tts once per sentence, so each
-// call streams one sentence and closes. Returns a ReadableStream that enqueues
-// decoded PCM as it arrives, so the Response body flows to the worker live.
-function elevenLabsStreamInputPcm(text: string, voiceId: string, model: string, key: string): ReadableStream<Uint8Array> {
-  const fmt = process.env.ELEVENLABS_TTS_OUTPUT_FORMAT || "pcm_24000";
-  const url =
-    `wss://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/stream-input` +
-    `?model_id=${encodeURIComponent(model)}&output_format=${encodeURIComponent(fmt)}`;
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      let done = false;
-      const finish = () => {
-        if (done) return;
-        done = true;
-        try {
-          controller.close();
-        } catch {}
-      };
-      let ws: WebSocket;
-      try {
-        ws = new WebSocket(url, { headers: { "xi-api-key": key } } as unknown as string[]);
-      } catch {
-        finish();
-        return;
-      }
-      // Bound the call so a stalled synth can't pin the worker's TTS turn open.
-      const timer = setTimeout(() => {
-        try {
-          ws.close();
-        } catch {}
-        finish();
-      }, TIMEOUT_MS);
-      ws.addEventListener("open", () => {
-        try {
-          // BOS — initialize the stream; a low first chunk_length_schedule value
-          // makes generation start after few characters → faster first audio.
-          ws.send(
-            JSON.stringify({
-              text: " ",
-              voice_settings: { stability: 0.5, similarity_boost: 0.8 },
-              generation_config: { chunk_length_schedule: [50, 160, 250, 290] },
-            }),
-          );
-          ws.send(JSON.stringify({ text: `${text} ` }));
-          ws.send(JSON.stringify({ text: "" })); // EOS → flush + finish
-        } catch {
-          finish();
-        }
-      });
-      ws.addEventListener("message", (ev: MessageEvent) => {
-        let d: { audio?: string | null; isFinal?: boolean; error?: unknown };
-        try {
-          d = JSON.parse(typeof ev.data === "string" ? ev.data : "");
-        } catch {
-          return;
-        }
-        if (d.audio) {
-          try {
-            controller.enqueue(new Uint8Array(Buffer.from(d.audio, "base64")));
-          } catch {}
-        }
-        if (d.isFinal || d.error) {
-          try {
-            ws.close();
-          } catch {}
-        }
-      });
-      ws.addEventListener("close", () => {
-        clearTimeout(timer);
-        finish();
-      });
-      ws.addEventListener("error", () => {
-        clearTimeout(timer);
-        finish();
-      });
-    },
-  });
-}
-
-const ttsElevenLabs: TtsProvider = {
-  id: "elevenlabs",
-  label: "ElevenLabs",
-  envVar: "ELEVENLABS_API_KEY",
-  accountUrl: "https://elevenlabs.io/app/developers/api-keys",
-  available: () => !!process.env.ELEVENLABS_API_KEY,
-  async synthesize(text) {
-    const key = process.env.ELEVENLABS_API_KEY;
-    if (!key) return eres(503, "elevenlabs not configured");
-    // Sarah — a premade voice confirmed usable on the free API tier. (Some
-    // library voices 402 for free accounts; override via ELEVENLABS_VOICE_ID.)
-    const voiceId = process.env.ELEVENLABS_VOICE_ID || "EXAVITQu4vr4xnSDxMaL";
-    const model = process.env.ELEVENLABS_TTS_MODEL || "eleven_turbo_v2_5";
-    try {
-      // Primary: stream-input websocket → native PCM, lowest first-audio latency.
-      return pcm(elevenLabsStreamInputPcm(text, voiceId, model, key));
-    } catch {
-      // Fallback: batch /stream mp3 piped through ffmpeg (every-tier safe), in
-      // case the websocket path can't be constructed in this runtime.
-      try {
-        const r = await fetch(
-          `https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}/stream?output_format=mp3_44100_128`,
-          {
-            method: "POST",
-            headers: { "xi-api-key": key, "Content-Type": "application/json" },
-            body: JSON.stringify({ text, model_id: model }),
-            signal: AbortSignal.timeout(TIMEOUT_MS),
-          },
-        );
-        if (!r.ok || !r.body) {
-          const detail = await r.text().catch(() => "");
-          return eres(502, `elevenlabs tts ${r.status}${detail ? `: ${detail.slice(0, 200)}` : ""}`);
-        }
-        return pcm(mp3ToPcm24k(r.body));
-      } catch {
-        return eres(502, "elevenlabs unreachable");
-      }
-    }
-  },
-};
-
-const ttsOpenAI: TtsProvider = {
-  id: "openai",
-  label: "OpenAI",
-  envVar: "OPENAI_API_KEY",
-  accountUrl: "https://platform.openai.com/api-keys",
-  available: () => !!process.env.OPENAI_API_KEY,
-  async synthesize(text) {
-    const key = process.env.OPENAI_API_KEY;
-    if (!key) return eres(503, "openai not configured");
-    const voice = process.env.OPENAI_TTS_VOICE || "alloy";
-    const model = process.env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts";
-    try {
-      // response_format pcm → raw 24 kHz mono s16le.
-      const r = await fetch("https://api.openai.com/v1/audio/speech", {
-        method: "POST",
-        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ model, voice, input: text, response_format: "pcm" }),
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
-      if (!r.ok) return eres(502, `openai tts ${r.status}`);
-      return pcm(r.body);
-    } catch {
-      return eres(502, "openai unreachable");
-    }
-  },
 };
 
 // ---------------------------------------------------------------- STT adapters
@@ -467,18 +268,13 @@ const sttOpenAI: SttProvider = {
   },
 };
 
-const TTS: Record<string, TtsProvider> = {
-  [ttsElevenLabs.id]: ttsElevenLabs,
-  [ttsOpenAI.id]: ttsOpenAI,
-};
-
 const STT: Record<string, SttProvider> = {
   [sttElevenLabs.id]: sttElevenLabs,
   [sttOpenAI.id]: sttOpenAI,
 };
 
-function providerById(id: string): TtsProvider | SttProvider | undefined {
-  return TTS[id] ?? STT[id];
+function providerById(id: string): SttProvider | undefined {
+  return STT[id];
 }
 
 /** Replace or append one environment assignment without disturbing comments. */
@@ -539,7 +335,6 @@ export async function getVoiceSettings(): Promise<VoiceSettings> {
   try {
     const p = JSON.parse(await f.text()) as Partial<VoiceSettings>;
     return {
-      ttsProvider: p.ttsProvider && TTS[p.ttsProvider] ? p.ttsProvider : DEFAULTS.ttsProvider,
       sttProvider: p.sttProvider && STT[p.sttProvider] ? p.sttProvider : DEFAULTS.sttProvider,
     };
   } catch {
@@ -554,7 +349,6 @@ function getVoiceSettingsSync(): VoiceSettings {
   try {
     const p = JSON.parse(readFileSync(filePath(), "utf8")) as Partial<VoiceSettings>;
     return {
-      ttsProvider: p.ttsProvider && TTS[p.ttsProvider] ? p.ttsProvider : DEFAULTS.ttsProvider,
       sttProvider: p.sttProvider && STT[p.sttProvider] ? p.sttProvider : DEFAULTS.sttProvider,
     };
   } catch {
@@ -565,7 +359,6 @@ function getVoiceSettingsSync(): VoiceSettings {
 export async function setVoiceSettings(patch: Partial<VoiceSettings>): Promise<VoiceSettings> {
   const cur = await getVoiceSettings();
   const next: VoiceSettings = {
-    ttsProvider: patch.ttsProvider && TTS[patch.ttsProvider] ? patch.ttsProvider : cur.ttsProvider,
     sttProvider: patch.sttProvider && STT[patch.sttProvider] ? patch.sttProvider : cur.sttProvider,
   };
   await mkdir(PATHS.data, { recursive: true });
@@ -592,7 +385,6 @@ export function listProviders() {
     available: p.available(),
   });
   return {
-    tts: Object.values(TTS).map(map),
     stt: Object.values(STT).map(map),
   };
 }
@@ -609,21 +401,10 @@ export function voiceSetupInfo() {
 
 // ------------------------------------------------------------ dispatch
 
-function pickTts(id: string): TtsProvider {
-  const p = TTS[id];
-  if (p && p.available()) return p;
-  return ttsElevenLabs; // safe fallback: never break voice on a mis-set provider
-}
-
 function pickStt(id: string): SttProvider {
   const p = STT[id];
   if (p && p.available()) return p;
   return sttElevenLabs;
-}
-
-export async function synthesizeTts(text: string, voice?: string): Promise<Response> {
-  const s = await getVoiceSettings();
-  return pickTts(s.ttsProvider).synthesize(text, voice);
 }
 
 export async function transcribeStt(audio: ArrayBuffer): Promise<Response> {

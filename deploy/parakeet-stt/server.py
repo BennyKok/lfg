@@ -13,7 +13,7 @@ and encodes 16-bit mono WAV. Parakeet wants 16 kHz mono, so we resample here —
 the frontend and the lfg proxy stay unchanged.
 
 Env:
-  STT_TOKEN     required; shared secret, must match lfg's STT_TOKEN/TTS_TOKEN
+  STT_TOKEN     required; shared secret, must match the client's STT_TOKEN
   STT_MODEL     default nvidia/parakeet-tdt-0.6b-v2 (English).
                 Use nvidia/parakeet-tdt-0.6b-v3 for multilingual (~25 langs).
   STT_DEVICE    cuda (default) | cpu

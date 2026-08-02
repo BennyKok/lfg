@@ -68,7 +68,7 @@ type StatusRow = Pick<
   | "statusDetail"
   | "model"
 >;
-type ChannelKind = "transcript" | "status" | "agent_run" | "summary" | "resumable";
+type ChannelKind = "transcript" | "status" | "agent_run" | "resumable";
 type LiveChannel = { kind: ChannelKind; key: string; resumeFromSeq?: number };
 type AgentRunSnapshot = {
   id: string;
@@ -104,13 +104,6 @@ type AgentRunHandler = {
   onSnapshot?: (run: AgentRunSnapshot) => void;
   onEvent?: (event: AgentRunEvent) => void;
   onError?: (message: string) => void;
-};
-type SummaryHandler = {
-  delivered: number;
-  full: string;
-  resolve: (text: string) => void;
-  reject: (error: Error) => void;
-  onChunk: (chunk: string) => void;
 };
 export type TranscriptEvent =
   | { type: "message"; message: Message }
@@ -382,7 +375,6 @@ export function useLiveSocket(
   const activeTranscriptIdsRef = useRef<Set<string>>(new Set());
   const lastSeqRef = useRef<Record<string, number>>({});
   const agentRunHandlersRef = useRef<Record<string, AgentRunHandler>>({});
-  const summaryHandlersRef = useRef<Record<string, SummaryHandler>>({});
   const transcriptListenersRef = useRef<Record<string, Set<(event: TranscriptEvent) => void>>>({});
   const seenRef = useRef<Record<string, Set<string>>>({});
   const messagesRef = useRef(messagesBySid);
@@ -496,13 +488,6 @@ export function useLiveSocket(
         const message = payload.message || payload.code || "live socket error";
         if (payload.kind === "transcript") emitTranscriptEvent(payload.key, { type: "error", error: message });
         if (payload.kind === "agent_run") agentRunHandlersRef.current[payload.key]?.onError?.(message);
-        if (payload.kind === "summary") {
-          const handler = summaryHandlersRef.current[payload.key];
-          if (handler) {
-            handler.reject(new Error(message));
-            delete summaryHandlersRef.current[payload.key];
-          }
-        }
         return;
       }
       if (payload.t === "gap" || payload.t === "resumed") return;
@@ -520,24 +505,6 @@ export function useLiveSocket(
           agentRunHandlersRef.current[payload.key]?.onSnapshot?.(payload.run);
           return;
         }
-        if (payload.kind === "summary") {
-          const handler = summaryHandlersRef.current[payload.key];
-          if (!handler) return;
-          const text = payload.text ?? "";
-          handler.full = text;
-          if (text.length > handler.delivered) {
-            handler.onChunk(text.slice(handler.delivered));
-            handler.delivered = text.length;
-          }
-          if (payload.error) {
-            handler.reject(new Error(payload.error));
-            delete summaryHandlersRef.current[payload.key];
-          } else if (payload.done) {
-            handler.resolve(handler.full);
-            delete summaryHandlersRef.current[payload.key];
-          }
-          return;
-        }
       }
       if (payload.t === "delta") {
         const delta = payload.delta;
@@ -548,23 +515,6 @@ export function useLiveSocket(
         }
         if (payload.kind === "agent_run" && delta.event) {
           agentRunHandlersRef.current[payload.key]?.onEvent?.(delta.event);
-          return;
-        }
-        if (payload.kind === "summary") {
-          const handler = summaryHandlersRef.current[payload.key];
-          if (!handler) return;
-          if (delta.chunk) {
-            handler.full += delta.chunk;
-            handler.delivered += delta.chunk.length;
-            handler.onChunk(delta.chunk);
-          }
-          if (delta.error) {
-            handler.reject(new Error(delta.error));
-            delete summaryHandlersRef.current[payload.key];
-          } else if (delta.done) {
-            handler.resolve(handler.full);
-            delete summaryHandlersRef.current[payload.key];
-          }
           return;
         }
       }
@@ -1132,35 +1082,6 @@ export function useLiveSocket(
     };
   }, [enabled, subscribeChannels, unsubscribeChannels]);
 
-  const streamSummary = useCallback((sid: string, onChunk: (chunk: string) => void) => {
-    const channel: LiveChannel = { kind: "summary", key: sid };
-    const id = channelId(channel);
-    delete lastSeqRef.current[id];
-    desiredChannelsRef.current.set(id, channel);
-    const cleanup = () => {
-      delete summaryHandlersRef.current[sid];
-      desiredChannelsRef.current.delete(id);
-      if (enabled && unsubscribeChannels([channel])) subscribedChannelsRef.current.delete(id);
-    };
-    const promise = new Promise<string>((resolve, reject) => {
-      summaryHandlersRef.current[sid] = {
-        delivered: 0,
-        full: "",
-        onChunk,
-        resolve: (text) => {
-          cleanup();
-          resolve(text);
-        },
-        reject: (error) => {
-          cleanup();
-          reject(error);
-        },
-      };
-    });
-    if (enabled && subscribeChannels([channel])) subscribedChannelsRef.current.add(id);
-    return promise;
-  }, [enabled, subscribeChannels, unsubscribeChannels]);
-
   const subscribeTranscript = useCallback<TranscriptSubscribe>((sid, listener) => {
     const listeners = transcriptListenersRef.current[sid] || (transcriptListenersRef.current[sid] = new Set());
     listeners.add(listener);
@@ -1202,7 +1123,6 @@ export function useLiveSocket(
     connection,
     reconnectNow,
     watchAgentRun,
-    streamSummary,
     subscribeTranscript,
   };
 }

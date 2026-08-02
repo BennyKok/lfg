@@ -20,7 +20,7 @@ and `busy`/`prompt`/`queue`/`ai_part`/artifact events. Heartbeat ping/pong 25s.
 
 ## Still OFF the socket (to migrate)
 1. Agent auto-run streams — SSE `/api/agents/{agent}/runs/{runId}` (App.tsx ~3589)
-2. Session summary — fetch stream `/api/sessions/{sid}/summary/stream` (~8334)
+2. ~~Session summary~~ — removed with the text-to-speech feature.
 3. Load-older pagination — REST (App.tsx ~2645/2742); socket already has `backfill`
 4. Polling loops — resumable sessions, ask-center, TermView (2s), version check (60s)
 
@@ -29,7 +29,7 @@ Today every frame carries `sid`. Generalize to a **channel** so any stream type
 rides the one socket, distinguished by `(kind, key)`:
 
 - channel kinds: `transcript` (key=sid), `status` (key="*"), `agent_run`
-  (key=runId), `summary` (key=sid), `resumable` (key="*").
+  (key=runId), `resumable` (key="*").
 - Keep `sid` as an alias for `channel:{kind:"transcript",key:sid}` for back-compat
   during migration; do not break the existing transcript path.
 
@@ -94,11 +94,11 @@ rides the one socket, distinguished by `(kind, key)`:
 ## Rollout
 - Additive & flag-gated. Migrate one stream at a time behind the existing
   `LIVE_TRANSPORT` gate (or a sub-flag), keeping the SSE/REST/poll fallback intact
-  until each channel is proven. Order: agent_run → summary → load-older(backfill)
+  until each channel is proven. Order: agent_run → load-older(backfill)
   → status/resumable polls. Verify each E2E (drop→resume, no dupes/gaps) before
   the next.
 
 ## Definition of done
-Zero EventSource/`/api/live/status`/agent-run-SSE/summary-stream and the named
+Zero EventSource/`/api/live/status`/agent-run-SSE and the named
 poll loops remain in the client when `LIVE_TRANSPORT=ws`; all ride one socket with
 seq-resume; interrupt bug cannot recur (covered by the upsert-by-id rule + a test).

@@ -4,6 +4,25 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - Text-to-speech removed (v0.1.204)
+
+- Spoken replies are gone: audio mode, the floating audio player, the "speak
+  this session" action hidden behind the agent avatar, and the text-to-speech
+  provider setting have all been removed.
+- "Audio mode · auto-play replies" had been silently broken for some time. The
+  hook that fed replies to speech only existed on the older streaming transport,
+  so on the default one nothing was ever spoken — while the session was still
+  told to keep its answers short and speakable. Turning it on made replies worse
+  and produced no audio. (The v0.1.201 note that audio mode "works exactly as
+  before" was written before this was discovered.)
+- Dictation is untouched: the mic button, voice messages, and the speech-to-text
+  provider setting all work exactly as before. The Voice settings section now
+  covers just voice input.
+- Note for self-hosters: `TTS_UPSTREAM`, `TTS_TOKEN`, and the ElevenLabs/OpenAI
+  TTS overrides are no longer read and can be removed from `.env`. The GPU TTS
+  engines, the TTS failover timer, and the Modal voice app went with them; the
+  Sakana egress proxy in `deploy/modal` stays.
+
 ## August 2, 2026 - Embedded chrome survives a settings visit (v0.1.203)
 
 - A host that mounts both surfaces no longer has its full app corrupted by
@@ -26,7 +45,6 @@ Recent product updates and deployment notes.
 - Settings > Computer no longer renders with a missing header and collapsed
   gutter after you visit Settings. Two surfaces can now be open at once without
   one describing the other.
-
 ## August 2, 2026 - Phone call and voice orb removed (v0.1.201)
 
 - The LiveKit phone-call screen and the voice orb are gone. The call UI had

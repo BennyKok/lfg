@@ -65,8 +65,7 @@ STT_UPSTREAM=http://<parakeet-box>:8087
 STT_TOKEN=<same secret>
 ```
 
-Then `systemctl --user restart lfg-serve.service`. TTS keeps using
-`TTS_UPSTREAM` untouched; only STT moves to Parakeet.
+Then `systemctl --user restart lfg-serve.service`.
 
 ## Smoke test
 

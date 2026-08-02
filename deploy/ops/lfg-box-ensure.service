@@ -1,8 +1,0 @@
-[Unit]
-Description=lfg box-ensure — keep requesting GPU box start (capacity-blocked), then bring up + fix orb TTS
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=/home/dev/repos/lfg/deploy/ops/lfg-box-ensure.sh

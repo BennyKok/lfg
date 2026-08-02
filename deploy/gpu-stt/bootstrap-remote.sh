@@ -45,30 +45,8 @@ if ! healthy; then
   healthy && echo "[bootstrap] STT up on :8087" || { echo "[bootstrap] STT FAILED"; tail -n 20 "$APP/server.log" 2>/dev/null; }
 fi
 
-# Cantonese TTS (CosyVoice2) — only if it was provisioned (deps + launcher present)
-tts_healthy() {
-  python - <<'PY' 2>/dev/null
-import urllib.request, sys
-try:
-    urllib.request.urlopen("http://127.0.0.1:8088/health", timeout=3); sys.exit(0)
-except Exception:
-    sys.exit(1)
-PY
-}
-if [ -f "$APP/run-tts.sh" ] && [ -d /opt/CosyVoice/pretrained_models/CosyVoice2-0.5B ]; then
-  if ! tts_healthy; then
-    echo "[bootstrap] starting TTS service..."
-    tmux kill-session -t tts 2>/dev/null || true
-    tmux new-session -d -s tts "bash $APP/run-tts.sh > $APP/tts.log 2>&1"
-    for i in $(seq 1 30); do tts_healthy && break; sleep 2; done
-    tts_healthy && echo "[bootstrap] TTS up on :8088" || echo "[bootstrap] TTS not healthy yet (lazy model load)"
-  else
-    echo "[bootstrap] TTS already healthy"
-  fi
-fi
-
 # Parakeet STT (English / multilingual-v3) — optional STT engine on its own port
-# (default :8091; :8087-8090 are taken by the STT/TTS engines). Opt-in via
+# (default :8091; :8087 is taken by the STT engine). Opt-in via
 # PARAKEET_ENABLE=1 in stt.env so the heavy NeMo deps only land when wanted.
 # Point lfg's STT_UPSTREAM at :$PARAKEET_PORT to make it the orb default.
 PPORT="${PARAKEET_PORT:-8091}"

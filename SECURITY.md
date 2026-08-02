@@ -16,7 +16,7 @@ understand it before you run it anywhere shared.
   optional `security_scan` collector runs **read-only** host probes (login
   history, listening ports, cron/systemd, SSH authorized_keys, package audits).
 - **Talks to services you configure** — GitHub, OpenRouter, an optional voice
-  TTS/STT upstream, and optionally WhatsApp.
+  speech-to-text upstream, and optionally WhatsApp.
 
 ## How to run it safely
 
