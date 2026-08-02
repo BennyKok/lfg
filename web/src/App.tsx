@@ -216,6 +216,7 @@ import {
 import { fetchBootstrap } from "./bootstrap";
 import { Toaster } from "@/components/ui/sonner";
 import { Button } from "@/components/ui/button";
+import { ShimmerText } from "@/components/ui/shimmer-text";
 import { DoubleConfirmAction } from "@/components/ui/double-confirm-action";
 import {
   Dialog,
@@ -16972,6 +16973,7 @@ function NewSessionDialog({
 
   function submit(e?: FormEvent, overrideText?: string) {
     e?.preventDefault();
+    if (launching) return;
     const taskPrompt = (overrideText ?? prompt).trim();
     const files = attachments;
     if (!taskPrompt && !files.length) return;
@@ -17012,13 +17014,12 @@ function NewSessionDialog({
     if (agentSupportsThinking(launchAgent)) localStorage.setItem("lfg_thinking_level", launchThinkingLevel);
     if (launchAgent === "claude") localStorage.setItem("lfg_model", launchModel);
     if (launchUser) localStorage.setItem("lfg_user", launchUser);
-    // Close the drawer flow. The inline home composer stays mounted for fast
-    // entry, but release its textarea so a successful submit dismisses the
-    // mobile keyboard while the new session boots in the background.
+    // Keep both composer variants mounted while the session boots so the
+    // creating overlay can acknowledge the submit immediately. Release the
+    // inline textarea to dismiss the mobile keyboard; the drawer closes from
+    // onCreated after the server has returned the new session.
     if (variant === "inline") {
       fieldRef.current?.querySelector("textarea")?.blur();
-    } else {
-      onClose();
     }
     void (async () => {
       try {
@@ -17269,18 +17270,28 @@ function NewSessionDialog({
     <form
       onSubmit={submit}
       {...files.dropZoneProps}
+      aria-busy={launching}
       className={cn(
         // Inline home: original device home-indicator pad when standalone.
         // Embed cancels --lfg-device-safe-bottom to 0 (host owns that zone) and
         // the shell still applies host-inset, so Start clears the pill without
         // a double gap. Drawer / dialog are full-bleed → global safe bottom.
-        "max-h-[70dvh] overscroll-contain px-2 transition-colors",
+        "relative max-h-[70dvh] overscroll-contain px-2 transition-colors",
         variant === "inline"
           ? "overflow-visible pb-[max(var(--lfg-device-safe-bottom),0.5rem)] pt-1.5"
           : "overflow-y-auto pb-[max(var(--lfg-safe-bottom),0.5rem)] pt-1",
         draggingFiles && "bg-primary/8",
       )}
     >
+      {launching ? (
+        <div
+          role="status"
+          aria-live="polite"
+          className="absolute inset-0 z-30 flex items-center justify-center bg-background/90 backdrop-blur-sm animate-in fade-in-0 duration-150"
+        >
+          <ShimmerText className="text-sm font-medium">Creating session…</ShimmerText>
+        </div>
+      ) : null}
       {files.fileInput}
       <div
         className={cn(

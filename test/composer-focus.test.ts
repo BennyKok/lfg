@@ -16,4 +16,22 @@ describe("composer focus after send", () => {
       'requestAnimationFrame(() => fieldRef.current?.querySelector("textarea")?.focus())',
     );
   });
+
+  test("covers the new-session composer with immediate creation feedback", async () => {
+    const app = await readFile("web/src/App.tsx", "utf8");
+    const dialogStart = app.indexOf("function NewSessionDialog");
+    const submitStart = app.indexOf(
+      "function submit(e?: FormEvent, overrideText?: string)",
+      dialogStart,
+    );
+    const submit = app.slice(
+      submitStart,
+      app.indexOf("// Inline composer resting state", submitStart),
+    );
+
+    expect(submit).toContain("if (launching) return");
+    expect(submit).not.toContain("onClose();");
+    expect(app).toContain("aria-busy={launching}");
+    expect(app).toContain("<ShimmerText className=\"text-sm font-medium\">Creating session…</ShimmerText>");
+  });
 });
