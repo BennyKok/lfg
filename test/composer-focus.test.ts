@@ -17,7 +17,7 @@ describe("composer focus after send", () => {
     );
   });
 
-  test("covers the new-session composer with immediate creation feedback", async () => {
+  test("covers the new-session input card with immediate creation feedback", async () => {
     const app = await readFile("web/src/App.tsx", "utf8");
     const dialogStart = app.indexOf("function NewSessionDialog");
     const submitStart = app.indexOf(
@@ -33,5 +33,16 @@ describe("composer focus after send", () => {
     expect(submit).not.toContain("onClose();");
     expect(app).toContain("aria-busy={launching}");
     expect(app).toContain("<ShimmerText className=\"text-sm font-medium\">Creating session…</ShimmerText>");
+
+    const formStart = app.indexOf("const formBody", dialogStart);
+    const fileInput = app.indexOf("{files.fileInput}", formStart);
+    const fieldStart = app.indexOf('"lfg-gfield relative rounded-2xl"', fileInput);
+    const statusStart = app.indexOf('role="status"', fieldStart);
+    const textareaStart = app.indexOf("<ComposerTextarea", fieldStart);
+
+    expect(app.slice(formStart, fileInput)).not.toContain('role="status"');
+    expect(statusStart).toBeGreaterThan(fieldStart);
+    expect(statusStart).toBeLessThan(textareaStart);
+    expect(app.slice(statusStart, textareaStart)).toContain("rounded-2xl");
   });
 });

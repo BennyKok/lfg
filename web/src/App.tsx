@@ -17282,15 +17282,6 @@ function NewSessionDialog({
         draggingFiles && "bg-primary/8",
       )}
     >
-      {launching ? (
-        <div
-          role="status"
-          aria-live="polite"
-          className="absolute inset-0 z-30 flex items-center justify-center bg-background/90 backdrop-blur-sm animate-in fade-in-0 duration-150"
-        >
-          <ShimmerText className="text-sm font-medium">Creating session…</ShimmerText>
-        </div>
-      ) : null}
       {files.fileInput}
       <div
         className={cn(
@@ -17306,6 +17297,15 @@ function NewSessionDialog({
         )}
         ref={fieldRef}
       >
+        {launching ? (
+          <div
+            role="status"
+            aria-live="polite"
+            className="absolute inset-0 z-30 flex items-center justify-center rounded-2xl bg-background/90 backdrop-blur-sm animate-in fade-in-0 duration-150"
+          >
+            <ShimmerText className="text-sm font-medium">Creating session…</ShimmerText>
+          </div>
+        ) : null}
         {variant === "inline" ? agentPopover : null}
         <ComposerTextarea
           value={prompt}
