@@ -11273,6 +11273,9 @@ type SkillTextareaProps = Omit<
   // partials/finals). A nonce instead of a boolean prevents later manual edits
   // in the middle of a long draft from being pulled back to the bottom.
   scrollToEndNonce?: number;
+  // Lets a surrounding composer align adjacent controls to a single-line field
+  // while still pinning them to the bottom once the textarea wraps or grows.
+  onMultilineChange?: (multiline: boolean) => void;
 };
 
 function SkillTextarea({
@@ -11283,11 +11286,13 @@ function SkillTextarea({
   showSkillButton = false,
   insetEnd = false,
   scrollToEndNonce = 0,
+  onMultilineChange,
   ...props
 }: SkillTextareaProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const fieldRef = useRef<HTMLTextAreaElement | null>(null);
   const followedScrollNonceRef = useRef(scrollToEndNonce);
+  const multilineRef = useRef(false);
   const [skillSuggest, setSkillSuggest] = useState<SlashSkillState | null>(null);
 
   // CSS `field-sizing: content` is still flaky across browsers (and loses to
@@ -11297,7 +11302,18 @@ function SkillTextarea({
     if (!el) return;
     el.style.height = "0px";
     el.style.height = `${el.scrollHeight}px`;
-  }, []);
+    if (onMultilineChange) {
+      const style = window.getComputedStyle(el);
+      const lineHeight = Number.parseFloat(style.lineHeight);
+      const padding = Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom);
+      const contentHeight = el.scrollHeight - padding;
+      const multiline = Number.isFinite(lineHeight) && contentHeight > lineHeight * 1.5;
+      if (multilineRef.current !== multiline) {
+        multilineRef.current = multiline;
+        onMultilineChange(multiline);
+      }
+    }
+  }, [onMultilineChange]);
 
   const setFieldRef = useCallback(
     (node: HTMLTextAreaElement | null) => {
@@ -16126,6 +16142,7 @@ function NewSessionDialog({
     () => readPromptDraft("new-session")?.text ?? "",
   );
   const [dictationScrollNonce, setDictationScrollNonce] = useState(0);
+  const [promptMultiline, setPromptMultiline] = useState(false);
   const [pendingUploads, setPendingUploads] = useState<ComposerAttachment[]>([]);
   const [pendingCreates, setPendingCreates] = useState(0);
   const [error, setError] = useState<string | null>(null);
@@ -16996,9 +17013,12 @@ function NewSessionDialog({
         className={cn(
           "lfg-gfield relative rounded-2xl",
           // Inline: a single row with the agent icon, field, and mic all
-          // pinned to the bottom while the shared textarea grows upward.
+          // centered at rest, then pinned to the bottom as the textarea grows.
           variant === "inline"
-            ? "flex items-end gap-1.5 overflow-visible px-2.5 py-2"
+            ? cn(
+                "flex gap-1.5 overflow-visible px-2.5 py-2",
+                promptMultiline ? "items-end" : "items-center",
+              )
             : "relative px-2 py-1",
         )}
         ref={fieldRef}
@@ -17007,6 +17027,7 @@ function NewSessionDialog({
         <ComposerTextarea
           value={prompt}
           onValueChange={setPrompt}
+          onMultilineChange={variant === "inline" ? setPromptMultiline : undefined}
           scrollToEndNonce={dictationScrollNonce}
           onPaste={files.onPasteFiles}
           onKeyDown={(e) => {
