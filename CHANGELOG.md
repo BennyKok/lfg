@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - One number per account on the campfire (v0.1.199)
+
+- A Claude account on the campfire no longer shows its number twice. The label
+  under the icon already reads "Claude 1", so the numbered badge stamped on the
+  icon was a duplicate; renamed accounts keep the badge, since their label
+  doesn't say which login it is.
+- The chat composer's one-line controls are centered.
+
 ## August 2, 2026 - Session creation feedback stays in its lane (v0.1.198)
 
 - The shimmering session-creation state now covers only the rounded input card,
