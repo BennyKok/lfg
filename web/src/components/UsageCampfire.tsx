@@ -204,6 +204,16 @@ function plottableUsage(p: ProviderUsage | null): boolean {
 }
 
 /**
+ * Does the node's own label already end in its account number? Default account
+ * labels do ("Claude 1"), and the arc prints that label right under the icon —
+ * so stamping the badge as well renders the number twice, "1" over "Claude 1".
+ * A renamed account ("Work") still needs the badge to say which login it is.
+ */
+function labelStatesNumber(label: string, accountNumber: number): boolean {
+  return new RegExp(`(^|\\s)${accountNumber}$`).test(label.trim());
+}
+
+/**
  * An arc node is about 80px wide, so a caption only has room for two or three
  * words — the full note stays as the hover title.
  */
@@ -955,8 +965,11 @@ function CampfireOverlay({
                   }}
                 />
                 {/* Same numbered badge the composer puts on its Claude icons.
-                    Only earns its space once two accounts share one mark. */}
-                {entry.accountNumber != null && numberedKinds.has(entry.kind) ? (
+                    Only earns its space once two accounts share one mark — and
+                    only when the label below isn't already saying the number. */}
+                {entry.accountNumber != null &&
+                numberedKinds.has(entry.kind) &&
+                !labelStatesNumber(entry.label, entry.accountNumber) ? (
                   <span
                     className="absolute -bottom-0.5 -right-0.5 flex size-[1.15em] items-center justify-center rounded-full text-[10px] font-semibold tabular-nums sm:text-[11px]"
                     style={{
