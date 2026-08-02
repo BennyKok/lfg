@@ -38,6 +38,22 @@ import {
 } from "./embedded-animation-recovery";
 import { lazy } from "react";
 import { useLfgChat } from "./lib/chat-context";
+import {
+  AGENT_ICON_VERSION,
+  ArtifactViewerContext,
+  BROWSER_AUTH_KINDS,
+  ClaudeAccountBadge,
+  CodingAgentsContext,
+  SessionAgentIcon,
+  GALLERY_PAGE,
+  titleForSession,
+  useClaudeAccountNumber,
+  useNumberedClaudeAccounts,
+  agentIconAlt,
+  agentIconSrc,
+  timeAgo,
+  type ViewerArtifact,
+} from "./lib/session-ui";
 
 // Dynamic: this is what keeps the AI SDK out of the entry chunk. See
 // SessionChat and web/src/lib/chat-engine.tsx.
@@ -231,6 +247,16 @@ const TermView = lazyWithReload("TermView", () =>
   import("@/components/TermView").then((m) => ({ default: m.TermView })),
 );
 const BrowserProfiles = lazyWithReload("BrowserProfiles", () => import("./BrowserProfiles"));
+const ShippedPage = lazyWithReload("ShippedPage", () => import("./views/shipped-page"));
+const SessionTokenUsageDialog = lazyWithReload("SessionTokenUsageDialog", () =>
+  import("./views/session-token-usage"),
+);
+const CodingAgentsPage = lazyWithReload("CodingAgentsPage", () =>
+  import("./views/coding-agents-page"),
+);
+const ResumeSessionSheet = lazyWithReload("ResumeSessionSheet", () =>
+  import("./views/resume-session-sheet"),
+);
 const ChangelogPage = lazyWithReload("ChangelogPage", () =>
   import("./ChangelogPage"),
 );
@@ -325,7 +351,7 @@ import {
   ReasoningTrigger,
 } from "@/components/ai-elements/reasoning";
 
-type Agent = {
+export type Agent = {
   name: string;
   title: string;
   enabled: boolean;
@@ -333,7 +359,7 @@ type Agent = {
   lastReport: ReportRef | null;
 };
 
-type CodingAgentInfo = {
+export type CodingAgentInfo = {
   key: AgentKind;
   label: string;
   visible: boolean;
@@ -353,7 +379,7 @@ type CodingAgentInfo = {
   };
 };
 
-type ClaudeAccountInfo = {
+export type ClaudeAccountInfo = {
   id: string;
   number: number;
   label: string;
@@ -362,7 +388,6 @@ type ClaudeAccountInfo = {
   createdAt: number;
 };
 
-const CodingAgentsContext = createContext<CodingAgentInfo[] | undefined>(undefined);
 const AgentAccessModeContext = createContext<AgentAccessMode>("configured");
 
 type AuthProvider = "claude" | "codex" | "grok";
@@ -373,15 +398,6 @@ const AUTH_PROVIDER_LABELS: Record<AuthProvider, string> = {
   grok: "Grok",
 };
 
-/** Agent kinds whose CLI login can be driven from the browser (see
- *  authProviderFor in src/coding-agents.ts). Everything else is terminal-only. */
-const BROWSER_AUTH_KINDS = new Set<string>([
-  "claude",
-  "aisdk",
-  "codex",
-  "codex-aisdk",
-  "grok",
-]);
 
 const authProviderLabel = (provider?: AuthProvider) =>
   (provider && AUTH_PROVIDER_LABELS[provider]) || "Account";
@@ -410,7 +426,7 @@ type CodingAgentAuthFlow = {
 
 const CodingAgentAuthContext = createContext<CodingAgentAuthFlow | null>(null);
 
-type SetupCheckGroup = {
+export type SetupCheckGroup = {
   key: string;
   label: string;
   configured: boolean;
@@ -455,7 +471,7 @@ type ActionRow = {
   result?: { ok: boolean; summary: string };
 };
 
-type Session = {
+export type Session = {
   agent?: "claude" | "aisdk" | "codex" | "codex-aisdk" | "opencode" | "grok" | "cursor" | string;
   // Display-name override from a custom agent profile (server-side), when set.
   // Prefer this over the raw agent kind for labels/tooltips.
@@ -498,58 +514,6 @@ type Session = {
   // normal Live workspace, but its first composer send must resume the session
   // instead of posting to the inactive transport.
   shippedReview?: boolean;
-};
-
-type SessionTokenUsage = {
-  available: boolean;
-  source: "claude-context" | "codex-transcript" | "claude-transcript" | "unavailable";
-  accuracy: "reported" | "mixed" | "unavailable";
-  updatedAt: number;
-  model: string | null;
-  context: {
-    used: number | null;
-    max: number | null;
-    free: number | null;
-    percent: number | null;
-  };
-  totals: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    reasoning: number;
-    total: number;
-    costUsd: number | null;
-  } | null;
-  categories: Array<{
-    name: string;
-    tokens: number;
-    color?: string;
-    accuracy: "reported" | "estimated";
-  }>;
-  details?: {
-    memoryFiles?: Array<{ path: string; type: string; tokens: number }>;
-    mcpTools?: Array<{ name: string; serverName: string; tokens: number; isLoaded?: boolean }>;
-    systemTools?: Array<{ name: string; tokens: number }>;
-    systemPromptSections?: Array<{ name: string; tokens: number }>;
-    skills?: {
-      totalSkills: number;
-      includedSkills: number;
-      tokens: number;
-      items: Array<{ name: string; source: string; tokens: number }>;
-    };
-    messageBreakdown?: {
-      toolCallTokens: number;
-      toolResultTokens: number;
-      attachmentTokens: number;
-      assistantMessageTokens: number;
-      userMessageTokens: number;
-      redirectedContextTokens: number;
-      unattributedTokens: number;
-      toolCallsByType: Array<{ name: string; callTokens: number; resultTokens: number }>;
-    };
-  };
-  note: string;
 };
 
 type User = { email: string; name?: string; avatar?: string };
@@ -822,7 +786,7 @@ function savedThinkingLevel(): ThinkingLevel {
   return value && (THINKING_LEVELS as readonly string[]).includes(value) ? value : "medium";
 }
 
-type AgentKind =
+export type AgentKind =
   | "claude"
   | "aisdk"
   | "codex"
@@ -993,26 +957,11 @@ function configuredLaunchOptions(
 // URL so the backend can serve them `immutable` for a year — repeat renders hit
 // the browser cache, never the network — while a redeploy that changes an icon
 // busts the cache by changing the URL.
-const AGENT_ICON_VERSION = "20260718";
 // Maps an agent-kind to its session-card / picker icon. codex variants share the
 // codex mark; claude variants (incl. aisdk) share the claude mark.
 // ---- Native artifact viewer -------------------------------------------------
 // Opening an artifact never leaves the app or pops a window: cards push onto a
 // full-screen in-app page with a Back header (Escape also closes).
-type ViewerArtifact = {
-  url: string;
-  kind: "image" | "video" | "html";
-  title?: string;
-  caption?: string;
-  name?: string;
-  version?: number;
-  // Changes on every successful content write, including data-only refreshes.
-  // Kept separate from the user-facing authored revision.
-  cacheKey?: number;
-};
-
-const ArtifactViewerContext = createContext<(artifact: ViewerArtifact) => void>(() => {});
-
 // Per-session terminal: pull up a real shell already sitting in the session's
 // worktree, without leaving the session you're reading. Pass a session id to
 // open it, null to close.
@@ -1184,17 +1133,6 @@ function ArtifactViewerPage({
   );
 }
 
-function agentIconSrc(agent?: string): string {
-  const v = `?v=${AGENT_ICON_VERSION}`;
-  if (agent === "codex" || agent === "codex-aisdk") return lfgAssetUrl(`/agent-codex.svg${v}`);
-  if (agent === "grok") return lfgAssetUrl(`/agent-grok.svg${v}`);
-  if (agent === "cursor") return lfgAssetUrl(`/agent-cursor.svg${v}`);
-  if (agent === "hermes") return lfgAssetUrl(`/agent-hermes.svg${v}`);
-  if (agent === "opencode") return lfgAssetUrl(`/agent-opencode.svg${v}`);
-  if (agent === "pi") return lfgAssetUrl(`/agent-pi.svg${v}`);
-  if (agent === "copilot") return lfgAssetUrl(`/agent-copilot.svg${v}`);
-  return lfgAssetUrl(`/agent-claude.svg${v}`);
-}
 // One definition of "is this session working?" as a dot. Busy is a pulsing
 // amber that draws the eye; idle is deliberately quiet. Every surface that shows
 // session activity (rail avatar, card header, live-view group headers) renders
@@ -1240,104 +1178,6 @@ function SessionStatusDot({
  * login has no identity to disambiguate, so stamping "1" on every Claude mark
  * in the fleet would be noise rather than information.
  */
-function useNumberedClaudeAccounts(): ClaudeAccountInfo[] {
-  const codingAgents = useContext(CodingAgentsContext);
-  return useMemo(() => {
-    const accounts = codingAgents
-      ?.find((agent) => agent.key === "aisdk")
-      ?.status.accounts?.filter((account) => account.connected);
-    return accounts && accounts.length > 1 ? accounts : [];
-  }, [codingAgents]);
-}
-
-/** The account number to stamp on a Claude mark, or null when there's nothing to tell apart. */
-function useClaudeAccountNumber(
-  agent: string | undefined,
-  claudeAccountId: string | null | undefined,
-): number | null {
-  const accounts = useNumberedClaudeAccounts();
-  if (!claudeAccountId) return null;
-  // Only the Claude marks are ambiguous; every other agent has one identity.
-  if (agent && agent !== "aisdk" && agent !== "claude") return null;
-  return accounts.find((account) => account.id === claudeAccountId)?.number ?? null;
-}
-
-/**
- * The account number worn by a Claude icon, so a fleet split across several
- * logins is readable without opening anything.
- *
- * Always bottom-right — the same corner the agent pickers and the usage
- * campfire use, so the number is in one place across the whole app and you
- * never have to look for it. Anything else that wants a corner on an agent
- * avatar (the busy dot) goes elsewhere.
- */
-function ClaudeAccountBadge({
-  number,
-  size = "md",
-  className,
-}: {
-  number: number | null;
-  size?: "sm" | "md";
-  className?: string;
-}) {
-  if (number == null) return null;
-  return (
-    <span
-      aria-hidden
-      className={cn(
-        "pointer-events-none absolute -bottom-0.5 -right-0.5 flex items-center justify-center rounded-full bg-foreground font-bold leading-none text-background ring-1 ring-background",
-        size === "sm" ? "size-3 text-[7px]" : "size-3.5 text-[8px]",
-        className,
-      )}
-    >
-      {number}
-    </span>
-  );
-}
-
-/** A session's agent mark, wearing its Claude account number when it has one. */
-function SessionAgentIcon({
-  session,
-  className,
-  size,
-  wrapperClassName,
-}: {
-  session: Pick<Session, "agent" | "agentLabel" | "claudeAccountId">;
-  className?: string;
-  size?: "sm" | "md";
-  wrapperClassName?: string;
-}) {
-  const number = useClaudeAccountNumber(session.agent, session.claudeAccountId);
-  const label = session.agentLabel || agentIconAlt(session.agent);
-  const img = (
-    <img
-      src={agentIconSrc(session.agent)}
-      alt={number == null ? label : `${label} ${number}`}
-      title={session.agentLabel || undefined}
-      className={className}
-    />
-  );
-  // Without a number there is nothing to position against, so the extra
-  // wrapper element is skipped entirely.
-  if (number == null && !wrapperClassName) return img;
-  return (
-    <span className={cn("relative inline-flex shrink-0", wrapperClassName)}>
-      {img}
-      <ClaudeAccountBadge number={number} size={size} />
-    </span>
-  );
-}
-
-function agentIconAlt(agent?: string): string {
-  if (agent === "codex" || agent === "codex-aisdk") return "Codex";
-  if (agent === "grok") return "Grok";
-  if (agent === "cursor") return "Cursor";
-  if (agent === "hermes") return "Hermes";
-  if (agent === "opencode") return "OpenCode";
-  if (agent === "pi") return "pi";
-  if (agent === "copilot") return "Copilot";
-  return "Claude";
-}
 
 function isHarnessAgent(agent?: string | null): boolean {
   return agent === "aisdk" || agent === "codex-aisdk" || agent === "opencode";
@@ -1961,17 +1801,6 @@ function logFindingAction(
   }).catch(() => {});
 }
 
-function timeAgo(value?: number | null) {
-  if (!value) return "unknown";
-  const seconds = Math.max(0, Math.round((Date.now() - value) / 1000));
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) return `${hours}h ago`;
-  return `${Math.round(hours / 24)}d ago`;
-}
-
 function shortUser(email?: string | null) {
   return email ? email.split("@")[0] : "unassigned";
 }
@@ -2090,17 +1919,6 @@ function autoAgentProject(agent: AutoAgent, repos: Repo[]): string {
   const cwd = agent.cwd || fallbackCwd;
   if (!cwd) return "-";
   return repoProject(repos.find((repo) => repo.cwd === cwd) ?? { name: cwd, cwd });
-}
-
-function titleForSession(session: Session) {
-  return (
-    session.title ||
-    session.lastUserText ||
-    session.tmuxName ||
-    session.project ||
-    session.sessionId?.slice(0, 8) ||
-    "session"
-  );
 }
 
 function sessionReference(sessionId: string): string {
@@ -6758,6 +6576,7 @@ export function App() {
         ) : null}
         {tab === "usage" ? <UsagePage /> : null}
         {tab === "coding-agents" ? (
+          <Suspense fallback={<div className="py-10 text-center text-sm text-muted-foreground">Loading…</div>}>
           <CodingAgentsPage
             setupChecks={setupChecks}
             agents={codingAgents}
@@ -6769,9 +6588,11 @@ export function App() {
             onSetupCheck={runSetupCheck}
             onRefresh={() => void refreshCodingAgents({ refreshModels: true })}
           />
+          </Suspense>
         ) : null}
         {keepShipped || tab === "notifications" ? (
           <div className={tab === "notifications" ? undefined : "hidden"} aria-hidden={tab !== "notifications"}>
+            <Suspense fallback={<div className="py-10 text-center text-sm text-muted-foreground">Loading…</div>}>
             <ShippedPage
               active={tab === "notifications"}
               notificationIdentity={identity}
@@ -6788,16 +6609,19 @@ export function App() {
               }}
               onReviewSession={openShippedSession}
             />
+            </Suspense>
           </div>
         ) : null}
         {keepArtifacts || tab === "artifacts" ? (
           <div className={tab === "artifacts" ? undefined : "hidden"} aria-hidden={tab !== "artifacts"}>
-            <ShippedPage
-              artifactsOnly
-              active={tab === "artifacts"}
-              liveSessionIds={new Set()}
-              onOpenSession={() => {}}
-            />
+            <Suspense fallback={<div className="py-10 text-center text-sm text-muted-foreground">Loading…</div>}>
+              <ShippedPage
+                artifactsOnly
+                active={tab === "artifacts"}
+                liveSessionIds={new Set()}
+                onOpenSession={() => {}}
+              />
+            </Suspense>
           </div>
         ) : null}
         {tab === "changelog" ? (
@@ -12063,288 +11887,6 @@ function useSessionActions({
   };
 }
 
-function formatTokenCount(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "—";
-  if (value < 1_000) return Math.round(value).toLocaleString();
-  if (value < 1_000_000) return `${(value / 1_000).toFixed(value < 10_000 ? 1 : 0)}k`;
-  return `${(value / 1_000_000).toFixed(value < 10_000_000 ? 1 : 0)}m`;
-}
-
-function TokenUsageDetailList({
-  title,
-  items,
-}: {
-  title: string;
-  items: Array<{ name: string; detail?: string; tokens: number }>;
-}) {
-  if (!items.length) return null;
-  return (
-    <section className="space-y-2">
-      <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</h3>
-      <div className="divide-y divide-border rounded-xl border border-border bg-muted/20 px-3">
-        {items.map((item, index) => (
-          <div key={`${item.name}-${index}`} className="flex items-center gap-3 py-2.5 text-sm">
-            <div className="min-w-0 flex-1">
-              <div className="truncate font-medium">{item.name}</div>
-              {item.detail ? (
-                <div className="truncate text-xs text-muted-foreground">{item.detail}</div>
-              ) : null}
-            </div>
-            <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
-              {formatTokenCount(item.tokens)}
-            </span>
-          </div>
-        ))}
-      </div>
-    </section>
-  );
-}
-
-function SessionTokenUsageDialog({
-  session,
-  open,
-  onOpenChange,
-}: {
-  session: Session;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-}) {
-  const sid = session.sessionId;
-  const [usage, setUsage] = useState<SessionTokenUsage | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    if (!sid) return;
-    setLoading(true);
-    setError(null);
-    try {
-      setUsage(await api<SessionTokenUsage>(`/api/sessions/${sid}/token-usage`));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn’t load token usage");
-    } finally {
-      setLoading(false);
-    }
-  }, [sid]);
-
-  useEffect(() => {
-    if (!open || usage || loading) return;
-    void load();
-  }, [load, loading, open, usage]);
-
-  const categoryTotal = usage?.categories.reduce((sum, category) => sum + category.tokens, 0) ?? 0;
-  const categoryDenominator = Math.max(categoryTotal, usage?.context.used ?? 0, 1);
-  const contextPercent =
-    usage?.context.percent ??
-    (usage?.context.used != null && usage.context.max
-      ? (usage.context.used / usage.context.max) * 100
-      : null);
-  const detail = usage?.details;
-  const messageBreakdown = detail?.messageBreakdown;
-
-  return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => {
-        onOpenChange(next);
-        if (next && usage) void load();
-      }}
-    >
-        <DialogContent
-          className="max-h-[88dvh] overflow-hidden sm:max-w-xl"
-          innerClassName="flex max-h-[88dvh] flex-col gap-0 p-0"
-        >
-          <DialogHeader className="border-b border-border px-5 pb-4 pt-5 text-left">
-            <DialogTitle className="flex items-center gap-2">
-              <Gauge className="size-5" />
-              Session token usage
-            </DialogTitle>
-            <DialogDescription>
-              Current context and cumulative model traffic for {titleForSession(session)}.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="min-h-0 flex-1 space-y-5 overflow-y-auto px-5 pb-6">
-            {loading && !usage ? (
-              <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
-                <Loader2 className="size-4 animate-spin" />
-                Reading session usage…
-              </div>
-            ) : error && !usage ? (
-              <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
-                {error}
-              </div>
-            ) : usage && !usage.available ? (
-              <div className="rounded-2xl border border-border bg-muted/30 p-5">
-                <div className="font-medium">Token data isn’t available for this agent yet</div>
-                <p className="mt-1 text-sm text-muted-foreground">{usage.note}</p>
-              </div>
-            ) : usage ? (
-              <>
-                <section className="space-y-3 pt-1">
-                  <div className="flex items-end justify-between gap-4">
-                    <div>
-                      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                        Current context
-                      </div>
-                      <div className="mt-1 text-3xl font-semibold tracking-tight tabular-nums">
-                        {formatTokenCount(usage.context.used)}
-                        {usage.context.max != null ? (
-                          <span className="ml-1 text-base font-normal text-muted-foreground">
-                            / {formatTokenCount(usage.context.max)}
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
-                    {contextPercent != null ? (
-                      <div className="text-right">
-                        <div className="text-xl font-semibold tabular-nums">
-                          {Math.round(contextPercent)}%
-                        </div>
-                        <div className="text-xs text-muted-foreground">
-                          {formatTokenCount(usage.context.free)} free
-                        </div>
-                      </div>
-                    ) : null}
-                  </div>
-                  {usage.context.max != null && usage.context.used != null ? (
-                    <div className="h-2 overflow-hidden rounded-full bg-muted" aria-hidden="true">
-                      <div
-                        className="h-full rounded-full bg-foreground transition-[width]"
-                        style={{ width: `${Math.min(100, Math.max(0, contextPercent ?? 0))}%` }}
-                      />
-                    </div>
-                  ) : null}
-                </section>
-
-                {usage.categories.length ? (
-                  <section className="space-y-3">
-                    <div className="flex h-3 overflow-hidden rounded-full bg-muted" aria-hidden="true">
-                      {usage.categories.map((category, index) => (
-                        <span
-                          key={`${category.name}-${index}`}
-                          style={{
-                            width: `${(category.tokens / categoryDenominator) * 100}%`,
-                            backgroundColor: category.color || `hsl(${(index * 47) % 360} 70% 60%)`,
-                          }}
-                        />
-                      ))}
-                    </div>
-                    <div className="grid gap-1 sm:grid-cols-2">
-                      {usage.categories.map((category, index) => (
-                        <div
-                          key={`${category.name}-${index}`}
-                          className="flex min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-sm"
-                        >
-                          <span
-                            className="size-2.5 shrink-0 rounded-sm"
-                            style={{
-                              backgroundColor:
-                                category.color || `hsl(${(index * 47) % 360} 70% 60%)`,
-                            }}
-                          />
-                          <span className="min-w-0 flex-1 truncate">{category.name}</span>
-                          <span className="shrink-0 font-mono text-xs tabular-nums text-muted-foreground">
-                            {formatTokenCount(category.tokens)}
-                            {category.accuracy === "estimated" ? " ~" : ""}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-                ) : null}
-
-                {usage.totals ? (
-                  <section className="space-y-2">
-                    <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                      Session totals
-                    </h3>
-                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-                      {[
-                        ["Input", usage.totals.input],
-                        ["Output", usage.totals.output],
-                        ["Cache read", usage.totals.cacheRead],
-                        ["Cache write", usage.totals.cacheWrite],
-                        ["Reasoning", usage.totals.reasoning],
-                        ["All traffic", usage.totals.total],
-                      ].map(([label, value]) => (
-                        <div key={String(label)} className="rounded-xl border border-border bg-muted/25 p-3">
-                          <div className="text-xs text-muted-foreground">{label}</div>
-                          <div className="mt-1 font-mono text-base font-semibold tabular-nums">
-                            {formatTokenCount(value as number)}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-                ) : null}
-
-                <TokenUsageDetailList
-                  title="Skills"
-                  items={(detail?.skills?.items ?? []).map((item) => ({
-                    name: item.name,
-                    detail: item.source,
-                    tokens: item.tokens,
-                  }))}
-                />
-                <TokenUsageDetailList
-                  title="System prompt"
-                  items={(detail?.systemPromptSections ?? []).map((item) => ({
-                    name: item.name,
-                    tokens: item.tokens,
-                  }))}
-                />
-                <TokenUsageDetailList
-                  title="MCP tools"
-                  items={(detail?.mcpTools ?? []).map((item) => ({
-                    name: item.name,
-                    detail: `${item.serverName}${item.isLoaded === false ? " · deferred" : ""}`,
-                    tokens: item.tokens,
-                  }))}
-                />
-                <TokenUsageDetailList
-                  title="Memory files"
-                  items={(detail?.memoryFiles ?? []).map((item) => ({
-                    name: item.path,
-                    detail: item.type,
-                    tokens: item.tokens,
-                  }))}
-                />
-                {messageBreakdown ? (
-                  <TokenUsageDetailList
-                    title="Messages"
-                    items={[
-                      { name: "User messages", tokens: messageBreakdown.userMessageTokens },
-                      { name: "Assistant messages", tokens: messageBreakdown.assistantMessageTokens },
-                      { name: "Tool calls", tokens: messageBreakdown.toolCallTokens },
-                      { name: "Tool results", tokens: messageBreakdown.toolResultTokens },
-                      { name: "Attachments", tokens: messageBreakdown.attachmentTokens },
-                    ].filter((item) => item.tokens > 0)}
-                  />
-                ) : null}
-
-                <div className="rounded-xl bg-muted/40 p-3 text-xs leading-relaxed text-muted-foreground">
-                  <div className="mb-1 flex items-center gap-2 font-medium text-foreground">
-                    <span
-                      className={cn(
-                        "size-2 rounded-full",
-                        usage.accuracy === "reported" ? "bg-emerald-500" : "bg-amber-500",
-                      )}
-                    />
-                    {usage.accuracy === "reported"
-                      ? "Provider-reported breakdown"
-                      : "Reported totals · estimated categories"}
-                  </div>
-                  {usage.note}
-                  {usage.model ? ` Model: ${usage.model}.` : ""}
-                </div>
-              </>
-            ) : null}
-          </div>
-        </DialogContent>
-    </Dialog>
-  );
-}
-
 function SessionActionsMenu({
   session,
   busy,
@@ -12384,11 +11926,15 @@ function SessionActionsMenu({
 
   return (
     <>
-      <SessionTokenUsageDialog
-        session={session}
-        open={tokenUsageOpen}
-        onOpenChange={setTokenUsageOpen}
-      />
+      {tokenUsageOpen ? (
+        <Suspense fallback={null}>
+          <SessionTokenUsageDialog
+            session={session}
+            open={tokenUsageOpen}
+            onOpenChange={setTokenUsageOpen}
+          />
+        </Suspense>
+      ) : null}
       {forkMode ? (
         <ForkSessionDialog
           session={session}
@@ -15312,7 +14858,7 @@ function PromptPanel({
 }
 
 // A closed/rebooted-away session that can be relaunched by its SDK backend.
-type ResumableSession = {
+export type ResumableSession = {
   sessionId: string;
   cwd: string | null;
   project: string;
@@ -15325,16 +14871,6 @@ type ResumableSession = {
 
 // Facet counts + total returned alongside the resumable roster so the picker can
 // render agent/project filter chips with live counts (see /api/sessions/resumable).
-type ResumableFacets = {
-  agents: Array<{ agent: string; count: number }>;
-  projects: Array<{ project: string; count: number }>;
-};
-type ResumableResponse = {
-  sessions: ResumableSession[];
-  total: number;
-  facets: ResumableFacets;
-};
-
 type FolderBrowserPayload = {
   current: string;
   parent: string | null;
@@ -16759,16 +16295,18 @@ function NewSessionDialog({
       </div>
 
       {resumeOpen ? (
-        <ResumeSessionSheet
-          initial={resumable}
-          scopedProject={composerProject}
-          onRestore={(entry) => setPrompt(entry.text)}
-          onPick={(session) => {
-            closeResume();
-            resume(session);
-          }}
-          onClose={closeResume}
-        />
+        <Suspense fallback={null}>
+          <ResumeSessionSheet
+            initial={resumable}
+            scopedProject={composerProject}
+            onRestore={(entry) => setPrompt(entry.text)}
+            onPick={(session) => {
+              closeResume();
+              resume(session);
+            }}
+            onClose={closeResume}
+          />
+        </Suspense>
       ) : null}
       <ProjectFolderBrowser
         open={folderBrowserOpen}
@@ -16831,16 +16369,18 @@ function NewSessionDialog({
   // overlay/focus trap and lets Back close only the resume page.
   if (!open && resumeOpen) {
     return (
-      <ResumeSessionSheet
-        initial={resumable}
-        scopedProject={composerProject}
-        onRestore={(entry) => setPrompt(entry.text)}
-        onPick={(session) => {
-          closeResume();
-          resume(session);
-        }}
-        onClose={closeResume}
-      />
+      <Suspense fallback={null}>
+        <ResumeSessionSheet
+          initial={resumable}
+          scopedProject={composerProject}
+          onRestore={(entry) => setPrompt(entry.text)}
+          onPick={(session) => {
+            closeResume();
+            resume(session);
+          }}
+          onClose={closeResume}
+        />
+      </Suspense>
     );
   }
 
@@ -16876,404 +16416,6 @@ function NewSessionDialog({
 
 // Compact recovery surface. The shared Drawer renders this as a bottom drawer
 // on mobile and a centered dialog on desktop.
-function ResumeSessionSheet({
-  initial,
-  scopedProject,
-  onRestore,
-  onPick,
-  onClose,
-}: {
-  initial: ResumableSession[] | null;
-  scopedProject: string;
-  onRestore: (entry: PromptStashEntry) => void;
-  onPick: (session: ResumableSession) => void;
-  onClose: () => void;
-}) {
-  const PAGE = 25;
-  const scoped = scopedProject && scopedProject !== "__all" ? scopedProject : "all";
-  const initialStash = readPromptStash();
-  const [view, setView] = useState<"stash" | "sessions">(() =>
-    initialStash.some((entry) => entry.status !== "sent") ? "stash" : "sessions",
-  );
-  const [stash, setStash] = useState(initialStash);
-  const [search, setSearch] = useState("");
-  const [debounced, setDebounced] = useState("");
-  const [agent, setAgent] = useState("all");
-  const [project, setProject] = useState(scoped);
-  const [items, setItems] = useState<ResumableSession[]>(
-    scoped === "all" && initial ? initial : [],
-  );
-  const [total, setTotal] = useState(scoped === "all" && initial ? initial.length : 0);
-  const [facets, setFacets] = useState<ResumableFacets>({ agents: [], projects: [] });
-  const [loading, setLoading] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const searchRef = useRef<HTMLInputElement>(null);
-  const itemsRef = useRef(items);
-  const requestRef = useRef(0);
-
-  useEffect(() => {
-    itemsRef.current = items;
-  }, [items]);
-
-  useEffect(() => {
-    const refresh = () => setStash(readPromptStash());
-    window.addEventListener(PROMPT_STASH_EVENT, refresh);
-    window.addEventListener("storage", refresh);
-    return () => {
-      window.removeEventListener(PROMPT_STASH_EVENT, refresh);
-      window.removeEventListener("storage", refresh);
-    };
-  }, []);
-
-  useEffect(() => {
-    const timeout = window.setTimeout(() => setDebounced(search.trim()), 220);
-    return () => window.clearTimeout(timeout);
-  }, [search]);
-
-  const fetchPage = useCallback(
-    (reset: boolean) => {
-      const token = reset ? ++requestRef.current : requestRef.current;
-      const offset = reset ? 0 : itemsRef.current.length;
-      if (reset) setLoading(true);
-      else setLoadingMore(true);
-      const params = new URLSearchParams({ limit: String(PAGE), offset: String(offset) });
-      if (debounced) params.set("search", debounced);
-      if (agent !== "all") params.set("agent", agent);
-      if (project !== "all") params.set("project", project);
-      api<ResumableResponse>(`/api/sessions/resumable?${params.toString()}`)
-        .then((response) => {
-          if (token !== requestRef.current) return;
-          const batch = Array.isArray(response.sessions) ? response.sessions : [];
-          setItems((current) => (reset ? batch : [...current, ...batch]));
-          setTotal(response.total ?? batch.length);
-          setFacets(response.facets ?? { agents: [], projects: [] });
-        })
-        .catch(() => {
-          if (token !== requestRef.current || !reset) return;
-          setItems([]);
-          setTotal(0);
-          setFacets({ agents: [], projects: [] });
-        })
-        .finally(() => {
-          if (token !== requestRef.current) return;
-          if (reset) setLoading(false);
-          else setLoadingMore(false);
-        });
-    },
-    [agent, debounced, project],
-  );
-
-  useEffect(() => {
-    if (view === "sessions") fetchPage(true);
-  }, [fetchPage, view]);
-
-  const stashQuery = search.trim().toLowerCase();
-  const visibleStash = stash.filter((entry) =>
-    !stashQuery
-      ? true
-      : `${entry.text} ${entry.sessionTitle ?? ""} ${entry.project ?? ""}`
-          .toLowerCase()
-          .includes(stashQuery),
-  );
-  const showSkeleton = loading && !items.length;
-  const filtersActive = agent !== "all" || project !== "all" || !!debounced;
-  const hasMore = items.length < total;
-  const statusLabel = (status: PromptStashEntry["status"]) =>
-    status === "draft"
-      ? "Draft"
-      : status === "sending"
-        ? "Sending"
-        : status === "failed"
-          ? "Failed"
-          : "Sent";
-
-  return (
-    <Drawer
-      open
-      repositionInputs={false}
-      onOpenChange={(next) => {
-        if (!next) onClose();
-      }}
-    >
-      <DrawerContent className="mx-auto w-full max-w-2xl sm:max-w-2xl">
-        <div className="flex max-h-[72dvh] min-h-0 flex-col overflow-hidden">
-          <header className="shrink-0 border-b border-border/70 pb-2">
-            <div className="flex h-9 items-center gap-2">
-              <DrawerTitle className="text-[15px] font-semibold">Resume</DrawerTitle>
-              <span className="text-xs text-muted-foreground">Stash & sessions</span>
-              <button
-                type="button"
-                onClick={onClose}
-                aria-label="Close"
-                className="ml-auto flex size-8 items-center justify-center rounded-full bg-muted text-muted-foreground transition hover:text-foreground active:scale-95"
-              >
-                <X className="size-4" />
-              </button>
-            </div>
-
-            <div className="mt-2 flex items-center gap-2">
-              <div className="inline-flex h-8 shrink-0 items-center rounded-full bg-muted p-0.5 text-xs font-medium">
-                <button
-                  type="button"
-                  onClick={() => setView("stash")}
-                  className={cn(
-                    "flex h-7 items-center gap-1.5 rounded-full px-3 transition",
-                    view === "stash"
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground",
-                  )}
-                >
-                  <Archive className="size-3.5" />
-                  Stash
-                  {stash.length ? <span className="tabular-nums opacity-60">{stash.length}</span> : null}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setView("sessions")}
-                  className={cn(
-                    "flex h-7 items-center gap-1.5 rounded-full px-3 transition",
-                    view === "sessions"
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground",
-                  )}
-                >
-                  <RotateCcw className="size-3.5" />
-                  Sessions
-                  {total ? <span className="tabular-nums opacity-60">{total}</span> : null}
-                </button>
-              </div>
-              {view === "stash" && stash.length ? (
-                <button
-                  type="button"
-                  onClick={() => clearPromptStash()}
-                  className="ml-auto h-8 rounded-full px-2.5 text-xs font-medium text-muted-foreground transition hover:bg-muted hover:text-destructive"
-                >
-                  Clear
-                </button>
-              ) : null}
-            </div>
-
-            <div className="mt-2 flex items-center gap-1.5">
-              <div className="relative min-w-0 flex-1">
-                <Search className="pointer-events-none absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground/70" />
-                <input
-                  ref={searchRef}
-                  value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  placeholder={view === "stash" ? "Search prompts" : "Search sessions"}
-                  aria-label={view === "stash" ? "Search stashed prompts" : "Search resumable sessions"}
-                  autoComplete="off"
-                  className="h-8 w-full rounded-full border border-border bg-muted/40 pl-8 pr-8 text-xs outline-none transition focus:border-ring focus:bg-background"
-                />
-                {search ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSearch("");
-                      searchRef.current?.focus();
-                    }}
-                    aria-label="Clear search"
-                    className="absolute right-1.5 top-1/2 flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground"
-                  >
-                    <X className="size-3.5" />
-                  </button>
-                ) : null}
-              </div>
-
-              {view === "sessions" ? (
-                <>
-                  <select
-                    value={agent}
-                    onChange={(event) => setAgent(event.target.value)}
-                    aria-label="Filter by agent"
-                    className="h-8 max-w-28 rounded-full border border-border bg-background px-2 text-xs outline-none"
-                  >
-                    <option value="all">All agents</option>
-                    {facets.agents.map((item) => (
-                      <option key={item.agent} value={item.agent}>
-                        {item.agent} · {item.count}
-                      </option>
-                    ))}
-                  </select>
-                  {facets.projects.length || project !== "all" ? (
-                    <select
-                      value={project}
-                      onChange={(event) => setProject(event.target.value)}
-                      aria-label="Filter by project"
-                      className="h-8 max-w-32 rounded-full border border-border bg-background px-2 text-xs outline-none"
-                    >
-                      <option value="all">All projects</option>
-                      {project !== "all" &&
-                      !facets.projects.some((item) => item.project === project) ? (
-                        <option value={project}>{project}</option>
-                      ) : null}
-                      {facets.projects.map((item) => (
-                        <option key={item.project} value={item.project}>
-                          {item.project} · {item.count}
-                        </option>
-                      ))}
-                    </select>
-                  ) : null}
-                </>
-              ) : null}
-            </div>
-          </header>
-
-          <div className="min-h-0 max-h-[min(28rem,55dvh)] overflow-y-auto overscroll-contain pt-1">
-            {view === "stash" ? (
-              visibleStash.length ? (
-                <div className="space-y-0.5">
-                  {visibleStash.map((entry) => (
-                    <div
-                      key={entry.id}
-                      className="group flex items-center gap-1 rounded-xl transition hover:bg-muted"
-                    >
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onRestore(entry);
-                          onClose();
-                        }}
-                        className="flex min-w-0 flex-1 items-center gap-2.5 px-2 py-2 text-left active:scale-[0.99]"
-                      >
-                        <span
-                          className={cn(
-                            "flex size-7 shrink-0 items-center justify-center rounded-lg",
-                            entry.status === "draft" || entry.status === "failed"
-                              ? "bg-primary/12 text-primary"
-                              : "bg-muted text-muted-foreground",
-                          )}
-                        >
-                          <Archive className="size-3.5" />
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="line-clamp-2 text-sm leading-snug">{entry.text}</span>
-                          <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                            <span
-                              className={cn(
-                                "font-medium",
-                                entry.status === "failed" && "text-destructive",
-                                entry.status === "draft" && "text-primary",
-                              )}
-                            >
-                              {statusLabel(entry.status)}
-                            </span>
-                            <span>·</span>
-                            <span className="truncate">
-                              {entry.source === "new-session"
-                                ? entry.project || "New session"
-                                : entry.sessionTitle || "Session"}
-                            </span>
-                            <span>·</span>
-                            <span className="shrink-0 tabular-nums">{timeAgo(entry.updatedAt)}</span>
-                          </span>
-                        </span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => removePromptStash(entry.id)}
-                        aria-label="Remove from Stash"
-                        className="mr-1 flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground opacity-60 transition hover:bg-background hover:text-destructive group-hover:opacity-100"
-                      >
-                        <Trash2 className="size-3.5" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="flex h-full min-h-48 flex-col items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground">
-                  <Archive className="size-5" />
-                  <span>{stashQuery ? "No stashed prompts match" : "Typed and dictated prompts will appear here"}</span>
-                </div>
-              )
-            ) : showSkeleton ? (
-              <div className="animate-pulse space-y-1" aria-hidden>
-                {Array.from({ length: 6 }).map((_, index) => (
-                  <div key={index} className="flex items-center gap-2.5 px-2 py-2.5">
-                    <div className="size-7 shrink-0 rounded-lg bg-muted" />
-                    <div className="min-w-0 flex-1 space-y-1.5">
-                      <div className="h-3 w-1/2 rounded bg-muted" />
-                      <div className="h-2.5 w-3/4 rounded bg-muted/60" />
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : items.length === 0 ? (
-              <div className="flex h-full min-h-48 flex-col items-center justify-center gap-2 px-4 text-center text-sm text-muted-foreground">
-                <RotateCcw className="size-5" />
-                <span>{filtersActive ? "No sessions match" : "No recent sessions to resume"}</span>
-                {filtersActive ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSearch("");
-                      setAgent("all");
-                      setProject("all");
-                    }}
-                    className="rounded-full border border-border px-3 py-1 text-xs font-medium text-foreground"
-                  >
-                    Clear filters
-                  </button>
-                ) : null}
-              </div>
-            ) : (
-              <>
-                <div className={cn("space-y-0.5 transition-opacity", loading && "opacity-60")}>
-                  {items.map((session) => (
-                    <button
-                      key={session.sessionId}
-                      type="button"
-                      onClick={() => onPick(session)}
-                      className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left transition hover:bg-muted active:scale-[0.99]"
-                    >
-                      <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted">
-                        <SessionAgentIcon session={session} className="size-4" size="sm" />
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium">{session.title}</span>
-                        <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                          {session.lastUserText ? (
-                            <>
-                              <span className="max-w-[60%] truncate">{session.lastUserText}</span>
-                              <span>·</span>
-                            </>
-                          ) : null}
-                          <span className="truncate">{session.project}</span>
-                          <span>·</span>
-                          <span className="shrink-0 tabular-nums">{timeAgo(session.lastActivityAt)}</span>
-                        </span>
-                      </span>
-                      <ChevronRight className="size-3.5 shrink-0 text-muted-foreground/60" />
-                    </button>
-                  ))}
-                </div>
-                {hasMore ? (
-                  <button
-                    type="button"
-                    onClick={() => fetchPage(false)}
-                    disabled={loadingMore}
-                    className="mt-1 flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2.5 text-xs font-medium text-muted-foreground transition hover:bg-muted disabled:opacity-60"
-                  >
-                    {loadingMore ? (
-                      <>
-                        <Loader2 className="size-3.5 animate-spin" /> Loading…
-                      </>
-                    ) : (
-                      `Load ${Math.min(PAGE, total - items.length)} more`
-                    )}
-                  </button>
-                ) : null}
-              </>
-            )}
-          </div>
-        </div>
-      </DrawerContent>
-    </Drawer>
-  );
-}
-
-// A compact iOS-style control pill: optional leading icon, a borderless native
-// select, and a trailing chevron — no field label, the value speaks for itself.
 function FieldPill({ icon, children, flat = false }: { icon?: ReactNode; children: ReactNode; flat?: boolean }) {
   return (
     <label
@@ -19291,291 +18433,6 @@ function CodingAgentAuthDialog({
   );
 }
 
-function CodingAgentsPage({
-  setupChecks,
-  agents,
-  onVisibleChange,
-  onSetup,
-  onLogin,
-  onAddClaudeAccount,
-  onRemoveClaudeAccount,
-  onSetupCheck,
-  onRefresh,
-}: {
-  setupChecks: SetupCheckGroup[];
-  agents: CodingAgentInfo[];
-  onVisibleChange: (kind: AgentKind, visible: boolean) => void;
-  onSetup: (kind: AgentKind) => void;
-  onLogin: (kind: AgentKind, claudeAccountId?: string) => void;
-  onAddClaudeAccount: () => void;
-  onRemoveClaudeAccount: (account: ClaudeAccountInfo) => void;
-  onSetupCheck: (key: string) => void;
-  onRefresh: () => void | Promise<void>;
-}) {
-  const [refreshing, setRefreshing] = useState(false);
-  async function refresh() {
-    if (refreshing) return;
-    setRefreshing(true);
-    try {
-      await onRefresh();
-      toast.success("Coding agents refreshed");
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not refresh coding agents");
-    } finally {
-      setRefreshing(false);
-    }
-  }
-
-  return (
-    <div className="mx-auto max-w-xl space-y-3 pb-10" data-lfg-page-column>
-      <div className="flex items-center justify-between px-4">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-          Coding agents
-        </h2>
-        <button
-          type="button"
-          onClick={() => void refresh()}
-          disabled={refreshing}
-          className="flex items-center gap-1 text-xs text-muted-foreground transition-colors hover:text-foreground disabled:opacity-50"
-        >
-          <RotateCcw className={cn("size-3.5", refreshing && "animate-spin")} />
-          Refresh
-        </button>
-      </div>
-
-      {setupChecks.length ? (
-        <div className="overflow-hidden rounded-2xl border border-border bg-card/40 divide-y divide-border">
-          {setupChecks.map((group) => (
-            <div key={group.key} className="px-4 py-3">
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex min-w-0 items-start gap-3">
-                  <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-[8px] border border-border bg-background">
-                    <TerminalSquare className="size-4 text-muted-foreground" />
-                  </span>
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-semibold">{group.label}</span>
-                      <Badge variant={group.configured ? "default" : "secondary"}>
-                        {group.configured ? "Ready" : "Needs setup"}
-                      </Badge>
-                    </div>
-                    <div className="mt-1 space-y-1">
-                      {group.checks.map((check) => (
-                        <div
-                          key={check.label}
-                          className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"
-                        >
-                          {check.ok ? (
-                            <Check className="size-3.5 shrink-0 text-success" />
-                          ) : (
-                            <X className="size-3.5 shrink-0 text-destructive" />
-                          )}
-                          <span className="shrink-0">{check.label}</span>
-                          {check.detail ? (
-                            <span className="min-w-0 truncate text-muted-foreground/70">
-                              {check.detail}
-                            </span>
-                          ) : null}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-3 flex flex-wrap items-center gap-2 pl-11">
-                {group.instructions.map((instruction) => (
-                  <span key={instruction} className="min-w-0 flex-1 text-xs text-muted-foreground">
-                    {instruction}
-                  </span>
-                ))}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={!group.canAutoSetup || group.running}
-                  onClick={() => onSetupCheck(group.key)}
-                  title={
-                    group.canAutoSetup
-                      ? group.actionLabel
-                      : "Install a supported coding agent first"
-                  }
-                >
-                  {group.running ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <Play className="size-4" />
-                  )}
-                  {group.running ? "Running…" : group.actionLabel}
-                </Button>
-              </div>
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      <div className="overflow-hidden rounded-2xl border border-border bg-card/40 divide-y divide-border">
-        {agents.map((agent) => {
-          const configured = agent.status.configured;
-          return (
-            <div key={agent.key} className="px-4 py-3">
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex min-w-0 items-start gap-3">
-                  <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-[8px] border border-border bg-background">
-                    <img
-                      src={agentIconSrc(agent.key)}
-                      alt={agentIconAlt(agent.key)}
-                      className="size-5"
-                    />
-                  </span>
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-semibold">{agent.label}</span>
-                      <Badge variant={configured ? "default" : "secondary"}>
-                        {configured ? "Ready" : "Needs setup"}
-                      </Badge>
-                      <Badge variant="outline">
-                        {agent.status.lfgCapabilityAccess === "mcp" ? "LFG tools" : "LFG prompt only"}
-                      </Badge>
-                    </div>
-                    <div className="mt-1 space-y-1">
-                      {agent.status.checks.map((check) => (
-                        <div
-                          key={check.label}
-                          className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground"
-                        >
-                          {check.ok ? (
-                            <Check className="size-3.5 shrink-0 text-success" />
-                          ) : (
-                            <X className="size-3.5 shrink-0 text-destructive" />
-                          )}
-                          <span className="shrink-0">{check.label}</span>
-                          {check.detail ? (
-                            <span className="min-w-0 truncate text-muted-foreground/70">
-                              {check.detail}
-                            </span>
-                          ) : null}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-                <Switch
-                  checked={agent.visible}
-                  onCheckedChange={(visible) => onVisibleChange(agent.key, visible)}
-                  aria-label={`${agent.label} visible in composer`}
-                />
-              </div>
-
-              {agent.key === "aisdk" && agent.status.accounts?.length ? (
-                <div className="mt-3 space-y-1.5 pl-11">
-                  {agent.status.accounts.map((account) => (
-                    <div
-                      key={account.id}
-                      className="flex items-center gap-2 rounded-xl border border-border/70 bg-background/55 px-2.5 py-2"
-                    >
-                      <span className="relative flex size-7 shrink-0 items-center justify-center rounded-full bg-muted">
-                        <img src={agentIconSrc("aisdk")} alt="" className="size-4.5" />
-                        <span className="absolute -bottom-0.5 -right-0.5 flex size-3.5 items-center justify-center rounded-full bg-foreground text-[8px] font-bold text-background ring-1 ring-background">
-                          {account.number}
-                        </span>
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-xs font-medium">
-                        {account.label}
-                      </span>
-                      <Badge variant={account.connected ? "default" : "secondary"}>
-                        {account.connected ? "Connected" : "Needs login"}
-                      </Badge>
-                      {!account.connected ? (
-                        <Button size="sm" variant="outline" onClick={() => onLogin(agent.key, account.id)}>
-                          <Globe className="size-3.5" />
-                          Connect
-                        </Button>
-                      ) : null}
-                      {account.removable ? (
-                        <button
-                          type="button"
-                          onClick={() => onRemoveClaudeAccount(account)}
-                          title={`Remove ${account.label}`}
-                          aria-label={`Remove ${account.label}`}
-                          className="flex size-7 items-center justify-center rounded-full text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive"
-                        >
-                          <Trash2 className="size-3.5" />
-                        </button>
-                      ) : null}
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-
-              <div className="mt-3 flex flex-wrap items-center gap-2 pl-11">
-                <div className="min-w-0 flex-1 space-y-1 text-xs text-muted-foreground">
-                  {agent.status.instructions.map((instruction) => (
-                    <div key={instruction}>{instruction}</div>
-                  ))}
-                  {agent.status.installCommand ? (
-                    <div className="truncate">
-                      Install: <code>{agent.status.installCommand}</code>
-                    </div>
-                  ) : null}
-                  {agent.status.loginCommand && !BROWSER_AUTH_KINDS.has(agent.key) ? (
-                    <div className="truncate">
-                      Login: <code>{agent.status.loginCommand}</code>
-                    </div>
-                  ) : null}
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={!agent.status.canAutoSetup || agent.status.setupRunning}
-                  onClick={() => onSetup(agent.key)}
-                  title={
-                    agent.status.canAutoSetup
-                      ? "Run setup for this agent"
-                      : "No automatic setup is available"
-                  }
-                >
-                  {agent.status.setupRunning ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <Play className="size-4" />
-                  )}
-                  {agent.status.setupRunning ? "Running…" : "Install"}
-                </Button>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={!agent.status.canLoginInTerminal || agent.status.setupRunning}
-                  onClick={() =>
-                    agent.key === "aisdk" && agent.status.accounts?.some((account) => account.connected)
-                      ? onAddClaudeAccount()
-                      : onLogin(agent.key)
-                  }
-                  title={
-                    BROWSER_AUTH_KINDS.has(agent.key)
-                      ? `Sign in to ${agent.label} in your browser`
-                      : agent.status.loginCommand
-                        ? `Open terminal and run ${agent.status.loginCommand}`
-                      : "No terminal login command is available"
-                  }
-                >
-                  {BROWSER_AUTH_KINDS.has(agent.key) ? (
-                    <Globe className="size-4" />
-                  ) : (
-                    <TerminalSquare className="size-4" />
-                  )}
-                  {agent.key === "aisdk" && agent.status.accounts?.some((account) => account.connected)
-                    ? "Add account"
-                    : "Login"}
-                </Button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 function fmtReset(ms: number | null): string {
   if (!ms) return "";
   const diff = ms - Date.now();
@@ -19711,19 +18568,7 @@ function UsagePage() {
   );
 }
 
-type ShipMediaItem = {
-  artifactId: string;
-  kind: "image" | "video" | "html";
-  url: string;
-  name: string;
-  caption?: string;
-  version?: number;
-  updatedAt?: number;
-  lastRefreshedAt?: number;
-  refreshStatus?: "idle" | "running" | "success" | "error";
-};
-
-type GalleryArtifact = {
+export type GalleryArtifact = {
   id: string;
   kind: "image" | "video" | "html";
   url: string;
@@ -19740,7 +18585,19 @@ type GalleryArtifact = {
   refreshEnabled?: boolean;
 };
 
-type ShipPost = {
+export type ShipMediaItem = {
+  artifactId: string;
+  kind: "image" | "video" | "html";
+  url: string;
+  name: string;
+  caption?: string;
+  version?: number;
+  updatedAt?: number;
+  lastRefreshedAt?: number;
+  refreshStatus?: "idle" | "running" | "success" | "error";
+};
+
+export type ShipPost = {
   id: string;
   rev: number;
   ts: number;
@@ -19766,758 +18623,6 @@ type ShipPost = {
 //
 // Still visibility-gated and still sticky once shown: a page of tiles is a page
 // of fetches, and re-mounting on scroll-back would throw away parsed documents.
-function GalleryTilePreview({
-  path,
-  cacheKey,
-  children,
-}: {
-  path: string;
-  cacheKey?: string | number;
-  children?: React.ReactNode;
-}) {
-  return (
-    <div className="relative h-32 w-full overflow-hidden bg-background">
-      <NativeArtifactThumbnail path={path} cacheKey={cacheKey} className="h-full w-full" />
-      {children}
-    </div>
-  );
-}
-
-// A notification's media, as a trailing thumbnail rather than a full-width
-// grid. This is the iOS notification shape: the attachment is a hint at what
-// happened, not the payload — one 52px square on the right of the row, tapped
-// to open the real thing. A post with four screenshots used to add ~350px of
-// feed height; it now adds none.
-function ShipMediaThumb({
-  items,
-  total,
-  onExpand,
-}: {
-  items: ShipMediaItem[];
-  total: number;
-  onExpand?: (artifact: ViewerArtifact) => void;
-}) {
-  const item = items[0];
-  if (!item) return null;
-  const extra = Math.max(0, total - 1);
-  const open = () =>
-    onExpand?.({
-      url: item.url,
-      kind: item.kind,
-      caption: item.caption,
-      name: item.name,
-      version: item.version,
-      cacheKey: item.updatedAt,
-    });
-  return (
-    <button
-      type="button"
-      onClick={open}
-      aria-label={`Open ${item.caption || item.name}`}
-      title={item.caption || item.name}
-      className="relative size-[52px] shrink-0 overflow-hidden rounded-lg border border-border/60 bg-muted transition-transform active:scale-[0.97]"
-    >
-      {item.kind === "image" ? (
-        <AuthenticatedArtifactImage
-          path={item.url}
-          alt={item.caption || item.name}
-          thumb
-          className="size-full object-cover"
-        />
-      ) : item.kind === "html" ? (
-        // Deliberately an icon, not a live preview. A document scaled into a
-        // 52px box is two words of giant text — unreadable, and it costs a
-        // fetch + parse per row. The Artifacts page is where previews belong.
-        <span className="flex size-full items-center justify-center bg-primary/10 text-primary">
-          <LayoutDashboard className="size-4" />
-        </span>
-      ) : (
-        <span className="flex size-full items-center justify-center bg-black/80 text-white/80">
-          <Play className="size-4" />
-        </span>
-      )}
-      {extra > 0 ? (
-        <span className="absolute inset-x-0 bottom-0 bg-black/55 py-0.5 text-center text-[9px] font-semibold text-white">
-          +{extra}
-        </span>
-      ) : null}
-    </button>
-  );
-}
-
-// Day buckets for the feed, in the phone-notification idiom: today and
-// yesterday are named, everything older is dated. Grouping is what lets the
-// rows themselves drop their date entirely and show just a time delta.
-function notificationDayLabel(ts: number, now: number): string {
-  const day = (t: number) => {
-    const d = new Date(t);
-    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-  };
-  const diffDays = Math.round((day(now) - day(ts)) / 86_400_000);
-  if (diffDays <= 0) return "Today";
-  if (diffDays === 1) return "Yesterday";
-  const d = new Date(ts);
-  return d.toLocaleDateString(undefined, {
-    month: "long",
-    day: "numeric",
-    ...(d.getFullYear() === new Date(now).getFullYear() ? {} : { year: "numeric" }),
-  });
-}
-
-// Page sizes for the Shipped feed and the artifacts gallery: both load one
-// page up front and grow via "load more" instead of fetching everything.
-const FEED_PAGE = 15;
-const GALLERY_PAGE = 24;
-
-// The Shipped channel: a showcase feed of finished work, posted by agents via
-// lfg_ship. Media are ordinary artifacts (image / video / live html), so this
-// page is purely presentational.
-//
-// List data is stale-while-revalidated from `feed-cache` so a revisit paints the
-// last-known page instantly; when the parent keeps this component mounted
-// (`active=false` while hidden) we also skip the poll so a background tab is
-// free, and revalidate once when it becomes active again.
-function ShippedPage({
-  onOpenSession,
-  onReviewSession,
-  liveSessionIds,
-  notificationIdentity,
-  artifactsOnly = false,
-  active = true,
-}: {
-  onOpenSession: (sessionId: string) => void;
-  onReviewSession?: (post: ShipPost) => void;
-  liveSessionIds: Set<string>;
-  notificationIdentity?: string | null;
-  artifactsOnly?: boolean;
-  active?: boolean;
-}) {
-  // Shipped and Artifacts are separate virtual pages. This shared loader keeps
-  // their paging/realtime behavior aligned without exposing a nested toggle.
-  const view: "feed" | "artifacts" = artifactsOnly ? "artifacts" : "feed";
-  const cachedGallery = artifactsOnly ? readFeedCache<GalleryArtifact>(ARTIFACTS_GALLERY_KEY) : null;
-  const cachedPosts = !artifactsOnly ? readFeedCache<ShipPost>(SHIPPED_FEED_KEY) : null;
-
-  const [posts, setPosts] = useState<ShipPost[] | null>(() => cachedPosts?.items ?? null);
-  const [postsTotal, setPostsTotal] = useState(() => cachedPosts?.total ?? 0);
-  const [postsBusy, setPostsBusy] = useState(false);
-  const [notificationReads, setNotificationReads] = useState<NotificationReadState | null>(() =>
-    artifactsOnly ? null : notificationReadState(notificationIdentity),
-  );
-  const [markingNotificationsRead, setMarkingNotificationsRead] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // Agent questions are notifications too, and <AskProvider> already polls for
-  // them app-wide (it feeds the nav badge). Reading them from context instead
-  // of fetching here keeps the page at one request per tick.
-  const { questions, busy: asksBusy, dismissAll: dismissAllQuestions } = useAsk();
-  // Two-step, because this one is bulk and irreversible: every asking agent
-  // stops waiting. Single dismissals stay one tap.
-  const [confirmDismissAll, setConfirmDismissAll] = useState(false);
-  // Never leave a primed destructive button behind when the stack changes under
-  // it — the count in the label would be answering for a different set.
-  useEffect(() => {
-    setConfirmDismissAll(false);
-  }, [questions.length]);
-  const [gallery, setGallery] = useState<GalleryArtifact[] | null>(() => cachedGallery?.items ?? null);
-  const [galleryTotal, setGalleryTotal] = useState(() => cachedGallery?.total ?? 0);
-  const [galleryBusy, setGalleryBusy] = useState(false);
-  const [refreshingArtifactId, setRefreshingArtifactId] = useState<string | null>(null);
-  const [deletingArtifactId, setDeletingArtifactId] = useState<string | null>(null);
-  // "Artifact" means the interactive HTML document. Images and recordings
-  // remain media in transcripts/Shipped and do not appear on this page.
-  const galleryKindParam = "&kind=html";
-  // How many items are currently on screen — the polling refresh re-fetches
-  // exactly that window so "load more" pages survive the refresh.
-  const galleryLen = useRef(Math.max(GALLERY_PAGE, cachedGallery?.items.length ?? 0));
-  const postsLen = useRef(Math.max(FEED_PAGE, cachedPosts?.items.length ?? 0));
-  const openArtifact = useContext(ArtifactViewerContext);
-  const appDialog = useAppDialog();
-
-  useEffect(() => {
-    if (view !== "feed") return;
-    setNotificationReads(notificationReadState(notificationIdentity));
-  }, [notificationIdentity, view]);
-
-  // Existing Shipped history predates the Notification Center. Establish a
-  // migration baseline on first visit so years of finished work do not appear
-  // as newly unread; only revisions arriving after this point raise the count.
-  useEffect(() => {
-    if (view !== "feed" || posts === null || notificationReads) return;
-    const newestVisible = posts.reduce((latest, post) => Math.max(latest, post.ts), Date.now());
-    setNotificationReads(markAllNotificationsRead(notificationIdentity, newestVisible));
-  }, [notificationIdentity, notificationReads, posts, view]);
-
-  // `storage` covers other tabs; the custom event covers other components in
-  // THIS tab (it was dispatched with nothing listening, so an in-tab write
-  // elsewhere never repainted the feed).
-  useEffect(() => {
-    if (view !== "feed") return;
-    const sync = () => setNotificationReads(notificationReadState(notificationIdentity));
-    window.addEventListener("storage", sync);
-    window.addEventListener(NOTIFICATION_READ_STATE_EVENT, sync);
-    return () => {
-      window.removeEventListener("storage", sync);
-      window.removeEventListener(NOTIFICATION_READ_STATE_EVENT, sync);
-    };
-  }, [notificationIdentity, view]);
-  useEffect(() => {
-    if (view !== "artifacts") return;
-    let alive = true;
-    const load = async () => {
-      try {
-        // One page per tick, same reasoning as the feed poll above: new and
-        // refreshed artifacts land at the head, so re-listing the whole loaded
-        // window every 20s buys nothing.
-        const data = await api<{ artifacts: GalleryArtifact[]; total?: number }>(
-          `/api/artifacts?limit=${GALLERY_PAGE}${galleryKindParam}`,
-          { cache: "no-store" },
-        );
-        if (!alive) return;
-        // Normalize once: a proxied workspace can answer 2xx without the array,
-        // and everything below spreads/maps it.
-        const artifacts = Array.isArray(data.artifacts) ? data.artifacts : [];
-        const total = data.total ?? artifacts.length;
-        setGallery((prev) => {
-          const freshIds = new Set(artifacts.map((a) => a.id));
-          const tail = (prev ?? []).filter((a) => !freshIds.has(a.id));
-          const merged = [...artifacts, ...tail];
-          galleryLen.current = Math.max(GALLERY_PAGE, merged.length);
-          writeFeedCache(ARTIFACTS_GALLERY_KEY, merged, total);
-          return merged;
-        });
-        setGalleryTotal(total);
-      } catch {
-        // Keep a cached paint if we have one; only fall to empty when nothing
-        // has ever loaded.
-        if (alive) setGallery((g) => g ?? []);
-      }
-    };
-    void load();
-    if (!active) {
-      return () => {
-        alive = false;
-      };
-    }
-    const interval = setInterval(() => void load(), 20_000);
-    return () => {
-      alive = false;
-      clearInterval(interval);
-    };
-  }, [view, active]);
-
-  const loadMoreGallery = async () => {
-    if (galleryBusy) return;
-    setGalleryBusy(true);
-    try {
-      const data = await api<{ artifacts: GalleryArtifact[]; total?: number }>(
-        `/api/artifacts?limit=${GALLERY_PAGE}&offset=${galleryLen.current}${galleryKindParam}`,
-        { cache: "no-store" },
-      );
-      setGallery((g) => {
-        const seen = new Set((g ?? []).map((a) => a.id));
-        const merged = [...(g ?? []), ...data.artifacts.filter((a) => !seen.has(a.id))];
-        galleryLen.current = merged.length;
-        writeFeedCache(ARTIFACTS_GALLERY_KEY, merged, data.total ?? galleryTotal);
-        return merged;
-      });
-      setGalleryTotal((t) => {
-        const next = data.total ?? t;
-        return next;
-      });
-    } catch {
-      // Leave the current page as-is; the next tap retries.
-    } finally {
-      setGalleryBusy(false);
-    }
-  };
-
-  const deleteGalleryArtifact = async (artifact: GalleryArtifact) => {
-    const label = artifact.title || artifact.caption || artifact.name;
-    const confirmed = await appDialog.confirm({
-      title: `Delete ${label}?`,
-      description: "This permanently removes the artifact and stops its automatic refresh schedule.",
-      confirmLabel: "Delete artifact",
-      destructive: true,
-    });
-    if (!confirmed) return;
-    setDeletingArtifactId(artifact.id);
-    try {
-      await api(
-        `/api/sessions/${encodeURIComponent(artifact.sessionId ?? "")}/artifacts/${encodeURIComponent(artifact.id)}`,
-        {
-          method: "DELETE",
-          headers: { "X-LFG-Session-ID": artifact.sessionId ?? "" },
-        },
-      );
-      setGallery((current) => {
-        const next = current?.filter((item) => item.id !== artifact.id) ?? null;
-        if (next) writeFeedCache(ARTIFACTS_GALLERY_KEY, next, Math.max(0, galleryTotal - 1));
-        return next;
-      });
-      setGalleryTotal((total) => Math.max(0, total - 1));
-      galleryLen.current = Math.max(0, galleryLen.current - 1);
-      toast.success("Artifact deleted");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn't delete artifact");
-    } finally {
-      setDeletingArtifactId(null);
-    }
-  };
-
-  const refreshGalleryArtifact = async (artifact: GalleryArtifact) => {
-    if (!artifact.sessionId || artifact.refreshEnabled === undefined) return;
-    setRefreshingArtifactId(artifact.id);
-    try {
-      const data = await api<{
-        artifact: {
-          updatedAt?: number;
-          version?: number;
-          size?: number;
-          refresh?: {
-            enabled?: boolean;
-            status?: GalleryArtifact["refreshStatus"];
-            lastSuccessAt?: number;
-          };
-        };
-      }>(
-        `/api/sessions/${encodeURIComponent(artifact.sessionId)}/artifacts/html/${encodeURIComponent(artifact.id)}/refresh`,
-        {
-          method: "POST",
-          headers: { "X-LFG-Session-ID": artifact.sessionId },
-        },
-      );
-      setGallery((current) => {
-        const next = current?.map((item) => item.id === artifact.id
-          ? {
-              ...item,
-              ts: data.artifact.updatedAt ?? item.ts,
-              version: data.artifact.version ?? item.version,
-              size: data.artifact.size ?? item.size,
-              lastRefreshedAt: data.artifact.refresh?.lastSuccessAt ?? item.lastRefreshedAt,
-              refreshStatus: data.artifact.refresh?.status ?? item.refreshStatus,
-              refreshEnabled: data.artifact.refresh?.enabled ?? item.refreshEnabled,
-            }
-          : item) ?? null;
-        if (next) writeFeedCache(ARTIFACTS_GALLERY_KEY, next, galleryTotal);
-        return next;
-      });
-      toast.success("Artifact refreshed");
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Couldn't refresh artifact");
-    } finally {
-      setRefreshingArtifactId(null);
-    }
-  };
-
-  // Only ever the HEAD page is polled, not everything loaded so far: freshness
-  // arrives at the top, so re-downloading 75 hydrated posts to discover one new
-  // one is pure waste. The head itself comes from the shared poller in
-  // lib/shipped-feed, which the Live sidebar reads too — one request per tick
-  // for the whole app instead of one per surface.
-  useEffect(() => {
-    if (view !== "feed" || !active) return;
-    return subscribeShippedHead<ShipPost>((result) => {
-      if (!result.ok) {
-        // Only meaningful when nothing has ever painted; otherwise the stale
-        // page stays up and the next tick retries.
-        setPosts((prev) => {
-          if (prev === null) setError(result.error);
-          return prev;
-        });
-        return;
-      }
-      setPosts((prev) => {
-        // Splice the fresh head onto the tail we already hold, keyed by id so a
-        // post that a newer ship pushed off the first page is not duplicated —
-        // and so the tail keeps its order when the head grows.
-        const freshIds = new Set(result.posts.map((p) => p.id));
-        const tail = (prev ?? []).filter((p) => !freshIds.has(p.id));
-        const merged = [...result.posts, ...tail];
-        postsLen.current = Math.max(SHIPPED_HEAD_LIMIT, merged.length);
-        writeFeedCache(SHIPPED_FEED_KEY, merged, result.total);
-        return merged;
-      });
-      setPostsTotal(result.total);
-      setError(null);
-    });
-  }, [view, active]);
-
-  const loadMorePosts = async () => {
-    if (postsBusy) return;
-    setPostsBusy(true);
-    try {
-      const data = await api<{ posts: ShipPost[]; total?: number }>(
-        `/api/shipped?limit=${FEED_PAGE}&offset=${postsLen.current}`,
-        { cache: "no-store" },
-      );
-      setPosts((p) => {
-        const seen = new Set((p ?? []).map((x) => x.id));
-        const merged = [...(p ?? []), ...data.posts.filter((x) => !seen.has(x.id))];
-        postsLen.current = merged.length;
-        writeFeedCache(SHIPPED_FEED_KEY, merged, data.total ?? postsTotal);
-        return merged;
-      });
-      setPostsTotal((t) => data.total ?? t);
-    } catch {
-      // Leave the current page as-is; the next tap retries.
-    } finally {
-      setPostsBusy(false);
-    }
-  };
-
-  const unreadPosts =
-    posts?.filter((post) =>
-      notificationIsUnread(notificationReads, {
-        id: shippedNotificationId(post),
-        ts: post.ts,
-      }),
-    ).length ?? 0;
-
-  // Bucket the feed into named days once per posts change. Grouping is what
-  // pays for the compact row: the date lives in the section header, so each
-  // row only carries a time delta.
-  const postGroups = useMemo(() => {
-    if (!posts?.length) return [];
-    const now = Date.now();
-    const groups: Array<{ label: string; items: ShipPost[] }> = [];
-    for (const post of posts) {
-      const label = notificationDayLabel(post.ts, now);
-      const last = groups[groups.length - 1];
-      if (last && last.label === label) last.items.push(post);
-      else groups.push({ label, items: [post] });
-    }
-    return groups;
-  }, [posts]);
-
-  const markPostRead = (post: ShipPost) => {
-    if (
-      !notificationIsUnread(notificationReads, {
-        id: shippedNotificationId(post),
-        ts: post.ts,
-      })
-    ) {
-      return;
-    }
-    setNotificationReads(
-      markNotificationRead(notificationIdentity, shippedNotificationId(post)),
-    );
-  };
-
-  const markAllRead = async () => {
-    if (markingNotificationsRead) return;
-    setMarkingNotificationsRead(true);
-    try {
-      const through = Math.max(Date.now(), ...(posts ?? []).map((post) => post.ts));
-      setNotificationReads(markAllNotificationsRead(notificationIdentity, through));
-      await acknowledgePushNotifications();
-      toast.success("Notifications marked read");
-    } finally {
-      setMarkingNotificationsRead(false);
-    }
-  };
-
-  return (
-    <div className="mx-auto max-w-xl space-y-4 pb-10" data-lfg-page-column>
-      <div className="flex items-center justify-between px-1">
-        <div>
-          <h1 className="text-lg font-semibold tracking-[-0.01em]">
-            {artifactsOnly ? "Artifacts" : "Notifications"}
-          </h1>
-          {artifactsOnly ? (
-            <p className="mt-0.5 text-xs text-muted-foreground">Interactive reports and live dashboards</p>
-          ) : (
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              {questions.length
-                ? `${questions.length} waiting on you`
-                : unreadPosts
-                  ? `${unreadPosts} unread`
-                  : "You're all caught up"}
-            </p>
-          )}
-        </div>
-        {!artifactsOnly && posts !== null ? (
-          // Icon only. It is a rare, undoable housekeeping action — it does not
-          // need to be the second-loudest thing on the page.
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            aria-label="Mark all read"
-            title="Mark all read — clears the app icon badge"
-            disabled={markingNotificationsRead}
-            onClick={() => void markAllRead()}
-          >
-            {markingNotificationsRead ? (
-              <Loader2 className="size-4 animate-spin" />
-            ) : (
-              <CheckCheck className="size-4" />
-            )}
-          </Button>
-        ) : null}
-      </div>
-
-      {view === "artifacts" ? (
-        <>
-          {gallery === null ? (
-            <div className="py-10 text-center text-sm text-muted-foreground">Loading…</div>
-          ) : gallery.length === 0 ? (
-            <div className="rounded-2xl border border-border bg-card/40 px-4 py-10 text-center text-sm text-muted-foreground">
-              No artifacts yet — agents create them with <code>lfg_publish_artifact</code>.
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              {gallery.map((a) => (
-                <div
-                  key={a.id}
-                  className="group relative overflow-hidden rounded-xl border border-border bg-card/40 text-left shadow-sm transition-colors hover:border-foreground/20"
-                >
-                  <button
-                    type="button"
-                    onClick={() =>
-                      openArtifact({
-                        url: a.url,
-                        kind: a.kind,
-                        title: a.title,
-                        caption: a.caption,
-                        name: a.name,
-                        version: a.version,
-                        cacheKey: a.ts,
-                      })
-                    }
-                    className="block w-full text-left active:scale-[0.99]"
-                  >
-                    <GalleryTilePreview path={a.url} cacheKey={a.ts}>
-                      {(a.version ?? 1) > 1 ? (
-                        <span className="absolute left-1.5 top-1.5 flex items-center gap-1 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 backdrop-blur dark:text-emerald-400">
-                          <span className="size-1.5 rounded-full bg-emerald-500" />
-                          live · v{a.version}
-                        </span>
-                      ) : null}
-                    </GalleryTilePreview>
-                    <div className="px-2.5 py-2 pr-9">
-                      <div className="truncate text-xs font-medium">{a.title || a.caption || a.name}</div>
-                      <div className="mt-0.5 truncate text-[10px] text-muted-foreground">
-                        {a.lastRefreshedAt
-                          ? `Refreshed ${timeAgo(a.lastRefreshedAt)}`
-                          : `Published ${timeAgo(a.ts)}`}
-                      </div>
-                    </div>
-                  </button>
-                  <div className="absolute bottom-1.5 right-1.5 flex items-center gap-0.5">
-                    {a.refreshEnabled !== undefined ? (
-                      <button
-                        type="button"
-                        onClick={() => void refreshGalleryArtifact(a)}
-                        disabled={refreshingArtifactId === a.id}
-                        aria-label={`Refresh ${a.title || a.caption || a.name}`}
-                        className="flex size-7 items-center justify-center rounded-full text-muted-foreground opacity-100 transition-[color,background-color,transform,opacity] duration-150 hover:bg-foreground/[0.06] hover:text-foreground active:scale-[0.94] disabled:opacity-50 sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100"
-                      >
-                        <RotateCcw className={cn("size-3.5", refreshingArtifactId === a.id && "animate-spin")} />
-                      </button>
-                    ) : null}
-                    <button
-                      type="button"
-                      onClick={() => void deleteGalleryArtifact(a)}
-                      disabled={deletingArtifactId === a.id}
-                      aria-label={`Delete ${a.title || a.caption || a.name}`}
-                      className="flex size-7 items-center justify-center rounded-full text-muted-foreground opacity-100 transition-[color,background-color,transform,opacity] duration-150 hover:bg-destructive/10 hover:text-destructive active:scale-[0.94] disabled:opacity-50 sm:opacity-0 sm:group-hover:opacity-100 sm:focus:opacity-100"
-                    >
-                      {deletingArtifactId === a.id ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-          {gallery !== null && gallery.length < galleryTotal ? (
-            <button
-              type="button"
-              onClick={() => void loadMoreGallery()}
-              disabled={galleryBusy}
-              className="w-full rounded-xl border border-border bg-card/40 px-4 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:border-foreground/20 hover:text-foreground disabled:opacity-60"
-            >
-              {galleryBusy ? "Loading…" : `Load more · ${galleryTotal - gallery.length} left`}
-            </button>
-          ) : null}
-        </>
-      ) : (
-        <>
-
-      {error ? (
-        <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-          {error}
-        </div>
-      ) : null}
-
-      {posts === null && !error ? (
-        <div className="py-10 text-center text-sm text-muted-foreground">Loading…</div>
-      ) : null}
-
-      {/* Time-sensitive first. Borrowed straight from the phone notification
-          hierarchy: things blocking a person sit above things that merely
-          happened, and they are actionable without leaving the list. */}
-      {questions.length ? (
-        <section className="space-y-1.5">
-          <div className="flex items-center justify-between gap-2 px-1">
-            <h2 className="text-[11px] font-semibold uppercase tracking-wide text-primary">
-              Needs you
-            </h2>
-            {questions.length > 1 ? (
-              <button
-                type="button"
-                disabled={asksBusy}
-                onClick={() => {
-                  if (!confirmDismissAll) {
-                    setConfirmDismissAll(true);
-                    return;
-                  }
-                  setConfirmDismissAll(false);
-                  void dismissAllQuestions();
-                }}
-                onBlur={() => setConfirmDismissAll(false)}
-                className={cn(
-                  "-my-1 rounded-full px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50",
-                  confirmDismissAll
-                    ? "bg-destructive/10 text-destructive"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {confirmDismissAll ? `Dismiss all ${questions.length}?` : "Dismiss all"}
-              </button>
-            ) : null}
-          </div>
-          <div className="overflow-hidden rounded-2xl border border-primary/25 bg-primary/[0.03] shadow-sm">
-            {/* Newest first, like the feed below it. The provider keeps the
-                queue oldest-first for working through it in order; a feed
-                that ran two directions at once just read as a bug. */}
-            {[...questions]
-              .sort((a, b) => b.createdAt - a.createdAt)
-              .map((q) => (
-                <QuestionNotification key={q.id} q={q} />
-              ))}
-          </div>
-        </section>
-      ) : null}
-
-      {posts !== null && posts.length === 0 && !questions.length ? (
-        <div className="rounded-2xl border border-border bg-card/40 px-4 py-10 text-center text-sm text-muted-foreground">
-          No notifications yet — verified results and future activity will collect here.
-        </div>
-      ) : null}
-
-      {/* One compact row per notification, grouped by day. Leading dot for
-          unread, avatar, agent · project · time, title, two-line body, and the
-          media as a trailing thumbnail. No action buttons at rest: tapping the
-          row opens the session, which is where following up actually belongs. */}
-      {postGroups.map((group) => (
-        <section key={group.label} className="space-y-1.5">
-          <h2 className="px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-            {group.label}
-          </h2>
-          <div className="overflow-hidden rounded-2xl border border-border bg-card/40 shadow-sm">
-            {group.items.map((post) => {
-              const live = !!post.sessionId && liveSessionIds.has(post.sessionId);
-              const unread = notificationIsUnread(notificationReads, {
-                id: shippedNotificationId(post),
-                ts: post.ts,
-              });
-              const hasThumb = post.mediaItems.length > 0;
-              return (
-                <article key={post.id} className="relative border-b border-border/50 last:border-b-0">
-                  {/* Tapping the post opens the conversation: straight into the
-                      live session when it's still running, the same shared chat
-                      renderer plus Resume when it has shipped and closed. */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      markPostRead(post);
-                      if (!post.sessionId) return;
-                      if (onReviewSession) onReviewSession(post);
-                      else if (live) onOpenSession(post.sessionId);
-                    }}
-                    className={cn(
-                      "flex w-full items-start gap-2.5 py-2.5 pl-2.5 text-left transition-colors hover:bg-foreground/[0.02]",
-                      hasThumb ? "pr-[4.75rem]" : "pr-3.5",
-                    )}
-                  >
-                    {/* Fixed gutter whether or not the dot is there, so every
-                        row's avatar lands on the same x. */}
-                    <span
-                      className={cn(
-                        "mt-3 size-1.5 shrink-0 rounded-full",
-                        unread && "bg-primary",
-                      )}
-                      title={unread ? "Unread" : undefined}
-                    />
-                    <span className="relative mt-0.5 shrink-0">
-                      <img
-                        src={agentIconSrc(post.agent)}
-                        alt={agentIconAlt(post.agent)}
-                        className="size-7 rounded-full border border-border bg-background p-1"
-                      />
-                      {live ? (
-                        <span
-                          title="Session is active"
-                          className="absolute -bottom-0.5 -right-0.5 size-2 rounded-full bg-emerald-500 ring-2 ring-background"
-                        />
-                      ) : null}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-baseline gap-1.5 text-[11px] text-muted-foreground">
-                        <span className="min-w-0 shrink truncate font-medium text-foreground/75">
-                          {agentIconAlt(post.agent)}
-                        </span>
-                        {post.project ? (
-                          <span className="min-w-0 shrink truncate">· {post.project}</span>
-                        ) : null}
-                        <span className="ml-auto shrink-0 tabular-nums">{timeAgo(post.ts)}</span>
-                      </div>
-                      {/* Two lines, not one: unlike a phone notification the
-                          title here IS the content, and a narrow screen minus
-                          the thumbnail clipped most of it. */}
-                      <h3 className="mt-0.5 line-clamp-2 text-[13.5px] font-semibold leading-snug tracking-[-0.01em]">
-                        {post.title}
-                      </h3>
-                      {post.summary ? (
-                        // Plain text, two lines. Rendering markdown for a body
-                        // that is clamped to two lines cost a whole markdown
-                        // tree per row for text nobody can see.
-                        <p className="mt-0.5 line-clamp-2 text-[12.5px] leading-relaxed text-muted-foreground">
-                          {stripMd(post.summary)}
-                        </p>
-                      ) : null}
-                    </div>
-                  </button>
-                  {hasThumb ? (
-                    <div className="absolute right-3.5 top-2.5">
-                      <ShipMediaThumb
-                        items={post.mediaItems}
-                        total={post.mediaTotal ?? post.mediaItems.length}
-                        onExpand={openArtifact}
-                      />
-                    </div>
-                  ) : null}
-                </article>
-              );
-            })}
-          </div>
-        </section>
-      ))}
-      {posts !== null && posts.length < postsTotal ? (
-        <button
-          type="button"
-          onClick={() => void loadMorePosts()}
-          disabled={postsBusy}
-          className="w-full rounded-xl border border-border bg-card/40 px-4 py-2.5 text-sm font-medium text-muted-foreground transition-colors hover:border-foreground/20 hover:text-foreground disabled:opacity-60"
-        >
-          {postsBusy ? "Loading…" : `Load more · ${postsTotal - posts.length} left`}
-        </button>
-      ) : null}
-        </>
-      )}
-    </div>
-  );
-}
-
 function LfgUpdateSection() {
   const [info, setInfo] = useState<InstallUpdateInfo | null>(null);
   const [checking, setChecking] = useState(true);

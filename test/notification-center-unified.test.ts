@@ -6,7 +6,12 @@
 import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 
-const app = () => readFile("web/src/App.tsx", "utf8");
+// The shipped feed and the notification surface moved into their own lazily
+// loaded chunk (web/src/views/shipped-page.tsx); these assertions follow the
+// code rather than the file it used to live in.
+const app = async () =>
+  (await readFile("web/src/App.tsx", "utf8")) +
+  (await readFile("web/src/views/shipped-page.tsx", "utf8"));
 const askCenter = () => readFile("web/src/components/ask-center.tsx", "utf8");
 
 describe("questions live inside the Notification Center", () => {

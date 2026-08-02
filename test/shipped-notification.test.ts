@@ -29,7 +29,11 @@ describe("shipped notifications", () => {
     const push = await readFile("web/src/lib/push.ts", "utf8");
     const main = await readFile("web/src/main.tsx", "utf8");
     const worker = await readFile("web/public/sw.js", "utf8");
-    const app = await readFile("web/src/App.tsx", "utf8");
+    // The shipped feed lives in its own lazily loaded chunk now; these
+    // assertions are about the notification surface, wherever it renders from.
+    const app =
+      (await readFile("web/src/App.tsx", "utf8")) +
+      (await readFile("web/src/views/shipped-page.tsx", "utf8"));
     expect(push).toContain("export async function acknowledgePushNotifications()");
     expect(push).toContain("notification.close()");
     expect(push).toContain("clearAppBadge");
