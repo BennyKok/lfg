@@ -4,6 +4,22 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - Host-mounted settings behave like pages (v0.1.189)
+
+- A product embedding LFG's settings pages no longer has them replaced by the
+  "Connect a coding agent" prompt. That gate exists for a framed full app,
+  which cannot run a session without an agent; a host that mounted a single
+  settings page was shown onboarding where its settings should have been, with
+  no way to reach the page at all.
+- Embedded settings pages can now be routed by the host. `LfgSettingsSurface`
+  reports its own navigation through `onNavigate` and accepts `page` as a
+  controlled prop, so Coding agents, Schedules, Storage and More become real
+  destinations in the host's URL — linkable, and with a back button that goes
+  up one page instead of leaving the surface.
+- A host-mounted page now shows its own shape while the machine is still
+  answering, instead of painting an empty ping, "0 working" and "—" storage as
+  if they were facts about the box.
+
 ## August 2, 2026 - SDK sessions survive restarts (v0.1.188)
 
 - AI-SDK, Codex SDK, OpenCode, and Pi sessions now run as direct managed
