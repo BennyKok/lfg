@@ -959,8 +959,11 @@ function configuredLaunchOptions(
       ? [
           {
             ...option,
+            // No selectorId: Auto is the account-less selection, so its id is
+            // the bare agent key — which is what selectedLaunchId resolves to
+            // when no Claude account is pinned. A synthetic "aisdk:auto" id
+            // never matched, leaving Auto visually unselected.
             label: "Claude · Auto",
-            selectorId: "aisdk:auto",
           },
           ...(accounts.length > 1
             ? accounts.map((account) => ({

@@ -198,6 +198,11 @@ function formatResetShort(ms: number | null, now: number): string {
   return c === "now" ? "resets now" : `in ${c}`;
 }
 
+/** A source has something to draw only once it reports at least one window. */
+function plottableUsage(p: ProviderUsage | null): boolean {
+  return Boolean(p?.available && (p.windows?.length ?? 0) > 0);
+}
+
 /** Window to feature on the arc card: highest utilization, then soonest reset. */
 function headlineWindow(p: ProviderUsage): UsageWindow | null {
   const windows = p.windows ?? [];
@@ -566,11 +571,17 @@ function CampfireOverlay({
   // unconfigured provider has nothing to show, and a row of greyed-out
   // placeholders was the noisiest thing on the arc — it read as "broken"
   // rather than "not set up".
+  //
+  // A connected account is the exception. It IS set up, so silently dropping it
+  // when its usage read fails (expired token, network blip) makes the account
+  // look like it doesn't exist — you count the nodes, come up short, and have no
+  // way to tell whether it's missing or just unreadable. Those keep their slot
+  // and say what went wrong.
   const ordered = useMemo<ArcEntry[]>(() => {
     if (!refs) return [];
     const byId = new Map(providers.map((p) => [p.id, p]));
-    const plottable = (p: ProviderUsage | null) =>
-      Boolean(p?.available && (p.windows?.length ?? 0) > 0);
+    const keep = (entry: ArcEntry) =>
+      plottableUsage(entry.usage) || entry.accountId != null;
     const entries = refs
       .map((ref) => ({ ...ref, usage: byId.get(ref.id) ?? null }))
       // Claude accounts sort together and in number order; everything else by name.
@@ -581,8 +592,8 @@ function CampfireOverlay({
           a.label.localeCompare(b.label),
       );
     return feedLoading
-      ? entries.filter((entry) => !entry.usage || plottable(entry.usage))
-      : entries.filter((entry) => plottable(entry.usage));
+      ? entries.filter((entry) => !entry.usage || keep(entry as ArcEntry))
+      : entries.filter(keep);
   }, [refs, providers, feedLoading]);
 
   const [mobile, setMobile] = useState(
@@ -840,6 +851,10 @@ function CampfireOverlay({
           // This source hasn't answered yet — the slot is already in its final
           // place, so it spins in place rather than pushing anything around.
           const resolving = p == null;
+          // Answered, but with nothing to plot — only accounts get to stay in
+          // this state (see `keep` above), so it always means "couldn't read
+          // this account's usage", not "not configured".
+          const unreadable = !resolving && !plottableUsage(p);
           return (
             <button
               key={entry.id}
@@ -903,7 +918,7 @@ function CampfireOverlay({
                   transform:
                     "translate(-50%, -50%) scale(var(--lfg-arc-scale))",
                   // Emphasis: the hovered agent stays lit, the rest recede.
-                  opacity: dimmed ? 0.42 : 1,
+                  opacity: dimmed ? 0.42 : unreadable ? 0.62 : 1,
                   animationDelay: `${i * 40}ms`,
                 } as CSSProperties
               }
@@ -966,13 +981,22 @@ function CampfireOverlay({
                   {maxPct == null ? "—" : `${Math.round(maxPct)}%`}
                 </span>
               </div>
-              {/* The window name is the non-colour half of the status cue. */}
+              {/* The window name is the non-colour half of the status cue —
+                  or, for an account we couldn't read, the reason why. */}
               {headline ? (
                 <div
                   className="w-full truncate text-center text-[9px] leading-tight sm:text-[10px]"
                   style={{ color: TONE.muted }}
                 >
                   {headline.label}
+                </div>
+              ) : unreadable ? (
+                <div
+                  className="w-full truncate text-center text-[9px] leading-tight sm:text-[10px]"
+                  style={{ color: TONE.muted }}
+                  title={p?.note ?? undefined}
+                >
+                  {p?.note ?? "usage unavailable"}
                 </div>
               ) : null}
             </button>

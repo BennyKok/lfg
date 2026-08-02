@@ -96,6 +96,11 @@ async function claudeUsage(ref: UsageProviderRef): Promise<ProviderUsage> {
     const r = await fetch("https://api.anthropic.com/api/oauth/usage", {
       headers: { Authorization: `Bearer ${token}`, "anthropic-beta": "oauth-2025-04-20" },
     });
+    // 401/403 is the common one and it has an actionable meaning: the stored
+    // OAuth token is stale, so this account needs signing in again. Say that
+    // instead of an HTTP status nobody can act on.
+    if (r.status === 401 || r.status === 403)
+      return { ...base, available: false, note: "Sign-in expired — reconnect" };
     if (!r.ok) return { ...base, available: false, note: `Usage endpoint returned ${r.status}` };
     const u = (await r.json()) as {
       five_hour?: { utilization?: number; resets_at?: string | null };
