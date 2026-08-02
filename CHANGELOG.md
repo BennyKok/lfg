@@ -4,6 +4,21 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - Faster session create and fork (v0.1.202)
+
+- Starting a session no longer waits on a fetch from GitHub. Provisioning its
+  worktree refreshed `origin/main` every single time — a network round trip on
+  the critical path that also froze the server for its duration, so every other
+  session's live updates stalled with it. It now refreshes at most once a minute
+  per repository, and gives up rather than hanging if the remote is slow.
+- Forking a session no longer rebuilds the whole session list just to look up
+  the session you are forking from.
+- Together: creating a session is about 37% faster and forking about 48% faster
+  on the server side, and neither one stalls the sessions you already have open.
+- Settings > Computer no longer renders with a missing header and collapsed
+  gutter after you visit Settings. Two surfaces can now be open at once without
+  one describing the other.
+
 ## August 2, 2026 - Phone call and voice orb removed (v0.1.201)
 
 - The LiveKit phone-call screen and the voice orb are gone. The call UI had
