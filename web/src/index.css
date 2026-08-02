@@ -1904,3 +1904,25 @@ html.lfg-keyboard-open {
     transition: none !important;
   }
 }
+
+/* A host-mounted settings page has no column of its own.
+ *
+ * Standalone, each page centres itself in a max-w-xl column with its own
+ * gutter — that IS the page. Mounted inside another product, the host has
+ * already centred and padded its settings column, so ours became a second one
+ * inside it: every card sat inset from the host's own cards by our gutter, and
+ * the mount read as a nested panel dropped into the page rather than part of
+ * it. The host owns the column; we fill it.
+ *
+ * Scoped to the settings surface, so the full embedded app (which brings its
+ * own shell and does want its column) is untouched.
+ */
+[data-lfg-settings-surface] [data-lfg-page-column] {
+  max-width: none;
+  margin-inline: 0;
+}
+/* Section labels come with it: at px-4 they sit 16px inside the card edge,
+ * which reads as a third indent level next to a host label sitting at 4px. */
+[data-lfg-settings-surface] [data-lfg-page-column] > section > h2 {
+  padding-inline: 0.25rem;
+}

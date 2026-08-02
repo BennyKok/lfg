@@ -352,3 +352,24 @@ describe("host-mounted settings navigation", () => {
     expect(embedded).toContain("SETTINGS_PAGES.includes(page) ? page : null");
   });
 });
+
+describe("host-mounted page layout", () => {
+  const app = require("node:fs").readFileSync("web/src/App.tsx", "utf8") as string;
+  const css = require("node:fs").readFileSync("web/src/index.css", "utf8") as string;
+
+  test("a mounted page fills the host's column instead of nesting its own", () => {
+    // Standalone, each page centres itself in a max-w-xl column — that IS the
+    // page. Inside a host that has already centred and padded its settings
+    // column, ours became a second column inside it: every card sat inset from
+    // the host's own cards, and the mount read as a panel dropped into the page
+    // rather than part of it.
+    expect(app).toContain('className="mx-auto max-w-xl space-y-8 pb-10" data-lfg-page-column');
+    expect(css).toContain("[data-lfg-settings-surface] [data-lfg-page-column]");
+    expect(css).toMatch(
+      /\[data-lfg-settings-surface\] \[data-lfg-page-column\]\s*\{[^}]*max-width:\s*none/,
+    );
+    // Scoped to the settings surface: the full embedded app brings its own
+    // shell and does want its column.
+    expect(css).not.toMatch(/^\s*\[data-lfg-page-column\]\s*\{/m);
+  });
+});

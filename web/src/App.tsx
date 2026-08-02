@@ -3662,7 +3662,7 @@ function AppStartupStatus() {
  */
 function BareSurfaceSkeleton() {
   return (
-    <div className="mx-auto max-w-xl space-y-8 pb-10" aria-hidden>
+    <div className="mx-auto max-w-xl space-y-8 pb-10" data-lfg-page-column aria-hidden>
       {[3, 2].map((rows, section) => (
         <section key={section} className="space-y-2">
           <div className="mx-4 h-3 w-24 animate-pulse rounded bg-muted" />
@@ -19563,7 +19563,7 @@ function StoragePage() {
       : null;
 
   return (
-    <div className="mx-auto max-w-xl space-y-8 pb-10">
+    <div className="mx-auto max-w-xl space-y-8 pb-10" data-lfg-page-column>
       <div className="px-1">
         <h1 className="text-lg font-semibold leading-tight">Storage &amp; performance</h1>
         <p className="text-sm text-muted-foreground">This computer</p>
@@ -20108,7 +20108,7 @@ function CodingAgentsPage({
   }
 
   return (
-    <div className="mx-auto max-w-xl space-y-3 pb-10">
+    <div className="mx-auto max-w-xl space-y-3 pb-10" data-lfg-page-column>
       <div className="flex items-center justify-between px-4">
         <h2 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Coding agents
@@ -20486,7 +20486,7 @@ function UsageLimitsSection() {
 // per-provider limit bars get the full width instead of crowding the settings list.
 function UsagePage() {
   return (
-    <div className="mx-auto max-w-xl space-y-8 pb-10">
+    <div className="mx-auto max-w-xl space-y-8 pb-10" data-lfg-page-column>
       <UsageLimitsSection />
     </div>
   );
@@ -20998,7 +20998,7 @@ function ShippedPage({
   };
 
   return (
-    <div className="mx-auto max-w-xl space-y-4 pb-10">
+    <div className="mx-auto max-w-xl space-y-4 pb-10" data-lfg-page-column>
       <div className="flex items-center justify-between px-1">
         <div>
           <h1 className="text-lg font-semibold tracking-[-0.01em]">
@@ -21453,7 +21453,7 @@ function SettingsView({
   const bare = isBareSurface();
 
   return (
-    <div className="mx-auto max-w-xl space-y-8 pb-10">
+    <div className="mx-auto max-w-xl space-y-8 pb-10" data-lfg-page-column>
       {bare ? null : (
       <div className="flex items-center gap-3.5 px-1">
         <div className="flex size-12 shrink-0 items-center justify-center rounded-full bg-secondary text-lg font-semibold text-muted-foreground">
@@ -21639,7 +21639,7 @@ function MoreView({
   const uiFeedback = useUiFeedbackPrefs();
 
   return (
-    <div className="mx-auto max-w-xl space-y-8 pb-10">
+    <div className="mx-auto max-w-xl space-y-8 pb-10" data-lfg-page-column>
       <div className="px-1">
         <h1 className="text-lg font-semibold leading-tight">More</h1>
       </div>
@@ -21860,7 +21860,7 @@ function AutoManageView({
 }) {
   const openByAgent = (id: string) => findings.filter((f) => f.agentId === id).length;
   return (
-    <div className="mx-auto flex max-w-3xl flex-col gap-2">
+    <div className="mx-auto flex max-w-3xl flex-col gap-2" data-lfg-page-column>
       <div className="px-1 pb-2">
         <h1 className="text-lg font-semibold leading-tight">Schedules</h1>
         <p className="text-sm text-muted-foreground">
