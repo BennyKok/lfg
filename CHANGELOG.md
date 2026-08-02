@@ -4,6 +4,17 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - SDK sessions survive restarts (v0.1.188)
+
+- AI-SDK, Codex SDK, OpenCode, and Pi sessions now run as direct managed
+  processes instead of using tmux as an otherwise-unused lifecycle wrapper.
+  LFG journals their boot ownership, adopts them across service restarts, and
+  safely reopens interrupted conversations after a host reboot without
+  replaying an unfinished prompt.
+- Resuming a conversation now keeps its provider/model identity together,
+  repairs stale cross-provider cache rows, and ignores dead managed entries so
+  a stopped harness cannot masquerade as an already-live session.
+
 ## August 2, 2026 - Claude capacity routes itself (v0.1.187)
 
 - New and forked Claude sessions now default to `Claude · Auto`, choosing the
