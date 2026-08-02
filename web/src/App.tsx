@@ -1638,7 +1638,13 @@ function AgentIconStrip<K extends AgentKind>({
               "relative flex h-7 w-9 items-center justify-center rounded-full transition",
               selected
                 ? flat
-                  ? "bg-muted text-foreground"
+                  ? // The flat strip has no track of its own, so the selected
+                    // chip sits straight on the composer surface. `bg-muted`
+                    // was #2c2c2e on a #1c1c1e sheet in dark mode — 16 levels
+                    // apart, invisible on a phone. Tint from the foreground
+                    // instead, so the fill inverts with the theme and stays
+                    // legible on either surface, and outline it.
+                    "bg-foreground/12 text-foreground ring-1 ring-foreground/20"
                   : "bg-background text-foreground shadow-sm"
                 : "text-muted-foreground",
             )}
