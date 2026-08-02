@@ -1,7 +1,7 @@
 import { mkdir, open, readdir, realpath, stat } from "node:fs/promises";
 import { appendFileSync, existsSync, statfsSync, statSync, mkdirSync, readFileSync, type Dirent } from "node:fs";
 import { tmpdir, homedir, loadavg, cpus, totalmem, freemem } from "node:os";
-import { dirname, extname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { marked } from "marked";
 import { PATHS, appVersion, installInfo } from "../config.ts";
@@ -276,6 +276,7 @@ import {
   type OriginDeliveryMedia,
 } from "../origin-deliveries.ts";
 import { deleteImagePreview, getOrCreateImagePreview } from "../artifact-previews.ts";
+import { resolveUploadRequest, uploadsDir } from "../uploads.ts";
 import { addShipPost, listShipPosts } from "../shipped.ts";
 import { shippedCloseDecision } from "../shipped-lifecycle.ts";
 import { verifySelfRepoLanding } from "../session-landing.ts";
@@ -362,7 +363,7 @@ async function persistUpload(req: Request, filename: string, prefix = "upload"):
   const ext = uploadExt(ct, filename);
   const buf = new Uint8Array(await req.arrayBuffer());
   if (!buf.length) throw new Error("empty upload");
-  const dir = join(tmpdir(), "lfg-uploads");
+  const dir = uploadsDir();
   mkdirSync(dir, { recursive: true });
   const safePrefix = prefix.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "upload";
   const name = `${safePrefix}-${Date.now()}-${randomBytes(3).toString("hex")}-${uploadStem(filename)}.${ext}`;
@@ -389,7 +390,7 @@ async function persistUploadChunk(
   if (!buf.length) throw new Error("empty upload chunk");
   if (offset + buf.length > total) throw new Error("upload chunk exceeds file size");
 
-  const dir = join(tmpdir(), "lfg-uploads");
+  const dir = uploadsDir();
   mkdirSync(dir, { recursive: true });
   const safePrefix = prefix.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "upload";
   const name = `${safePrefix}-${uploadId}-${uploadStem(filename)}.${ext}`;
@@ -5418,6 +5419,50 @@ export async function cmdServe() {
           } catch (e) {
             return err(400, e instanceof Error ? e.message : "could not add shipped post");
           }
+        }
+      }
+
+      {
+        // Serve an attached image back to the transcript. The path the composer
+        // splices into the message text is a server-local tmpdir path, so the
+        // bubble can't render it directly — it asks for the basename here and
+        // the bytes are resolved inside the uploads dir.
+        const m = path.match(/^\/api\/uploads\/([^/]+)$/);
+        if (m && req.method === "GET") {
+          const resolved = resolveUploadRequest(m[1]!);
+          if ("error" in resolved) return err(resolved.status, resolved.error);
+          let filePath = resolved.filePath;
+          let contentType = resolved.contentType;
+          if (!(await Bun.file(filePath).exists())) {
+            // Uploads live in tmpdir, which a reboot clears. Old transcripts
+            // keep their text and the bubble degrades to a named file chip.
+            return err(404, "upload not found");
+          }
+          const previewParam = url.searchParams.get("preview");
+          if (previewParam === "1" || previewParam === "thumb") {
+            try {
+              filePath = await getOrCreateImagePreview(
+                { id: `upload-${basename(filePath)}`, filePath },
+                previewParam === "thumb" ? "thumb" : "preview",
+              );
+              contentType = "image/webp";
+            } catch (error) {
+              // Same rule as artifacts: a preview failure must not leave a
+              // broken image in the transcript — serve the original instead.
+              console.warn("upload preview generation failed", filePath, error);
+              filePath = resolved.filePath;
+              contentType = resolved.contentType;
+            }
+          }
+          return new Response(Bun.file(filePath), {
+            headers: {
+              "Content-Type": contentType,
+              // Upload names are unique per file, so bytes never change.
+              "Cache-Control": "private, max-age=31536000, immutable",
+              "X-Content-Type-Options": "nosniff",
+              "Content-Security-Policy": "default-src 'none'; sandbox",
+            },
+          });
         }
       }
 

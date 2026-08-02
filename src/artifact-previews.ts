@@ -3,7 +3,13 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { loadSharp } from "./native-deps.ts";
 import { PATHS } from "./config.ts";
-import type { ImageArtifact } from "./artifacts.ts";
+
+/**
+ * Anything with stable identity and bytes on disk: an image artifact, or a
+ * user's uploaded attachment (which lives in the uploads tmpdir, not the
+ * artifact store, but wants the same bounded transcript-sized WebP).
+ */
+export type ImagePreviewSource = { id: string; filePath: string };
 
 const PREVIEWS_DIR = join(PATHS.data, "artifacts", "previews");
 const PREVIEW_VERSION = "v2";
@@ -46,7 +52,7 @@ export function imagePreviewPath(
 }
 
 async function createImagePreview(
-  artifact: ImageArtifact,
+  artifact: ImagePreviewSource,
   outputPath: string,
   variant: ImagePreviewVariant,
 ): Promise<string> {
@@ -77,7 +83,7 @@ async function createImagePreview(
 }
 
 export async function getOrCreateImagePreview(
-  artifact: ImageArtifact,
+  artifact: ImagePreviewSource,
   variant: ImagePreviewVariant = "preview",
 ): Promise<string> {
   const outputPath = imagePreviewPath(artifact.id, variant);

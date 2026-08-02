@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { artifactRequestPath } from "../lib/artifact-document";
 import { lfgFetch } from "../lib/lfg-client";
@@ -106,19 +106,23 @@ function AuthenticatedZoomableImage({
   alt,
   width,
   height,
+  fallback,
   className,
 }: {
   path: string;
   alt: string;
   width?: number;
   height?: number;
+  fallback?: ReactNode;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
   const preview = useArtifactBlobUrl(artifactRequestPath(path, { preview: 1 }));
   const full = useArtifactBlobUrl(open ? path : null);
 
-  if (preview.status === "error") return <ArtifactLoadError className={className} />;
+  if (preview.status === "error") {
+    return <>{fallback ?? <ArtifactLoadError className={className} />}</>;
+  }
   if (preview.status === "loading") {
     return <ArtifactLoading className={className} width={width} height={height} />;
   }
@@ -154,6 +158,7 @@ export function AuthenticatedArtifactImage({
   height,
   zoomable = false,
   thumb = false,
+  fallback,
   className,
 }: {
   path: string;
@@ -161,6 +166,9 @@ export function AuthenticatedArtifactImage({
   width?: number;
   height?: number;
   zoomable?: boolean;
+  /** Shown instead of the generic error box when the bytes can't be fetched —
+   *  user uploads live in tmpdir, so an old transcript's images may be gone. */
+  fallback?: ReactNode;
   /** Fetch the server's 160px webp instead of the original. For small fixed
    *  squares (the Notification Center's media thumbnails) where downloading a
    *  multi-megabyte original to paint 52px is pure waste. */
@@ -174,12 +182,19 @@ export function AuthenticatedArtifactImage({
         alt={alt}
         width={width}
         height={height}
+        fallback={fallback}
         className={className}
       />
     );
   }
   return (
-    <AuthenticatedPlainImage path={path} alt={alt} thumb={thumb} className={className} />
+    <AuthenticatedPlainImage
+      path={path}
+      alt={alt}
+      thumb={thumb}
+      fallback={fallback}
+      className={className}
+    />
   );
 }
 
@@ -187,18 +202,20 @@ function AuthenticatedPlainImage({
   path,
   alt,
   thumb = false,
+  fallback,
   className,
 }: {
   path: string;
   alt: string;
   thumb?: boolean;
+  fallback?: ReactNode;
   className?: string;
 }) {
   const source = useArtifactBlobUrl(
     thumb ? artifactRequestPath(path, { preview: "thumb" }) : path,
   );
   if (source.status === "error") {
-    return <ArtifactLoadError className={className} />;
+    return <>{fallback ?? <ArtifactLoadError className={className} />}</>;
   }
   if (source.status === "loading") {
     return <ArtifactLoading className={className} />;

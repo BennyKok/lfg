@@ -198,6 +198,10 @@ import { reportError } from "./lib/report-error";
 import { lazyWithReload } from "./lib/lazy-with-reload";
 import { buildChatRenderItems, toolGroupLabel } from "./lib/chat-render-items";
 import {
+  parseMessageAttachments,
+  type MessageAttachment,
+} from "./lib/message-attachments";
+import {
   messagesForTranscriptView,
   type TranscriptView,
 } from "./lib/transcript-view";
@@ -14741,11 +14745,74 @@ function TypingIndicator({ visible = true }: { visible?: boolean }) {
   );
 }
 
+/**
+ * What a user turn should actually show: the typed text, plus the attachments
+ * lifted out of the trailing "Attached file(s):" block.
+ *
+ * The message keeps its raw form everywhere it matters (copy, search, what the
+ * agent received) — this only changes what gets painted.
+ */
+function renderableUserContent(
+  text: string,
+  html?: string,
+): { html: string; attachments: MessageAttachment[] } {
+  const parsed = parseMessageAttachments(text);
+  if (!parsed.attachments.length) return { html: html || escapeHtml(text), attachments: [] };
+  // Re-derive the HTML from the trimmed body: any pre-rendered `html` still
+  // has the upload paths baked into it.
+  return {
+    html: escapeHtml(parsed.body).replace(/\n/g, "<br>"),
+    attachments: parsed.attachments,
+  };
+}
+
+// A named chip: the representation for an attachment with nothing to show
+// inline — a PDF, or an image whose bytes are gone (uploads live in tmpdir,
+// which a reboot clears). Still better than the raw path it replaces.
+function UserAttachmentChip({ name }: { name: string }) {
+  return (
+    <span className="user-bubble-file" title={name}>
+      <Paperclip className="size-3.5 shrink-0" />
+      <span className="min-w-0 truncate">{name}</span>
+    </span>
+  );
+}
+
+// The files a user attached, rendered above their text in the same bubble.
+function UserAttachments({ attachments }: { attachments: MessageAttachment[] }) {
+  return (
+    <div className="user-bubble-media relative z-[1]">
+      {attachments.map((att) =>
+        att.url ? (
+          <AuthenticatedArtifactImage
+            key={att.path}
+            path={att.url}
+            alt={att.name}
+            zoomable
+            fallback={<UserAttachmentChip name={att.name} />}
+            className="user-bubble-media-item"
+          />
+        ) : (
+          <UserAttachmentChip key={att.path} name={att.name} />
+        ),
+      )}
+    </div>
+  );
+}
+
 // A user turn's text bubble. When the content runs longer than the collapsed
 // clamp (~10 lines) it's truncated with a small "Show more" / "Show less"
 // toggle at the end. Content is injected HTML (pre-escaped user text), so the
 // clamp lives on an inner wrapper and the toggle sits beside it in the bubble.
-function UserBubble({ html, pending }: { html: string; pending?: boolean }) {
+function UserBubble({
+  html,
+  attachments = [],
+  pending,
+}: {
+  html: string;
+  attachments?: MessageAttachment[];
+  pending?: boolean;
+}) {
   const [expanded, setExpanded] = useState(false);
   const [overflowing, setOverflowing] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
@@ -14778,17 +14845,23 @@ function UserBubble({ html, pending }: { html: string; pending?: boolean }) {
         // hugs content up to that cap so multi-line turns stay right-aligned.
         "msg-text markdown user-bubble text-base w-fit max-w-full",
         pending && "is-pending",
+        // Media with no caption gets a tighter bubble so the images read as the
+        // message rather than as decoration inside a mostly-empty one.
+        attachments.length > 0 && !html && "is-media-only",
       )}
     >
       <OrganicActivityEffect active={!!pending} className="user-bubble-organic" />
-      <div
-        ref={bodyRef}
-        className={cn(
-          "user-bubble-body relative z-[1]",
-          !expanded && "user-bubble-clamp",
-        )}
-        dangerouslySetInnerHTML={{ __html: html }}
-      />
+      {attachments.length > 0 && <UserAttachments attachments={attachments} />}
+      {html ? (
+        <div
+          ref={bodyRef}
+          className={cn(
+            "user-bubble-body relative z-[1]",
+            !expanded && "user-bubble-clamp",
+          )}
+          dangerouslySetInnerHTML={{ __html: html }}
+        />
+      ) : null}
       {overflowing && (
         <button
           type="button"
@@ -15037,6 +15110,15 @@ function MessageBubble({
   const sendMorphRef = useSendMorph<HTMLDivElement>(
     message.role === "user" && !!message.pending,
   );
+  // Attachments ride along in the user's text as absolute upload paths (the
+  // agent needs them); split them back out so the bubble shows the images.
+  const userContent = useMemo(
+    () =>
+      message.role === "user"
+        ? renderableUserContent(message.text || "", message.html)
+        : { html: "", attachments: [] as MessageAttachment[] },
+    [message.role, message.text, message.html],
+  );
   if (message.kind === "thinking") {
     return (
       <AiMessage className="msg" from="assistant">
@@ -15180,7 +15262,8 @@ function MessageBubble({
           // "Show more" toggle. Pending state is handled in the border so the
           // text stays steady while the send is in flight.
           <UserBubble
-            html={message.html || escapeHtml(message.text || "")}
+            html={userContent.html}
+            attachments={userContent.attachments}
             pending={message.pending}
           />
         ) : (

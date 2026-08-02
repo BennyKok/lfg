@@ -1008,6 +1008,47 @@ html.lfg-keyboard-open {
     color: var(--foreground);
   }
 
+  /* Images the user attached, shown above their text in the same bubble.
+     Right-aligned so a single image hugs the bubble's sent edge. */
+  .user-bubble-media {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 4px;
+    margin-bottom: 6px;
+  }
+
+  .user-bubble.is-media-only {
+    --user-bubble-padding: 4px;
+  }
+
+  .user-bubble.is-media-only .user-bubble-media {
+    margin-bottom: 0;
+  }
+
+  .user-bubble-media-item {
+    display: block;
+    max-height: 15rem;
+    /* Two per row at the bubble's max width; a lone image just uses its own. */
+    max-width: min(100%, 15rem);
+    width: auto;
+    border-radius: 14px;
+    object-fit: cover;
+    background: rgba(120, 120, 128, 0.16);
+  }
+
+  /* Attachments with no inline rendering (pdf, txt) keep their name visible. */
+  .user-bubble-file {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    padding: 4px 10px;
+    border-radius: 12px;
+    background: rgba(120, 120, 128, 0.16);
+    font-size: 13px;
+  }
+
   /* Long user turns collapse to ~10 lines until "Show more" is clicked. */
   .user-bubble-clamp {
     display: -webkit-box;
