@@ -152,6 +152,8 @@ import {
   isBusy,
 } from "../tmux.ts";
 import { addManaged, listManaged, patchManaged, removeManaged, type ManagedSession } from "../managed.ts";
+import { reconcileCommandFileSessions } from "../session-recovery.ts";
+import { resolveResumeModel } from "../resume-model.ts";
 import { PtyBridge, termSessionName } from "../pty.ts";
 import { capturePaneScroll, capturePaneEscaped, paneWidth } from "../tmux.ts";
 import { detectUrls } from "../links.ts";
@@ -163,7 +165,7 @@ import {
   liveWsUpgradeAuthenticated,
   type LiveWsSocketData,
 } from "../live-ws.ts";
-import { appendCmd as appendAisdkCmd, removeEntry as removeAisdkEntry, readEntry as readAisdkEntry, findEntryByAnyId as findAisdkEntryByAnyId, isEntryBusy as isAisdkEntryBusy } from "../aisdk-registry.ts";
+import { appendCmd as appendAisdkCmd, removeEntry as removeAisdkEntry, readEntry as readAisdkEntry, findEntryByAnyId as findAisdkEntryByAnyId, isEntryBusy as isAisdkEntryBusy, isPidAlive as isAisdkPidAlive, patchEntry as patchAisdkEntry, terminateHarnessProcess } from "../aisdk-registry.ts";
 import { markClosed } from "../closing.ts";
 import { assignUser, resolveSessionUserTag, rosterEmails, userRoster } from "../users.ts";
 import {
@@ -1128,9 +1130,16 @@ async function closeLiveSession(
     // session drops out of the list immediately. For codex-aisdk the
     // live-view id is the threadId — map it back to the key the command
     // file and registry entry are named by.
-    const key = findAisdkEntryByAnyId(id)?.sessionId ?? id;
+    const entry = findAisdkEntryByAnyId(id);
+    const key = entry?.sessionId ?? id;
     appendAisdkCmd(key, { type: "close" });
-    if (sess.tmuxName) tmuxKillSession(sess.tmuxName);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    if (entry && isAisdkPidAlive(entry.harnessPid)) {
+      if (entry.supervisor === "process") terminateHarnessProcess(entry);
+      else if (sess.tmuxName) tmuxKillSession(sess.tmuxName);
+    } else if (!entry?.supervisor && sess.tmuxName) {
+      tmuxKillSession(sess.tmuxName);
+    }
     markClosed(sess.pid);
     removeAisdkEntry(key);
     if (sess.tmuxName) {
@@ -1428,6 +1437,8 @@ function sendPromptToLiveSession(
   }
   if (isCommandFileAgent(session.agent)) {
     const key = findAisdkEntryByAnyId(sid)?.sessionId ?? sid;
+    patchAisdkEntry(key, { recoveredAt: null });
+    if (session.tmuxName) patchManaged(session.tmuxName, { interruptedAt: undefined });
     appendAisdkCmd(key, { type: "send", text: prompt });
     traceLog("session_send_aisdk_cmd", { sessionId: sid, key, chars: prompt.length });
     return {
@@ -1890,9 +1901,16 @@ async function retireVoiceAdvisor(): Promise<void> {
   try {
     const sess = (await listSessions()).find((s) => s.sessionId === id);
     if (!sess) return; // already gone (serve restart, closed) — nothing to tear down
-    const key = findAisdkEntryByAnyId(id)?.sessionId ?? id;
+    const entry = findAisdkEntryByAnyId(id);
+    const key = entry?.sessionId ?? id;
     appendAisdkCmd(key, { type: "close" });
-    if (sess.tmuxName) tmuxKillSession(sess.tmuxName);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    if (entry && isAisdkPidAlive(entry.harnessPid)) {
+      if (entry.supervisor === "process") terminateHarnessProcess(entry);
+      else if (sess.tmuxName) tmuxKillSession(sess.tmuxName);
+    } else if (!entry?.supervisor && sess.tmuxName) {
+      tmuxKillSession(sess.tmuxName);
+    }
     markClosed(sess.pid);
     removeAisdkEntry(key);
     if (sess.tmuxName) {
@@ -3881,10 +3899,9 @@ export async function cmdServe() {
         }
       }
 
-      // Start a new lfg-managed session: spin up a detached tmux session
-      // running `claude` that we own end-to-end. Because we pick the tmux name
-      // we know the exact pane, so we can resolve the authoritative sessionId
-      // (no pgrep/heuristic guessing) and tear it down cleanly later.
+      // Start a new lfg-managed session. Native interactive agents use a tmux
+      // pane; command-file SDK agents launch as direct processes. The durable
+      // managed name identifies either lifecycle boundary end-to-end.
       // Closed/rebooted-away sessions that can be brought back with `claude
       // --resume`. After the box reboots, the live list (pgrep-based) is empty
       // but every transcript survives on disk — this surfaces those so the UI
@@ -4010,15 +4027,10 @@ export async function cmdServe() {
           const tag = resolveSessionUserTag(body?.user || cachedResume.assignedUser);
           if (!tag.ok) return err(400, `unknown user "${tag.unknown}"`);
           const assignedUser = tag.user;
-          const resumeModel = model || cachedResume.model || (
-            cachedResume.backend === "codex-aisdk"
-              ? "gpt-5.5"
-              : cachedResume.backend === "opencode"
-                ? defaultModelForAgent("opencode")
-                : cachedResume.backend === "pi"
-                  ? PI_DEFAULT_MODEL
-                  : "opus"
-          );
+          // Durable session identity wins over the new-composer selection. An
+          // incompatible client model is ignored instead of crossing provider
+          // families (the gpt-5.6-sol -> Claude error from the resume picker).
+          const resumeModel = resolveResumeModel(cachedResume.backend, cachedResume.model, model);
           addManaged({
             tmuxName,
             cwd,
@@ -4245,11 +4257,7 @@ export async function cmdServe() {
         // transcript (no fork unless forkSession is set), so the whole legacy
         // dance below it replaced — dismissing the CLI's "Resume from summary"
         // selector, polling pidfiles for the forked id, codex fallback — is gone.
-        if (model) {
-          const allowed = modelsForAgent("aisdk");
-          if (!allowed.includes(model))
-            return err(400, `unknown model "${model}" (expected one of ${allowed.join(", ")})`);
-        }
+        const claudeResumeModel = resolveResumeModel("aisdk", cachedResume?.model, model);
         const cwd = await resolveResumeCwd(await cwdForTranscript(transcript), cachedResume?.project);
         const tmuxName = `lfg-${randomBytes(3).toString("hex")}`;
         const resumePrompt = body?.prompt?.trim() || undefined;
@@ -4265,7 +4273,7 @@ export async function cmdServe() {
           sessionId,
           nativeSessionId: sessionId,
           launchState: "launching",
-          model: model ?? "opus",
+          model: claudeResumeModel,
           claudeAccountId: pinnedClaudeAccountId,
           project: cachedResume?.project || undefined,
           repoRoot: repoRootForManagedCwd(cwd),
@@ -4275,7 +4283,7 @@ export async function cmdServe() {
         const r = spawnManagedAisdkSession({
           name: tmuxName,
           cwd,
-          model: model ?? "opus",
+          model: claudeResumeModel,
           sessionId,
           prompt: resumePrompt,
           lfgUser: body?.user,
@@ -5945,7 +5953,7 @@ export async function cmdServe() {
         });
         const closed: string[] = [];
         const failed: { sessionId: string; reason: string }[] = [];
-        // Sequential: each close kills tmux panes and rewrites registry files,
+        // Sequential: each close stops a process/tmux lifecycle and rewrites registry files,
         // and the list is small (tens at most).
         for (const sess of targets) {
           const sid = sess.sessionId as string;
@@ -6528,6 +6536,11 @@ export async function cmdServe() {
     },
   });
 
+  const recovered = await reconcileCommandFileSessions((l) => console.log(l));
+  if (recovered.adopted || recovered.recovered || recovered.failed || recovered.skippedLegacy) {
+    console.log(`[session-recovery] adopted=${recovered.adopted} recovered=${recovered.recovered} failed=${recovered.failed} skippedLegacy=${recovered.skippedLegacy}`);
+    invalidateListSessionsCache();
+  }
   startAutoScheduler((l) => console.log(l));
   const stopArtifactRefresh = startArtifactRefreshScheduler((l) => console.log(l));
   // Refresh scripts are detached process groups so timeouts can kill their

@@ -96,7 +96,11 @@ type AgentContainment = {
  * the service's session bus also prevents Chromium from moving itself into an
  * unrestricted app-org.chromium scope outside the slice.
  */
-export function containedAgentCommand(command: string[], opts: AgentContainment): string[] {
+export function containedAgentCommand(
+  command: string[],
+  opts: AgentContainment,
+  launch: { pty?: boolean } = {},
+): string[] {
   if (process.platform !== "linux") return command;
   const systemdRun = Bun.which("systemd-run") ?? "/usr/bin/systemd-run";
   const uid = typeof process.getuid === "function" ? process.getuid() : 1000;
@@ -104,7 +108,7 @@ export function containedAgentCommand(command: string[], opts: AgentContainment)
     systemdRun,
     "--user",
     "--quiet",
-    "--pty",
+    ...(launch.pty === false ? [] : ["--pty"]),
     "--wait",
     "--collect",
     `--unit=lfg-agent-${opts.name}`,
@@ -134,6 +138,55 @@ function containTmuxCommand(
   const commandIndex = argv.indexOf(executable);
   if (commandIndex < 0) throw new Error(`agent executable not found in tmux argv: ${executable}`);
   argv.splice(commandIndex, argv.length - commandIndex, ...containedAgentCommand(argv.slice(commandIndex), opts));
+}
+
+export type ManagedHarnessSpawnResult = { ok: boolean; error?: string; pid?: number };
+
+// Headless SDK harnesses have their own durable command-file control plane, so
+// tmux adds no transport value. Launch them as ordinary detached children. The
+// lfg systemd unit uses KillMode=process, which lets these children survive a
+// serve restart exactly as the old tmux wrapper did; a host reboot is handled
+// separately by the boot reconciliation journal in session-recovery.ts.
+function spawnManagedHarness(
+  command: string[],
+  opts: AgentContainment & { containInAgentSlice?: boolean },
+): ManagedHarnessSpawnResult {
+  const sessionId = opts.lfgSessionId?.trim() || undefined;
+  const env: Record<string, string> = { ...process.env } as Record<string, string>;
+  if (sessionId) env.LFG_SESSION_ID = sessionId;
+  env.LFG_CAPABILITY_VERSION = LFG_CAPABILITY_VERSION;
+  if (opts.lfgUser) env.LFG_USER = opts.lfgUser;
+  else delete env.LFG_USER;
+  const cmd = opts.containInAgentSlice
+    ? containedAgentCommand(command, opts, { pty: false })
+    : command;
+
+  // Process-isolated integration tests capture the launch contract without
+  // starting a real provider harness.
+  const capture = process.env.LFG_TEST_HARNESS_CAPTURE;
+  if (capture) {
+    writeFileSync(capture, JSON.stringify({ cmd, cwd: opts.cwd, env: {
+      LFG_SESSION_ID: env.LFG_SESSION_ID,
+      LFG_CAPABILITY_VERSION: env.LFG_CAPABILITY_VERSION,
+      LFG_USER: env.LFG_USER,
+    } }));
+    return { ok: true, pid: 424242 };
+  }
+
+  try {
+    const child = Bun.spawn({
+      cmd,
+      cwd: opts.cwd,
+      env,
+      stdin: "ignore",
+      stdout: "inherit",
+      stderr: "inherit",
+    });
+    child.unref();
+    return { ok: true, pid: child.pid };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 // Resolve the `claude` executable to an absolute path. We must NOT rely on a
@@ -838,11 +891,8 @@ export function spawnManagedHermesSession(opts: {
   return { ok: true };
 }
 
-// Spawn a headless "aisdk" session: the lfg `aisdk-session` harness, supervised
-// by a tmux session. The pane is only a lifecycle handle (survives serve restarts
-// + reuses tmuxKillSession teardown) — I/O happens via the registry/command files
-// and the transcript, not the pane. We run it with the same bun runtime that's
-// running serve, pointed at this repo's cli.ts.
+// Spawn a headless "aisdk" session directly. I/O and lifecycle are registry /
+// command-file driven; no tmux pane is involved.
 export function spawnManagedAisdkSession(opts: {
   name: string;
   cwd: string;
@@ -854,8 +904,8 @@ export function spawnManagedAisdkSession(opts: {
   lfgUser?: string | null;
   containInAgentSlice?: boolean;
   claudeAccountId?: string;
-}): { ok: boolean; error?: string } {
-  const dec = new TextDecoder();
+  recoveredAt?: number;
+}): ManagedHarnessSpawnResult {
   // The provider drives the bundled claude binary, which still honors the trust
   // dialog — pre-accept it so the first turn doesn't hang.
   ensureFolderTrusted(opts.cwd);
@@ -863,34 +913,32 @@ export function spawnManagedAisdkSession(opts: {
   // dependency on the rest of the command surface.
   const harnessPath = `${import.meta.dir}/agents/backends/aisdk-session.ts`;
   const argv = [
-    "tmux", "new-session", "-d", "-s", opts.name, "-c", opts.cwd,
     process.execPath, harnessPath,
     "--session", opts.sessionId,
     "--model", opts.model,
     "--cwd", opts.cwd,
-    "--tmux", opts.name,
+    "--managed-name", opts.name,
   ];
   // Forward the requested thinking level; the harness maps it onto the
   // claude-code provider's `effort` option (see aisdk-session.ts).
   if (opts.thinkingLevel) argv.push("--thinking-level", opts.thinkingLevel);
   const claudeAccountId = opts.claudeAccountId ?? resolveClaudeAccount()?.id;
   if (claudeAccountId) argv.push("--claude-account", claudeAccountId);
+  if (opts.recoveredAt) argv.push("--recovered-at", String(opts.recoveredAt));
   const prompt = withLfgRuntimeContract(opts.prompt);
   if (prompt?.trim()) argv.push("--", prompt);
-  addSessionEnv(argv, opts.lfgSessionId ?? opts.sessionId, opts.lfgUser);
-  containTmuxCommand(argv, process.execPath, opts.containInAgentSlice, {
-    ...opts,
+  return spawnManagedHarness(argv, {
+    name: opts.name,
+    cwd: opts.cwd,
     lfgSessionId: opts.lfgSessionId ?? opts.sessionId,
+    lfgUser: opts.lfgUser,
+    containInAgentSlice: opts.containInAgentSlice,
   });
-  const create = Bun.spawnSync(argv);
-  if (create.exitCode !== 0)
-    return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
-  return { ok: true };
 }
 
 // Spawn a headless "codex-aisdk" session: the lfg codex-aisdk-session harness,
-// supervised by a tmux session. Mirrors spawnManagedAisdkSession exactly except
-// it points at the codex harness and passes the control-plane KEY (--key) rather
+// launched directly. Mirrors spawnManagedAisdkSession exactly except it points
+// at the codex harness and passes the control-plane KEY (--key) rather
 // than a deterministic --session id — codex assigns its thread id only after the
 // first turn, so the key is all we know up front (see the harness header).
 export function spawnManagedCodexAisdkSession(opts: {
@@ -906,8 +954,8 @@ export function spawnManagedCodexAisdkSession(opts: {
   // When set, resume this existing codex rollout/thread instead of starting a
   // fresh persistent thread — the harness seeds its threadId with it.
   resume?: string;
-}): { ok: boolean; error?: string } {
-  const dec = new TextDecoder();
+  recoveredAt?: number;
+}): ManagedHarnessSpawnResult {
   // Harmless for codex: ensureFolderTrusted only patches ~/.claude.json and is a
   // no-op when that file (or the project entry) is absent. Codex doesn't gate on
   // it, but keeping it costs nothing and keeps this in lockstep with the Claude
@@ -917,30 +965,28 @@ export function spawnManagedCodexAisdkSession(opts: {
   // dependency on the rest of the command surface.
   const harnessPath = `${import.meta.dir}/agents/backends/codex-aisdk-session.ts`;
   const argv = [
-    "tmux", "new-session", "-d", "-s", opts.name, "-c", opts.cwd,
     process.execPath, harnessPath,
     "--key", opts.key,
     "--model", opts.model,
     "--cwd", opts.cwd,
-    "--tmux", opts.name,
+    "--managed-name", opts.name,
   ];
   if (opts.thinkingLevel) argv.push("--thinking-level", opts.thinkingLevel);
   if (opts.resume) argv.push("--resume", opts.resume);
+  if (opts.recoveredAt) argv.push("--recovered-at", String(opts.recoveredAt));
   const prompt = withLfgRuntimeContract(opts.prompt);
   if (prompt?.trim()) argv.push("--", prompt);
-  addSessionEnv(argv, opts.lfgSessionId ?? opts.key, opts.lfgUser);
-  containTmuxCommand(argv, process.execPath, opts.containInAgentSlice, {
-    ...opts,
+  return spawnManagedHarness(argv, {
+    name: opts.name,
+    cwd: opts.cwd,
     lfgSessionId: opts.lfgSessionId ?? opts.key,
+    lfgUser: opts.lfgUser,
+    containInAgentSlice: opts.containInAgentSlice,
   });
-  const create = Bun.spawnSync(argv);
-  if (create.exitCode !== 0)
-    return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
-  return { ok: true };
 }
 
 // Spawn a headless "pi" session: the lfg pi-session harness, supervised by a
-// tmux session. Mirrors spawnManagedCodexAisdkSession exactly except it points
+// process. Mirrors spawnManagedCodexAisdkSession exactly except it points
 // at the pi harness and passes a control-plane KEY (--key) — pi's own session
 // id (like codex's threadId) is only known once the harness starts the RpcClient,
 // so the key is all we know up front (see the harness header).
@@ -957,8 +1003,8 @@ export function spawnManagedPiSession(opts: {
   // When set, resume this existing pi session file instead of starting a fresh
   // one — the harness passes it through as `--session <id>`.
   resume?: string;
-}): { ok: boolean; error?: string } {
-  const dec = new TextDecoder();
+  recoveredAt?: number;
+}): ManagedHarnessSpawnResult {
   // Harmless for pi: ensureFolderTrusted only patches ~/.claude.json and is a
   // no-op when that file (or the project entry) is absent. Kept in lockstep
   // with the other AI-SDK spawn helpers.
@@ -967,29 +1013,27 @@ export function spawnManagedPiSession(opts: {
   // dependency on the rest of the command surface.
   const harnessPath = `${import.meta.dir}/agents/backends/pi-session.ts`;
   const argv = [
-    "tmux", "new-session", "-d", "-s", opts.name, "-c", opts.cwd,
     process.execPath, harnessPath,
     "--key", opts.key,
     "--model", opts.model,
     "--cwd", opts.cwd,
-    "--tmux", opts.name,
+    "--managed-name", opts.name,
   ];
   if (opts.thinkingLevel) argv.push("--thinking-level", opts.thinkingLevel);
   if (opts.resume) argv.push("--resume", opts.resume);
+  if (opts.recoveredAt) argv.push("--recovered-at", String(opts.recoveredAt));
   if (opts.prompt && opts.prompt.trim()) argv.push("--", opts.prompt);
-  addSessionEnv(argv, opts.lfgSessionId ?? opts.key, opts.lfgUser);
-  containTmuxCommand(argv, process.execPath, opts.containInAgentSlice, {
-    ...opts,
+  return spawnManagedHarness(argv, {
+    name: opts.name,
+    cwd: opts.cwd,
     lfgSessionId: opts.lfgSessionId ?? opts.key,
+    lfgUser: opts.lfgUser,
+    containInAgentSlice: opts.containInAgentSlice,
   });
-  const create = Bun.spawnSync(argv);
-  if (create.exitCode !== 0)
-    return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
-  return { ok: true };
 }
 
 // Spawn a headless "opencode" session: the lfg opencode-aisdk-session harness,
-// supervised by a tmux session. Mirrors spawnManagedCodexAisdkSession exactly
+// launched directly. Mirrors spawnManagedCodexAisdkSession exactly
 // except it points at the opencode harness. Like codex-aisdk it passes a
 // control-plane KEY (--key) — but for opencode the key is ALSO the transcript id
 // (the harness owns the transcript file it writes), so serve can treat the
@@ -1004,8 +1048,8 @@ export function spawnManagedOpencodeAisdkSession(opts: {
   lfgUser?: string | null;
   resume?: string;
   containInAgentSlice?: boolean;
-}): { ok: boolean; error?: string } {
-  const dec = new TextDecoder();
+  recoveredAt?: number;
+}): ManagedHarnessSpawnResult {
   // Harmless for opencode: ensureFolderTrusted only patches ~/.claude.json and
   // is a no-op when that file (or the project entry) is absent. Kept in lockstep
   // with the other AI-SDK spawn helpers.
@@ -1014,25 +1058,23 @@ export function spawnManagedOpencodeAisdkSession(opts: {
   // dependency on the rest of the command surface.
   const harnessPath = `${import.meta.dir}/agents/backends/opencode-aisdk-session.ts`;
   const argv = [
-    "tmux", "new-session", "-d", "-s", opts.name, "-c", opts.cwd,
     process.execPath, harnessPath,
     "--key", opts.key,
     "--model", opts.model,
     "--cwd", opts.cwd,
-    "--tmux", opts.name,
+    "--managed-name", opts.name,
   ];
   if (opts.resume) argv.push("--resume", opts.resume);
+  if (opts.recoveredAt) argv.push("--recovered-at", String(opts.recoveredAt));
   const prompt = withLfgRuntimeContract(opts.prompt);
   if (prompt?.trim()) argv.push("--", prompt);
-  addSessionEnv(argv, opts.lfgSessionId ?? opts.key, opts.lfgUser);
-  containTmuxCommand(argv, process.execPath, opts.containInAgentSlice, {
-    ...opts,
+  return spawnManagedHarness(argv, {
+    name: opts.name,
+    cwd: opts.cwd,
     lfgSessionId: opts.lfgSessionId ?? opts.key,
+    lfgUser: opts.lfgUser,
+    containInAgentSlice: opts.containInAgentSlice,
   });
-  const create = Bun.spawnSync(argv);
-  if (create.exitCode !== 0)
-    return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
-  return { ok: true };
 }
 
 // Codex 0.135 can show an update selector before the composer, which strands a

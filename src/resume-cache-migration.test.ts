@@ -51,6 +51,16 @@ describe("resume cache migration", () => {
       "utf8",
     );
     db.exec(nativeTuiSql);
+    db.exec(`
+      UPDATE resumable_sessions
+      SET backend = 'aisdk', model = 'opus', resume_handle = session_id, managed = 1
+      WHERE session_id = 'grok-session';
+    `);
+    const identitySql = readFileSync(
+      new URL("./migrations/resume-cache/004_repair_backend_identity.sql", import.meta.url),
+      "utf8",
+    );
+    db.exec(identitySql);
 
     const columns = db.query<{ name: string }, []>("PRAGMA table_info(resumable_sessions)").all();
     expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining([
@@ -64,7 +74,10 @@ describe("resume cache migration", () => {
     expect(db.query<{ session_id: string }, []>(
       "SELECT session_id FROM resumable_sessions WHERE resumable = 1 ORDER BY session_id",
     ).all().map((row) => row.session_id)).toEqual(["cursor-session", "grok-session"]);
-    expect(db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(3);
+    expect(db.query<{ backend: string | null }, []>(
+      "SELECT backend FROM resumable_sessions WHERE session_id = 'grok-session'",
+    ).get()?.backend).toBeNull();
+    expect(db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(4);
     db.close();
   });
 });

@@ -288,7 +288,7 @@ export type Session = {
   // session reads as an explained pause, not a silent stall. See computeStatus.
   status: "ok" | "blocked";
   // Machine-readable reason when status === "blocked"; null when ok.
-  statusReason: "model_unavailable" | "out_of_credits" | "provider_auth" | "provider_error" | null;
+  statusReason: "model_unavailable" | "out_of_credits" | "provider_auth" | "provider_error" | "restart_recovered" | null;
   // Human-readable one-liner for the banner (e.g. the dead model id), or null.
   statusDetail: string | null;
   // Whether the session is actively working RIGHT NOW: for a tmux session, its
@@ -397,15 +397,23 @@ function managedLaunchRow(
   tmux: TmuxProbe = defaultTmuxProbe,
 ): Session | null {
   const sessionId = m.sessionId ?? m.nativeSessionId ?? null;
-  if (!sessionId || !tmux.hasSession(m.tmuxName)) return null;
-  const pid = tmux.panePid(m.tmuxName) ?? 0;
+  if (!sessionId) return null;
+  const agent = m.agent ?? "claude";
+  const commandFile = isCommandFileAgent(agent);
+  const directEntry = commandFile ? findAisdkEntryByAnyId(sessionId) : null;
+  if (!commandFile && !tmux.hasSession(m.tmuxName)) return null;
+  if (commandFile && m.launchState !== "launching" && !directEntry) return null;
+  const pid = commandFile ? (directEntry?.harnessPid ?? 0) : (tmux.panePid(m.tmuxName) ?? 0);
   if (pid && isClosing(pid)) return null;
-  const tmuxTarget = pid ? tmux.targetForPid(pid) ?? `${m.tmuxName}:0.0` : `${m.tmuxName}:0.0`;
+  const tmuxTarget = commandFile
+    ? null
+    : pid
+      ? tmux.targetForPid(pid) ?? `${m.tmuxName}:0.0`
+      : `${m.tmuxName}:0.0`;
   const project = m.project || projectName(m.cwd, { repoRoot: m.repoRoot });
   const title =
     managedTitle(m, sessionId, m.nativeSessionId, overrides) ||
     (m.cwd ? basename(m.cwd) : project);
-  const agent = m.agent ?? "claude";
   const fallbackCmd =
     agent === "codex" || agent === "codex-aisdk"
       ? `lfg ${agent} --model ${m.model ?? ""}`.trim()
@@ -447,7 +455,7 @@ function managedLaunchRow(
     transcriptPath,
     lastActivityAt: m.createdAt,
     last: null,
-    tmuxTarget: isCommandFileAgent(agent) ? null : tmuxTarget,
+    tmuxTarget,
     tmuxName: m.tmuxName,
     managed: true,
     assignedUser: assigns[m.tmuxName] ?? null,
@@ -1903,8 +1911,8 @@ export async function listSessions(): Promise<Session[]> {
     // phantom alongside the registry-driven codex-aisdk entry.
     if (/\bapp-server\b/.test(p.cmd)) continue;
     // Same idea for the `codex exec --experimental-json …` child the codex SDK
-    // spawns per turn: it lives inside the harness's own tmux pane. If that
-    // pane belongs to a command-file managed session (codex-aisdk/opencode),
+    // spawns per turn: it lives inside the long-running harness. If that
+    // harness belongs to a command-file managed session (codex-aisdk/opencode),
     // this process is the AI-SDK engine, not a standalone codex — listing it
     // would emit a SECOND row with the SAME visible sessionId (via
     // managedVisibleId) whose busy flag comes from the log pane (always idle),
@@ -2286,7 +2294,8 @@ export async function listSessions(): Promise<Session[]> {
       transcriptPath,
       lastActivityAt,
       last,
-      // No pane I/O — but keep the supervisor name so kill + managed badge work.
+      // No pane I/O. tmuxName is now a backward-compatible managed-runtime key;
+      // direct SDK harnesses do not have a tmux session.
       tmuxTarget: null,
       tmuxName: e.tmuxName || null,
       managed: !!managedRec || isManagedName(e.tmuxName),
@@ -2295,7 +2304,13 @@ export async function listSessions(): Promise<Session[]> {
       // pass them through raw. modelAlias would leave them unchanged anyway, but
       // be explicit about intent.
       model: isCodex || isOpencode ? e.model : modelAlias(e.model),
-      ...computeStatus(last, null),
+      ...(e.recoveredAt
+        ? {
+            status: "blocked" as const,
+            statusReason: "restart_recovered" as const,
+            statusDetail: "The host restarted during this session. Review the last output and send a message to continue.",
+          }
+        : computeStatus(last, null)),
     });
   }
 

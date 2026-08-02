@@ -1,8 +1,7 @@
 // Headless interactive session harness for the "codex-aisdk" agent kind.
 //
 // This is the long-lived process behind a managed codex session. Like its
-// Claude sibling (./aisdk-session.ts) it runs inside a tmux pane used purely as
-// a process supervisor + lifecycle handle (we never drive I/O through the pane),
+// Claude sibling (./aisdk-session.ts) it runs as a detached process and
 // and drives a multi-turn conversation through the OFFICIAL @openai/codex-sdk
 // (`Codex` → `startThread`/`resumeThread` → `runStreamed`). ChatGPT-subscription
 // auth comes from ~/.codex/auth.json; there is NO API key.
@@ -28,6 +27,7 @@ import {
   patchEntry,
   removeEntry,
   writeEntry,
+  currentBootId,
 } from "../../aisdk-registry.ts";
 import type { SessionMsg } from "../../sessions.ts";
 import { indexSessionMessagesDirect, reindexFileHistoryUnderSessionKey } from "../../transcript-index.ts";
@@ -190,7 +190,8 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
   const model = arg(argv, "--model") ?? "gpt-5.5";
   const thinkingLevel = arg(argv, "--thinking-level");
   const cwd = arg(argv, "--cwd") ?? process.cwd();
-  const tmuxName = arg(argv, "--tmux") ?? "";
+  const tmuxName = arg(argv, "--managed-name") ?? arg(argv, "--tmux") ?? "";
+  const recoveredAt = Number(arg(argv, "--recovered-at")) || null;
   // Resuming a closed codex session: the rollout's threadId is known up front.
   const resumeThreadId = arg(argv, "--resume");
   // Everything after `--` is the initial prompt.
@@ -230,12 +231,18 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
   // Control-plane registry entry — the moment this exists (and our pid is
   // alive), serve surfaces the session in the live view. threadId starts null
   // on fresh sessions and is patched at turn 1's thread.started event.
+  const bootId = currentBootId();
   writeEntry({
     sessionId: key,
     agent: "codex",
     threadId,
     harnessPid: process.pid,
     tmuxName,
+    supervisor: "process",
+    bootId,
+    recoveryClaimBootId: recoveredAt ? bootId : null,
+    recoveredAt,
+    thinkingLevel: thinkingLevel ?? null,
     cwd,
     model,
     busy: false,
@@ -338,8 +345,8 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
     closing = true;
     currentAc?.abort();
     removeEntry(key);
-    // Give the registry write a tick to flush, then exit so the tmux pane
-    // closes (the SDK's codex child exits with us).
+    // Give the registry write a tick to flush, then exit with the SDK's codex
+    // child.
     setTimeout(() => process.exit(0), 50);
   }
 

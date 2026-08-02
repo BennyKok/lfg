@@ -57,10 +57,11 @@ describe("session recovery integration", () => {
     expect(CODING_AGENT_ADAPTERS.copilot.recovery).toBe("process-bound");
   });
 
-  test("every durable backend hands its recovery id across the tmux process boundary", () => {
+  test("every durable backend hands its recovery id across its process boundary", () => {
     const root = tempRoot("lfg-recovery-launch-");
     const fakeBin = join(root, "bin");
-    const capture = join(root, "tmux-argv.json");
+    const tmuxCapture = join(root, "tmux-argv.json");
+    const harnessCapture = join(root, "harness-argv.json");
     const fakeTmux = join(fakeBin, "tmux");
     const fakeHome = join(root, "home");
     mkdirSync(fakeBin, { recursive: true });
@@ -75,7 +76,8 @@ describe("session recovery integration", () => {
 
     const resume = "33333333-3333-4333-8333-333333333333";
     for (const agent of DURABLE_RECOVERY_AGENT_KINDS) {
-      rmSync(capture, { force: true });
+      rmSync(tmuxCapture, { force: true });
+      rmSync(harnessCapture, { force: true });
       const result = run([
         process.execPath,
         join(import.meta.dir, "test-support", "recovery-launch-process.ts"),
@@ -85,12 +87,18 @@ describe("session recovery integration", () => {
       ], {
         HOME: fakeHome,
         PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-        LFG_TEST_TMUX_CAPTURE: capture,
+        LFG_TEST_TMUX_CAPTURE: tmuxCapture,
+        LFG_TEST_HARNESS_CAPTURE: harnessCapture,
       });
 
       expect(result.exitCode, `${agent}: ${output(result, "stderr")}`).toBe(0);
-      const argv = JSON.parse(readFileSync(capture, "utf8")) as string[];
-      expect(argv, agent).toContain("new-session");
+      const direct = ["claude", "aisdk", "codex", "codex-aisdk", "opencode", "pi"].includes(agent);
+      const captured = JSON.parse(readFileSync(direct ? harnessCapture : tmuxCapture, "utf8")) as
+        | string[]
+        | { cmd: string[] };
+      const argv = Array.isArray(captured) ? captured : captured.cmd;
+      if (direct) expect(argv, agent).not.toContain("tmux");
+      else expect(argv, agent).toContain("new-session");
       if (agent === "claude" || agent === "aisdk") {
         const at = argv.indexOf("--session");
         expect(argv.slice(at, at + 2), agent).toEqual(["--session", resume]);

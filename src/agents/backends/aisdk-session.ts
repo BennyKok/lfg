@@ -1,8 +1,7 @@
 // Headless interactive session harness for the "aisdk" agent kind.
 //
 // This is the long-lived process behind a "claude code" managed session. It runs
-// inside a tmux pane (the pane is only a process supervisor + lifecycle handle —
-// we never drive I/O through it) and drives a multi-turn conversation through the
+// as a detached process and drives a multi-turn conversation through the
 // OFFICIAL @anthropic-ai/claude-agent-sdk (`query()` with streaming input) — one
 // live claude subprocess for the whole session, no per-turn resume dance.
 //
@@ -29,6 +28,7 @@ import {
   patchEntry,
   removeEntry,
   writeEntry,
+  currentBootId,
 } from "../../aisdk-registry.ts";
 import { normalizeLineMessages, type SessionMsg } from "../../sessions.ts";
 import {
@@ -158,7 +158,8 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
   const model = arg(argv, "--model") ?? "opus";
   const effort = effortFor(arg(argv, "--thinking-level"));
   const cwd = arg(argv, "--cwd") ?? process.cwd();
-  const tmuxName = arg(argv, "--tmux") ?? "";
+  const tmuxName = arg(argv, "--managed-name") ?? arg(argv, "--tmux") ?? "";
+  const recoveredAt = Number(arg(argv, "--recovered-at")) || null;
   const claudeAccountId = arg(argv, "--claude-account");
   // Everything after `--` is the initial prompt (mirrors how spawnManagedSession
   // passes the first message to the claude CLI).
@@ -187,11 +188,17 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
 
   // Control-plane registry entry — the moment this exists (and our pid is alive),
   // serve will surface the session in the live view.
+  const bootId = currentBootId();
   writeEntry({
     sessionId,
     agent: "claude",
     harnessPid: process.pid,
     tmuxName,
+    supervisor: "process",
+    bootId,
+    recoveryClaimBootId: recoveredAt ? bootId : null,
+    recoveredAt,
+    thinkingLevel: arg(argv, "--thinking-level") ?? null,
     cwd,
     model,
     busy: false,

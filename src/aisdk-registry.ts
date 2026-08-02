@@ -36,8 +36,15 @@ export type AisdkPrompt = {
 
 export type AisdkEntry = {
   sessionId: string;
-  harnessPid: number; // pid of the bun harness process (the tmux pane's child)
-  tmuxName: string; // supervisor tmux session name (lifecycle/kill + managed badge)
+  harnessPid: number; // pid of the bun harness process
+  // Stable managed-runtime name. Kept as tmuxName on disk/API for backward
+  // compatibility; process-supervised SDK sessions do not have a tmux pane.
+  tmuxName: string;
+  supervisor?: "tmux" | "process";
+  bootId?: string | null;
+  recoveryClaimBootId?: string | null;
+  recoveredAt?: number | null;
+  thinkingLevel?: string | null;
   cwd: string;
   model: string;
   busy: boolean; // true while a turn is generating — feeds the live-view busy dot
@@ -170,6 +177,34 @@ export function isPidAlive(pid: number): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+export function currentBootId(): string | null {
+  try {
+    return readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+// Force-stop a direct harness that did not consume its graceful `close`
+// command. Contained sessions live in their own transient systemd service;
+// stopping that unit reaps the whole cgroup. Plain sessions are single harness
+// processes whose SDK child is first given a grace window by the caller.
+export function terminateHarnessProcess(entry: AisdkEntry): boolean {
+  try {
+    const cgroup = readFileSync(`/proc/${entry.harnessPid}/cgroup`, "utf8");
+    const unit = cgroup.match(/(lfg-agent-[^/\s]+\.service)/)?.[1];
+    if (unit) {
+      return Bun.spawnSync(["systemctl", "--user", "stop", unit]).exitCode === 0;
+    }
+  } catch {}
+  try {
+    process.kill(entry.harnessPid, "SIGTERM");
+    return true;
+  } catch {
+    return !isPidAlive(entry.harnessPid);
   }
 }
 

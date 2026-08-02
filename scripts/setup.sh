@@ -482,10 +482,9 @@ Environment=LFG_HOST=127.0.0.1
 ExecStart=$BUN_BIN run $LFG_DIR/src/cli.ts serve
 Restart=on-failure
 RestartSec=3
-# The tmux server that holds every Claude session is spawned by serve, so it
-# lives in this unit's cgroup. With the default KillMode=control-group a restart
-# (every deploy) SIGKILLs the whole cgroup - wiping all running sessions. Kill
-# only the main bun process so tmux and the sessions survive a redeploy.
+# Managed agent processes (plus tmux for native TUI agents) originate under
+# serve's cgroup. With KillMode=control-group a deploy restart wipes them all;
+# kill only the main bun process so direct SDK and tmux sessions both survive.
 KillMode=process
 
 [Install]

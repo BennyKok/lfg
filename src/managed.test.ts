@@ -103,4 +103,28 @@ describe("managed session registry", () => {
 
     expect(listManaged().map((row) => row.tmuxName)).toEqual(["lfg-recovered"]);
   });
+
+  test("a resumed conversation replaces its stale runtime owner", () => {
+    const sessionId = "77777777-7777-4777-8777-777777777777";
+    addManaged({
+      tmuxName: "lfg-old-owner",
+      cwd: "/tmp/project",
+      createdAt: 1,
+      agent: "codex-aisdk",
+      sessionId,
+      nativeSessionId: "88888888-8888-4888-8888-888888888888",
+    });
+    addManaged({
+      tmuxName: "lfg-new-owner",
+      cwd: "/tmp/project",
+      createdAt: 2,
+      agent: "codex-aisdk",
+      sessionId,
+      nativeSessionId: "88888888-8888-4888-8888-888888888888",
+    });
+
+    expect(listManaged()).toEqual([
+      expect.objectContaining({ tmuxName: "lfg-new-owner", sessionId }),
+    ]);
+  });
 });

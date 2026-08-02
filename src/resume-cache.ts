@@ -157,6 +157,13 @@ function init(): Database {
     );
     d.exec(migration);
   }
+  if (version < 4) {
+    const migration = readFileSync(
+      new URL("./migrations/resume-cache/004_repair_backend_identity.sql", import.meta.url),
+      "utf8",
+    );
+    d.exec(migration);
+  }
   initialized = true;
   return d;
 }
@@ -216,11 +223,11 @@ export function upsertResumableRows(rows: ResumableCacheRow[]): void {
       agent = excluded.agent,
       path = excluded.path,
       mtime_ms = excluded.mtime_ms,
-      backend = COALESCE(excluded.backend, resumable_sessions.backend),
-      resume_handle = COALESCE(excluded.resume_handle, resumable_sessions.resume_handle),
-      model = COALESCE(excluded.model, resumable_sessions.model),
+      backend = excluded.backend,
+      resume_handle = excluded.resume_handle,
+      model = excluded.model,
       assigned_user = COALESCE(excluded.assigned_user, resumable_sessions.assigned_user),
-      managed = MAX(excluded.managed, resumable_sessions.managed),
+      managed = excluded.managed,
       resumable = excluded.resumable
   `);
   d.transaction((batch: ResumableCacheRow[]) => {

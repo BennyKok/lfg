@@ -2,8 +2,7 @@
 //
 // This is the long-lived process behind a managed pi session. Like its
 // Claude/codex/opencode siblings (./aisdk-session.ts, ./codex-aisdk-session.ts,
-// ./opencode-aisdk-session.ts) it runs inside a tmux pane used purely as a
-// process supervisor + lifecycle handle (we never drive I/O through the pane),
+// ./opencode-aisdk-session.ts) it runs as a detached process,
 // and drives a multi-turn conversation through the OFFICIAL
 // @mariozechner/pi-coding-agent RpcClient: it spawns `pi --mode rpc` as a child
 // process and speaks a typed JSONL protocol over its stdin/stdout. Auth is pi's
@@ -30,6 +29,7 @@ import {
   patchEntry,
   removeEntry,
   writeEntry,
+  currentBootId,
 } from "../../aisdk-registry.ts";
 import { agentProfileCliArgs, loadAgentProfileFromEnv } from "../../agent-profile.ts";
 import type { SessionMsg } from "../../sessions.ts";
@@ -152,7 +152,8 @@ export async function cmdPiSession(argv: string[]): Promise<void> {
   const model = arg(argv, "--model") ?? "sonnet";
   const thinkingLevel = arg(argv, "--thinking-level");
   const cwd = arg(argv, "--cwd") ?? process.cwd();
-  const tmuxName = arg(argv, "--tmux") ?? "";
+  const tmuxName = arg(argv, "--managed-name") ?? arg(argv, "--tmux") ?? "";
+  const recoveredAt = Number(arg(argv, "--recovered-at")) || null;
   // Resuming a closed pi session: its own session-file id is known up front.
   const resumeSessionId = arg(argv, "--resume");
   const dashI = argv.indexOf("--");
@@ -205,12 +206,18 @@ export async function cmdPiSession(argv: string[]): Promise<void> {
   // Control-plane registry entry — the moment this exists (and our pid is
   // alive), serve surfaces the session in the live view. threadId starts null
   // on fresh sessions and is patched in below once pi reports its own id.
+  const bootId = currentBootId();
   writeEntry({
     sessionId: key,
     agent: "pi",
     threadId: sessionId,
     harnessPid: process.pid,
     tmuxName,
+    supervisor: "process",
+    bootId,
+    recoveryClaimBootId: recoveredAt ? bootId : null,
+    recoveredAt,
+    thinkingLevel: thinkingLevel ?? null,
     cwd,
     model,
     busy: false,

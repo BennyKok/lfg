@@ -490,7 +490,7 @@ type Session = {
   // Build health (from the backend). "blocked" means the session can't make
   // progress until a human acts; statusReason/statusDetail explain why.
   status?: "ok" | "blocked";
-  statusReason?: "model_unavailable" | "out_of_credits" | "provider_auth" | "provider_error" | null;
+  statusReason?: "model_unavailable" | "out_of_credits" | "provider_auth" | "provider_error" | "restart_recovered" | null;
   statusDetail?: string | null;
   // Live "working" flag from the list call (backend computes it from the tmux
   // pane / aisdk registry). Lets a collapsed card show working/idle without
@@ -11015,7 +11015,9 @@ function PausedBanner({
   }
 
   const title =
-    reason === "out_of_credits"
+    reason === "restart_recovered"
+      ? "Session recovered after restart"
+      : reason === "out_of_credits"
       ? "Build paused — out of credits"
       : reason === "provider_auth"
         ? reconnectKind
@@ -11025,7 +11027,9 @@ function PausedBanner({
           ? "Build paused — provider error"
           : "Build paused";
   const detail =
-    reason === "out_of_credits"
+    reason === "restart_recovered"
+      ? session.statusDetail || "The previous turn was interrupted. Review the last output, then send a message to continue safely."
+      : reason === "out_of_credits"
       ? "This app's build agent ran out of AI credits. Top up the wallet to resume the build."
       : reason === "provider_auth"
         ? reconnectKind

@@ -2,8 +2,7 @@
 //
 // This is the long-lived process behind a managed opencode session. Like its
 // Claude/codex siblings (./aisdk-session.ts, ./codex-aisdk-session.ts) it runs
-// inside a tmux pane used purely as a process supervisor + lifecycle handle (we
-// never drive I/O through the pane), and drives a multi-turn conversation
+// as a detached process and drives a multi-turn conversation
 // through the OFFICIAL @opencode-ai/sdk: `createOpencodeServer()` boots a local
 // `opencode serve`, and the generated client drives it over HTTP. Auth is
 // opencode's own config (~/.config/opencode auth); there is NO API key.
@@ -40,6 +39,7 @@ import {
   patchEntry,
   removeEntry,
   writeEntry,
+  currentBootId,
 } from "../../aisdk-registry.ts";
 import { normalizeLineMessages } from "../../sessions.ts";
 import { indexSessionMessagesDirect } from "../../transcript-index.ts";
@@ -467,7 +467,8 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
   const keyArg = arg(argv, "--key");
   let model = arg(argv, "--model") ?? "anthropic/claude-sonnet-4-6";
   const cwd = arg(argv, "--cwd") ?? process.cwd();
-  const tmuxName = arg(argv, "--tmux") ?? "";
+  const tmuxName = arg(argv, "--managed-name") ?? arg(argv, "--tmux") ?? "";
+  const recoveredAt = Number(arg(argv, "--recovered-at")) || null;
   // Resuming: opencode session ids persist server-side, so a relaunched harness
   // can be handed one (registry threadId) and continue the conversation.
   const resumeOcId = arg(argv, "--resume");
@@ -577,12 +578,17 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
 
   // Control-plane registry entry — threadId (opencode's resume id) is known
   // immediately now, so the live view never has to fall back.
+  const bootId = currentBootId();
   writeEntry({
     sessionId: key,
     agent: "opencode",
     threadId: ocSessionId,
     harnessPid: process.pid,
     tmuxName,
+    supervisor: "process",
+    bootId,
+    recoveryClaimBootId: recoveredAt ? bootId : null,
+    recoveredAt,
     cwd,
     model,
     busy: false,

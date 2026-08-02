@@ -1,11 +1,7 @@
-// Registry of tmux sessions lfg started itself. Owning the session's tmux
-// name is what makes the lifecycle deterministic: we created `tmux new-session
-// -s <name>`, so we know the exact pane and can resolve its authoritative
-// sessionId directly — no pgrep/parent-walk/newest-unclaimed guessing, so none
-// of the ghost-panel / wrong-pid problems that plague attached sessions. The
-// file survives a server restart so lfg still knows which live sessions it
-// owns (for the managed badge, clean kill-session teardown, and following the
-// sessionId when /clear rotates it).
+// Registry of sessions lfg started itself. `tmuxName` is the historical field
+// name for the stable managed-runtime key: native TUI agents still own a tmux
+// session with that name, while command-file SDK agents are direct processes.
+// The file survives a server restart so lfg can reconnect to either lifecycle.
 import {
   closeSync,
   fsyncSync,
@@ -57,6 +53,9 @@ export type ManagedSession = {
   /** Main repo checkout when cwd is an auto-provisioned worktree. */
   repoRoot?: string;
   worktreeBranch?: string;
+  /** Set when boot reconciliation relaunched a process without replaying its turn. */
+  interruptedAt?: number;
+  recoveredFromBootId?: string;
 };
 
 let memory: Record<string, ManagedSession> | null = null;
@@ -199,6 +198,20 @@ export function listManaged(): ManagedSession[] {
 export function addManaged(rec: ManagedSession): void {
   withRegistryLock(() => {
     const all = { ...readAll(true) };
+    const identities = new Set(
+      [rec.sessionId, rec.nativeSessionId].filter((id): id is string => !!id),
+    );
+    // A cold/manual resume may use a new runtime name for the same durable
+    // conversation. Keep one owner row so later boot reconciliation cannot
+    // launch both the stale and current records.
+    if (identities.size) {
+      for (const [name, existing] of Object.entries(all)) {
+        if (name === rec.tmuxName) continue;
+        if ([existing.sessionId, existing.nativeSessionId].some((id) => id && identities.has(id))) {
+          delete all[name];
+        }
+      }
+    }
     all[rec.tmuxName] = {
       ...rec,
       capabilityVersion: rec.capabilityVersion ?? LFG_CAPABILITY_VERSION,
