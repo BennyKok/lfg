@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - Mounted settings pages sit in the host's column (v0.1.200)
+
+- A settings page mounted inside another product now fills that product's
+  column instead of centring a narrower one inside it. Every card previously
+  sat inset from the host's own cards, and the mount read as a panel dropped
+  into the page rather than part of it.
+
 ## August 2, 2026 - One number per account on the campfire (v0.1.199)
 
 - A Claude account on the campfire no longer shows its number twice. The label
