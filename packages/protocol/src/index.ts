@@ -91,8 +91,7 @@ export interface LfgQueueMessage {
 export type LfgLiveChannelKind =
   | "transcript"
   | "status"
-  | "agent_run"
-  | "resumable";
+  | "agent_run";
 
 export interface LfgLiveChannel {
   kind: LfgLiveChannelKind;
@@ -116,10 +115,9 @@ export type LfgLiveMessage =
   | { t: "batch"; sid: string; messages?: LfgMessage[]; nextBefore?: number | null }
   | { t: "msg"; sid: string; message?: LfgMessage; m?: LfgMessage }
   | { t: "ai_part"; sid: string; part?: LfgAiStreamPart }
+  | { t: "queue"; sid: string; queue?: LfgQueueMessage[] }
   | { t: "busy"; sid: string; busy?: boolean }
   | { t: "prompt"; sid: string; prompt?: LfgSessionPrompt | null }
-  | { t: "queue"; sid: string; queue?: LfgQueueMessage[] }
-  | { t: "page"; sid: string; messages?: LfgMessage[]; nextBefore?: number | null; hasMore?: boolean }
   | {
       t: "snapshot";
       kind: LfgLiveChannelKind;

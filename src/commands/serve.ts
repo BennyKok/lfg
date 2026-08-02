@@ -163,7 +163,6 @@ import {
   createLiveWsSupport,
   isLiveWsEnabled,
   liveTransportMode,
-  liveWsUpgradeAuthenticated,
   type LiveWsSocketData,
 } from "../live-ws.ts";
 import { appendCmd as appendAisdkCmd, removeEntry as removeAisdkEntry, readEntry as readAisdkEntry, findEntryByAnyId as findAisdkEntryByAnyId, isEntryBusy as isAisdkEntryBusy, isPidAlive as isAisdkPidAlive, patchEntry as patchAisdkEntry, terminateHarnessProcess } from "../aisdk-registry.ts";
@@ -1918,7 +1917,6 @@ export async function cmdServe() {
 
       if (path === "/api/live/ws") {
         if (!isLiveWsEnabled()) return err(404, "live websocket disabled");
-        if (!liveWsUpgradeAuthenticated(req)) return err(401, "unauthorized");
         const ok = server.upgrade(req, {
           data: liveWs.dataForRequest(),
         });

@@ -39,7 +39,7 @@ export type LiveWsSocketData = { liveWs: true; rid: string };
 
 type Evlog = (event: string, fields?: Record<string, unknown>) => void;
 type LiveWs = ServerWebSocket<unknown>;
-type SendType = "batch" | "msg" | "page" | "busy" | "prompt" | "queue" | "ai_part" | "error";
+type SendType = "batch" | "msg" | "busy" | "prompt" | "queue" | "ai_part" | "error";
 type DraftState = { id: string; text: string };
 type HtmlMessage = {
   kind: string;
@@ -53,7 +53,7 @@ type HtmlMessage = {
   size?: number;
 };
 type LivePane = { sid: string; tp: string | null; target: string | null };
-type ChannelKind = "transcript" | "status" | "agent_run" | "resumable";
+type ChannelKind = "transcript" | "status" | "agent_run";
 type Channel = { kind: ChannelKind; key: string; resumeFromSeq?: number };
 type AgentRunSnapshot = {
   id: string;
@@ -104,12 +104,6 @@ export function liveTransportMode(): "sse" | "ws" {
 
 export function isLiveWsEnabled(): boolean {
   return liveTransportMode() === "ws";
-}
-
-export function liveWsUpgradeAuthenticated(_req: Request): boolean {
-  // The existing local API and live SSE endpoints are unauthenticated; matching
-  // that behavior here means there is no additional credential to validate.
-  return true;
 }
 
 function safeSend(ws: LiveWs, payload: unknown): boolean {
@@ -352,18 +346,6 @@ export function createLiveWsSupport(opts: {
     const seq = typeof frame.seq === "number" ? frame.seq : state.seq;
     state.ring.push({ seq, frame });
     if (state.ring.length > RING_CAP) state.ring.splice(0, state.ring.length - RING_CAP);
-  };
-
-  const sendChannel = (
-    state: SocketState,
-    channel: Pick<Channel, "kind" | "key">,
-    frame: Record<string, unknown>,
-    opts: { remember?: boolean } = {},
-  ) => {
-    if (state.closed || !state.subscribed.has(channelId(channel))) return;
-    const stamped = stamp(channel, frame);
-    if (opts.remember) rememberDelta(channel, stamped);
-    safeSend(state.ws, stamped);
   };
 
   const publishChannelDelta = (channel: Pick<Channel, "kind" | "key">, delta: Record<string, unknown>) => {
@@ -799,29 +781,6 @@ export function createLiveWsSupport(opts: {
     state.subscribed.delete(id);
   };
 
-  const backfill = async (state: SocketState, sid: string, before: number | null, limit: number) => {
-    try {
-      const tp = await resolveTranscript(sid);
-      if (!tp) {
-        sendChannel(state, transcriptChannel(sid), { t: "error", sid, message: "session transcript not found" });
-        return;
-      }
-      await ensureChatTranscriptCaughtUp(tp, sid, "ws-backfill");
-      const bounded = Math.max(1, Math.min(200, limit || 80));
-      const page = await indexedMessagePage(tp, sid, { before, limit: bounded });
-      const messages = transcriptMessagesForClient(sid, page.messages).map(msgWithHtml);
-      safeSend(state.ws, stamp(transcriptChannel(sid), {
-        t: "page",
-        sid,
-        messages,
-        hasMore: page.nextBefore != null,
-        nextBefore: page.nextBefore ?? null,
-      }));
-    } catch (e) {
-      sendChannel(state, transcriptChannel(sid), { t: "error", sid, message: e instanceof Error ? e.message : String(e) });
-    }
-  };
-
   const closeSocket = (ws: LiveWs) => {
     const state = sockets.get(ws);
     if (!state || state.closed) return;
@@ -843,17 +802,17 @@ export function createLiveWsSupport(opts: {
         resumeFromSeq: typeof v.resumeFromSeq === "number" && Number.isFinite(v.resumeFromSeq) ? v.resumeFromSeq : undefined,
       };
     }
+    if (v.kind === "status" && v.key === "*") {
+      return {
+        kind: "status",
+        key: "*",
+        resumeFromSeq: typeof v.resumeFromSeq === "number" && Number.isFinite(v.resumeFromSeq) ? v.resumeFromSeq : undefined,
+      };
+    }
     if (v.kind === "agent_run" && RUN_RE.test(v.key)) {
       return {
         kind: "agent_run",
         key: v.key,
-        resumeFromSeq: typeof v.resumeFromSeq === "number" && Number.isFinite(v.resumeFromSeq) ? v.resumeFromSeq : undefined,
-      };
-    }
-    if ((v.kind === "status" || v.kind === "resumable") && v.key === "*") {
-      return {
-        kind: v.kind,
-        key: "*",
         resumeFromSeq: typeof v.resumeFromSeq === "number" && Number.isFinite(v.resumeFromSeq) ? v.resumeFromSeq : undefined,
       };
     }
@@ -980,19 +939,6 @@ export function createLiveWsSupport(opts: {
           : [];
         for (const sid of ids) channels.push(transcriptChannel(sid));
         for (const channel of channels) unsubscribeChannel(state, channelId(channel));
-        return;
-      }
-      const backfillSid = typeof input.sid === "string" && SID_RE.test(input.sid)
-        ? input.sid
-        : input.kind === "transcript" && typeof input.key === "string" && SID_RE.test(input.key)
-          ? input.key
-          : null;
-      if (input.t === "backfill" && backfillSid) {
-        const before = typeof input.before === "number" && Number.isFinite(input.before)
-          ? Math.max(0, input.before)
-          : null;
-        const limit = typeof input.limit === "number" && Number.isFinite(input.limit) ? input.limit : 80;
-        void backfill(state, backfillSid, before, limit);
         return;
       }
       safeSend(ws, { t: "error", message: "unknown live websocket message" });

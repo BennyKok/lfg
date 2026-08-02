@@ -68,7 +68,7 @@ type StatusRow = Pick<
   | "statusDetail"
   | "model"
 >;
-type ChannelKind = "transcript" | "status" | "agent_run" | "resumable";
+type ChannelKind = "transcript" | "status" | "agent_run";
 type LiveChannel = { kind: ChannelKind; key: string; resumeFromSeq?: number };
 type AgentRunSnapshot = {
   id: string;
@@ -87,10 +87,9 @@ type LiveWsMessage =
   | { t: "batch"; sid: string; messages?: Message[]; nextBefore?: number | null }
   | { t: "msg"; sid: string; message?: Message; m?: Message }
   | { t: "ai_part"; sid: string; part?: AiStreamPart }
+  | { t: "queue"; sid: string; queue?: QueueMsg[] }
   | { t: "busy"; sid: string; busy?: boolean }
   | { t: "prompt"; sid: string; prompt?: SessionPrompt | null }
-  | { t: "queue"; sid: string; queue?: QueueMsg[] }
-  | { t: "page"; sid: string; messages?: Message[]; nextBefore?: number | null; hasMore?: boolean }
   | { t: "snapshot"; kind: ChannelKind; key: string; sid?: string; seq?: number; messages?: Message[]; nextBefore?: number | null; run?: AgentRunSnapshot; text?: string; done?: boolean; error?: string | null }
   | { t: "delta"; kind: ChannelKind; key: string; seq?: number; delta?: { t?: string; sid?: string; message?: Message; m?: Message; part?: AiStreamPart; busy?: boolean; prompt?: SessionPrompt | null; queue?: QueueMsg[]; event?: AgentRunEvent; chunk?: string; done?: boolean; error?: string | null } }
   | { t: "resumed"; kind: ChannelKind; key: string; seq?: number; fromSeq?: number; toSeq?: number; replayed?: number }
