@@ -3373,6 +3373,40 @@ function AppStartupStatus() {
   );
 }
 
+/**
+ * The shape of a host-mounted page while the box is still answering.
+ *
+ * Deliberately the settings page's real geometry — the same max-w-xl column and
+ * the same section/card rhythm — so the swap to real content is a fill rather
+ * than a re-layout. Used only when `bare`: the standalone app has its own
+ * chrome and its "Connecting…" pill to carry this.
+ */
+function BareSurfaceSkeleton() {
+  return (
+    <div className="mx-auto max-w-xl space-y-8 pb-10" aria-hidden>
+      {[3, 2].map((rows, section) => (
+        <section key={section} className="space-y-2">
+          <div className="mx-4 h-3 w-24 animate-pulse rounded bg-muted" />
+          <div className="overflow-hidden rounded-2xl border border-border bg-card/40">
+            {Array.from({ length: rows }, (_, row) => (
+              <div
+                key={row}
+                className="flex items-center gap-3 border-b border-border/60 px-4 py-3 last:border-b-0"
+              >
+                <div className="size-7 shrink-0 animate-pulse rounded-[7px] bg-muted" />
+                <div className="min-w-0 flex-1 space-y-1.5">
+                  <div className="h-3 w-28 animate-pulse rounded bg-muted" />
+                  <div className="h-2.5 w-40 animate-pulse rounded bg-muted/70" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 // A single bad render (e.g. an unexpected menu/streaming edge case) must never
 // blank the whole app — isolate it so the rest of the live view keeps working.
 class ErrorBoundary extends Component<
@@ -6106,8 +6140,11 @@ export function App() {
   // A `?session=` deep link is the host asking for one specific session, which
   // only exists on a box that is past first run — never hold that behind the
   // gate. The gate is back on the next plain load while nothing is connected.
+  // `bare` closes it: a host that mounted one settings page asked for that
+  // page, not for onboarding. See shouldShowEmbeddedConnectGate.
   const connectGateOpen = shouldShowEmbeddedConnectGate({
     embedded,
+    bare,
     agents: codingAgents,
     dismissed: connectGateSkipped || !!sessionDeepLinkRef.current,
   });
@@ -6411,6 +6448,14 @@ export function App() {
           ],
         )}
       >
+        {/* A host-mounted page has no header, no nav and no composer of its
+            own — so while /api/bootstrap is in flight the mount painted the
+            real page with empty values: "Unavailable" ping, "0 working", "—"
+            storage. Those read as facts about the machine rather than as a
+            load in progress, and the standalone shell's one "Connecting…" pill
+            is chrome the host doesn't render. Show the page's shape instead,
+            and let the real values replace it. */}
+        {bare && loading ? <BareSurfaceSkeleton /> : <>
         {keepLive || tab === "live" ? (
           <div
             className={cn(
@@ -6586,6 +6631,7 @@ export function App() {
             connection={useWsLive ? wsLiveStream.connection : null}
           />
         ) : null}
+        </>}
       </main>
 
       {!callOpen && !bare ? (

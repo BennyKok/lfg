@@ -82,12 +82,23 @@ export function hasConnectedGateProvider(agents: ConnectAgentInfo[]): boolean {
  * neither provider connected. An empty roster means the bootstrap payload
  * never arrived (or failed) — gating on that would trap the user behind a card
  * we cannot resolve, so it stays closed.
+ *
+ * `bare` closes it outright. The gate replaces the ENTIRE tree — it returns
+ * before the shell — which is right for a framed full app (the frame's whole
+ * job is to run sessions, and it can't run one without an agent) and wrong for
+ * a host that mounted a single settings page. There, the user asked to change
+ * a setting, not to onboard: a host mounting Settings on a box with no
+ * connected agent got "Connect a coding agent" where its settings should have
+ * been, with no way to reach the page at all. A bare surface renders the page
+ * it was asked for; the host owns its own onboarding.
  */
 export function shouldShowEmbeddedConnectGate(input: {
   embedded: boolean;
   agents: ConnectAgentInfo[];
   dismissed?: boolean;
+  bare?: boolean;
 }): boolean {
+  if (input.bare) return false;
   if (!input.embedded || input.dismissed) return false;
   if (!input.agents.length) return false;
   return !hasConnectedGateProvider(input.agents);

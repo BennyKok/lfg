@@ -51,8 +51,23 @@ export type LfgSettingsPage =
 export interface LfgSettingsSurfaceProps {
   transport: LfgTransport;
   assetBaseUrl?: string;
-  /** Which page to mount. Defaults to the settings root. */
+  /**
+   * Which page to show. CONTROLLED when the host also passes `onNavigate`:
+   * changing this prop navigates the surface, no remount required.
+   */
   page?: LfgSettingsPage;
+  /**
+   * Called when the surface navigates itself — the user tapped "Coding
+   * agents", "Storage", "More", or a back link inside a page.
+   *
+   * Without this the surface's pages are invisible to the host: it runs on a
+   * memory history, so a host with its own router shows one URL for five
+   * different screens and none of them are linkable. A host that routes these
+   * pages passes this and reflects the page back through `page`. Pages the
+   * host doesn't route are reported too — ignore the ones you don't handle;
+   * the surface navigates internally either way.
+   */
+  onNavigate?: (page: LfgSettingsPage) => void;
   className?: string;
   errorSink?: LfgErrorSink;
 }

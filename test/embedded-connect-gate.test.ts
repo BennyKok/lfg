@@ -107,6 +107,22 @@ describe("embedded connect gate visibility", () => {
     ).toBe(false);
   });
 
+  test("a host-mounted settings page is never replaced by onboarding", () => {
+    // The gate returns before the shell, so it replaces the ENTIRE tree. That
+    // is right for a framed full app — its whole job is running sessions, and
+    // it can't run one without an agent — and wrong for a host that mounted a
+    // single settings page: the user asked to change a setting, and got an
+    // onboarding card where their settings should have been, with no way to
+    // reach the page at all.
+    expect(
+      shouldShowEmbeddedConnectGate({ embedded: true, bare: true, agents: FRESH_BOX }),
+    ).toBe(false);
+    // …and the framed full app is untouched.
+    expect(
+      shouldShowEmbeddedConnectGate({ embedded: true, bare: false, agents: FRESH_BOX }),
+    ).toBe(true);
+  });
+
   test("an empty roster (bootstrap failed) does not trap the user", () => {
     expect(shouldShowEmbeddedConnectGate({ embedded: true, agents: [] })).toBe(false);
   });
@@ -305,5 +321,34 @@ describe("App wiring", () => {
     expect(funnel).toContain("emitSessionCreatedToHost(sid, readLocationEmbedFlag())");
     // Exactly one emit site — not one per /api/sessions/new call site.
     expect(app.split("emitSessionCreatedToHost(").length - 1).toBe(1);
+  });
+});
+
+describe("host-mounted settings navigation", () => {
+  const embedded = require("node:fs").readFileSync("web/src/embedded.tsx", "utf8") as string;
+  const dts = require("node:fs").readFileSync("web/src/embedded.d.ts", "utf8") as string;
+
+  test("the surface reports where it navigated, and accepts being driven back", () => {
+    // The surface runs on a memory history, so without this a host with its own
+    // router shows ONE url for five different screens: the device back button
+    // leaves the whole surface instead of going up a page, and no page inside
+    // it is linkable.
+    expect(embedded).toContain("onNavigate?: (page: LfgSettingsPage) => void");
+    expect(embedded).toContain('router.subscribe("onResolved"');
+    // Controlled: the host echoing back the page we just reported must not
+    // navigate a second time.
+    expect(embedded).toContain(
+      "if (pathToSettingsPage(router.state.location.pathname) === page) return;",
+    );
+    // The published types are hand-written, so they drift silently unless
+    // pinned alongside the implementation.
+    expect(dts).toContain("onNavigate?: (page: LfgSettingsPage) => void");
+  });
+
+  test("only real settings pages are reported outward", () => {
+    // Any unknown first segment renders SettingsView (the app's catch-all), so
+    // an unfiltered pathname→page cast would hand the host a page id it has no
+    // route for.
+    expect(embedded).toContain("SETTINGS_PAGES.includes(page) ? page : null");
   });
 });

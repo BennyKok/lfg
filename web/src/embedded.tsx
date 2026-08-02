@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   RouterProvider,
   createMemoryHistory,
@@ -61,10 +61,42 @@ export type LfgSettingsPage =
 export interface LfgSettingsSurfaceProps {
   transport: LfgTransport;
   assetBaseUrl?: string;
-  /** Which page to mount. Defaults to the settings root. */
+  /**
+   * Which page to show. CONTROLLED when the host also passes `onNavigate`:
+   * changing this prop navigates the surface, no remount required.
+   */
   page?: LfgSettingsPage;
+  /**
+   * Called when the surface navigates itself — the user tapped "Coding
+   * agents", "Storage", "More", or a back link inside a page.
+   *
+   * Without this the surface's pages are invisible to the host: it runs on a
+   * memory history, so a host with its own router shows one URL for five
+   * different screens, the device back button leaves the whole surface instead
+   * of going up one page, and none of it is linkable. A host that routes these
+   * pages itself passes this and reflects the page back through `page`.
+   *
+   * Pages the host doesn't route are reported too — handle the ones you know
+   * and ignore the rest; the surface navigates internally either way, so an
+   * unhandled page still works.
+   */
+  onNavigate?: (page: LfgSettingsPage) => void;
   className?: string;
   errorSink?: LfgErrorSink;
+}
+
+const SETTINGS_PAGES: readonly LfgSettingsPage[] = [
+  "settings",
+  "coding-agents",
+  "auto",
+  "storage",
+  "more",
+];
+
+function pathToSettingsPage(pathname: string): LfgSettingsPage | null {
+  const seg = pathname.split("/").filter(Boolean)[0];
+  const page = (seg ? decodeURIComponent(seg) : "settings") as LfgSettingsPage;
+  return SETTINGS_PAGES.includes(page) ? page : null;
 }
 
 /**
@@ -78,6 +110,7 @@ export function LfgSettingsSurface({
   transport,
   assetBaseUrl,
   page = "settings",
+  onNavigate,
   className,
   errorSink,
 }: LfgSettingsSurfaceProps) {
@@ -90,6 +123,30 @@ export function LfgSettingsSurface({
       createMemoryHistory({ initialEntries: [`/${page}?embed=true`] }),
     ),
   );
+
+  // Ref, not a dep: a host that passes an inline arrow would otherwise
+  // re-subscribe on every render.
+  const onNavigateRef = useRef(onNavigate);
+  onNavigateRef.current = onNavigate;
+
+  // Report internal navigation outward. `subscribe` fires after the location
+  // has changed, so the host is told where the surface actually IS — echoing
+  // that back through `page` is a no-op below rather than a second navigation.
+  useEffect(() => {
+    return router.subscribe("onResolved", () => {
+      const next = pathToSettingsPage(router.state.location.pathname);
+      if (next) onNavigateRef.current?.(next);
+    });
+  }, [router]);
+
+  // Host-driven navigation: the host's URL is the source of truth once it
+  // routes these pages, so a browser back/forward or a deep link moves the
+  // surface. Guarded on the current location because the common case is the
+  // host echoing back the page we just reported.
+  useEffect(() => {
+    if (pathToSettingsPage(router.state.location.pathname) === page) return;
+    void router.navigate({ to: `/${page}`, search: { embed: true }, replace: true });
+  }, [router, page]);
 
   useLayoutEffect(() => {
     document.documentElement.dataset.lfgAppSurface = "";
