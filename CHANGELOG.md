@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - Claude capacity routes itself (v0.1.187)
+
+- New and forked Claude sessions now default to `Claude · Auto`, choosing the
+  connected account with the most room in its tightest usage window and pinning
+  that concrete account for the session's lifetime. Explicit numbered-account
+  choices remain available, while unknown capacity stays a fallback ahead of an
+  account known to be exhausted.
+
 ## August 1, 2026 - Embedded terminals use their host transport (v0.1.186)
 
 - Terminals mounted inside another product now open their WebSocket through
