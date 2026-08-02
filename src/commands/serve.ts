@@ -53,6 +53,12 @@ import {
 import { runAutoAgent } from "../auto/runner.ts";
 import { startAutoScheduler } from "../auto/scheduler.ts";
 import {
+  getMetricsHistory,
+  readAllPressure,
+  startMetricsSampler,
+  type MetricSample,
+} from "../metrics.ts";
+import {
   computeSessionDiff,
   computeSessionDiffStat,
   computeSessionDiffSummary,
@@ -555,6 +561,11 @@ async function serverStats() {
   const slice = sliceMemoryBytes();
   const disk = hostDiskBytes();
   const [load1, load5, load15] = loadavg();
+  // Pressure is the leading indicator the panel warns on: it rises while
+  // "percent used" still looks healthy. History powers the sparklines.
+  const pressure = await readAllPressure();
+  const history: MetricSample[] = getMetricsHistory();
+  const latest = history.length ? history[history.length - 1]! : null;
   return {
     agents: {
       live,
@@ -574,6 +585,9 @@ async function serverStats() {
       freeBytes: disk.free,
     },
     cpu: { cores: cpus().length, load1, load5, load15 },
+    network: { rxBps: latest?.rxBps ?? 0, txBps: latest?.txBps ?? 0 },
+    pressure,
+    history,
   };
 }
 
@@ -6584,6 +6598,8 @@ export async function cmdServe() {
     invalidateListSessionsCache();
   }
   startAutoScheduler((l) => console.log(l));
+  // Rolling CPU/RAM/network/PSI history for the settings Performance panel.
+  startMetricsSampler();
   const stopArtifactRefresh = startArtifactRefreshScheduler((l) => console.log(l));
   // Refresh scripts are detached process groups so timeouts can kill their
   // descendants. Tear all of them down before the server exits on either

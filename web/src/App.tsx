@@ -739,6 +739,25 @@ type ServerStats = {
     freeBytes: number | null;
   };
   cpu: { cores: number; load1: number; load5: number; load15: number };
+  network?: { rxBps: number; txBps: number };
+  // PSI — share of time tasks stalled on a resource. Leads "percent used".
+  pressure?: {
+    cpu: { some10: number; full10: number } | null;
+    memory: { some10: number; full10: number } | null;
+    io: { some10: number; full10: number } | null;
+  };
+  history?: MetricSample[];
+};
+
+type MetricSample = {
+  t: number;
+  cpuPct: number;
+  memPct: number;
+  rxBps: number;
+  txBps: number;
+  psiCpu: number | null;
+  psiMem: number | null;
+  psiIo: number | null;
 };
 
 type BootstrapPayload = {
@@ -4423,8 +4442,90 @@ function PushBell({ user }: { user?: string | null }) {
   );
 }
 
+// Advisory resource warnings. Polls the server snapshot slowly and toasts when
+// a metric ESCALATES to a higher severity — never on every poll, and never on
+// the way back down, so a metric hovering at a threshold doesn't spam.
+// Purely informational: nothing here blocks or kills anything.
+const WARN_POLL_MS = 20_000;
+const WARN_COOLDOWN_MS = 5 * 60_000;
+
+function useResourceWarnings(): void {
+  const levels = useRef<Record<string, number>>({});
+  const lastFired = useRef<Record<string, number>>({});
+
+  useEffect(() => {
+    let stopped = false;
+
+    const check = async () => {
+      let s: ServerStats;
+      try {
+        s = (await api<{ stats: ServerStats }>("/api/server/stats")).stats;
+      } catch {
+        return; // transient — say nothing
+      }
+      if (stopped) return;
+      const now = Date.now();
+
+      const fire = (key: string, level: number, title: string, description: string) => {
+        const prev = levels.current[key] ?? 0;
+        levels.current[key] = level;
+        if (level === 0 || level <= prev) return; // escalation only
+        if (now - (lastFired.current[key] ?? 0) < WARN_COOLDOWN_MS) return;
+        lastFired.current[key] = now;
+        (level >= 2 ? toast.error : toast.warning)(title, { description });
+      };
+
+      // Pressure first — it leads the usage numbers.
+      const pm = s.pressure?.memory?.some10 ?? 0;
+      fire(
+        "psiMem",
+        pm >= 30 ? 2 : pm >= 10 ? 1 : 0,
+        pm >= 30 ? "Memory pressure high" : "Memory pressure rising",
+        `Tasks stalled ${pm.toFixed(1)}% of the time waiting for memory.`,
+      );
+
+      const pio = s.pressure?.io?.some10 ?? 0;
+      fire(
+        "psiIo",
+        pio >= 50 ? 2 : pio >= 20 ? 1 : 0,
+        "I/O pressure rising",
+        `Tasks stalled ${pio.toFixed(1)}% of the time waiting for disk.`,
+      );
+
+      const total = s.memory.hostTotalBytes;
+      if (total > 0) {
+        const usedPct = ((total - s.memory.hostFreeBytes) / total) * 100;
+        fire(
+          "ram",
+          usedPct >= 95 ? 2 : usedPct >= 85 ? 1 : 0,
+          "Host memory low",
+          `${Math.round(usedPct)}% of RAM in use.`,
+        );
+      }
+
+      if (s.disk.totalBytes && s.disk.freeBytes != null && s.disk.totalBytes > 0) {
+        const dPct = ((s.disk.totalBytes - s.disk.freeBytes) / s.disk.totalBytes) * 100;
+        fire(
+          "disk",
+          dPct >= 95 ? 2 : dPct >= 90 ? 1 : 0,
+          "Disk almost full",
+          `${Math.round(dPct)}% of the data volume used.`,
+        );
+      }
+    };
+
+    void check();
+    const timer = window.setInterval(() => void check(), WARN_POLL_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, []);
+}
+
 export function App() {
   const appDialog = useAppDialog();
+  useResourceWarnings();
   const [dark, setDark] = useState(() => document.documentElement.classList.contains("dark"));
   useEffect(() => {
     const syncTheme = () => {
@@ -19519,76 +19620,271 @@ function StoragePage() {
   );
 }
 
+// Severity of a metric. Drives the status colour AND a text word, so state is
+// never conveyed by colour alone.
+type MetricTone = "ok" | "warn" | "crit" | "neutral";
+
+const TONE_TEXT: Record<MetricTone, string> = {
+  ok: "text-primary",
+  warn: "text-amber-500",
+  crit: "text-destructive",
+  neutral: "text-muted-foreground",
+};
+
+const TONE_WORD: Record<MetricTone, string | null> = {
+  ok: null,
+  warn: "elevated",
+  crit: "high",
+  neutral: null,
+};
+
+function toneFor(value: number, warn: number, crit: number): MetricTone {
+  if (value >= crit) return "crit";
+  if (value >= warn) return "warn";
+  return "ok";
+}
+
+// A single-series inline time-series. No axes, no gridlines, no legend: the
+// row's icon + label name the series, and the current value is the direct
+// label. Colour comes from `tone` (the status job), and the stroke uses
+// currentColor so light/dark follow the design tokens.
+function Sparkline({
+  values,
+  max,
+  tone,
+  label,
+  format,
+}: {
+  values: number[];
+  max?: number;
+  tone: MetricTone;
+  label: string;
+  format: (v: number) => string;
+}) {
+  const [hover, setHover] = useState<number | null>(null);
+  const W = 240;
+  const H = 34;
+  const PAD = 3;
+
+  if (values.length < 2) {
+    return (
+      <div className="mt-2 flex h-[34px] items-center text-[11px] text-muted-foreground">
+        Collecting…
+      </div>
+    );
+  }
+
+  const hi = Math.max(max ?? 0, ...values, 1e-6);
+  const n = values.length;
+  const px = (i: number) => (i / (n - 1)) * W;
+  const py = (v: number) => H - PAD - (Math.min(v, hi) / hi) * (H - PAD * 2);
+  const line = values.map((v, i) => `${i ? "L" : "M"}${px(i).toFixed(1)},${py(v).toFixed(1)}`).join(" ");
+  const area = `${line} L${W.toFixed(1)},${H} L0,${H} Z`;
+  const cur = values[values.length - 1]!;
+  const shown = hover != null ? values[hover]! : cur;
+
+  return (
+    <div className={cn("relative mt-2", TONE_TEXT[tone])}>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="none"
+        className="h-[34px] w-full overflow-visible"
+        role="img"
+        aria-label={`${label}: ${format(cur)} now, ${values.length} samples over the last ${Math.round((values.length * 5) / 60)} minutes`}
+        onMouseLeave={() => setHover(null)}
+        onMouseMove={(e) => {
+          const r = e.currentTarget.getBoundingClientRect();
+          if (r.width <= 0) return;
+          const frac = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+          setHover(Math.round(frac * (n - 1)));
+        }}
+      >
+        <title>{`${label}: ${format(cur)}`}</title>
+        <path d={area} fill="currentColor" fillOpacity={0.12} stroke="none" />
+        <path
+          d={line}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          vectorEffect="non-scaling-stroke"
+        />
+        {hover != null ? (
+          <line
+            x1={px(hover)}
+            x2={px(hover)}
+            y1={0}
+            y2={H}
+            stroke="currentColor"
+            strokeWidth={1}
+            strokeOpacity={0.45}
+            vectorEffect="non-scaling-stroke"
+          />
+        ) : null}
+      </svg>
+      {hover != null ? (
+        <div className="pointer-events-none absolute -top-1 right-0 rounded bg-popover px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-popover-foreground shadow-sm">
+          {format(shown)}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function MetricCard({
+  icon,
+  label,
+  value,
+  sub,
+  values,
+  max,
+  tone,
+  format,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: string;
+  sub?: string;
+  values: number[];
+  max?: number;
+  tone: MetricTone;
+  format: (v: number) => string;
+}) {
+  const word = TONE_WORD[tone];
+  return (
+    <div className="px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex min-w-0 items-center gap-3">
+          <span className="flex size-7 shrink-0 items-center justify-center rounded-[7px] bg-muted text-foreground/70">
+            {icon}
+          </span>
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5 text-sm font-medium">
+              {label}
+              {word ? (
+                <span className={cn("text-[10px] font-semibold uppercase tracking-wide", TONE_TEXT[tone])}>
+                  {word}
+                </span>
+              ) : null}
+            </div>
+            {sub ? <div className="text-xs text-muted-foreground tabular-nums">{sub}</div> : null}
+          </div>
+        </div>
+        <div className="shrink-0 text-sm font-semibold tabular-nums">{value}</div>
+      </div>
+      <Sparkline values={values} max={max} tone={tone} label={label} format={format} />
+    </div>
+  );
+}
+
 function ServerPerformancePanel({ stats }: { stats: ServerStats | null }) {
   const cpuPct = stats ? Math.min(100, Math.round((stats.cpu.load1 / Math.max(1, stats.cpu.cores)) * 100)) : 0;
   const hostUsed = stats ? stats.memory.hostTotalBytes - stats.memory.hostFreeBytes : 0;
   const hostPct = stats && stats.memory.hostTotalBytes > 0
     ? Math.round((hostUsed / stats.memory.hostTotalBytes) * 100)
     : 0;
-  const sliceCur = stats?.memory.sliceCurrentBytes ?? null;
-  const sliceMax = stats?.memory.sliceMaxBytes ?? null;
+  const hist = stats?.history ?? [];
+  const psi = stats?.pressure;
+  const rate = (v: number) => `${formatBytes(v)}/s`;
+  const pct = (v: number) => `${Math.round(v)}%`;
 
-  const rows: { icon: ReactNode; label: string; value: string; sub?: string; pct?: number | null }[] = [
-    {
-      icon: <Cpu className="size-4" />,
-      label: "CPU load",
-      value: stats ? `${cpuPct}%` : "—",
-      sub: stats ? `load ${stats.cpu.load1.toFixed(2)} · ${stats.cpu.cores} cores` : undefined,
-    },
-    {
-      icon: <Gauge className="size-4" />,
-      label: "Agent memory (slice)",
-      value: sliceCur != null ? formatBytes(sliceCur) : "—",
-      sub: sliceMax != null ? `of ${formatBytes(sliceMax)} cap` : "no cap set",
-    },
-    {
-      icon: <MemoryStick className="size-4" />,
-      label: "Host memory",
-      value: stats ? `${hostPct}%` : "—",
-      sub: stats ? `${formatBytes(hostUsed)} of ${formatBytes(stats.memory.hostTotalBytes)}` : undefined,
-    },
-  ];
+  const psiMem = psi?.memory?.some10 ?? 0;
+  const psiCpu = psi?.cpu?.some10 ?? 0;
+  const psiIo = psi?.io?.some10 ?? 0;
+  const hasPsi = !!psi && (psi.memory != null || psi.cpu != null || psi.io != null);
 
   return (
-    <section className="space-y-2">
-      <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-        Performance
-      </h2>
-      <div className="overflow-hidden rounded-2xl border border-border bg-card/40 divide-y divide-border">
-        {rows.map((row) => (
-          <div key={row.label} className="flex items-center justify-between gap-3 px-4 py-2.5">
-            <div className="flex min-w-0 items-center gap-3">
-              <span className="flex size-7 shrink-0 items-center justify-center rounded-[7px] bg-muted text-foreground/70">
-                {row.icon}
-              </span>
-              <div className="min-w-0">
-                <div className="text-sm font-medium">{row.label}</div>
-                {row.sub ? <div className="text-xs text-muted-foreground tabular-nums">{row.sub}</div> : null}
-                {row.pct != null ? (
-                  <div
-                    className="mt-1.5 h-1.5 w-32 max-w-full overflow-hidden rounded-full bg-foreground/[0.08]"
-                    role="progressbar"
-                    aria-label={`${row.label} usage`}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={row.pct}
-                  >
-                    <div
-                      className={cn(
-                        "h-full rounded-full transition-all duration-300 ease-ios",
-                        row.pct >= 90 ? "bg-destructive" : row.pct >= 75 ? "bg-amber-500" : "bg-primary",
-                      )}
-                      style={{ width: `${row.pct}%` }}
-                    />
-                  </div>
-                ) : null}
-              </div>
-            </div>
-            <div className="shrink-0 text-sm font-semibold tabular-nums">{row.value}</div>
+    <>
+      <section className="space-y-2">
+        <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Performance
+        </h2>
+        <div className="overflow-hidden rounded-2xl border border-border bg-card/40 divide-y divide-border">
+          <MetricCard
+            icon={<Cpu className="size-4" />}
+            label="CPU load"
+            value={stats ? `${cpuPct}%` : "—"}
+            sub={stats ? `load ${stats.cpu.load1.toFixed(2)} · ${stats.cpu.cores} cores` : undefined}
+            values={hist.map((h) => h.cpuPct)}
+            max={100}
+            tone={toneFor(cpuPct, 70, 90)}
+            format={pct}
+          />
+          <MetricCard
+            icon={<MemoryStick className="size-4" />}
+            label="Host memory"
+            value={stats ? `${hostPct}%` : "—"}
+            sub={stats ? `${formatBytes(hostUsed)} of ${formatBytes(stats.memory.hostTotalBytes)}` : undefined}
+            values={hist.map((h) => h.memPct)}
+            max={100}
+            tone={toneFor(hostPct, 75, 90)}
+            format={pct}
+          />
+          <MetricCard
+            icon={<ArrowDown className="size-4" />}
+            label="Network in"
+            value={stats?.network ? rate(stats.network.rxBps) : "—"}
+            values={hist.map((h) => h.rxBps)}
+            tone="neutral"
+            format={rate}
+          />
+          <MetricCard
+            icon={<ArrowUp className="size-4" />}
+            label="Network out"
+            value={stats?.network ? rate(stats.network.txBps) : "—"}
+            values={hist.map((h) => h.txBps)}
+            tone="neutral"
+            format={rate}
+          />
+        </div>
+      </section>
+
+      <section className="space-y-2">
+        <h2 className="px-4 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Resource pressure
+        </h2>
+        {hasPsi ? (
+          <div className="overflow-hidden rounded-2xl border border-border bg-card/40 divide-y divide-border">
+            <MetricCard
+              icon={<MemoryStick className="size-4" />}
+              label="Memory pressure"
+              value={`${psiMem.toFixed(1)}%`}
+              sub="time tasks stalled waiting for memory"
+              values={hist.map((h) => h.psiMem ?? 0)}
+              tone={toneFor(psiMem, 10, 30)}
+              format={(v) => `${v.toFixed(1)}%`}
+            />
+            <MetricCard
+              icon={<Cpu className="size-4" />}
+              label="CPU pressure"
+              value={`${psiCpu.toFixed(1)}%`}
+              sub="time tasks stalled waiting for CPU"
+              values={hist.map((h) => h.psiCpu ?? 0)}
+              tone={toneFor(psiCpu, 30, 60)}
+              format={(v) => `${v.toFixed(1)}%`}
+            />
+            <MetricCard
+              icon={<Gauge className="size-4" />}
+              label="I/O pressure"
+              value={`${psiIo.toFixed(1)}%`}
+              sub="time tasks stalled waiting for disk"
+              values={hist.map((h) => h.psiIo ?? 0)}
+              tone={toneFor(psiIo, 20, 50)}
+              format={(v) => `${v.toFixed(1)}%`}
+            />
           </div>
-        ))}
-      </div>
-    </section>
+        ) : (
+          <div className="rounded-2xl border border-border bg-card/40 px-4 py-3 text-xs text-muted-foreground">
+            Pressure metrics need Linux PSI (/proc/pressure) — unavailable on this host.
+          </div>
+        )}
+        <p className="px-4 text-xs text-muted-foreground">
+          Pressure is the share of time work was stalled waiting on a resource. It rises
+          before capacity runs out, so it warns earlier than a percentage-used bar.
+        </p>
+      </section>
+    </>
   );
 }
 
