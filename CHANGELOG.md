@@ -4,6 +4,20 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - Attached images show up as images (v0.1.190)
+
+- Screenshots you attach now render as thumbnails inside your own message
+  instead of a wall of `/tmp/lfg-uploads/...` paths. Sending six images used to
+  fill the transcript with six file paths and nothing you could actually look
+  at. Tap one to open the full-size viewer.
+- A lone image widens to the bubble; several tile side by side. Attachments
+  with nothing to show inline — a PDF, or an image whose bytes were cleared
+  when the box rebooted — appear as a named file chip rather than a broken
+  image.
+- What the agent receives is unchanged: the absolute paths still travel with
+  the message, so a coding agent can read the files exactly as before. Only the
+  rendering changed.
+
 ## August 2, 2026 - Host-mounted settings behave like pages (v0.1.189)
 
 - A product embedding LFG's settings pages no longer has them replaced by the
