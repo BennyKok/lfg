@@ -4,6 +4,15 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - Session creation no longer looks stuck (v0.1.195)
+
+- Starting a session now replaces the composer with a clear, shimmering
+  "Creating session…" status while LFG prepares the worktree and starts the
+  agent. The mobile composer and desktop new-session drawer both stay visibly
+  busy instead of clearing or disappearing with no feedback.
+- The creating state blocks accidental duplicate launches. If startup fails,
+  the overlay clears and the original prompt returns so it can be retried.
+
 ## August 2, 2026 - The mic responds on the first tap (v0.1.194)
 
 - Tapping the mic now opens it immediately. Every tap used to wait on a network
