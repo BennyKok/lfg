@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - Session creation feedback stays in its lane (v0.1.198)
+
+- The shimmering session-creation state now covers only the rounded input card,
+  leaving project, attachment, and action controls visible while LFG starts the
+  session.
+
 ## August 2, 2026 - Every Claude account's usage, and a chip you can see (v0.1.197)
 
 - A Claude account whose access token had gone stale now reports its usage
