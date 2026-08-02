@@ -4131,7 +4131,7 @@ export async function cmdServe() {
         if (gate) return gate;
         const tmuxName = `lfg-${randomBytes(3).toString("hex")}`;
         const isSubagent = spawnedBy === "subagent";
-        const cwdResolved = resolveSessionCwd(repo.cwd, tmuxName, {
+        const cwdResolved = await resolveSessionCwd(repo.cwd, tmuxName, {
           worktree: body?.worktree,
           selfRepo: SELF_REPO,
         });

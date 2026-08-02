@@ -428,7 +428,7 @@ async function getOrCreateGroupSession(sock: WASocket, groupJid: string): Promis
   // after turn 1, so we store the key and resolve the threadId lazily in the
   // relay loop via findEntryByAnyId). The legacy CLI paths discover the
   // sessionId from the pane/pidfile as before.
-  const cwdResolved = resolveSessionCwd(AGENT_CWD, tmuxName, { selfRepo: PATHS.root });
+  const cwdResolved = await resolveSessionCwd(AGENT_CWD, tmuxName, { selfRepo: PATHS.root });
   if (!cwdResolved.ok) throw new Error(cwdResolved.error);
   const { cwd, worktree } = cwdResolved;
 

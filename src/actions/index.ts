@@ -115,7 +115,7 @@ async function dispatchAgent(
   // worktree/branch — both must agree so the agent's worktree is uniquely
   // its own (one per dispatched action).
   const session = `agent_${sanitize(agentName)}_${id.slice(0, 6)}`;
-  const cwdResolved = resolveSessionCwd(PROJECT_REPO, session, { selfRepo: SELF_REPO });
+  const cwdResolved = await resolveSessionCwd(PROJECT_REPO, session, { selfRepo: SELF_REPO });
   if (!cwdResolved.ok) {
     return { ok: false, summary: `failed to prepare worktree: ${cwdResolved.error}` };
   }
@@ -284,7 +284,7 @@ async function dispatchCombinedAgent(
     .digest("hex")
     .slice(0, 6);
   const session = `agent_${sanitize(agentName)}_multi_${combinedId}`;
-  const cwdResolved = resolveSessionCwd(PROJECT_REPO, session, { selfRepo: SELF_REPO });
+  const cwdResolved = await resolveSessionCwd(PROJECT_REPO, session, { selfRepo: SELF_REPO });
   if (!cwdResolved.ok) {
     return { ok: false, summary: `failed to prepare worktree: ${cwdResolved.error}` };
   }
@@ -410,7 +410,7 @@ export async function dispatchSendFixAgent(opts: {
   msgAttempts: number;
 }): Promise<ActionResult> {
   const session = `debug_send_${opts.msgId.slice(0, 6)}`;
-  const cwdResolved = resolveSessionCwd(SELF_REPO, session);
+  const cwdResolved = await resolveSessionCwd(SELF_REPO, session);
   if (!cwdResolved.ok) {
     return { ok: false, summary: `failed to prepare worktree: ${cwdResolved.error}` };
   }

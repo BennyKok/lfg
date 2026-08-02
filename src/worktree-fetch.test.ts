@@ -57,57 +57,87 @@ function newSessionName(): string {
   return name;
 }
 
+// Wait for the background refresh to land origin/main on disk.
+async function waitForOriginMain(work: string, want: string): Promise<string> {
+  for (let i = 0; i < 100; i++) {
+    if (git(work, "rev-parse", "origin/main") === want) return want;
+    await Bun.sleep(50);
+  }
+  return git(work, "rev-parse", "origin/main");
+}
+
 describe("session worktree origin/main fetch", () => {
-  test("the first create for a repo fetches, so it branches from current origin/main", () => {
+  test("a create never waits for the network — it branches from the main on disk", async () => {
     const { origin, work } = makeClonedRepo();
-    // Advance origin BEFORE the clone's very first provisioning. The clone has
-    // not seen this commit, so only a real fetch can reach it.
+    const clonedHead = git(work, "rev-parse", "origin/main");
+    // Advance origin BEFORE provisioning. The clone has not seen this commit,
+    // so branching from it would prove the create blocked on a fetch.
+    Bun.write(join(origin, "b.txt"), "second\n");
+    git(origin, "add", "b.txt");
+    git(origin, "commit", "-qm", "second");
+    const originHead = git(origin, "rev-parse", "HEAD");
+    expect(originHead).not.toBe(clonedHead);
+
+    const result = await prepareSessionWorktree(work, newSessionName());
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // The base is what was already on disk: the round trip is off this path.
+    expect(git(result.worktree.path, "rev-parse", "HEAD")).toBe(clonedHead);
+  });
+
+  test("the refresh it kicks off in the background benefits the next create", async () => {
+    const { origin, work } = makeClonedRepo();
     Bun.write(join(origin, "b.txt"), "second\n");
     git(origin, "add", "b.txt");
     git(origin, "commit", "-qm", "second");
     const originHead = git(origin, "rev-parse", "HEAD");
 
-    const session = newSessionName();
-    const result = prepareSessionWorktree(work, session);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
+    // This create starts the fetch and returns without it.
+    const first = await prepareSessionWorktree(work, newSessionName());
+    expect(first.ok).toBe(true);
+    expect(await waitForOriginMain(work, originHead)).toBe(originHead);
 
-    expect(git(result.worktree.path, "rev-parse", "HEAD")).toBe(originHead);
+    // Second create branches from the ref the background fetch brought in —
+    // freshness is preserved, it is just paid for out of band.
+    const second = await prepareSessionWorktree(work, newSessionName());
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(git(second.worktree.path, "rev-parse", "HEAD")).toBe(originHead);
   });
 
-  test("a second create within the TTL skips the fetch instead of paying it again", () => {
+  test("a second create within the TTL does not fetch again", async () => {
     const { origin, work } = makeClonedRepo();
 
     // First create warms the per-repo fetch timestamp.
-    const first = prepareSessionWorktree(work, newSessionName());
+    const first = await prepareSessionWorktree(work, newSessionName());
     expect(first.ok).toBe(true);
     if (!first.ok) return;
     const baseHead = git(first.worktree.path, "rev-parse", "HEAD");
 
-    // Now move origin forward. A second create in the same TTL window must NOT
-    // go to the network, so it branches from the origin/main already on disk.
+    // Now move origin forward. A second create in the same TTL window must not
+    // go to the network at all, so origin/main on disk stays where it was.
     Bun.write(join(origin, "c.txt"), "third\n");
     git(origin, "add", "c.txt");
     git(origin, "commit", "-qm", "third");
     expect(git(origin, "rev-parse", "HEAD")).not.toBe(baseHead);
 
-    const second = prepareSessionWorktree(work, newSessionName());
+    const second = await prepareSessionWorktree(work, newSessionName());
     expect(second.ok).toBe(true);
     if (!second.ok) return;
-
-    // Same base as the first create — proof the fetch was skipped, and that
-    // skipping still yields a working worktree rather than an error.
+    await Bun.sleep(300);
+    expect(git(work, "rev-parse", "origin/main")).toBe(baseHead);
     expect(git(second.worktree.path, "rev-parse", "HEAD")).toBe(baseHead);
   });
 
-  test("an unreachable remote still produces a worktree from the local main", () => {
+  test("an unreachable remote still produces a worktree from the local main", async () => {
     const { origin, work } = makeClonedRepo();
     const localHead = git(work, "rev-parse", "HEAD");
-    // Point origin at a path that does not exist: the fetch fails rather than
-    // hanging, and provisioning must fall through to the refs already present.
+    // Point origin at a path that does not exist: the failing background fetch
+    // must not touch provisioning, which uses the refs already present.
     git(work, "remote", "set-url", "origin", join(origin, "..", "gone.git"));
 
-    const result = prepareSessionWorktree(work, newSessionName());
+    const result = await prepareSessionWorktree(work, newSessionName());
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(git(result.worktree.path, "rev-parse", "HEAD")).toBe(localHead);

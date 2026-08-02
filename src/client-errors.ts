@@ -274,7 +274,7 @@ async function dispatchFixAgent(
   // Derive a short, stable, tmux-safe session name from the signature.
   const tag = Buffer.from(sig).toString("hex").slice(0, 6);
   const session = `fix_clienterr_${tag}`;
-  const cwdResolved = resolveSessionCwd(SELF_REPO, session);
+  const cwdResolved = await resolveSessionCwd(SELF_REPO, session);
   if (!cwdResolved.ok) {
     console.error(`[client-error] failed to prepare worktree: ${cwdResolved.error}`);
     return null;

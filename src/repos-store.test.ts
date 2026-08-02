@@ -50,7 +50,7 @@ describe("project creation", () => {
 
     const session = `repo-init-${crypto.randomUUID().slice(0, 8)}`;
     worktreeSessions.push({ repo: repo.cwd, session });
-    const worktree = prepareSessionWorktree(repo.cwd, session);
+    const worktree = await prepareSessionWorktree(repo.cwd, session);
 
     expect(worktree.ok).toBe(true);
     if (!worktree.ok) return;
@@ -67,11 +67,11 @@ describe("project creation", () => {
     git(root, "add", "README.md");
     git(root, "commit", "-m", "initial");
 
-    expect(shouldAutoWorktree(root, { selfRepo: root })).toBe(true);
-    expect(shouldAutoWorktree(root, { selfRepo: root, worktree: false })).toBe(true);
+    expect(await shouldAutoWorktree(root, { selfRepo: root })).toBe(true);
+    expect(await shouldAutoWorktree(root, { selfRepo: root, worktree: false })).toBe(true);
     const session = `self-${crypto.randomUUID().slice(0, 8)}`;
     worktreeSessions.push({ repo: root, session });
-    const resolved = resolveSessionCwd(root, session, { selfRepo: root });
+    const resolved = await resolveSessionCwd(root, session, { selfRepo: root });
     expect(resolved.ok).toBe(true);
     if (!resolved.ok) return;
     expect(resolved.cwd).toBe(join(WORKTREE_ROOT, session));
@@ -100,7 +100,7 @@ describe("project creation", () => {
     const repo = await useProjectFolder(folder);
     expect(Bun.spawnSync(["git", "-C", repo.cwd, "rev-parse", "HEAD"]).exitCode).not.toBe(0);
 
-    const resolved = resolveSessionCwd(repo.cwd, `unborn-${crypto.randomUUID().slice(0, 8)}`);
+    const resolved = await resolveSessionCwd(repo.cwd, `unborn-${crypto.randomUUID().slice(0, 8)}`);
     expect(resolved).toEqual({ ok: true, cwd: repo.cwd });
     expect(readFileSync(join(folder, "notes.txt"), "utf8")).toBe("keep me\n");
   });
