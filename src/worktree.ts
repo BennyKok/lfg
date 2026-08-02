@@ -50,17 +50,16 @@ export function sessionWorktreeEnabled(): boolean {
 
 export function shouldAutoWorktree(
   repoRoot: string,
-  opts?: { voice?: boolean; worktree?: boolean; selfRepo?: string },
+  opts?: { worktree?: boolean; selfRepo?: string },
 ): boolean {
   const abs = resolve(repoRoot);
   const isSelfRepo = !!opts?.selfRepo && resolve(opts.selfRepo) === abs;
   // Shared-checkout opt-out remains available for ordinary projects, but not
   // for LFG itself: allowing one API caller to set worktree=false would reopen
   // the exact multi-session data-loss path this isolation is meant to close.
-  // Voice-only sessions are handled by their dedicated guard below.
   if (opts?.worktree === false && !isSelfRepo) return false;
   // Explicit `worktree: true` is a hard opt-in: it overrides the default-off
-  // guards (global disable and voice) so an agent asked to
+  // guards (global disable) so an agent asked to
   // isolate ALWAYS lands in /tmp/lfg-wt instead of editing a shared checkout in
   // place. This is what lets an lfg subagent safely rewrite serve.ts/App.tsx
   // without colliding with the ~15 sessions live in the shared tree.
@@ -70,7 +69,6 @@ export function shouldAutoWorktree(
   // and deploy the same checkout, so the last finisher silently erased earlier
   // work. `selfRepo` now strengthens rather than weakens the isolation policy.
   if (!sessionWorktreeEnabled()) return false;
-  if (opts?.voice) return false;
   // "Use this folder" can initialize an existing directory as an unborn Git
   // repository. There is no commit from which Git can create a worktree yet,
   // but the first coding agent still needs to launch so it can inspect the
@@ -139,7 +137,7 @@ export function prepareSessionWorktree(
 export function resolveSessionCwd(
   repoRoot: string,
   sessionName: string,
-  opts?: { voice?: boolean; worktree?: boolean; selfRepo?: string },
+  opts?: { worktree?: boolean; selfRepo?: string },
 ):
   | { ok: true; cwd: string; worktree?: SessionWorktree }
   | { ok: false; error: string } {

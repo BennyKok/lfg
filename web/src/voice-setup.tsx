@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/dialog";
 import { lfgFetch } from "@/lib/lfg-client";
 
-export type VoiceCapability = "input" | "output" | "call";
+export type VoiceCapability = "input" | "output";
 
 type ProviderOption = {
   id: string;
@@ -30,23 +30,17 @@ export type VoiceConfig = {
 
 const SETUP_EVENT = "lfg:voice-setup";
 
-function selectedProvider(
-  cfg: VoiceConfig,
-  capability: Exclude<VoiceCapability, "call">,
-): ProviderOption | undefined {
+function selectedProvider(cfg: VoiceConfig, capability: VoiceCapability): ProviderOption | undefined {
   const kind = capability === "input" ? "stt" : "tts";
   const selected = capability === "input" ? cfg.settings.sttProvider : cfg.settings.ttsProvider;
   return cfg.providers[kind].find((provider) => provider.id === selected);
 }
 
 export function voiceReady(cfg: VoiceConfig, capability: VoiceCapability): boolean {
-  if (capability === "call") {
-    return voiceReady(cfg, "input") && voiceReady(cfg, "output");
-  }
   return selectedProvider(cfg, capability)?.available === true;
 }
 
-export function showVoiceSetup(capability: VoiceCapability = "call") {
+export function showVoiceSetup(capability: VoiceCapability = "input") {
   window.dispatchEvent(new CustomEvent(SETUP_EVENT, { detail: { capability } }));
 }
 
@@ -141,7 +135,7 @@ export async function ensureVoiceConfigured(capability: VoiceCapability): Promis
 
 export function VoiceSetupDialog() {
   const [open, setOpen] = useState(false);
-  const [capability, setCapability] = useState<VoiceCapability>("call");
+  const [capability, setCapability] = useState<VoiceCapability>("input");
   const [cfg, setCfg] = useState<VoiceConfig | null>(null);
   const [providerId, setProviderId] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -168,17 +162,14 @@ export function VoiceSetupDialog() {
   useEffect(() => {
     const onSetup = (event: Event) => {
       const detail = (event as CustomEvent<{ capability?: VoiceCapability }>).detail;
-      const nextCapability = detail?.capability ?? "call";
+      const nextCapability = detail?.capability ?? "input";
       setCapability(nextCapability);
       setApiKey("");
       setMessage("");
       setOpen(true);
       void load()
         .then((next) => {
-          const preferred = selectedProvider(
-            next,
-            nextCapability === "output" ? "output" : "input",
-          );
+          const preferred = selectedProvider(next, nextCapability);
           setProviderId(preferred?.id ?? next.providers.stt[0]?.id ?? "");
         })
         .catch((error) => setMessage(error instanceof Error ? error.message : String(error)));
@@ -199,11 +190,8 @@ export function VoiceSetupDialog() {
     setSaving(true);
     setMessage("");
     try {
-      const selection = capability === "input"
-        ? { sttProvider: provider.id }
-        : capability === "output"
-          ? { ttsProvider: provider.id }
-          : { sttProvider: provider.id, ttsProvider: provider.id };
+      const selection =
+        capability === "input" ? { sttProvider: provider.id } : { ttsProvider: provider.id };
       const response = await lfgFetch("/api/voice/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -214,7 +202,14 @@ export function VoiceSetupDialog() {
       const next = await load();
       setApiKey("");
       if (voiceReady(next, capability)) {
-        setMessage("API key saved. Voice is ready to use.");
+        // Scoped to the capability we just configured — with the old "call"
+        // variant gone, one save only ever satisfies one half, so claiming
+        // "voice is ready" would be wrong when the other half is still keyless.
+        setMessage(
+          capability === "input"
+            ? "API key saved. Voice messages are ready."
+            : "API key saved. Spoken replies are ready.",
+        );
         window.setTimeout(() => setOpen(false), 700);
       } else {
         setMessage("API key saved, but this voice configuration is not ready yet.");
@@ -237,9 +232,7 @@ export function VoiceSetupDialog() {
           <DialogDescription>
             {capability === "input"
               ? "Voice messages need a speech-to-text API key."
-              : capability === "output"
-                ? "Spoken replies need a text-to-speech API key."
-                : "Voice calls need a configured speech provider before they can start."}
+              : "Spoken replies need a text-to-speech API key."}
           </DialogDescription>
         </DialogHeader>
 

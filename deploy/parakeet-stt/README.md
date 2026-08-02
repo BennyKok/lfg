@@ -83,5 +83,7 @@ curl -sS -X POST http://<parakeet-box>:8087/stt \
 - `-v2` is English-only; `-v3` covers ~25 languages with auto language ID.
 - First boot downloads the model from Hugging Face (~2.4 GB); subsequent starts
   are fast.
-- This covers the **browser dictation** path. The realtime LiveKit voice-orb
-  worker has its own STT wiring on the control-plane box — swap that separately.
+- **Not currently wired into lfg.** `serve` routes `/api/voice/stt` through
+  `src/voice-providers.ts`, which only has ElevenLabs and OpenAI adapters — it
+  does not read `STT_UPSTREAM`. Using this box means adding a self-hosted
+  adapter there first.

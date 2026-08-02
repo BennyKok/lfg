@@ -120,7 +120,7 @@ def tts(
         return Response(content=_pcm_wav(audio, m.sample_rate), media_type="audio/wav")
 
     # default: STREAM raw int16 PCM as CosyVoice2 produces each chunk (~150ms
-    # first-chunk). The LiveKit worker pushes these into the room progressively.
+    # first-chunk). Callers stream these to the client progressively.
     def gen():
         for out in m.inference_zero_shot(text, "", "", zero_shot_spk_id=SPK_ID, stream=True):
             yield _f32_to_pcm16(out["tts_speech"].squeeze(0).cpu().numpy())

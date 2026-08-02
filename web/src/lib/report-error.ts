@@ -240,8 +240,8 @@ export function installErrorReporting(): void {
   window.addEventListener("unhandledrejection", (ev: PromiseRejectionEvent) => {
     const reason = ev.reason;
     // A bare DOM Event as the rejection reason is non-actionable noise: it's how
-    // libraries (e.g. livekit-client's signal WebSocket, media elements) surface
-    // a transient connection/playback error — reject with the raw `error` event.
+    // libraries (WebSocket transports, media elements) surface a transient
+    // connection/playback error — reject with the raw `error` event.
     // It carries no message or stack and serializes to a useless `{"isTrusted":
     // true}`, yet would still raise a finding + dispatch an auto-fix agent. Drop
     // it, mirroring the resource-load filter in the 'error' handler above.
@@ -271,8 +271,8 @@ export function installErrorReporting(): void {
 
 // A promise rejected with a DOM Event (rather than an Error) is, by construction,
 // a failed/aborted *resource* or *transport* — EventSource, WebSocket, media,
-// <img>/<script>, WebRTC — typically surfaced from inside a third-party library
-// (livekit-client, etc.). It is never a JS logic bug: no stack, no message, and
+// <img>/<script> — typically surfaced from inside a third-party library.
+// It is never a JS logic bug: no stack, no message, and
 // it JSON-serializes to the infamous `{"isTrusted":true}`. The owning code
 // already recovers (sockets reconnect, media degrades), so escalating it as a
 // "frontend error" only spams the feed and dispatches an auto-fix agent against a

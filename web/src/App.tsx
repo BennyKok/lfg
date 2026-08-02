@@ -233,9 +233,6 @@ import { useAppDialog } from "@/components/ui/app-dialog";
 const TermView = lazyWithReload("TermView", () =>
   import("@/components/TermView").then((m) => ({ default: m.TermView })),
 );
-const VoiceCall = lazyWithReload("VoiceCall", () =>
-  import("./voice-call").then((m) => ({ default: m.VoiceCall })),
-);
 const BrowserProfiles = lazyWithReload("BrowserProfiles", () => import("./BrowserProfiles"));
 const ChangelogPage = lazyWithReload("ChangelogPage", () =>
   import("./ChangelogPage"),
@@ -3075,8 +3072,8 @@ function useDictation(opts: {
   return { state, toggle, start, stop, cancel, supported, level };
 }
 
-// Imperative handle so a parent (e.g. the orb's press-and-hold gesture) can
-// drive dictation without a click on the button itself. `submitOnStop` routes
+// Imperative handle so a parent can drive dictation without a click on the
+// button itself. `submitOnStop` routes
 // the stopped transcript through the auto-submit callback (release-to-send)
 // rather than just inserting it.
 type MicHandle = { start: () => void; stop: (submitOnStop?: boolean) => void; cancel: () => void };
@@ -4774,7 +4771,7 @@ export function App() {
   const [newOpen, setNewOpen] = useState(false);
   // Mobile inline create composer (anchored at the bottom of the home screen).
   // `composerExpanded` toggles the compact↔full controls; bumping
-  // `composerFocusNonce` (orb double-tap / "new session" affordances) focuses the
+  // `composerFocusNonce` ("new session" affordances) focuses the
   // composer's textarea so the soft keyboard opens.
   const [composerExpanded, setComposerExpanded] = useState(false);
   // Set when something outside the composer picks an agent for it (currently the
@@ -4786,7 +4783,6 @@ export function App() {
     nonce: number;
   } | null>(null);
   const [composerFocusNonce, setComposerFocusNonce] = useState(0);
-  const [callOpen, setCallOpen] = useState(false);
   const [runLog, setRunLog] = useState<string | null>(null);
   // Auto agents
   // Tabs are "live" | "settings" | "notifications" | "term" | "browser". Auto agents and runtime
@@ -5799,7 +5795,7 @@ export function App() {
   pageSwipeCtx.current = { cycleMobileProjectFilter, composerExpanded };
 
   useEffect(() => {
-    if (!isMobile || (tab !== "live" && tab !== "notifications" && tab !== "artifacts") || callOpen) return;
+    if (!isMobile || (tab !== "live" && tab !== "notifications" && tab !== "artifacts")) return;
     const main = mainRef.current;
     if (!main) return;
     const SWIPE_COMMIT = 64;
@@ -5911,7 +5907,7 @@ export function App() {
         main.style.opacity = "";
       }
     };
-  }, [callOpen, isMobile, tab]);
+  }, [isMobile, tab]);
 
   // Tab / Shift+Tab cycles the live project filter (mirrors the project menu).
   const projectKb = useRef({ tab, projectFilter, projectOptions, setProjectFilter });
@@ -6598,7 +6594,6 @@ export function App() {
 
   const mobileComposerVisible =
     isMobile &&
-    !callOpen &&
     !viewerArtifact &&
     // The pulled-up terminal covers the page and owns the keyboard. Leaving the
     // composer mounted underneath means it rides the keyboard up and down (and
@@ -6999,7 +6994,7 @@ export function App() {
         </>}
       </main>
 
-      {!callOpen && !bare ? (
+      {!bare ? (
         <>
           {mobileComposerVisible ? (
             // Mobile bottom composer: the create flow lives inline, anchored at
@@ -7010,7 +7005,6 @@ export function App() {
             // surface (artifact viewer, pulled-up terminal) so it cannot stack
             // above the content — `mobileComposerVisible` is the single source
             // of truth, shared with the <main> padding that reserves its space.
-            // The orb lives in the top nav.
             <NewSessionDialog
               variant="inline"
               open
@@ -7037,14 +7031,6 @@ export function App() {
             />
           ) : null}
         </>
-      ) : null}
-      {callOpen ? (
-        <Suspense fallback={null}>
-          <VoiceCall
-            onClose={() => setCallOpen(false)}
-            onCompose={() => setNewOpen(true)}
-          />
-        </Suspense>
       ) : null}
 
       {openFinding ? (
@@ -16453,8 +16439,8 @@ function NewSessionDialog({
   onReposChanged,
   onProjectSwipe,
   // Presentation shell for the shared composer core:
-  //  - "drawer" (default): desktop / call-screen bottom sheet (Vaul), opened by
-  //    the orb or the "C" shortcut.
+  //  - "drawer" (default): desktop bottom sheet (Vaul), opened by the "C"
+  //    shortcut.
   //  - "inline": mobile home screen — anchored at the bottom of the viewport,
   //    compact at rest and expandable. Always mounted (no open/close).
   variant = "drawer",
@@ -16483,11 +16469,11 @@ function NewSessionDialog({
   onProjectSwipe?: (dir: 1 | -1) => boolean;
   onReposChanged: () => Promise<void>;
   variant?: "drawer" | "inline";
-  // Inline only: compact↔full controls toggle (lifted to the parent so the orb
-  // and other affordances can drive it).
+  // Inline only: compact↔full controls toggle (lifted to the parent so other
+  // affordances can drive it).
   expanded?: boolean;
   onExpandedChange?: (next: boolean) => void;
-  // Inline only: bump to focus the textarea (orb double-tap / "new session").
+  // Inline only: bump to focus the textarea ("new session").
   focusNonce?: number;
   codingAgents?: CodingAgentInfo[];
   // Set when a surface outside the composer picks the agent for it (the usage
@@ -19282,7 +19268,7 @@ function VoiceSettingsSection() {
         />
       </div>
       <p className="px-4 text-xs text-muted-foreground">
-        Applies to the voice orb and every mic button. Greyed-out providers need an API key set on
+        Applies to every mic button and spoken reply. Greyed-out providers need an API key set on
         the server.
       </p>
       {needsSetup ? (
@@ -19291,7 +19277,10 @@ function VoiceSettingsSection() {
             type="button"
             variant="outline"
             size="sm"
-            onClick={() => showVoiceSetup("call")}
+            // "call" used to mean "needs both"; with that capability gone, open
+            // the dialog for whichever half is actually missing (input first,
+            // since dictation is the more commonly used one).
+            onClick={() => showVoiceSetup(!selectedInput?.available ? "input" : "output")}
           >
             <KeyRound className="size-4" /> Set up voice API key
           </Button>

@@ -1,10 +1,13 @@
 // Pluggable TTS/STT providers behind the /api/voice/{tts,stt} proxies. Both the
-// browser dictation path and the Python LiveKit worker funnel through those two
-// endpoints, so switching provider here switches it everywhere — the worker
-// (deploy/voice/agent.py) needs no changes. The internal contract every adapter
-// honours, which the worker consumes verbatim:
+// browser dictation path and the TTS playback path funnel through those two
+// endpoints, so switching provider here switches it everywhere. The internal
+// contract every adapter honours:
 //   TTS  → raw 24 kHz mono int16 PCM byte stream (no container/header)
 //   STT  → JSON { text }   (input is octet-stream WAV)
+// NOTE: only the ElevenLabs and OpenAI adapters exist today. The self-hosted GPU
+// stacks under deploy/{gpu-stt,streaming-stt,parakeet-stt} are NOT reachable from
+// here — nothing reads TTS_UPSTREAM/STT_UPSTREAM/STT_WS_URL since the LiveKit
+// call worker was removed. Wiring one up means adding an adapter below.
 // Secrets (API keys / upstream tokens) stay server-side. Provider choices live
 // in data/voice-settings.json; keys entered in the setup dialog are written to
 // the server's .env file and are never returned to the browser.
@@ -20,7 +23,7 @@ export type VoiceSettings = {
   sttProvider: string;
 };
 
-// Streaming-STT bridge. The LiveKit worker (agent.py LfgSpeechStream) holds a
+// Streaming-STT bridge. The browser dictation path holds a
 // long-lived websocket to /api/voice/stt-stream and speaks a tiny protocol:
 //   client→server : raw 16 kHz mono int16 PCM as BINARY frames; text frames
 //                   {"type":"flush"} at each utterance boundary and

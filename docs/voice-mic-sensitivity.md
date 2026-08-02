@@ -4,17 +4,15 @@ This documents how lfg decides when the microphone is "hearing you" and how to
 tune it so the mic is **less** sensitive (ignores background noise / room tone,
 waits longer before deciding you've stopped talking).
 
-There are **two independent voice paths**, and "sensitivity" means something
-different in each. Pick the one you're actually using before changing anything.
+Sensitivity lives in one place: the browser dictation path.
 
 | Path | Where | What it is | Where sensitivity lives |
 |------|-------|-----------|------------------------|
-| **Browser dictation** | `web/src/App.tsx` | Push-to-talk / hands-free dictation in the web UI. Custom Web Audio VAD → batch Whisper STT. | `VOICE_RMS_THRESHOLD`, `silenceMs` |
-| **LiveKit voice agent** | `deploy/voice/agent.py` | Full conversational voice agent (the room-based call). Silero VAD + turn detection. | Silero VAD (bundled) + turn-detection mode |
+| **Browser dictation** | `web/src/App.tsx` | Push-to-talk / hands-free dictation in the web UI. Custom Web Audio VAD → streaming STT. | `VOICE_RMS_THRESHOLD`, `silenceMs` |
 
 ---
 
-## 1. Browser dictation (most likely what you want)
+## 1. Browser dictation
 
 This is the tap-to-talk / hands-free dictation built into the web app. It runs a
 small **voice-activity detector (VAD)** entirely in the browser: every audio
@@ -101,37 +99,7 @@ npm --prefix web run build
 
 ---
 
-## 2. LiveKit voice agent (`deploy/voice/agent.py`)
-
-The conversational room-based agent uses LiveKit's `AgentSession`. Its
-"sensitivity" / "when did the user stop talking" is governed by **Silero VAD**
-(bundled into `AgentSession` — there is no explicit RMS threshold in our code)
-plus the **turn-detection mode** chosen by `_load_turn_detection()`
-(`agent.py:1378-1422`), wired in at `agent.py:1440-1445`.
-
-Turn detection falls through, in order:
-
-1. **Hosted inference** — if `LIVEKIT_INFERENCE_URL` is set → `inference.TurnDetector()`
-2. **Local on-box EOU model** — if `LFG_LOCAL_EOU=1` → `EnglishModel()` (opt-in;
-   currently flaky on this box, see comment at `agent.py:1406-1411`)
-3. **Plain VAD endpointing** (default) → returns `"vad"` — silence-based
-   endpointing over the bundled Silero VAD
-
-If the agent is **endpointing too eagerly** (cutting you off) or **too noise-
-triggered**, the relevant levers are the turn-detection mode (a semantic
-detector like options 1/2 is far less likely to false-trigger on noise than
-plain `"vad"`) rather than a numeric threshold. Note there is currently **no env
-var or settings entry that exposes a Silero VAD sensitivity/threshold** — tuning
-it would require passing a configured `silero.VAD` into `AgentSession`.
-
-After changing env vars or this file, restart the voice worker (and the agent
-service) so the change takes effect.
-
----
-
-## 3. Summary — "make the mic less sensitive"
-
-Most of the time this means the **browser dictation** path:
+## 2. Summary — "make the mic less sensitive"
 
 1. **Ignores background noise** → raise `VOICE_RMS_THRESHOLD` (`App.tsx:391`)
    from `0.01` to `0.02`–`0.03`.
@@ -139,11 +107,7 @@ Most of the time this means the **browser dictation** path:
    (`App.tsx:3336` and `App.tsx:4852`).
 3. Rebuild: `npm --prefix web run build`.
 
-For the **LiveKit agent**, prefer a semantic turn detector
-(`LIVEKIT_INFERENCE_URL` / `LFG_LOCAL_EOU=1`) over plain `"vad"`; there is no
-numeric sensitivity knob exposed today.
-
-## 4. Not currently user-tunable (no settings UI)
+## 3. Not currently user-tunable (no settings UI)
 
 None of these are exposed in a settings panel — all require a code/env change
 plus rebuild/restart. If you want a user-facing "mic sensitivity" control, the

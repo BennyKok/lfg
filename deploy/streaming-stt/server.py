@@ -3,10 +3,10 @@ lfg streaming STT server — NeMo cache-aware FastConformer over a websocket.
 
 This is the server half of the high-performance realtime voice path. It accepts
 a raw 16 kHz mono int16 PCM audio stream and emits interim ("partial") and
-"final" transcripts as the user speaks, so the LiveKit agent can endpoint a turn
+"final" transcripts as the user speaks, so the caller can endpoint a turn
 and react far sooner than batch whisper allows.
 
-Wire protocol (matches LfgSpeechStream in deploy/voice/agent.py):
+Wire protocol:
   client -> server : binary ws frames of raw 16 kHz mono int16 PCM
                      then a text frame {"type":"eof"} when the utterance ends.
   server -> client : text frames {"type":"partial","text":"..."} as it decodes

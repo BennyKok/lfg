@@ -48,7 +48,7 @@ In `/home/dev/repos/lfg/.env`:
 TTS_UPSTREAM=https://<workspace>--lfg-voice-voice-web.modal.run
 STT_UPSTREAM=https://<workspace>--lfg-voice-voice-web.modal.run
 ```
-`systemctl --user restart lfg-serve.service`, then verify the orb. serve appends
+`systemctl --user restart lfg-serve.service`, then verify playback. serve appends
 `/tts` and `/stt` to the upstream, which these routes already match.
 
 ## Cost / latency knobs (`voice_app.py`)

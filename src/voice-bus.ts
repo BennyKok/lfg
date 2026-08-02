@@ -1,17 +1,15 @@
-// Fleet completion bus for the voice assistant.
+// Fleet completion bus.
 //
-// Before this, the voice brain (deploy/voice/agent.py) learned about other
-// sessions only at connect (a one-shot snapshot baked into its system prompt)
-// or by polling get_fleet_status itself mid-turn. Nothing told it when another
-// session FINISHED. This module turns "a session just completed a turn" into a
-// PUSH:
+// Turns "a session just completed a turn" into a PUSH:
 //
 //   - a single background watcher samples each session's busy state on an
 //     interval and detects busy -> idle transitions (= a session landed work),
 //   - it fans those out as events to any subscriber,
-//   - serve exposes them over SSE at /api/voice/events; the voice worker
-//     subscribes, refreshes its live context, and can speak a proactive
-//     heads-up the instant a session lands.
+//   - session-push.ts subscribes and delivers a Web Push notification, so you
+//     hear about a landed turn with the app closed.
+//
+// (Named for the voice assistant it was originally built for; that phone-call
+// feature is gone, but the bus is now load-bearing for Web Push.)
 //
 // The watcher is process-global and idempotent (one loop regardless of how many
 // subscribers connect). Busy detection reuses the exact signals the live view

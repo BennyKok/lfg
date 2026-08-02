@@ -1,13 +1,20 @@
 # Streaming STT — NeMo cache-aware FastConformer (English)
 
-The streaming half of the high-performance realtime voice path. Replaces batch
-whisper/Parakeet with a model that emits transcripts **as the user speaks**, so
-the voice agent can endpoint a turn and start the LLM far sooner.
+The streaming half of a high-performance realtime voice path. Replaces batch
+whisper/Parakeet with a model that emits transcripts **as the user speaks**.
+
+> **Status: not currently wired into lfg.** This server's only client was the
+> LiveKit voice worker (`deploy/voice/agent.py`), which was removed along with
+> the phone-call feature. `serve` reads neither `STT_UPSTREAM` nor `STT_WS_URL`
+> — `/api/voice/stt` and `/api/voice/stt-stream` go through
+> `src/voice-providers.ts`, which today only has ElevenLabs and OpenAI adapters.
+> Kept here because the server itself is still good; re-wiring it means adding a
+> self-hosted adapter to `voice-providers.ts`.
 
 ```
-LiveKit agent (LfgSpeechStream)  ──16kHz PCM ws──▶  server.py  ──▶  NeMo
-        ▲                                                              │
-        └──────────── {"partial"|"final","text"} ◀────────────────────┘
+client  ──16kHz PCM ws──▶  server.py  ──▶  NeMo
+   ▲                                        │
+   └────── {"partial"|"final","text"} ◀─────┘
 ```
 
 ## Why this model
@@ -38,8 +45,8 @@ restarting the worker — no other agent change required:
 STT_WS_URL=ws://<gpu-box-or-tailnet-host>:8088
 ```
 
-Unset `STT_WS_URL` → the agent uses batch `/api/voice/stt` (the safe default).
-The switch is entirely in `make_stt()` in `deploy/voice/agent.py`.
+`STT_WS_URL` was read by the removed LiveKit worker; nothing in lfg reads it
+today.
 
 ## Env knobs (server.py)
 | Var | Default | Notes |

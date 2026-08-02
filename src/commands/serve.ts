@@ -456,10 +456,8 @@ const OPENCODE_DISABLED_MODELS = new Set<string>([
   "novita-ai/zai-org/glm-5.1",
 ]);
 import { enqueueMessage, listQueue, retryMessage, clearResolved, reconcileQueued, getMessage } from "../sendq.ts";
-import { startFleetWatcher, subscribeFleet, type FleetEvent } from "../voice-bus.ts";
+import { startFleetWatcher } from "../voice-bus.ts";
 import { startSessionPushBridge } from "../session-push.ts";
-import { handleElevenLlm, handleElevenToken } from "../voice-eleven-llm.ts";
-import { resolveVoiceIntent, type VoiceIntentRequest } from "../voice-intent.ts";
 
 const PORT = Number(process.env.LFG_PORT ?? process.env.PORT ?? 8766);
 
@@ -1721,99 +1719,6 @@ function plannedSessionAction(answer: string): {
   return text ? { kind: "send", text } : { kind: "none" };
 }
 
-async function voiceStatusSnapshot(user?: string | null): Promise<string> {
-  let sessions;
-  try {
-    sessions = await listSessionsCached();
-  } catch {
-    return "(session list unavailable)";
-  }
-  // Scope to the speaking user when one is given, so the voice assistant never
-  // surfaces (or acts on) another person's sessions. Empty/"__all" → whole fleet.
-  if (user && user !== "__all") {
-    sessions = sessions.filter((s) => s.assignedUser === user);
-  }
-  if (!sessions.length) return "(no sessions running)";
-  const now = Date.now();
-  const ago = (t: number | null): string => {
-    if (!t) return "";
-    const s = Math.max(0, Math.round((now - t) / 1000));
-    if (s < 60) return `${s}s ago`;
-    const m = Math.round(s / 60);
-    if (m < 60) return `${m}m ago`;
-    return `${Math.round(m / 60)}h ago`;
-  };
-  const clip = (t: string, n: number) => {
-    const c = t.replace(/\s+/g, " ").trim();
-    return c.length > n ? c.slice(0, n - 1).trimEnd() + "…" : c;
-  };
-  const lines: string[] = [];
-  for (const s of sessions) {
-    // Titles are often the whole kickoff prompt — clip hard so a line reads as a
-    // label, not a paragraph.
-    const name = clip(s.title || s.tmuxName || s.sessionId?.slice(0, 8) || "session", 60);
-    const who = s.assignedUser ? ` [${s.assignedUser}]` : "";
-    // Surface the agent family so the voice assistant can tell OpenCode and
-    // Codex sessions apart from regular Claude ones. Plain Claude (claude/aisdk)
-    // is the common case, so leave it untagged to keep lines terse.
-    const family =
-      s.agent === "codex" || s.agent === "codex-aisdk"
-        ? "codex"
-        : s.agent === "opencode"
-          ? "opencode"
-          : s.agent === "grok"
-            ? "grok"
-            : s.agent === "hermes"
-              ? "hermes"
-          : s.agent === "pi"
-            ? "pi"
-          : null;
-    const kind = family ? ` <${family}>` : "";
-    let status = "IDLE";
-    let detail = "";
-    if (s.tmuxTarget) {
-      const pane = capturePane(s.tmuxTarget);
-      const tp = s.sessionId ? await resolveTranscript(s.sessionId) : null;
-      const prompt = await resolveSessionPrompt(tp, pane);
-      if (prompt) {
-        status = "BLOCKED";
-        const opts = prompt.options
-          .map((o) => o.label)
-          .filter(Boolean)
-          .slice(0, 4)
-          .join(" / ");
-        detail = ` — needs an answer: "${clip(prompt.question, 100)}"${opts ? ` (${opts})` : ""}`;
-      } else if (pane && isBusy(pane)) {
-        status = "WORKING";
-      }
-    }
-    // Skip "last ask" when it just restates the (clipped) title — common for the
-    // agent sessions whose title IS their first prompt.
-    const last = clip(s.lastUserText || "", 100);
-    const redundant = last && name.replace(/…$/, "").startsWith(last.slice(0, 30));
-    const lastBit = last && !redundant ? ` last ask: "${last}"` : "";
-    const when = ago(s.lastActivityAt);
-    lines.push(`- ${name}${kind}${who}: ${status}${detail}.${lastBit}${when ? ` (${when})` : ""}`);
-  }
-  // Pending agent questions for the human — the voice agent should read these
-  // out and, when the user replies, answer them via POST /api/ask/<id>/answer.
-  try {
-    await sweepExpiredQuestions();
-    const open = await listQuestions("open");
-    if (open.length) {
-      lines.push("");
-      lines.push("PENDING QUESTIONS FOR YOU (answer with the user's reply):");
-      for (const q of open) {
-        const opts = q.options?.length ? ` (${q.options.join(" / ")})` : "";
-        lines.push(`- [${q.id}] "${clip(q.question, 120)}"${opts}`);
-      }
-    }
-  } catch {
-    // questions store unavailable — snapshot still useful without them
-  }
-  return lines.join("\n");
-}
-
 // ── Voice "deep-think" advisor ──────────────────────────────────────────────
 // The voice brain is Haiku (fast, cheap, 1-2 sentences). For hard questions it
 // escalates here: a persistent Opus aisdk session with full tool + repo access.
@@ -1860,9 +1765,8 @@ async function waitForAdvisorAnswer(
 }
 
 // Send a question to the Opus advisor and return its spoken answer. `cwd` is the
-// repo to explore (defaults to the lfg repo for the in-call voice agent); the
-// orb's one-shot "ask a question" passes the user's currently-scoped repo so the
-// answer has that codebase's full context.
+// repo to explore (defaults to the lfg repo); callers pass the user's
+// currently-scoped repo so the answer has that codebase's full context.
 async function voiceConsult(
   question: string,
   cwd: string = SELF_REPO,
@@ -1977,7 +1881,7 @@ type TermSocketData = { sessionName: string; cwd: string; cols: number; rows: nu
 const termBridges = new WeakMap<object, PtyBridge>();
 
 // ---- streaming-STT bridge sockets ----
-// The LiveKit voice worker holds a websocket to /api/voice/stt-stream and streams
+// The browser dictation path holds a websocket to /api/voice/stt-stream and streams
 // 16 kHz PCM up / gets {partial,final} transcripts back. Each socket owns one
 // upstream realtime-STT bridge (built in voice-providers so the API key stays
 // there); the global ws handlers below find it by socket to forward audio / tear
@@ -2329,8 +2233,8 @@ export async function cmdServe() {
       }
 
       // ---- streaming STT bridge (websocket upgrade) ----
-      // The voice worker connects here when STT_WS_URL is set; the socket bridges
-      // its raw-PCM/{flush,eof} protocol to the configured realtime-STT provider
+      // The browser's dictation path connects here; the socket bridges its
+      // raw-PCM/{flush,eof} protocol to the configured realtime-STT provider
       // (ElevenLabs Scribe v2 Realtime) in voice-providers.ts.
       if (path === "/api/voice/stt-stream") {
         const ok = server.upgrade(req, {
@@ -2417,71 +2321,6 @@ export async function cmdServe() {
         }
       }
 
-      // ---- LiveKit access token: mint a short-lived JWT so the browser can
-      // join the self-hosted voice room. API key/secret live server-side; media
-      // + signaling run on this box (livekit-server) over the tailnet.
-      if (path === "/api/livekit/token") {
-        const key = process.env.LIVEKIT_API_KEY;
-        const secret = process.env.LIVEKIT_API_SECRET;
-        const wss = process.env.LIVEKIT_WSS_PUBLIC;
-        if (!key || !secret || !wss) return err(503, "livekit not configured");
-        const room = "voice";
-        const identity =
-          url.searchParams.get("identity")?.slice(0, 64) ||
-          `web-${randomBytes(3).toString("hex")}`;
-        const now = Math.floor(Date.now() / 1000);
-        const enc = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
-        const data = `${enc({ alg: "HS256", typ: "JWT" })}.${enc({
-          iss: key,
-          sub: identity,
-          nbf: now,
-          iat: now,
-          exp: now + 6 * 60 * 60,
-          name: identity,
-          video: {
-            room,
-            roomJoin: true,
-            canPublish: true,
-            canSubscribe: true,
-            canPublishData: true,
-            // Required for localParticipant.setAttributes() — the orb publishes
-            // the speaking user as the `lfg.user` attribute so the voice worker
-            // can assign new sessions on their behalf. Without this grant the
-            // server silently drops the attribute update and CURRENT_USER stays
-            // empty, so orb-created sessions land unassigned.
-            canUpdateOwnMetadata: true,
-          },
-        })}`;
-        const ck = await crypto.subtle.importKey(
-          "raw",
-          new TextEncoder().encode(secret),
-          { name: "HMAC", hash: "SHA-256" },
-          false,
-          ["sign"],
-        );
-        const sig = await crypto.subtle.sign("HMAC", ck, new TextEncoder().encode(data));
-        return json({
-          url: wss,
-          room,
-          identity,
-          token: `${data}.${Buffer.from(sig).toString("base64url")}`,
-        });
-      }
-
-      // ---- ElevenLabs managed-agent brain (Option B): OpenAI-compatible
-      // custom-LLM endpoint. ElevenLabs owns STT/TTS/turn-taking and calls this
-      // per user turn; we run the Haiku brain + fleet tools here (see
-      // voice-eleven-llm.ts) and stream the spoken reply back as SSE. No Python
-      // worker, no shared LiveKit room — so no duplicate-session race.
-      if (path === "/v1/chat/completions" && req.method === "POST") {
-        return handleElevenLlm(req);
-      }
-      // Per-connect WebRTC token for the browser @elevenlabs/client SDK (keeps
-      // the ElevenLabs API key server-side).
-      if (path === "/api/voice/eleven-token" && req.method === "GET") {
-        return handleElevenToken(req);
-      }
-
       // ---- voice TTS proxy: synthesize via the configured cloud provider
       // (ElevenLabs by default; see voice-providers.ts). The API key lives
       // server-side (.env) so the browser never sees it; the client just plays
@@ -2494,20 +2333,6 @@ export async function cmdServe() {
         const text = body?.text?.trim();
         if (!text) return err(400, "expected { text }");
         return synthesizeTts(text, body?.voice);
-      }
-
-      // ---- voice intent: turn a dictated one-shot request (from the orb's
-      // push-to-talk) into a session config. Merges the user's spoken overrides
-      // onto their saved defaults and returns a short spoken confirmation. Used
-      // by createVoiceSession in the frontend before it POSTs /api/sessions/new.
-      if (path === "/api/voice/intent" && req.method === "POST") {
-        const body = (await req.json().catch(() => null)) as
-          | VoiceIntentRequest
-          | null;
-        if (!body?.transcript?.trim() || !body?.base?.cwd) {
-          return err(400, "expected { transcript, base, repos, agents }");
-        }
-        return json(await resolveVoiceIntent(body));
       }
 
       // ---- voice STT proxy: transcribe uploaded WAV audio via the configured
@@ -2887,47 +2712,6 @@ export async function cmdServe() {
         }
       }
 
-      // ---- voice speaker-ID proxy: forward uploaded WAV to the upstream
-      // /identify (resemblyzer) and return { embedding }. The client compares
-      // the embedding (cosine) against its enrolled refs in localStorage to gate
-      // barge-ins to known speakers — keeps refs on-device, box stays stateless.
-      if (path === "/api/voice/identify" && req.method === "POST") {
-        const up = process.env.TTS_UPSTREAM;
-        const tok = process.env.TTS_TOKEN;
-        if (!up || !tok) return err(503, "identify not configured");
-        const audio = await req.arrayBuffer();
-        if (!audio.byteLength) return err(400, "empty audio");
-        try {
-          const r = await fetch(`${up}/identify`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/octet-stream",
-              Authorization: `Bearer ${tok}`,
-            },
-            body: audio,
-            signal: AbortSignal.timeout(30000),
-          });
-          if (!r.ok) return err(502, `identify upstream ${r.status}`);
-          return new Response(r.body, { headers: { "Content-Type": "application/json" } });
-        } catch {
-          return err(502, "identify upstream unreachable");
-        }
-      }
-
-      // ---- voice fleet snapshot: live status of every session plus the user's
-      // standing context (~/.lfg/voice-context.md). The LiveKit worker fetches
-      // this at connect to seed its system prompt and speak a proactive briefing.
-      if (path === "/api/voice/snapshot" && req.method === "GET") {
-        const snapshot = await voiceStatusSnapshot(url.searchParams.get("user"));
-        let context = "";
-        try {
-          context = (
-            await Bun.file(join(homedir(), ".lfg", "voice-context.md")).text()
-          ).trim();
-        } catch {}
-        return json({ snapshot, context });
-      }
-
       // ---- voice deep-think consult: forward a hard question to the persistent
       // Opus advisor session and return its spoken answer. The voice brain
       // (Haiku) calls this as a tool when a question needs heavier reasoning.
@@ -2944,41 +2728,6 @@ export async function cmdServe() {
         } catch (e) {
           return err(502, e instanceof Error ? e.message : "consult failed");
         }
-      }
-
-      // ---- voice fleet PUSH: SSE stream of session-completion events, scoped
-      // to the speaking user. The voice worker holds this open and reacts the
-      // instant another session lands work (refresh its live context + speak a
-      // proactive heads-up) — replacing connect-time-snapshot-only awareness.
-      if (path === "/api/voice/events" && req.method === "GET") {
-        const user = url.searchParams.get("user");
-        let unsub: (() => void) | null = null;
-        let hb: ReturnType<typeof setInterval> | null = null;
-        let closed = false;
-        const stream = new ReadableStream({
-          start(controller) {
-            const send = (s: string) => {
-              if (closed) return;
-              try {
-                controller.enqueue(s);
-              } catch {
-                closed = true;
-              }
-            };
-            // Greet so the client knows the stream is live (and to flush proxies).
-            send(`event: ready\ndata: {}\n\n`);
-            unsub = subscribeFleet(user, (ev: FleetEvent) => {
-              send(`event: completed\ndata: ${JSON.stringify(ev)}\n\n`);
-            });
-            hb = setInterval(() => send(`event: ping\ndata: {}\n\n`), 20000);
-          },
-          cancel() {
-            closed = true;
-            if (unsub) unsub();
-            if (hb) clearInterval(hb);
-          },
-        });
-        return new Response(stream, { headers: sseHeaders() });
       }
 
       // ---- extension backend proxy (optional, config-driven) ----
@@ -4407,7 +4156,6 @@ export async function cmdServe() {
           cwd?: string;
           prompt?: string;
           user?: string;
-          voice?: boolean;
           worktree?: boolean;
           model?: string;
           thinkingLevel?: string;
@@ -4592,7 +4340,6 @@ export async function cmdServe() {
         const tmuxName = `lfg-${randomBytes(3).toString("hex")}`;
         const isSubagent = spawnedBy === "subagent";
         const cwdResolved = resolveSessionCwd(repo.cwd, tmuxName, {
-          voice: !!body?.voice,
           worktree: body?.worktree,
           selfRepo: SELF_REPO,
         });
@@ -4601,24 +4348,12 @@ export async function cmdServe() {
         }
         const cwd = cwdResolved.cwd;
         const worktree = cwdResolved.worktree;
-        // For the voice orchestrator, append a live snapshot of every OTHER
-        // session (built before this one spawns, so it's not in the list) so its
-        // first spoken reply can be a proactive blockers-first status briefing.
         let prompt = body?.prompt;
         if (spawnedBy === "subagent") {
           prompt = withLfgSubagentContract(prompt, {
             parentSessionId: parent?.sessionId ?? parent?.nativeSessionId ?? parentId,
             depth: subagentDepth,
           });
-        }
-        if (body?.voice) {
-          // Clear lingering state from any previous voice session before this
-          // one starts: retire the persistent deep-think advisor so it doesn't
-          // carry the prior session's conversation context into this one. The
-          // snapshot below is already rebuilt fresh each time.
-          await retireVoiceAdvisor();
-          const snap = await voiceStatusSnapshot();
-          prompt = `${prompt ?? ""}\n\n=== SESSION SNAPSHOT (live, at session start) ===\n${snap}\n=== END SNAPSHOT ===`;
         }
         // aisdk sessions own their sessionId up front (deterministic transcript
         // path), so we generate it here and hand it to the harness.
@@ -6618,7 +6353,7 @@ export async function cmdServe() {
   startModelDiscoveryScheduler((l) => console.log(l));
   startWorktreeSweep((l) => console.log(l));
   // Watch the fleet for busy -> idle transitions and fan "completed" events out
-  // to voice subscribers (/api/voice/events). Idempotent + best-effort.
+  // to fleet subscribers (Web Push). Idempotent + best-effort.
   startFleetWatcher();
   // Bridge those same completions to Web Push, so an installed PWA hears
   // about a landed turn with the app closed. Must follow startFleetWatcher().
