@@ -1028,9 +1028,11 @@ html.lfg-keyboard-open {
 
   .user-bubble-media-item {
     display: block;
-    max-height: 15rem;
-    /* Two per row at the bubble's max width; a lone image just uses its own. */
-    max-width: min(100%, 15rem);
+    /* Big enough to recognize a screenshot at a glance — the common case is a
+       UI capture the user wants to point at — without letting one attachment
+       take over the transcript. Tap opens the full-size lightbox. */
+    max-height: 17rem;
+    max-width: min(100%, 20rem);
     width: auto;
     border-radius: 14px;
     object-fit: cover;
