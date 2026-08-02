@@ -7,10 +7,6 @@ import { marked } from "marked";
 import { PATHS, appVersion, installInfo } from "../config.ts";
 import { claudeOauthToken as sharedClaudeOauthToken } from "../claude-creds.ts";
 import {
-  ManagerRoundError,
-  createManagerRoundService,
-} from "../manager-round.ts";
-import {
   applyReleaseUpdate,
   applySourceUpdate,
   releaseUpdateStatus,
@@ -120,7 +116,6 @@ import {
   prepareFileHistoryForResume,
   removeIndexedArtifact,
   sessionIndexKey,
-  searchAllTranscriptIndexes,
   searchTranscriptIndex,
   subscribeIndexedArtifactMessages,
 } from "../transcript-index.ts";
@@ -300,7 +295,6 @@ const REPOS_ROOT = reposRoot();
 const SELF_REPO = PATHS.root;
 const EVLOG_DIR = join(PATHS.data, "evlogs");
 const SERVER_INSTANCE_ID = randomBytes(8).toString("hex");
-const managerRoundService = createManagerRoundService({ dataDir: PATHS.data });
 let selfUpdateRunning = false;
 
 function evlog(event: string, fields: Record<string, unknown> = {}) {
@@ -602,31 +596,6 @@ function renderReportHtml(raw: string): string {
 }
 
 // ---------- legacy: pre-agents flat reports ----------
-
-async function listLegacyReports() {
-  const dir = join(PATHS.data, "reports");
-  let files: string[];
-  try {
-    files = await readdir(dir);
-  } catch {
-    return [];
-  }
-  const entries = await Promise.all(
-    files
-      .filter((f) => f.endsWith(".md") && /^\d{4}-\d{2}-\d{2}\.md$/.test(f))
-      .map(async (f) => {
-        const s = await stat(join(dir, f));
-        return { date: f.replace(/\.md$/, ""), bytes: s.size, mtime: s.mtimeMs };
-      }),
-  );
-  return entries.sort((a, b) => b.date.localeCompare(a.date));
-}
-
-async function readLegacyReport(date: string): Promise<string | null> {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
-  const f = Bun.file(join(PATHS.data, "reports", `${date}.md`));
-  return (await f.exists()) ? await f.text() : null;
-}
 
 async function listRepos() {
   let root: string;
@@ -1947,65 +1916,6 @@ export async function cmdServe() {
         return await serveLfgMcpRequest(req);
       }
 
-      if (path === "/api/manager/capabilities") {
-        if (req.method !== "GET") return err(405, "method not allowed");
-        return json(managerRoundService.capabilities());
-      }
-
-      if (path === "/api/manager/round") {
-        if (req.method !== "POST") return err(405, "method not allowed");
-        const declaredLength = Number(req.headers.get("content-length") ?? "0");
-        if (Number.isFinite(declaredLength) && declaredLength > 1_000_000) {
-          return err(413, "request too large");
-        }
-        const raw = await req.text();
-        if (raw.length > 1_000_000) return err(413, "request too large");
-        let body: unknown;
-        try {
-          body = JSON.parse(raw);
-        } catch {
-          return err(400, "invalid JSON");
-        }
-        try {
-          return json(await managerRoundService.run(body));
-        } catch (error) {
-          if (error instanceof ManagerRoundError) return err(error.status, error.message);
-          throw error;
-        }
-      }
-
-      if (path === "/api/evlog") {
-        if (req.method === "POST") {
-          const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
-          const event = typeof body?.event === "string" ? body.event : "client_event";
-          evlog(event, {
-            source: "browser",
-            href: req.headers.get("referer") ?? undefined,
-            ...((body && typeof body === "object" ? body : {}) as Record<string, unknown>),
-          });
-          return json({
-            ok: true,
-            path: join(EVLOG_DIR, `${new Date().toISOString().slice(0, 10)}.jsonl`),
-            tracePath: traceLogPathForToday(),
-          });
-        }
-        if (req.method === "GET") {
-          const file = join(EVLOG_DIR, `${new Date().toISOString().slice(0, 10)}.jsonl`);
-          const limit = Math.min(1000, Math.max(1, parseInt(url.searchParams.get("limit") ?? "200", 10) || 200));
-          const text = (() => {
-            try {
-              return readFileSync(file, "utf8");
-            } catch {
-              return "";
-            }
-          })();
-          const lines = text.trim() ? text.trim().split("\n").slice(-limit) : [];
-          return json({ path: file, lines });
-        }
-        return err(405, "method not allowed");
-      }
-
-      // ---- live view stream (websocket upgrade) ----
       if (path === "/api/live/ws") {
         if (!isLiveWsEnabled()) return err(404, "live websocket disabled");
         if (!liveWsUpgradeAuthenticated(req)) return err(401, "unauthorized");
@@ -2558,17 +2468,6 @@ export async function cmdServe() {
           });
         } catch {
           return err(502, "proxy upstream unreachable");
-        }
-      }
-
-      // ---- legacy flat reports (for back-compat with old UI bookmarks) ----
-      if (path === "/api/reports") return json({ reports: await listLegacyReports() });
-      {
-        const m = path.match(/^\/api\/reports\/(\d{4}-\d{2}-\d{2})$/);
-        if (m) {
-          const raw = await readLegacyReport(m[1]);
-          if (raw === null) return err(404, "not found");
-          return json({ date: m[1], raw, html: renderReportHtml(raw) });
         }
       }
 
@@ -5250,53 +5149,6 @@ export async function cmdServe() {
           const r = await searchTranscriptIndex(tp, m[1], query, { limit: body?.limit });
           return json({ id: m[1], query, ...r });
         }
-      }
-
-      if (path === "/api/transcripts/search" && req.method === "POST") {
-        const body = (await req.json().catch(() => null)) as {
-          query?: string;
-          limit?: number;
-        } | null;
-        const query = body?.query?.trim();
-        if (!query) return err(400, "expected { query }");
-        return json({ query, ...(await searchAllTranscriptIndexes(query, { limit: body?.limit })) });
-      }
-
-      if (path === "/api/transcripts/index" && req.method === "POST") {
-        const body = (await req.json().catch(() => null)) as {
-          limit?: number;
-        } | null;
-        const limit = Math.max(1, Math.min(200, body?.limit ?? 50));
-        const live = await listSessions();
-        const liveIds = liveSessionIds(live);
-        const resumable = await listResumable({ limit, excludeIds: liveIds });
-        const targets = [
-          ...live
-            .filter((session) => session.sessionId && session.transcriptPath)
-            .map((session) => ({
-              sessionId: session.sessionId as string,
-              path: session.transcriptPath as string,
-            })),
-          ...(await Promise.all(
-            resumable.map(async (session) => {
-              const path = await resolveTranscript(session.sessionId).catch(() => null);
-              return path ? { sessionId: session.sessionId, path } : null;
-            }),
-          )).filter((target): target is { sessionId: string; path: string } => !!target),
-        ];
-        const seen = new Set<string>();
-        const results: Array<{ sessionId: string; indexed: number; size: number; offset: number }> = [];
-        for (const target of targets) {
-          if (seen.has(target.sessionId)) continue;
-          seen.add(target.sessionId);
-          const r = await indexTranscript(target.path, target.sessionId);
-          results.push({ sessionId: target.sessionId, ...r });
-        }
-        return json({
-          indexedSessions: results.length,
-          indexedMessages: results.reduce((sum, result) => sum + result.indexed, 0),
-          results,
-        });
       }
 
       {
