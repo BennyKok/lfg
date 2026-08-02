@@ -4,6 +4,19 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 2, 2026 - Returning home no longer repeats replies (v0.1.207)
+
+- Opening Settings and returning Home could briefly render the same assistant
+  reply and Thought block several times. The saved transcript was correct, but
+  two live listeners could both accept the first event from a locally sent
+  message and cache the duplicate UI state. Locally started chats now claim
+  their live stream synchronously, while replies started from another device
+  still appear normally.
+- Starting a new session no longer pauses every other live session while LFG
+  runs the Git commands that prepare its worktree. Provisioning now stays off
+  the server event loop, and its remote refresh benefits the next session
+  without blocking the one you just started.
+
 ## August 2, 2026 - Artifact cards follow your theme instead of your desktop (v0.1.206)
 
 - An artifact rendered in a dark card on a light machine kept its light
