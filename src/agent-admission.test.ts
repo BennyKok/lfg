@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   activeAgentCount,
   AgentAdmissionController,
@@ -40,5 +43,18 @@ describe("Computer agent admission", () => {
   test("fails safe to free when a cloud plan is unknown", () => {
     expect(computerAgentAdmissionContext("retired-plan")).toEqual({ plan: "free", limit: 1 });
     expect(computerAgentAdmissionContext("")).toBeNull();
+  });
+
+  test("the managed plan file can change a live process admission limit", () => {
+    const dir = mkdtempSync(join(tmpdir(), "lfg-computer-plan-"));
+    const path = join(dir, "computer-plan");
+    try {
+      writeFileSync(path, "computer_5\n");
+      expect(computerAgentAdmissionContext(undefined, path)).toEqual({ plan: "computer_5", limit: 2 });
+      writeFileSync(path, "free\n");
+      expect(computerAgentAdmissionContext(undefined, path)).toEqual({ plan: "free", limit: 1 });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

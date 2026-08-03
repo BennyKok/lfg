@@ -14,10 +14,12 @@ import { join } from "node:path";
 import { PATHS } from "./config.ts";
 
 const originalData = PATHS.data;
+const originalCodexSessions = PATHS.codexSessions;
 const roots: string[] = [];
 
 afterEach(() => {
   PATHS.data = originalData;
+  PATHS.codexSessions = originalCodexSessions;
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -25,7 +27,9 @@ function useTempData(): string {
   const root = mkdtempSync(join(tmpdir(), "lfg-codex-heads-"));
   roots.push(root);
   PATHS.data = join(root, "data");
+  PATHS.codexSessions = join(root, "codex-sessions");
   mkdirSync(PATHS.data, { recursive: true });
+  mkdirSync(PATHS.codexSessions, { recursive: true });
   return root;
 }
 

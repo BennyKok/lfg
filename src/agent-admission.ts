@@ -37,12 +37,30 @@ const LIMITS: Readonly<Record<AgentAdmissionPlan, number>> = {
   computer_early: 8,
 };
 
-/** The per-Computer plan is supplied only by the trusted bootstrap command. */
+const COMPUTER_PLAN_FILE = "/etc/omg/computer-plan";
+
+function currentComputerPlan(planFile: string): string | undefined {
+  try {
+    // The control plane owns this root-written file and atomically replaces it
+    // while LFG is live. Reading it per admission makes downgrades immediate;
+    // a process-start environment variable cannot do that.
+    return readFileSync(planFile, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // Standalone LFG has no managed plan file, so retain the bootstrap env as
+    // its compatibility bridge. Any other file failure fails safe to Free.
+    return code === "ENOENT" ? process.env.LFG_COMPUTER_PLAN : "invalid-managed-plan";
+  }
+}
+
+/** The per-Computer plan is supplied only by the trusted control plane. */
 export function computerAgentAdmissionContext(
-  rawPlan = process.env.LFG_COMPUTER_PLAN,
+  rawPlan?: string,
+  planFile = COMPUTER_PLAN_FILE,
 ): AgentAdmissionContext | null {
-  if (!rawPlan?.trim()) return null;
-  const plan = rawPlan.trim().toLowerCase();
+  const selectedPlan = rawPlan === undefined ? currentComputerPlan(planFile) : rawPlan;
+  if (!selectedPlan?.trim()) return null;
+  const plan = selectedPlan.trim().toLowerCase();
   if (
     plan === "computer_trial" ||
     plan === "computer_5" ||
@@ -91,3 +109,4 @@ export class AgentAdmissionController {
     return this.pending.size;
   }
 }
+import { readFileSync } from "node:fs";

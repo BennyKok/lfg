@@ -1,12 +1,14 @@
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 export const PATHS = {
   root: ROOT,
   data: join(ROOT, "data"),
+  codexSessions: join(process.env.HOME ?? homedir(), ".codex", "sessions"),
   sessionTitles: join(ROOT, "data", "session-titles.json"),
   installInfo: join(ROOT, "data", "install.json"),
 };

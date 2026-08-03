@@ -43,7 +43,6 @@ import { isProviderAuthError } from "./provider-auth-error";
 
 const HOME = process.env.HOME ?? homedir();
 const PROJECTS_DIR = join(HOME, ".claude", "projects");
-const CODEX_SESSIONS_DIR = join(HOME, ".codex", "sessions");
 const GROK_SESSIONS_DIR = join(HOME, ".grok", "sessions");
 const GROK_ACTIVE_SESSIONS = join(HOME, ".grok", "active_sessions.json");
 // cursor-agent persists a per-turn transcript at
@@ -854,36 +853,37 @@ async function codexRolloutFiles(): Promise<string[]> {
 
 async function scanCodexRolloutFiles(): Promise<string[]> {
   const out: string[] = [];
+  const root = PATHS.codexSessions;
   let years: string[];
   try {
-    years = await readdir(CODEX_SESSIONS_DIR);
+    years = await readdir(root);
   } catch {
     return out;
   }
   for (const y of years) {
     let months: string[];
     try {
-      months = await readdir(join(CODEX_SESSIONS_DIR, y));
+      months = await readdir(join(root, y));
     } catch {
       continue;
     }
     for (const m of months) {
       let days: string[];
       try {
-        days = await readdir(join(CODEX_SESSIONS_DIR, y, m));
+        days = await readdir(join(root, y, m));
       } catch {
         continue;
       }
       for (const d of days) {
         let files: string[];
         try {
-          files = await readdir(join(CODEX_SESSIONS_DIR, y, m, d));
+          files = await readdir(join(root, y, m, d));
         } catch {
           continue;
         }
         for (const f of files) {
           if (f.endsWith(".jsonl")) {
-            const path = join(CODEX_SESSIONS_DIR, y, m, d, f);
+            const path = join(root, y, m, d, f);
             out.push(path);
             const id = path.match(UUID)?.[0];
             if (id) {
