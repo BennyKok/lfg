@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - Mobile Live is a list again (v0.1.223)
+
+- Live view on mobile no longer expands a session in place. Every session is a
+  compact row — title, latest activity, status — and tapping it opens the full
+  session sheet, which stays the one place to read and reply.
+- The long-press-to-expand gesture is gone, along with the transcript streams
+  those expanded cards kept open in the background. Desktop is unchanged.
+
 ## August 3, 2026 - A welcome with a pulse (v0.1.222)
 
 - The mobile Live header now cycles between the personal welcome and current
