@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - Toasts land on the right edge (v0.1.227)
+
+- Desktop toasts now sit at the bottom of the screen, while mobile toasts stay
+  below the top chrome and fold their stacked layers back toward the top edge.
+
 ## August 3, 2026 - Computer plans guard their real capacity (v0.1.226)
 
 - Cloud Computers now enforce their plan's agent concurrency at LFG's single
