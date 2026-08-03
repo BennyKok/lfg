@@ -23,7 +23,51 @@ web UI, and lets you answer prompts or steer work from your phone or laptop.
 
 ## Quick start
 
-**Install it on your own machine — one command:**
+### Set up with the OMG CLI
+
+The guided path keeps the whole computer lifecycle under one command surface:
+
+```bash
+npx --yes @omg-dev/cli@latest computer setup
+```
+
+No OMG account is needed to install LFG. Setup delegates to LFG's own installer,
+is a no-op when LFG is already present, and accepts `--reinstall` when you
+deliberately want to run the installer again. Then open
+**http://127.0.0.1:8766**.
+
+For ongoing lifecycle management and relay access, install the CLI once, then
+sign in and connect the computer to OMG's hosted relay:
+
+```bash
+npm install --global @omg-dev/cli
+omg login
+omg connect
+```
+
+Manage the same installation through OMG:
+
+```bash
+omg computer status                    # inspect the local install and pairing
+omg computer update                    # update an existing LFG installation
+omg computer upgrade                   # alias for update
+omg computer uninstall                 # remove LFG; preserve sessions and config
+omg computer uninstall --purge --yes   # also permanently delete local LFG data
+```
+
+`update` never installs a missing computer, and `uninstall` delegates cleanup to
+LFG instead of guessing which files it owns. Removal stops LFG's service and
+deletes its command, MCP registrations, and release files. Shared prerequisites
+such as Bun, Tailscale, `tmux`, and coding-agent CLIs are left alone; source
+checkouts are preserved unless explicitly purged.
+
+> The `omg computer` lifecycle requires a CLI release that includes those
+> commands. If your installed `omg` does not recognize them, update the CLI or
+> use the direct installer and LFG-native commands below.
+
+### Install directly
+
+To install without the OMG CLI:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/BennyKok/lfg/main/scripts/setup.sh | bash
@@ -36,17 +80,13 @@ downloads the latest release, writes `.env`, and starts `lfg` as a user service
 bound to loopback. On a fresh Ubuntu/Debian box, add
 `LFG_INSTALL_SYSTEM_DEPS=1` so it may `apt-get` the base packages.
 
-Update or remove the installation through LFG itself:
+Update or remove a direct installation through LFG itself:
 
 ```bash
 lfg setup                     # update and re-run idempotent provisioning
 lfg uninstall                 # remove LFG; keep sessions and config for reinstall
 lfg uninstall --purge --yes   # also permanently delete sessions and config
 ```
-
-Uninstall removes LFG's service, command, MCP registrations, and release files.
-It leaves shared prerequisites such as Bun, Tailscale, tmux, and coding-agent
-CLIs alone. Source checkouts are also preserved unless explicitly purged.
 
 Next: [connect a coding agent](#connect-a-coding-agent) so you have something to
 run, and [reach it from your phone](#reach-it-from-your-phone).
@@ -192,6 +232,7 @@ machine, install locally instead. More detail in
 ```bash
 lfg serve                      # web UI + control server
 lfg setup                      # rerun provisioning/update flow
+lfg uninstall                 # remove LFG while preserving sessions and config
 lfg connect <code>             # reach this box through a relay (see docs/remote-access.md)
 lfg mcp                        # stdio MCP server for LFG session tools
 lfg agents list                # list markdown-defined insight agents
