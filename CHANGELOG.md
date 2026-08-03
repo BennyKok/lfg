@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - A welcome that reflects the room (v0.1.220)
+
+- The mobile Live welcome now keeps its compact, bell-free single line while
+  showing current activity inline, using larger type, and sitting closer to the
+  screen edge. When no agents are working, it switches to “Ready to build.”
+
 ## August 3, 2026 - Every artifact leads home (v0.1.219)
 
 - Artifact cards now show the conversation that created them. Open the related
