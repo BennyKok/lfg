@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - The right agent from the first frame (v0.1.234)
+
+- Managed Computers now keep the saved OpenCode choice visible while their
+  live agent roster loads, instead of briefly presenting Claude during boot.
+
 ## August 3, 2026 - More room for parallel work (v0.1.233)
 
 - Cloud Computers now admit up to 1 simultaneous agent on Free, 5 on Personal,
