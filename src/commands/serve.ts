@@ -3853,6 +3853,10 @@ export async function cmdServe() {
             body: JSON.stringify({
               cwd: repo.cwd,
               prompt,
+              // Continue replaces the source session, so keep the name the
+              // user already chose. A normal fork remains independently
+              // titled from its own opening prompt.
+              title: body?.archiveSource === true ? title : undefined,
               user: body?.user || source?.assignedUser || undefined,
               agent: body?.agent,
               model: body?.model,
@@ -3890,6 +3894,7 @@ export async function cmdServe() {
         const body = (await req.json().catch(() => null)) as {
           cwd?: string;
           prompt?: string;
+          title?: string;
           user?: string;
           worktree?: boolean;
           model?: string;
@@ -4135,6 +4140,7 @@ export async function cmdServe() {
                       : agent === "pi"
                         ? resolvedModel ?? PI_DEFAULT_MODEL
                         : resolvedModel;
+        const requestedTitle = body?.title?.trim().slice(0, 200);
         addManaged({
           tmuxName,
           cwd,
@@ -4148,7 +4154,7 @@ export async function cmdServe() {
           launchState: "launching",
           model: launchModel,
           claudeAccountId,
-          title: body?.prompt?.slice(0, 72),
+          title: requestedTitle || body?.prompt?.slice(0, 72),
           project: repo.project,
           parentSessionId: parent?.sessionId ?? parentId,
           parentNativeSessionId: parent?.nativeSessionId ?? undefined,
