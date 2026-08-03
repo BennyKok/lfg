@@ -218,6 +218,7 @@ import {
   messagesForTranscriptView,
   type TranscriptView,
 } from "./lib/transcript-view";
+import { isRequestInterruptedMessage } from "./lib/transcript-status";
 import {
   ensureVoiceConfigured,
   invalidateVoiceConfig,
@@ -14570,6 +14571,17 @@ function MessageBubble({
         : { html: "", attachments: [] as MessageAttachment[] },
     [message.role, message.text, message.html],
   );
+  if (isRequestInterruptedMessage(message)) {
+    return (
+      <div
+        role="status"
+        aria-label="Request interrupted"
+        className="flex w-full items-center justify-center py-0.5 text-[11px] text-muted-foreground/60"
+      >
+        Interrupted
+      </div>
+    );
+  }
   if (message.kind === "thinking") {
     return (
       <AiMessage className="msg" from="assistant">
