@@ -4,6 +4,17 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - The last freeze, at startup (v0.1.212)
+
+- Restarting LFG used to stall it for several seconds about a minute in, while
+  it re-read the header of every Codex session ever recorded on the box — 3,517
+  files and 1.8GB here. Those headers never change, so they are kept now: the
+  first session list after a restart went from 3.9s to 0.25s.
+- With that gone, yesterday's other fixes hold up on a full day of real
+  traffic: requests to the session list that took over a second dropped from
+  686 to effectively zero, and the ones that remained were all this startup
+  stall, which is now fixed too.
+
 ## August 3, 2026 - Quieter interrupted turns (v0.1.212)
 
 - Steering an agent mid-task no longer leaves a large synthetic
