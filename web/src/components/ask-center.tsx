@@ -251,15 +251,17 @@ export function AskNavButton({
 }
 
 // One answerable question, shaped like a notification rather than a page. Rests
-// collapsed at two lines; tapping opens the full text and a reply box. Suggested
-// options stay visible because they are the one-tap path — everything else
-// (dismiss, free text) is revealed on interaction, iOS-style.
+// collapsed at two lines; tapping the question returns to its conversation,
+// while the explicit More action opens the full text and reply box in place.
+// Suggested options stay visible because they are the one-tap path.
 export function QuestionNotification({
   q,
   compactPreview = true,
+  onOpenSession,
 }: {
   q: Question;
   compactPreview?: boolean;
+  onOpenSession?: (sessionId: string) => void;
 }) {
   const { busy, answer, dismiss } = useAsk();
   const [open, setOpen] = useState(!compactPreview);
@@ -271,8 +273,6 @@ export function QuestionNotification({
   }, [q.id]);
 
   const preview = stripMd(q.question);
-  const hasMore = preview.length > 120 || /\n/.test(q.question);
-
   return (
     <article className="border-b border-border/50 last:border-b-0">
       <div className="flex w-full items-start gap-3 px-4 py-3">
@@ -319,17 +319,16 @@ export function QuestionNotification({
           ) : (
             <button
               type="button"
-              onClick={() => setOpen(true)}
+              onClick={() => {
+                if (q.sessionId && onOpenSession) onOpenSession(q.sessionId);
+                else setOpen(true);
+              }}
+              title={q.sessionId ? "Open corresponding session" : "Show full question"}
               className="mt-0.5 block w-full text-left"
             >
               <span className="line-clamp-2 text-[13px] leading-relaxed text-foreground/90">
                 {preview}
               </span>
-              {hasMore ? (
-                <span className="mt-0.5 inline-block text-[11px] text-muted-foreground">
-                  Show more
-                </span>
-              ) : null}
             </button>
           )}
 
@@ -381,7 +380,7 @@ export function QuestionNotification({
               onClick={() => setOpen(true)}
               className="mt-1.5 text-[11px] font-medium text-primary transition-opacity hover:opacity-80"
             >
-              Reply
+              More
             </button>
           )}
         </div>

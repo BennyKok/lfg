@@ -17,11 +17,25 @@ const askCenter = () => readFile("web/src/components/ask-center.tsx", "utf8");
 describe("questions live inside the Notification Center", () => {
   test("the feed renders questions as answerable cells", async () => {
     const source = await app();
-    expect(source).toContain("<QuestionNotification key={q.id} q={q} />");
+    expect(source).toContain(
+      "<QuestionNotification key={q.id} q={q} onOpenSession={onOpenSession} />",
+    );
     // Read from the app-wide provider, not fetched a second time by the page.
     expect(source).toContain("} = useAsk();");
     expect(source).not.toContain("/api/ask?status=open");
     expect(source).toContain("Needs you");
+  });
+
+  test("question clicks open the owning session while More expands the reply", async () => {
+    const source = await app();
+    const center = await askCenter();
+    expect(source).toContain(
+      "<QuestionNotification key={q.id} q={q} onOpenSession={onOpenSession} />",
+    );
+    expect(center).toContain("if (q.sessionId && onOpenSession) onOpenSession(q.sessionId);");
+    expect(center).toContain('title={q.sessionId ? "Open corresponding session" : "Show full question"}');
+    expect(center).toContain("              More\n");
+    expect(center).not.toContain("Show more");
   });
 
   test("a question can always be dismissed, on any device", async () => {

@@ -18,4 +18,10 @@ describe("artifact session navigation", () => {
     expect(app).toContain('reviewLabel: "Artifact"');
     expect(app).toContain("openHistoricalSession({");
   });
+
+  test("linked sessions restore their owning project filter", () => {
+    expect(app).toContain("const destinationProject = live?.project || source.project");
+    expect(app).toContain("if (destinationProject) setProjectFilter(destinationProject)");
+    expect(app).toContain('reviewLabel: "Question"');
+  });
 });

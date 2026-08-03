@@ -698,7 +698,7 @@ export default function ShippedPage({
             {[...questions]
               .sort((a, b) => b.createdAt - a.createdAt)
               .map((q) => (
-                <QuestionNotification key={q.id} q={q} />
+                <QuestionNotification key={q.id} q={q} onOpenSession={onOpenSession} />
               ))}
           </div>
         </section>

@@ -5436,6 +5436,12 @@ export function App() {
           session.sessionId === source.sessionId ||
           session.nativeSessionId === source.sessionId,
       );
+      // Links from Notifications, Artifacts, and Ask must restore the owning
+      // folder scope as well as focusing the row. Leaving a different saved
+      // project selected either hides the destination or makes the header lie
+      // about which workspace the conversation belongs to.
+      const destinationProject = live?.project || source.project;
+      if (destinationProject) setProjectFilter(destinationProject);
       setTab("live");
       if (live?.sessionId) {
         setShippedReview(null);
@@ -6768,8 +6774,10 @@ export function App() {
                 )
               }
               onOpenSession={(sid) => {
-                setTab("live");
-                setLiveFocus({ sid, n: Date.now() });
+                openHistoricalSession({
+                  sessionId: sid,
+                  reviewLabel: "Question",
+                });
               }}
               onReviewSession={openShippedSession}
             />
