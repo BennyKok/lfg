@@ -89,4 +89,14 @@ describe("session lifecycle actions", () => {
     expect(dialog).toContain("archiveSource: continuing || undefined");
     expect(dialog).toContain("Archives this session after opening the replacement");
   });
+
+  test("uses a modal instead of a draggable drawer for fork input", () => {
+    const dialog = section("function ForkSessionDialog(", "const SessionCard = memo(");
+
+    expect(dialog).toContain("<Dialog");
+    expect(dialog).toContain("<DialogContent");
+    expect(dialog).not.toContain("<BottomSheet");
+    expect(dialog).toContain("overflow-y-auto overscroll-contain");
+    expect(dialog).toContain('"min-w-0 px-4 pb-5 pt-3 transition-colors"');
+  });
 });

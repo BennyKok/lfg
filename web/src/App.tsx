@@ -13339,128 +13339,146 @@ function ForkSessionDialog({
   }
 
   return (
-    <BottomSheet onClose={onClose} title={continuing ? "Continue session" : "Fork session"}>
-      <form
-        onSubmit={submit}
-        {...files.dropZoneProps}
-        className={cn(
-          "px-4 pb-5 pt-3 transition-colors",
-          files.draggingFiles && "bg-primary/8",
-        )}
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+    >
+      <DialogContent
+        showCloseButton={false}
+        // Forking is an input-heavy flow. Keep it out of the mobile Vaul drawer:
+        // the drawer's drag gesture and focus handling compete with textarea
+        // scrolling while the soft keyboard resizes the viewport. A real modal
+        // keeps the form stationary and gives the form itself the scroll area.
+        className="max-h-[calc(var(--lfg-visual-height,100dvh)-1rem)] max-w-[calc(100%-1rem)] sm:max-w-xl"
+        innerClassName="max-h-[calc(var(--lfg-visual-height,100dvh)-1rem)] gap-0 overflow-y-auto overscroll-contain p-0"
       >
-        <div className="mb-3 flex items-center gap-2">
-          {continuing ? (
-            <Play className="size-4 text-muted-foreground" />
-          ) : (
-            <GitFork className="size-4 text-muted-foreground" />
+        <DialogTitle className="sr-only">
+          {continuing ? "Continue session" : "Fork session"}
+        </DialogTitle>
+        <form
+          onSubmit={submit}
+          {...files.dropZoneProps}
+          className={cn(
+            "min-w-0 px-4 pb-5 pt-3 transition-colors",
+            files.draggingFiles && "bg-primary/8",
           )}
-          <div className="min-w-0">
-            <div className="text-[15px] font-semibold">
-              {continuing ? "Continue in a new session" : "Fork session"}
-            </div>
-            <div className="truncate text-xs text-muted-foreground">
-              {continuing
-                ? `Archives this session after opening the replacement · ${titleForSession(session)}`
-                : titleForSession(session)}
+        >
+          <div className="mb-3 flex items-center gap-2">
+            {continuing ? (
+              <Play className="size-4 text-muted-foreground" />
+            ) : (
+              <GitFork className="size-4 text-muted-foreground" />
+            )}
+            <div className="min-w-0">
+              <div className="text-[15px] font-semibold">
+                {continuing ? "Continue in a new session" : "Fork session"}
+              </div>
+              <div className="truncate text-xs text-muted-foreground">
+                {continuing
+                  ? `Archives this session after opening the replacement · ${titleForSession(session)}`
+                  : titleForSession(session)}
+              </div>
             </div>
           </div>
-        </div>
 
-        {files.fileInput}
+          {files.fileInput}
 
-        <div className="lfg-gfield relative rounded-2xl px-2 py-1">
-          <SkillTextarea
-            value={prompt}
-            onValueChange={setPrompt}
-            onPaste={files.onPasteFiles}
-            onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-                e.preventDefault();
-                e.currentTarget.form?.requestSubmit();
+          <div className="lfg-gfield relative rounded-2xl px-2 py-1">
+            <SkillTextarea
+              value={prompt}
+              onValueChange={setPrompt}
+              onPaste={files.onPasteFiles}
+              onKeyDown={(e) => {
+                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                  e.preventDefault();
+                  e.currentTarget.form?.requestSubmit();
+                }
+              }}
+              placeholder={
+                files.attachments.length
+                  ? "Add a note for the files…"
+                  : "Extra prompt for the new agent…"
               }
-            }}
-            placeholder={
-              files.attachments.length
-                ? "Add a note for the files…"
-                : "Extra prompt for the new agent…"
-            }
-            className="min-h-32 max-h-[42dvh] resize-none overflow-y-auto border-0 bg-transparent px-1 py-1 pr-10 text-base leading-relaxed shadow-none focus-visible:border-0 focus-visible:ring-0"
-          />
-          <MicButton
-            minimal
-            className="absolute bottom-1 right-1 size-9 shrink-0"
-            silenceMs={2500}
-            baseText={prompt}
-            onText={(text, base) => setPrompt(base.trim() ? `${base.trimEnd()} ${text}` : text)}
-            onInterim={(text, base) => setPrompt(base.trim() ? `${base.trimEnd()} ${text}` : text)}
-            onAutoSubmit={(text, base) => {
-              const combined = base.trim() ? `${base.trimEnd()} ${text}` : text;
-              setPrompt(combined);
-              submit(undefined, combined);
-            }}
-            onCancel={(base) => setPrompt(base)}
-          />
-        </div>
-
-        {files.attachments.length ? <div className="mt-2">{files.chips}</div> : null}
-
-        <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          <AgentIconStrip
-            options={availableAgentOptions}
-            value={agent}
-            selectedId={selectedLaunchId}
-            onSelect={(key, option) => {
-              setAgent(key);
-              if (key === "aisdk") setClaudeAccountId(option?.accountId ?? "");
-              setModel(localStorage.getItem(`lfg_fork_model_${key}`) || defaultModelFor(key));
-            }}
-          />
-
-          <ModelPicker value={model} models={models} onChange={setModel} width="max-w-28" />
-
-          {agentSupportsThinking(agent) ? (
-            <FieldPill>
-              <select
-                value={thinkingLevel}
-                onChange={(e) => setThinkingLevel(e.target.value as ThinkingLevel)}
-                aria-label="Thinking level"
-                className="max-w-24 appearance-none truncate bg-transparent pr-1 text-xs font-medium outline-none"
-              >
-                {thinkingLevels.map((item) => (
-                  <option key={item} value={item}>
-                    {item}
-                  </option>
-                ))}
-              </select>
-            </FieldPill>
-          ) : null}
-        </div>
-
-        <div className="mt-4 flex items-center gap-2">
-          <Button
-            size="icon-sm"
-            type="button"
-            variant={files.draggingFiles ? "brand-soft" : "outline"}
-            className="size-8 rounded-full shadow-sm"
-            onClick={files.openFilePicker}
-            aria-label="Attach files"
-            title="Attach files"
-          >
-            <Paperclip className="size-4" />
-          </Button>
-          <div className="ml-auto flex items-center gap-2">
-            <Button type="button" variant="ghost" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button type="submit" variant="brand" disabled={!sid}>
-              {continuing ? <Play className="size-4" /> : <GitFork className="size-4" />}
-              {continuing ? "Continue" : "Open"}
-            </Button>
+              className="min-h-32 max-h-[42dvh] resize-none overflow-y-auto border-0 bg-transparent px-1 py-1 pr-10 text-base leading-relaxed shadow-none focus-visible:border-0 focus-visible:ring-0"
+            />
+            <MicButton
+              minimal
+              className="absolute bottom-1 right-1 size-9 shrink-0"
+              silenceMs={2500}
+              baseText={prompt}
+              onText={(text, base) => setPrompt(base.trim() ? `${base.trimEnd()} ${text}` : text)}
+              onInterim={(text, base) => setPrompt(base.trim() ? `${base.trimEnd()} ${text}` : text)}
+              onAutoSubmit={(text, base) => {
+                const combined = base.trim() ? `${base.trimEnd()} ${text}` : text;
+                setPrompt(combined);
+                submit(undefined, combined);
+              }}
+              onCancel={(base) => setPrompt(base)}
+            />
           </div>
-        </div>
-      </form>
-      {files.annotator}
-    </BottomSheet>
+
+          {files.attachments.length ? <div className="mt-2">{files.chips}</div> : null}
+
+          <div className="mt-3 flex flex-wrap items-center gap-1.5">
+            <AgentIconStrip
+              options={availableAgentOptions}
+              value={agent}
+              selectedId={selectedLaunchId}
+              onSelect={(key, option) => {
+                setAgent(key);
+                if (key === "aisdk") setClaudeAccountId(option?.accountId ?? "");
+                setModel(localStorage.getItem(`lfg_fork_model_${key}`) || defaultModelFor(key));
+              }}
+            />
+
+            <ModelPicker value={model} models={models} onChange={setModel} width="max-w-28" />
+
+            {agentSupportsThinking(agent) ? (
+              <FieldPill>
+                <select
+                  value={thinkingLevel}
+                  onChange={(e) => setThinkingLevel(e.target.value as ThinkingLevel)}
+                  aria-label="Thinking level"
+                  className="max-w-24 appearance-none truncate bg-transparent pr-1 text-xs font-medium outline-none"
+                >
+                  {thinkingLevels.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </FieldPill>
+            ) : null}
+          </div>
+
+          <div className="mt-4 flex items-center gap-2">
+            <Button
+              size="icon-sm"
+              type="button"
+              variant={files.draggingFiles ? "brand-soft" : "outline"}
+              className="size-8 rounded-full shadow-sm"
+              onClick={files.openFilePicker}
+              aria-label="Attach files"
+              title="Attach files"
+            >
+              <Paperclip className="size-4" />
+            </Button>
+            <div className="ml-auto flex items-center gap-2">
+              <Button type="button" variant="ghost" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button type="submit" variant="brand" disabled={!sid}>
+                {continuing ? <Play className="size-4" /> : <GitFork className="size-4" />}
+                {continuing ? "Continue" : "Open"}
+              </Button>
+            </div>
+          </div>
+        </form>
+        {files.annotator}
+      </DialogContent>
+    </Dialog>
   );
 }
 

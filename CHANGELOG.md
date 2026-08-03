@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - Forking stays put (v0.1.232)
+
+- Fork and Continue now open in a stable modal on phones instead of a draggable
+  drawer, so typing, textarea scrolling, and the software keyboard no longer
+  compete with the sheet gesture. Compact keyboard layouts keep every action
+  reachable through the modal's own scroll area.
+
 ## August 3, 2026 - Your Computer, ready first (v0.1.231)
 
 - Managed hosts can now open a credential-free Computer directly and keep
