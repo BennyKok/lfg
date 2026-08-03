@@ -29,12 +29,12 @@ const LIMITS: Readonly<Record<AgentAdmissionPlan, number>> = {
   // One interactive coding agent can use most of the 512 MiB free Computer.
   free: 1,
   computer_trial: 1,
-  // Leave CPU and RAM room for the LFG server, Vite, and the OS. These are
-  // deliberately below the vCPU count once each agent has a real tool turn.
-  computer_5: 2,
-  computer_10: 4,
-  computer_20: 8,
-  computer_early: 8,
+  // Paid tiers keep roughly 1.5–1.6 GiB of RAM available per admitted agent.
+  // Admission is a safety ceiling, not a promise that every agent owns a CPU.
+  computer_5: 5,
+  computer_10: 16,
+  computer_20: 24,
+  computer_early: 24,
 };
 
 const COMPUTER_PLAN_FILE = "/etc/omg/computer-plan";
@@ -49,7 +49,9 @@ function currentComputerPlan(planFile: string): string | undefined {
     const code = (error as NodeJS.ErrnoException).code;
     // Standalone LFG has no managed plan file, so retain the bootstrap env as
     // its compatibility bridge. Any other file failure fails safe to Free.
-    return code === "ENOENT" ? process.env.LFG_COMPUTER_PLAN : "invalid-managed-plan";
+    return code === "ENOENT"
+      ? process.env.LFG_COMPUTER_PLAN
+      : "invalid-managed-plan";
   }
 }
 
@@ -58,7 +60,8 @@ export function computerAgentAdmissionContext(
   rawPlan?: string,
   planFile = COMPUTER_PLAN_FILE,
 ): AgentAdmissionContext | null {
-  const selectedPlan = rawPlan === undefined ? currentComputerPlan(planFile) : rawPlan;
+  const selectedPlan =
+    rawPlan === undefined ? currentComputerPlan(planFile) : rawPlan;
   if (!selectedPlan?.trim()) return null;
   const plan = selectedPlan.trim().toLowerCase();
   if (
@@ -86,7 +89,10 @@ export type AgentAdmission =
 export class AgentAdmissionController {
   private readonly pending = new Set<string>();
 
-  tryAcquire(limit: number, sessions: readonly AgentActivity[]): AgentAdmission {
+  tryAcquire(
+    limit: number,
+    sessions: readonly AgentActivity[],
+  ): AgentAdmission {
     const active = activeAgentCount(sessions);
     if (active + this.pending.size >= limit) {
       return { ok: false, active, reserved: this.pending.size };
