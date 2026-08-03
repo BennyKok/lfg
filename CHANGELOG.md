@@ -4,6 +4,19 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - Listing sessions gets out of everything else's way (v0.1.235)
+
+- Binding a newly started Codex session to its transcript used to search every
+  Codex session ever recorded on the box — 3,604 of them here, re-checked every
+  couple of seconds. It now looks only at the last week, which is all a
+  just-started session can be, and the session list rebuilds around a quarter
+  faster.
+- The last piece of the rebuild that stopped the server outright — asking tmux
+  for its panes — no longer does. The worst pause the rebuild inflicts on
+  everything else is down to about 10ms.
+- Both changes were checked against the real fleet: the session list they
+  produce is identical, down to every Codex binding and tmux pane.
+
 ## August 3, 2026 - The right agent from the first frame (v0.1.234)
 
 - Managed Computers now keep the saved OpenCode choice visible while their
