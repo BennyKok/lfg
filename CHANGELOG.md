@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - Quieter interrupted turns (v0.1.212)
+
+- Steering an agent mid-task no longer leaves a large synthetic
+  `[Request interrupted by user for tool use]` chat bubble behind. The event
+  now appears as a subtle `Interrupted` status between the surrounding turns.
+
 ## August 2, 2026 - Fewer whole-server freezes (v0.1.211)
 
 - Listing sessions ran `pgrep` twice, forking a process to ask the operating
