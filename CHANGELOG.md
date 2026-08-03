@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - A quieter mobile hello (v0.1.218)
+
+- The mobile Live welcome is now one compact line with no bell icon or
+  secondary status copy. Bells, context, and the wider card remain reserved
+  for agent questions that actually need attention.
+
 ## August 3, 2026 - A lighter mobile welcome (v0.1.217)
 
 - The mobile Live welcome now sits directly on the page instead of inside a
