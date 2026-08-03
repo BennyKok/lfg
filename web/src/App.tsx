@@ -339,6 +339,7 @@ import {
 } from "./lib/usage";
 import {
   configuredAgentOptions,
+  displayedAgentOption,
   type AgentAccessMode,
 } from "./lib/coding-agent-options";
 import {
@@ -16241,10 +16242,12 @@ function NewSessionDialog({
     !!selectedRepo &&
     visibleAgentOptions.some((option) => option.key === agent) &&
     (!!prompt.trim() || attachments.length > 0);
-  const selectedAgentOption =
-    visibleAgentOptions.find(
-      (option) => (option.selectorId ?? option.key) === selectedLaunchId,
-    ) ?? visibleAgentOptions.find((option) => option.key === agent) ?? visibleAgentOptions[0] ?? AGENT_OPTIONS[0];
+  const selectedAgentOption = displayedAgentOption<AgentLaunchOption>(
+    AGENT_OPTIONS,
+    visibleAgentOptions,
+    agent,
+    selectedLaunchId,
+  ) ?? (AGENT_OPTIONS[0] as AgentLaunchOption);
   // Keep every agent in a fixed position so picking one never reshuffles the
   // icons. The selected agent is highlighted in place rather than hoisted out.
   const agentButtons = visibleAgentOptions;

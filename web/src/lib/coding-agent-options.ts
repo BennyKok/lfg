@@ -6,6 +6,28 @@ export type CodingAgentAvailability = {
 
 export type AgentAccessMode = "configured" | "connected-or-opencode";
 
+/**
+ * Resolve the agent icon/label while the configured roster is still loading.
+ *
+ * The selected agent state is authoritative even before bootstrap supplies the
+ * launchable subset. Falling back to the first catalog entry in that window
+ * briefly painted Claude for a saved OpenCode selection.
+ */
+export function displayedAgentOption<T extends { key: string; selectorId?: string }>(
+  catalog: readonly T[],
+  visible: readonly T[],
+  agent: string,
+  selectedId: string,
+): T | undefined {
+  return (
+    visible.find((option) => (option.selectorId ?? option.key) === selectedId) ??
+    visible.find((option) => option.key === agent) ??
+    visible[0] ??
+    catalog.find((option) => option.key === agent) ??
+    catalog[0]
+  );
+}
+
 /** Keep agent pickers limited to choices that can actually launch. */
 export function configuredAgentOptions<
   T extends { key: string },
