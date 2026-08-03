@@ -2,12 +2,22 @@ import { useTheme } from "next-themes"
 import { Toaster as Sonner, type ToasterProps } from "sonner"
 import { CircleCheckIcon, InfoIcon, TriangleAlertIcon, OctagonXIcon } from "lucide-react"
 
-const Toaster = ({ ...props }: ToasterProps) => {
+const Toaster = ({
+  position = "bottom-right",
+  swipeDirections,
+  ...props
+}: ToasterProps) => {
   const { theme = "system" } = useTheme()
+  const edgeSwipeDirection = position.startsWith("top") ? "top" : "bottom"
 
   return (
     <Sonner
       theme={theme as ToasterProps["theme"]}
+      position={position}
+      // Keep dismissal motion tied to the edge that owns the stack. Sonner
+      // infers this today, but making it explicit prevents a top toast from
+      // retaining bottom-oriented gesture behavior as placement evolves.
+      swipeDirections={swipeDirections ?? [edgeSwipeDirection]}
       className="toaster group"
       icons={{
         success: (

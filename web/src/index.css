@@ -528,6 +528,13 @@ html.lfg-keyboard-open {
     opacity: 0;
   }
 
+  /* Sonner's collapsed background-toast removal is hard-coded to +40%, which
+     is toward the screen on a top-anchored stack. Send that hidden shell back
+     through the top edge so every exit follows the stack's placement. */
+  [data-sonner-toast][data-y-position="top"][data-removed="true"][data-front="false"][data-expanded="false"] {
+    --y: translateY(-40%);
+  }
+
   .lfg-finding-toast {
     width: var(--lfg-toast-max, min(27rem, calc(100vw - 2rem))) !important;
     /* Match .cn-toast chrome so the custom shell stacks cleanly with styled

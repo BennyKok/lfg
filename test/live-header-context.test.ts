@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 
 const app = () => readFile("web/src/App.tsx", "utf8");
 const sonner = () => readFile("web/src/components/ui/sonner.tsx", "utf8");
+const styles = () => readFile("web/src/index.css", "utf8");
 
 describe("contextual mobile Live header", () => {
   test("morphs the logo into a personalized notification target after two seconds", async () => {
@@ -39,5 +40,19 @@ describe("toast placement", () => {
     expect(await sonner()).toContain(
       'top: "calc(var(--lfg-mobile-header-height) + 0.5rem)"',
     );
+  });
+
+  test("dismisses top-anchored toasts back through the top edge", async () => {
+    const wrapper = await sonner();
+    expect(wrapper).toContain(
+      'const edgeSwipeDirection = position.startsWith("top") ? "top" : "bottom"',
+    );
+    expect(wrapper).toContain(
+      "swipeDirections={swipeDirections ?? [edgeSwipeDirection]}",
+    );
+    expect(await styles()).toContain(
+      '[data-y-position="top"][data-removed="true"][data-front="false"][data-expanded="false"]',
+    );
+    expect(await styles()).toContain("--y: translateY(-40%);");
   });
 });
