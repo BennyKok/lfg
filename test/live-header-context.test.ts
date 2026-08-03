@@ -10,18 +10,34 @@ describe("contextual mobile Live header", () => {
     const source = await app();
     expect(source).toContain("setShowHeaderBrandIntro(false), 2000");
     expect(source).toContain("function LiveHeaderContext({");
-    expect(source).toContain("`Welcome, ${firstName} · ${ambientContext}`");
+    expect(source).toContain("const welcomeMessage = `Welcome, ${firstName}`");
     expect(source).toContain('`${busyCount} agent${busyCount === 1 ? "" : "s"} building`');
     expect(source).toContain(': "Ready to build"');
+    expect(source).toContain("setShowAmbientStatus((current) => !current)");
+    expect(source).toContain('getPropertyValue("--text-swap-dur")');
+    expect(source).toContain('ambientSwapState === "exit" && "is-exit"');
+    expect(source).toContain('ambientSwapState === "enter" && "is-enter-start"');
+    expect(source).toContain("<ShimmerText>{headline}</ShimmerText>");
     expect(source).toContain("const showCard = intro || questionCount > 0;");
     expect(source).toContain("surface={showCard}");
     expect(source).toContain('showCard && "glass-island"');
     expect(source).toContain('questionCount ? "px-3" : "px-1"');
-    expect(source).toContain('questionCount ? "text-[12px]" : "text-[14px]"');
+    expect(source).toContain('? "text-[12px] font-semibold"');
+    expect(source).toContain('? "text-[12px] font-medium"');
+    expect(source).toContain(': "text-[14px] font-semibold"');
     expect(source).toContain("{questionCount ? (");
     expect(source).toContain('<Bell className="size-4 shrink-0 fill-primary/15 text-primary" aria-hidden />');
     expect(source).toContain("{detail ? (");
     expect(source).toContain('onOpenNotifications={() => setTab("notifications")}');
+  });
+
+  test("ships motion-safe text swap and shimmer treatments", async () => {
+    const styleSource = await styles();
+    expect(styleSource).toContain(".t-text-swap.is-exit");
+    expect(styleSource).toContain(".t-text-swap.is-enter-start");
+    expect(styleSource).toContain("--text-swap-dur: 150ms");
+    expect(styleSource).toContain(".lfg-shimmer-text::before");
+    expect(styleSource).toContain("animation: none !important");
   });
 
   test("uses the center surface for urgent questions on mobile", async () => {

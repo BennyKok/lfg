@@ -7070,17 +7070,60 @@ function LiveHeaderContext({
   const firstName = `${firstNamePart.charAt(0).toUpperCase()}${firstNamePart.slice(1)}`;
   const questionCount = questions.length;
   const showCard = intro || questionCount > 0;
+  const [showAmbientStatus, setShowAmbientStatus] = useState(false);
+  const [ambientSwapState, setAmbientSwapState] = useState<"idle" | "exit" | "enter">("idle");
+  const ambientTextRef = useRef<HTMLSpanElement>(null);
+  const ambientSwapTimerRef = useRef<number | null>(null);
   const ambientContext = busyCount
     ? `${busyCount} agent${busyCount === 1 ? "" : "s"} building`
     : "Ready to build";
+  const welcomeMessage = `Welcome, ${firstName}`;
   const headline = questionCount
     ? questionCount === 1
       ? `${firstName}, an agent needs you`
       : `${firstName}, ${questionCount} agents need you`
-    : `Welcome, ${firstName} · ${ambientContext}`;
+    : showAmbientStatus
+      ? ambientContext
+      : welcomeMessage;
   const detail = questionCount
     ? "Tap to open notifications"
     : null;
+
+  useEffect(() => {
+    if (intro || questionCount) {
+      setShowAmbientStatus(false);
+      setAmbientSwapState("idle");
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      setAmbientSwapState("exit");
+      const swapDuration = Number.parseFloat(
+        window.getComputedStyle(document.documentElement).getPropertyValue("--text-swap-dur"),
+      ) || 150;
+      ambientSwapTimerRef.current = window.setTimeout(() => {
+        setShowAmbientStatus((current) => !current);
+        setAmbientSwapState("enter");
+      }, swapDuration);
+    }, 3200);
+
+    return () => {
+      window.clearInterval(interval);
+      if (ambientSwapTimerRef.current !== null) {
+        window.clearTimeout(ambientSwapTimerRef.current);
+        ambientSwapTimerRef.current = null;
+      }
+    };
+  }, [intro, questionCount]);
+
+  useLayoutEffect(() => {
+    if (ambientSwapState !== "enter") return;
+    const label = ambientTextRef.current;
+    if (!label) return;
+    void label.offsetHeight;
+    const frame = window.requestAnimationFrame(() => setAmbientSwapState("idle"));
+    return () => window.cancelAnimationFrame(frame);
+  }, [ambientSwapState, showAmbientStatus]);
 
   return (
     <NavIsland
@@ -7096,7 +7139,7 @@ function LiveHeaderContext({
           haptic("selection");
           onOpenNotifications();
         }}
-        aria-label={intro ? "LFG" : detail ? `${headline}. ${detail}` : headline}
+        aria-label={intro ? "LFG" : detail ? `${headline}. ${detail}` : `${welcomeMessage}. ${ambientContext}`}
         title={intro ? "LFG" : "Open notifications"}
         className={cn(
           "relative flex h-11 w-full items-center overflow-hidden rounded-full text-left transition-colors active:scale-[0.98]",
@@ -7114,7 +7157,7 @@ function LiveHeaderContext({
           <ProductBrand compact />
         </span>
         <span
-          aria-live="polite"
+          aria-live={questionCount ? "polite" : "off"}
           className={cn(
             "flex min-w-0 items-center gap-2 transition-all duration-300 ease-ios",
             questionCount ? "px-3" : "px-1",
@@ -7126,12 +7169,23 @@ function LiveHeaderContext({
           ) : null}
           <span className="min-w-0 leading-none">
             <span
+              ref={ambientTextRef}
               className={cn(
-                "block truncate font-semibold tracking-[-0.01em]",
-                questionCount ? "text-[12px]" : "text-[14px]",
+                "t-text-swap block truncate tracking-[-0.01em]",
+                ambientSwapState === "exit" && "is-exit",
+                ambientSwapState === "enter" && "is-enter-start",
+                questionCount
+                  ? "text-[12px] font-semibold"
+                  : showAmbientStatus
+                    ? "text-[12px] font-medium"
+                    : "text-[14px] font-semibold",
               )}
             >
-              {headline}
+              {!questionCount && showAmbientStatus ? (
+                <ShimmerText>{headline}</ShimmerText>
+              ) : (
+                headline
+              )}
             </span>
             {detail ? (
               <span className="mt-1 block truncate text-[10px] font-medium text-primary/75">
