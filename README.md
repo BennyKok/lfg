@@ -23,7 +23,7 @@ web UI, and lets you answer prompts or steer work from your phone or laptop.
 
 ## Quick start
 
-### Set up with the OMG CLI
+### Set up with the omg.dev CLI
 
 The guided path keeps the whole computer lifecycle under one command surface:
 
@@ -31,13 +31,13 @@ The guided path keeps the whole computer lifecycle under one command surface:
 npx --yes @omg-dev/cli@latest computer setup
 ```
 
-No OMG account is needed to install LFG. Setup delegates to LFG's own installer,
-is a no-op when LFG is already present, and accepts `--reinstall` when you
-deliberately want to run the installer again. Then open
+No omg.dev account is needed to install LFG. Setup delegates to LFG's own
+installer, is a no-op when LFG is already present, and accepts `--reinstall`
+when you deliberately want to run the installer again. Then open
 **http://127.0.0.1:8766**.
 
 For ongoing lifecycle management and relay access, install the CLI once, then
-sign in and connect the computer to OMG's hosted relay:
+sign in and connect the computer to omg.dev's hosted relay:
 
 ```bash
 npm install --global @omg-dev/cli
@@ -45,7 +45,7 @@ omg login
 omg connect
 ```
 
-Manage the same installation through OMG:
+Manage the same installation through omg.dev:
 
 ```bash
 omg computer status                    # inspect the local install and pairing
@@ -67,7 +67,7 @@ checkouts are preserved unless explicitly purged.
 
 ### Install directly
 
-To install without the OMG CLI:
+To install without the omg.dev CLI:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/BennyKok/lfg/main/scripts/setup.sh | bash
@@ -93,7 +93,7 @@ run, and [reach it from your phone](#reach-it-from-your-phone).
 
 **Or try it hosted, with no install at all:**
 
-[![Deploy on omg](https://omg.dev/deploy-badge.svg?v=2)](https://omg.dev/sandbox/templates/lfg)
+[![Deploy on omg.dev](https://omg.dev/deploy-badge.svg?v=2)](https://omg.dev/sandbox/templates/lfg)
 
 One click on [omg.dev](https://omg.dev/sandbox/templates/lfg) gives you a
 workspace with `lfg` already running — nothing to install and no server to
@@ -162,7 +162,7 @@ shortest path to the hosted relay:
 omg connect                              # installs LFG if needed, then pairs and connects
 ```
 
-`omg connect` discovers OMG's relay and passes a one-time code directly to
+`omg connect` discovers omg.dev's relay and passes a one-time code directly to
 `lfg connect`, without a dashboard or clipboard step. It resumes the saved
 binding on later runs. Sign in once with `omg login`; install the CLI with
 `npm install --global @omg-dev/cli` if you do not already have it.
@@ -179,7 +179,7 @@ LFG_RELAY_URL=wss://your-relay.example/connect lfg connect ABC123   # outbound r
 
 Tailscale is the simpler choice if you only open the UI from your own devices.
 The relay (experimental) exists for the case Tailscale can't cover — rendering a
-session from your box on a *public* web origin. OMG operates one that its CLI
+session from your box on a *public* web origin. omg.dev operates one that its CLI
 configures for you; other operators can implement the same generic protocol.
 No relay ships with LFG itself. Full comparison, the pairing flow, and opt-in
 session lifecycle events:
@@ -190,14 +190,14 @@ See [Security](#security).
 
 ## One-click setup on omg.dev
 
-[![Deploy on omg](https://omg.dev/deploy-badge.svg?v=2)](https://omg.dev/sandbox/templates/lfg)
+[![Deploy on omg.dev](https://omg.dev/deploy-badge.svg?v=2)](https://omg.dev/sandbox/templates/lfg)
 
 **[omg.dev](https://omg.dev/sandbox/templates/lfg)** is the fastest way to try
 `lfg` — one click, no local install and no server to provision:
 
 1. Open [omg.dev/sandbox/templates/lfg](https://omg.dev/sandbox/templates/lfg)
-   and sign in to OMG if prompted.
-2. OMG creates a sandbox from the prebuilt `lfg` template and starts
+   and sign in to omg.dev if prompted.
+2. omg.dev creates a sandbox from the prebuilt `lfg` template and starts
    `lfg serve --host 0.0.0.0 --port 8766`.
 3. Your browser lands on the workspace URL with the LFG web UI already running.
 
@@ -239,7 +239,6 @@ lfg agents list                # list markdown-defined insight agents
 lfg agents run <name>          # run an insight agent
 lfg subagent models            # list runtime sub-agent providers/models
 lfg subagent create --prompt "..." --agent codex-aisdk
-lfg whatsapp run               # optional WhatsApp sidecar
 ```
 
 From a source checkout, use `bun run <command>` (e.g. `bun run serve`) — the
