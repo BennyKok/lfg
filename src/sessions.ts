@@ -1063,6 +1063,7 @@ const codexHeadCache = new Map<string, CodexHead | null>();
 // A path that has since been deleted is dropped when we next look at it; a
 // corrupt or foreign-version file just fails to load and we rebuild from
 // scratch, which is only as slow as before.
+const CODEX_LIVE_ROLLOUT_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const CODEX_HEAD_CACHE_VERSION = 1;
 const codexHeadCachePath = () => join(PATHS.data, "codex-heads.json");
 let codexHeadCacheLoaded = false;
@@ -1126,10 +1127,43 @@ async function parseCodexHead(path: string): Promise<CodexHead | null> {
   }
 }
 
-async function codexThreads(): Promise<CodexThread[]> {
+/**
+ * The day a rollout was started, from its own path.
+ *
+ * ~/.codex/sessions is partitioned YYYY/MM/DD, so a rollout's age is readable
+ * without touching the disk — which is the point: statting every rollout to
+ * find the handful that matter costs ~9ms of blocking syscalls per rebuild at
+ * 3,600 files, and that number only grows.
+ */
+function rolloutStartedAtFromPath(path: string): number | null {
+  const m = path.match(/\/(\d{4})\/(\d{2})\/(\d{2})\//);
+  if (!m) return null;
+  const at = Date.parse(`${m[1]}-${m[2]}-${m[3]}T00:00:00Z`);
+  return Number.isFinite(at) ? at : null;
+}
+
+/**
+ * @param sinceMs Only consider rollouts started on or after this instant.
+ *
+ * The live session list uses this. It only reaches codexThreads at all when a
+ * codex process or managed row is not yet bound to a rollout, and an unbound
+ * session is by definition one that just started — so it does not need the
+ * history, and walking 3,600 rollouts to match one of them is pure waste. The
+ * resumable index, which genuinely wants every session ever recorded, calls
+ * this without a window and is unaffected.
+ */
+async function codexThreads(opts?: { sinceMs?: number }): Promise<CodexThread[]> {
   loadCodexHeadCache();
   const out: CodexThread[] = [];
+  // A rollout is filed under the day it started but appended to for as long as
+  // its session lives, so the cutoff is generous: a week of slack between "not
+  // yet bound" and "too old to be the session we are looking for".
+  const cutoff = opts?.sinceMs ?? null;
   for (const path of await codexRolloutFiles()) {
+    if (cutoff !== null) {
+      const startedAt = rolloutStartedAtFromPath(path);
+      if (startedAt !== null && startedAt < cutoff) continue;
+    }
     let head = codexHeadCache.get(path);
     if (head === undefined) {
       head = await parseCodexHead(path);
@@ -1977,7 +2011,8 @@ export async function listSessions(): Promise<Session[]> {
     managedSessions.some((m) => m.agent === "codex" && !!m.sessionId && !m.nativeSessionId);
   profile?.count("codexThreads_skipped", needsCodexThreads ? 0 : 1);
   const codex = needsCodexThreads
-    ? await profileAsync(profile, "codexThreads_ms", () => codexThreads())
+    ? await profileAsync(profile, "codexThreads_ms", () =>
+        codexThreads({ sinceMs: Date.now() - CODEX_LIVE_ROLLOUT_WINDOW_MS }))
     : [];
   const claimedCodex = new Set<string>();
   // codex-aisdk harnesses each spawn a `codex app-server --listen stdio://`
