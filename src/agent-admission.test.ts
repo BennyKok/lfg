@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   activeAgentCount,
   AgentAdmissionController,
+  agentLaunchMemoryBudget,
   computerAgentAdmissionContext,
 } from "./agent-admission.ts";
 
@@ -74,6 +75,38 @@ describe("Computer agent admission", () => {
     );
     expect(results.filter((result) => result.ok)).toHaveLength(1);
     expect(admission.reserved).toBe(1);
+  });
+
+  test("a Computer launch preserves host memory headroom", () => {
+    const gib = 1024 ** 3;
+    const budget = agentLaunchMemoryBudget(4 * gib, 1.5 * gib);
+    expect(budget).toEqual({
+      availableBytes: 1.5 * gib,
+      reserveBytes: 768 * 1024 ** 2,
+      launchBytes: gib,
+    });
+    const admission = new AgentAdmissionController();
+    expect(admission.tryAcquire(10, [], budget)).toMatchObject({
+      ok: false,
+      reason: "memory",
+      availableBytes: 1.5 * gib,
+      requiredBytes: 1.75 * gib,
+    });
+  });
+
+  test("pending launches reserve memory atomically and release it", () => {
+    const gib = 1024 ** 3;
+    const budget = agentLaunchMemoryBudget(4 * gib, 2.75 * gib);
+    const admission = new AgentAdmissionController();
+    const first = admission.tryAcquire(10, [], budget);
+    const second = admission.tryAcquire(10, [], budget);
+    const third = admission.tryAcquire(10, [], budget);
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(third).toMatchObject({ ok: false, reason: "memory" });
+    expect(admission.reservedBytes).toBe(2 * gib);
+    if (first.ok) first.release();
+    expect(admission.tryAcquire(10, [], budget).ok).toBe(true);
   });
 
   test("a launch storm stops exactly at every paid plan ceiling", () => {

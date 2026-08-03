@@ -25,8 +25,37 @@ export type AgentActivity = {
   launching?: boolean;
 };
 
+export type AgentMemoryBudget = {
+  availableBytes: number;
+  reserveBytes: number;
+  launchBytes: number;
+};
+
+const MIB = 1024 * 1024;
+const GIB = 1024 * MIB;
+
+/**
+ * A launch must leave enough memory for LFG, the OS, and the tunnel to keep
+ * answering while the agent runtime initializes. Existing processes are
+ * already reflected in availableBytes; launchBytes reserves only starts that
+ * passed admission but have not consumed their memory yet.
+ */
+export function agentLaunchMemoryBudget(
+  totalBytes: number,
+  availableBytes: number,
+): AgentMemoryBudget {
+  const total = Number.isFinite(totalBytes) ? Math.max(0, totalBytes) : 0;
+  const available = Number.isFinite(availableBytes) ? Math.max(0, availableBytes) : 0;
+  return {
+    availableBytes: available,
+    reserveBytes: Math.max(768 * MIB, Math.ceil(total * 0.1)),
+    launchBytes: GIB,
+  };
+}
+
 const LIMITS: Readonly<Record<AgentAdmissionPlan, number>> = {
-  // One interactive coding agent can use most of the 512 MiB free Computer.
+  // Free stays single-agent; its 4 GiB machine now has enough headroom for the
+  // runtime, LFG, and the OS instead of forcing all three into 512 MiB.
   free: 1,
   computer_trial: 1,
   // Paid tiers keep roughly 1.5–1.6 GiB of RAM available per admitted agent.
@@ -84,22 +113,47 @@ export function activeAgentCount(sessions: readonly AgentActivity[]): number {
 
 export type AgentAdmission =
   | { ok: true; release: () => void }
-  | { ok: false; active: number; reserved: number };
+  | { ok: false; reason: "limit"; active: number; reserved: number }
+  | {
+      ok: false;
+      reason: "memory";
+      active: number;
+      reserved: number;
+      availableBytes: number;
+      requiredBytes: number;
+    };
 
 export class AgentAdmissionController {
-  private readonly pending = new Set<string>();
+  private readonly pending = new Map<string, number>();
 
   tryAcquire(
     limit: number,
     sessions: readonly AgentActivity[],
+    memory?: AgentMemoryBudget,
   ): AgentAdmission {
     const active = activeAgentCount(sessions);
     if (active + this.pending.size >= limit) {
-      return { ok: false, active, reserved: this.pending.size };
+      return { ok: false, reason: "limit", active, reserved: this.pending.size };
+    }
+
+    const reservedBytes = [...this.pending.values()].reduce((sum, bytes) => sum + bytes, 0);
+    if (memory) {
+      const availableBytes = Math.max(0, memory.availableBytes - reservedBytes);
+      const requiredBytes = memory.reserveBytes + memory.launchBytes;
+      if (availableBytes < requiredBytes) {
+        return {
+          ok: false,
+          reason: "memory",
+          active,
+          reserved: this.pending.size,
+          availableBytes,
+          requiredBytes,
+        };
+      }
     }
 
     const token = crypto.randomUUID();
-    this.pending.add(token);
+    this.pending.set(token, memory?.launchBytes ?? 0);
     let released = false;
     return {
       ok: true,
@@ -113,6 +167,10 @@ export class AgentAdmissionController {
 
   get reserved(): number {
     return this.pending.size;
+  }
+
+  get reservedBytes(): number {
+    return [...this.pending.values()].reduce((sum, bytes) => sum + bytes, 0);
   }
 }
 import { readFileSync } from "node:fs";

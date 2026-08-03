@@ -6,6 +6,7 @@ import { randomBytes } from "node:crypto";
 import { marked } from "marked";
 import {
   AgentAdmissionController,
+  agentLaunchMemoryBudget,
   computerAgentAdmissionContext,
 } from "../agent-admission.ts";
 import { PATHS, appVersion, installInfo } from "../config.ts";
@@ -478,6 +479,20 @@ const HOST = process.env.LFG_HOST ?? "127.0.0.1";
 const MAX_LFG_SUBAGENT_DEPTH = 4;
 const agentAdmission = new AgentAdmissionController();
 
+function hostAvailableMemoryBytes(): number {
+  try {
+    const match = readFileSync("/proc/meminfo", "utf8").match(/^MemAvailable:\s+(\d+)\s+kB$/m);
+    if (match) return Number(match[1]) * 1024;
+  } catch {
+    // Non-Linux standalone installs fall back to Node's portable reading.
+  }
+  return freemem();
+}
+
+function formatMemory(bytes: number): string {
+  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+}
+
 // Admission gate for activating a NEW agent (create / cold resume / fork).
 // Cloud Computers use the trusted bootstrap plan and cannot be overridden by a
 // dashboard setting. Ordinary LFG installs retain their local setting cap.
@@ -491,8 +506,21 @@ async function activationGate(): Promise<Response | { release: () => void }> {
   const computer = computerAgentAdmissionContext();
   const limit = computer?.limit ?? settings.maxLiveAgents;
   if (limit === 0) return { release: () => {} };
-  const reservation = agentAdmission.tryAcquire(limit, await listSessionsCached().catch(() => []));
+  const memory = computer
+    ? agentLaunchMemoryBudget(totalmem(), hostAvailableMemoryBytes())
+    : undefined;
+  const reservation = agentAdmission.tryAcquire(
+    limit,
+    await listSessionsCached().catch(() => []),
+    memory,
+  );
   if (reservation.ok) return reservation;
+  if (reservation.reason === "memory") {
+    return err(
+      429,
+      `this Computer has ${formatMemory(reservation.availableBytes)} memory available and needs ${formatMemory(reservation.requiredBytes)} to start another agent safely; finish an agent or upgrade your Computer`,
+    );
+  }
   const context = computer
     ? `your ${computer.plan} Computer plan allows ${computer.limit} concurrent agents`
     : `max live agents (${limit}) reached`;
