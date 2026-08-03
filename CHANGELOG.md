@@ -4,6 +4,15 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - A clean way out (v0.1.224)
+
+- `lfg uninstall` now removes the LFG service, command, MCP registrations, and
+  release application files while preserving sessions and config for a future
+  reinstall.
+- `lfg uninstall --purge --yes` is the explicit destructive path for deleting
+  sessions and config too. Shared tools such as Bun, Tailscale, tmux, and agent
+  CLIs are never removed, and source checkouts stay intact by default.
+
 ## August 3, 2026 - Mobile Live is a list again (v0.1.223)
 
 - Live view on mobile no longer expands a session in place. Every session is a
