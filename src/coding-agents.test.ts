@@ -1,12 +1,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   claudeConfigDirs,
   cleanAuthOutput,
+  getCodingAgentAuth,
   listCodingAgents,
   parseAuthOutput,
+  startToolAuth,
   withCursorLfgMcp,
   withOpencodeLfgMcp,
 } from "./coding-agents.ts";
@@ -83,6 +85,61 @@ describe("coding agent browser auth output", () => {
       userCode: "42DX-1KQLE",
       needsCode: false,
     });
+  });
+
+  test("extracts the GitHub verification URL and device code", () => {
+    const output = [
+      "! First copy your one-time code: 8A2B-C3D4",
+      "Press Enter to open https://github.com/login/device in your browser...",
+    ].join("\n");
+
+    expect(parseAuthOutput("github", output)).toEqual({
+      authorizationUrl: "https://github.com/login/device",
+      userCode: "8A2B-C3D4",
+      needsCode: false,
+    });
+  });
+
+  test("advances GitHub's hidden Enter prompt after surfacing the device code", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "lfg-github-auth-"));
+    const binary = join(dir, "gh");
+    const marker = join(dir, "advanced");
+    const previousGithubPath = process.env.LFG_GH_PATH;
+    const previousMarker = process.env.LFG_GITHUB_AUTH_MARKER;
+    writeFileSync(
+      binary,
+      [
+        "#!/bin/sh",
+        'printf "%s\\n" "! First copy your one-time code: 8A2B-C3D4" >&2',
+        'printf "%s\\n" "Press Enter to open https://github.com/login/device in your browser..." >&2',
+        "IFS= read -r _",
+        'printf "advanced" > "$LFG_GITHUB_AUTH_MARKER"',
+      ].join("\n"),
+    );
+    chmodSync(binary, 0o755);
+    process.env.LFG_GH_PATH = binary;
+    process.env.LFG_GITHUB_AUTH_MARKER = marker;
+    try {
+      const session = await startToolAuth("github");
+      for (let attempt = 0; attempt < 20 && !existsSync(marker); attempt += 1) {
+        await Bun.sleep(10);
+      }
+      expect(existsSync(marker)).toBe(true);
+      for (
+        let attempt = 0;
+        attempt < 20 && getCodingAgentAuth(session.id)?.status !== "complete";
+        attempt += 1
+      ) {
+        await Bun.sleep(10);
+      }
+      expect(getCodingAgentAuth(session.id)?.status).toBe("complete");
+    } finally {
+      if (previousGithubPath === undefined) delete process.env.LFG_GH_PATH;
+      else process.env.LFG_GH_PATH = previousGithubPath;
+      if (previousMarker === undefined) delete process.env.LFG_GITHUB_AUTH_MARKER;
+      else process.env.LFG_GITHUB_AUTH_MARKER = previousMarker;
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test("extracts the Grok verification URL and device code", () => {

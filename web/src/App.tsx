@@ -14,6 +14,7 @@ import { useBareSurface } from "./lib/bare-surface";
 import {
   embeddedConnectOptions,
   shouldShowEmbeddedConnectGate,
+  type ToolConnectOption,
 } from "./lib/embedded-connect";
 import { emitSessionCreatedToHost } from "./lib/embed-host-signal";
 import { LFG_SMALL_ICON_PATH } from "./lib/icon-assets";
@@ -394,12 +395,13 @@ export type ClaudeAccountInfo = {
 
 const AgentAccessModeContext = createContext<AgentAccessMode>("configured");
 
-type AuthProvider = "claude" | "codex" | "grok";
+type AuthProvider = "claude" | "codex" | "grok" | "github";
 
 const AUTH_PROVIDER_LABELS: Record<AuthProvider, string> = {
   claude: "Claude",
   codex: "Codex",
   grok: "Grok",
+  github: "GitHub",
 };
 
 
@@ -408,7 +410,7 @@ const authProviderLabel = (provider?: AuthProvider) =>
 
 type CodingAgentAuthSession = {
   id: string;
-  kind: AgentKind;
+  kind: AgentKind | "github";
   provider: AuthProvider;
   status: "starting" | "waiting" | "complete" | "error";
   authorizationUrl?: string;
@@ -4555,10 +4557,12 @@ export function App() {
   // tail (and therefore still classifies as blocked until the user retries).
   const [codingAgentAuthInlineSid, setCodingAgentAuthInlineSid] = useState<string | null>(null);
   const [codingAgentAuthCompletedSid, setCodingAgentAuthCompletedSid] = useState<string | null>(null);
-  // Embed-only first-run gate: which provider row has an in-flight click, and
-  // whether the user chose to look past the gate for this app load.
-  const [connectPendingKind, setConnectPendingKind] = useState<AgentKind | null>(null);
+  // Embed-only first-run gate: which connection has an in-flight click, whether
+  // the user finished/skipped it, and whether this load ever entered the flow.
+  const [connectPendingKind, setConnectPendingKind] = useState<AgentKind | "github" | null>(null);
   const [connectGateSkipped, setConnectGateSkipped] = useState(false);
+  const connectGateStarted = useRef(false);
+  const [toolConnections, setToolConnections] = useState<ToolConnectOption[] | undefined>();
   const [modelCatalog, setModelCatalog] = useState<AgentModelCatalog>(() =>
     buildAgentModelCatalog(),
   );
@@ -6095,6 +6099,15 @@ export function App() {
     setSetupChecks(checksPayload.checks ?? []);
   }, []);
 
+  const refreshToolConnections = useCallback(async () => {
+    try {
+      const payload = await api<{ connections?: ToolConnectOption[] }>("/api/connections");
+      setToolConnections(payload.connections ?? []);
+    } catch {
+      // Keep the last known connection state during a transient box restart.
+    }
+  }, []);
+
   function runSetupCheck(key: string) {
     setSetupChecks((current) =>
       current.map((item) => (item.key === key ? { ...item, running: true } : item)),
@@ -6158,6 +6171,47 @@ export function App() {
     );
   }
 
+  async function startBrowserAuth(
+    kind: AgentKind | "github",
+    path: string,
+    inlineSid?: string,
+    body: Record<string, unknown> = {},
+  ) {
+    setCodingAgentAuthInlineSid(inlineSid ?? null);
+    if (inlineSid) setCodingAgentAuthCompletedSid(null);
+    const authWindow = window.open("about:blank", "_blank");
+    try {
+      const session = await api<CodingAgentAuthSession>(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (session.status === "error") throw new Error(session.error || "Couldn't start login");
+      if (session.status === "complete") {
+        authWindow?.close();
+        toast.success(`${authProviderLabel(session.provider)} connected`);
+        setCodingAgentAuthInlineSid(null);
+        if (inlineSid) setCodingAgentAuthCompletedSid(inlineSid);
+        await Promise.all([
+          refreshCodingAgents({ refreshModels: true }),
+          refreshToolConnections(),
+        ]);
+        return;
+      }
+      setCodingAgentAuth(session);
+      if (session.authorizationUrl && authWindow) {
+        authWindow.location.replace(session.authorizationUrl);
+        authWindow.focus();
+      } else if (!session.authorizationUrl) {
+        authWindow?.close();
+      }
+    } catch (e) {
+      authWindow?.close();
+      setCodingAgentAuthInlineSid(null);
+      toast.error(e instanceof Error ? e.message : "Couldn't start login");
+    }
+  }
+
   async function loginCodingAgent(
     kind: AgentKind,
     inlineSid?: string,
@@ -6179,36 +6233,16 @@ export function App() {
       );
       return;
     }
-    setCodingAgentAuthInlineSid(inlineSid ?? null);
-    if (inlineSid) setCodingAgentAuthCompletedSid(null);
-    const authWindow = window.open("about:blank", "_blank");
-    try {
-      const session = await api<CodingAgentAuthSession>(`/api/coding-agents/${kind}/auth`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ claudeAccountId }),
-      });
-      if (session.status === "error") throw new Error(session.error || "Couldn't start login");
-      if (session.status === "complete") {
-        authWindow?.close();
-        toast.success(`${authProviderLabel(session.provider)} connected`);
-        setCodingAgentAuthInlineSid(null);
-        if (inlineSid) setCodingAgentAuthCompletedSid(inlineSid);
-        await refreshCodingAgents({ refreshModels: true });
-        return;
-      }
-      setCodingAgentAuth(session);
-      if (session.authorizationUrl && authWindow) {
-        authWindow.location.replace(session.authorizationUrl);
-        authWindow.focus();
-      } else if (!session.authorizationUrl) {
-        authWindow?.close();
-      }
-    } catch (e) {
-      authWindow?.close();
-      setCodingAgentAuthInlineSid(null);
-      toast.error(e instanceof Error ? e.message : "Couldn't start login");
-    }
+    return startBrowserAuth(
+      kind,
+      `/api/coding-agents/${kind}/auth`,
+      inlineSid,
+      { claudeAccountId },
+    );
+  }
+
+  async function loginTool(key: ToolConnectOption["key"]) {
+    return startBrowserAuth(key, `/api/connections/${key}/auth`);
   }
 
   async function addClaudeAccount() {
@@ -6249,7 +6283,7 @@ export function App() {
     }
   }
 
-  async function completeCodingAgentAuth() {
+  async function completeConnectionAuth() {
     const inlineSid = codingAgentAuthInlineSid;
     setCodingAgentAuth(null);
     setCodingAgentAuthInlineSid(null);
@@ -6257,7 +6291,10 @@ export function App() {
     // A finished login flips an account to connected, which changes the set of
     // usage sources.
     invalidateUsageProviders();
-    await refreshCodingAgents({ refreshModels: true });
+    await Promise.all([
+      refreshCodingAgents({ refreshModels: true }),
+      refreshToolConnections(),
+    ]);
   }
 
   const codingAgentAuthFlow: CodingAgentAuthFlow = {
@@ -6273,7 +6310,7 @@ export function App() {
       setCodingAgentAuth(null);
       setCodingAgentAuthInlineSid(null);
     },
-    complete: completeCodingAgentAuth,
+    complete: completeConnectionAuth,
   };
 
   // Embedded fresh box: onboarding and settings are hidden under a host, so
@@ -6286,25 +6323,35 @@ export function App() {
   // gate. The gate is back on the next plain load while nothing is connected.
   // `bare` closes it: a host that mounted one settings page asked for that
   // page, not for onboarding. See shouldShowEmbeddedConnectGate.
-  const connectGateOpen = shouldShowEmbeddedConnectGate({
+  const connectGateRequired = shouldShowEmbeddedConnectGate({
     embedded,
     bare,
     agents: codingAgents,
     dismissed: connectGateSkipped || !!sessionDeepLinkRef.current,
   });
+  if (connectGateRequired) connectGateStarted.current = true;
+  const connectGateOpen =
+    embedded &&
+    !bare &&
+    !connectGateSkipped &&
+    !sessionDeepLinkRef.current &&
+    connectGateStarted.current;
   useEffect(() => {
     if (!connectGateOpen) return;
+    void refreshToolConnections();
     const timer = window.setInterval(() => void refreshCodingAgents(), 4000);
     return () => window.clearInterval(timer);
-  }, [connectGateOpen, refreshCodingAgents]);
+  }, [connectGateOpen, refreshCodingAgents, refreshToolConnections]);
 
-  // Reuses loginCodingAgent/setupCodingAgent and the shared auth dialog, and
-  // closes itself as soon as refreshCodingAgents reports something configured.
+  // Reuses the existing setup handlers and shared auth dialog for every row.
+  // Once opened, it stays mounted through the tools page; a connected agent
+  // must not make page two disappear mid-flow.
   if (connectGateOpen) {
     return (
       <>
         <EmbeddedConnectGate
           options={embeddedConnectOptions(codingAgents)}
+          toolConnections={toolConnections}
           pendingKind={connectPendingKind}
           onConnect={(kind) => {
             setConnectPendingKind(kind as AgentKind);
@@ -6315,12 +6362,16 @@ export function App() {
           onInstall={(kind) => {
             setupCodingAgent(kind as AgentKind);
           }}
-          onSkip={() => setConnectGateSkipped(true)}
+          onConnectTool={(key) => {
+            setConnectPendingKind(key);
+            void loginTool(key).finally(() => setConnectPendingKind(null));
+          }}
+          onDone={() => setConnectGateSkipped(true)}
         />
         <CodingAgentAuthDialog
           session={codingAgentAuth}
           onSessionChange={setCodingAgentAuth}
-          onComplete={completeCodingAgentAuth}
+          onComplete={completeConnectionAuth}
         />
         <Toaster position={isMobile ? "top-center" : "bottom-center"} />
       </>
@@ -6895,7 +6946,7 @@ export function App() {
       <CodingAgentAuthDialog
         session={codingAgentAuthInlineSid ? null : codingAgentAuth}
         onSessionChange={setCodingAgentAuth}
-        onComplete={completeCodingAgentAuth}
+        onComplete={completeConnectionAuth}
       />
 
       {useWsLive ? (

@@ -25,7 +25,7 @@ function agent(
   const installed = opts.installed !== false;
   const authed = opts.authed === true;
   const runtimeAuthed = opts.runtimeAuthed ?? authed;
-  const label = key.includes("codex") ? "Codex" : "Claude";
+  const label = key.includes("codex") ? "Codex" : key === "grok" ? "Grok" : "Claude";
   return {
     key,
     label,
@@ -41,7 +41,7 @@ function agent(
   };
 }
 
-const FRESH_BOX = [agent("aisdk"), agent("codex-aisdk")];
+const FRESH_BOX = [agent("aisdk"), agent("codex-aisdk"), agent("grok")];
 
 describe("embedded connect gate visibility", () => {
   test("opens on a framed box with nothing authenticated", () => {
@@ -60,6 +60,11 @@ describe("embedded connect gate visibility", () => {
 
   test("closes when Codex connects", () => {
     const connected = [agent("claude"), agent("codex", { authed: true })];
+    expect(shouldShowEmbeddedConnectGate({ embedded: true, agents: connected })).toBe(false);
+  });
+
+  test("closes when Grok connects", () => {
+    const connected = [agent("claude"), agent("codex"), agent("grok", { authed: true })];
     expect(shouldShowEmbeddedConnectGate({ embedded: true, agents: connected })).toBe(false);
   });
 
@@ -85,7 +90,7 @@ describe("embedded connect gate visibility", () => {
   test("bundled pi / OpenCode must NOT satisfy the gate on a fresh image", () => {
     // agent-lfg ships pi bundled (file-based auth) and can carry OpenCode or
     // Copilot creds in the image. Those report configured while the user still
-    // has no Claude/Codex login, so the connect prompt must stay up.
+    // has no offered provider login, so the connect prompt must stay up.
     const imageDefaults = [
       ...FRESH_BOX,
       agent("pi", { authed: true }),
@@ -94,11 +99,16 @@ describe("embedded connect gate visibility", () => {
     ];
     expect(hasConnectedGateProvider(imageDefaults)).toBe(false);
     expect(shouldShowEmbeddedConnectGate({ embedded: true, agents: imageDefaults })).toBe(true);
-    // …and it closes only once one of the two offered providers connects.
+    // …and it closes only once an offered provider connects.
     expect(
       shouldShowEmbeddedConnectGate({
         embedded: true,
-        agents: [...imageDefaults.slice(2), agent("claude", { authed: true }), agent("codex")],
+        agents: [
+          ...imageDefaults.slice(FRESH_BOX.length),
+          agent("claude", { authed: true }),
+          agent("codex"),
+          agent("grok"),
+        ],
       }),
     ).toBe(false);
     // Someone deliberately using pi/OpenCode takes the skip link.
@@ -135,11 +145,11 @@ describe("embedded connect gate visibility", () => {
 });
 
 describe("embedded connect options", () => {
-  test("offers exactly Claude Code and Codex, in order", () => {
+  test("offers Claude Code, Codex, and Grok in order", () => {
     const options = embeddedConnectOptions(FRESH_BOX);
-    expect(options.map((o) => o.kind)).toEqual(["aisdk", "codex-aisdk"]);
-    expect(options.map((o) => o.label)).toEqual(["Claude Code", "Codex"]);
-    expect(options.map((o) => o.provider)).toEqual(["claude", "codex"]);
+    expect(options.map((o) => o.kind)).toEqual(["aisdk", "codex-aisdk", "grok"]);
+    expect(options.map((o) => o.label)).toEqual(["Claude Code", "Codex", "Grok"]);
+    expect(options.map((o) => o.provider)).toEqual(["claude", "codex", "grok"]);
   });
 
   test("reports a missing CLI separately from a missing login", () => {
@@ -307,6 +317,20 @@ describe("App wiring", () => {
     // Login/install go through the existing App handlers, not a new fetch.
     expect(gate.slice(0, gate.indexOf("</>"))).toContain("loginCodingAgent(kind as AgentKind)");
     expect(gate.slice(0, gate.indexOf("</>"))).toContain("setupCodingAgent(kind as AgentKind)");
+    expect(gate.slice(0, gate.indexOf("</>"))).toContain("loginTool(key)");
+  });
+
+  test("the gate includes a second tools page with a real GitHub connection", () => {
+    const component = require("node:fs").readFileSync(
+      "web/src/components/embedded-connect-gate.tsx",
+      "utf8",
+    ) as string;
+    expect(component).toContain("Connect your tools");
+    expect(component).toContain("onConnectTool(tool.key)");
+    expect(component).toContain("tool.detail");
+    const connections = require("node:fs").readFileSync("src/tool-connections.ts", "utf8") as string;
+    expect(connections).toContain("Private repos, pushes, and pull requests");
+    expect(app).toContain('`/api/connections/${key}/auth`');
   });
 
   test("a session deep link is never held behind the gate", () => {

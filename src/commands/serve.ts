@@ -226,8 +226,10 @@ import {
   runSetupAction,
   setCodingAgentVisibility,
   startCodingAgentAuth,
+  startToolAuth,
   submitCodingAgentAuthCode,
 } from "../coding-agents.ts";
+import { listToolConnections } from "../tool-connections.ts";
 import {
   bindClaudeSessionAccount,
   claudeAccountIdForSession,
@@ -2365,6 +2367,19 @@ export async function cmdServe() {
           } catch (e) {
             return err(502, e instanceof Error ? e.message : "failed to start login");
           }
+        }
+      }
+      if (path === "/api/connections" && req.method === "GET") {
+        return json({ connections: listToolConnections() });
+      }
+      if (path === "/api/connections/github/auth" && req.method === "POST") {
+        try {
+          return json(await startToolAuth("github"));
+        } catch (e) {
+          return err(
+            502,
+            e instanceof Error ? e.message : "failed to start GitHub login",
+          );
         }
       }
       {

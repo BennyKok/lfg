@@ -24,7 +24,7 @@ export type ConnectAgentInfo = {
 
 export type ConnectOption = {
   /** Auth provider the CLI login belongs to. */
-  provider: "claude" | "codex";
+  provider: "claude" | "codex" | "grok";
   /** Coding agent kind to drive install/login with. */
   kind: string;
   /** Product name shown on the card. */
@@ -37,18 +37,26 @@ export type ConnectOption = {
   canAutoSetup: boolean;
 };
 
-/** The two providers the embedded gate offers, in display order. Both reuse
- *  the browser-login path (`claude auth login --claudeai` / `codex login
- *  --device-auth`); every other agent kind is terminal-only, which a framed
- *  surface cannot show. */
+export type ToolConnectOption = {
+  key: "github";
+  label: string;
+  detail: string;
+  installed: boolean;
+  connected: boolean;
+};
+
+/** Providers the embedded gate offers, in display order. All three reuse the
+ *  existing browser-login path; every other agent kind is terminal-only,
+ *  which a framed surface cannot show. */
 const GATE_PROVIDERS: {
-  provider: "claude" | "codex";
+  provider: "claude" | "codex" | "grok";
   label: string;
   /** Actual roster keys that can drive this provider's install/login flow. */
   kinds: string[];
 }[] = [
   { provider: "claude", label: "Claude Code", kinds: ["claude", "aisdk"] },
   { provider: "codex", label: "Codex", kinds: ["codex", "codex-aisdk"] },
+  { provider: "grok", label: "Grok", kinds: ["grok"] },
 ];
 
 const GATE_PROVIDER_KINDS = new Set(GATE_PROVIDERS.flatMap((entry) => entry.kinds));
@@ -62,8 +70,7 @@ function binaryInstalled(agent: ConnectAgentInfo): boolean {
 }
 
 /**
- * True when Claude or Codex is connected — the only two providers this gate
- * can actually connect from a frame.
+ * True when one of the providers offered by the framed gate is connected.
  *
  * Deliberately NOT "any configured agent": an agent-lfg image ships pi bundled
  * (and can carry OpenCode/Copilot creds from the image), so `agents.some(
@@ -79,9 +86,9 @@ export function hasConnectedGateProvider(agents: ConnectAgentInfo[]): boolean {
 
 /**
  * Show the embedded connect gate only when we positively know the box has
- * neither provider connected. An empty roster means the bootstrap payload
- * never arrived (or failed) — gating on that would trap the user behind a card
- * we cannot resolve, so it stays closed.
+ * none of the offered providers connected. An empty roster means the bootstrap
+ * payload never arrived (or failed) — gating on that would trap the user behind
+ * a card we cannot resolve, so it stays closed.
  *
  * `bare` closes it outright. The gate replaces the ENTIRE tree — it returns
  * before the shell — which is right for a framed full app (the frame's whole
@@ -104,8 +111,8 @@ export function shouldShowEmbeddedConnectGate(input: {
   return !hasConnectedGateProvider(input.agents);
 }
 
-/** Claude Code + Codex rows for the gate, skipping any the server doesn't
- *  know about. */
+/** Browser-loginable provider rows for the gate, skipping any the server
+ *  doesn't know about. */
 export function embeddedConnectOptions(agents: ConnectAgentInfo[]): ConnectOption[] {
   const options: ConnectOption[] = [];
   for (const entry of GATE_PROVIDERS) {

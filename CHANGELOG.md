@@ -4,6 +4,16 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - Your Computer meets your tools (v0.1.228)
+
+- The first-run Computer connection flow now has two focused steps: connect a
+  coding agent, then connect the tools that agent works through.
+- Grok joins Claude Code and Codex as a browser-login option, using its existing
+  device-code flow with no terminal handoff.
+- GitHub can now be connected from onboarding for private repositories, pushes,
+  and pull requests. The same device-login session owner handles agent and tool
+  authentication, including expiry and cancellation.
+
 ## August 3, 2026 - Toasts land on the right edge (v0.1.227)
 
 - Desktop toasts now sit at the bottom of the screen, while mobile toasts stay

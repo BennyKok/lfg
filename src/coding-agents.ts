@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { PATHS, localServeBaseUrl } from "./config.ts";
 import { lfgCapabilityAccess } from "./lfg-capabilities.ts";
+import { githubCliPath } from "./tool-connections.ts";
 import {
   DEFAULT_CLAUDE_ACCOUNT_ID,
   claudeAccountConfigDir,
@@ -68,17 +69,18 @@ export type CodingAgentInfo = {
 };
 
 /** Providers whose CLI can drive a login from the browser instead of a terminal. */
-export type AuthProvider = "claude" | "codex" | "grok";
+export type AuthProvider = "claude" | "codex" | "grok" | "github";
 
 const AUTH_PROVIDER_LABELS: Record<AuthProvider, string> = {
   claude: "Claude",
   codex: "Codex",
   grok: "Grok",
+  github: "GitHub",
 };
 
 export type CodingAgentAuthSession = {
   id: string;
-  kind: CodingAgentKind;
+  kind: CodingAgentKind | "github";
   provider: AuthProvider;
   status: "starting" | "waiting" | "complete" | "error";
   authorizationUrl?: string;
@@ -565,11 +567,24 @@ function authProviderFor(kind: CodingAgentKind): AuthProvider | null {
 function authProviderBinary(provider: AuthProvider): string | null {
   if (provider === "claude") return claudePath();
   if (provider === "codex") return codexPath();
-  return grokPath();
+  if (provider === "grok") return grokPath();
+  return githubCliPath();
 }
 
 function authProviderArgv(provider: AuthProvider, binary: string): string[] {
   if (provider === "claude") return [binary, "auth", "login", "--claudeai"];
+  if (provider === "github") {
+    return [
+      binary,
+      "auth",
+      "login",
+      "--hostname",
+      "github.com",
+      "--git-protocol",
+      "https",
+      "--web",
+    ];
+  }
   // Codex and Grok both expose an RFC 8628 device flow that prints a
   // verification URL plus a short user code — no terminal interaction needed.
   return [binary, "login", "--device-auth"];
@@ -606,6 +621,12 @@ export function parseAuthOutput(
     const userCode = output.match(/one-time code[\s\S]{0,160}?\b([A-Z0-9]{4,}-[A-Z0-9]{4,})\b/i)?.[1];
     return { authorizationUrl, userCode, needsCode: false };
   }
+  if (provider === "github") {
+    const userCode = output.match(
+      /one-time code[\s\S]{0,160}?\b([A-Z0-9]{4,}-[A-Z0-9]{4,})\b/i,
+    )?.[1];
+    return { authorizationUrl, userCode, needsCode: false };
+  }
   return {
     authorizationUrl,
     needsCode: /paste code here/i.test(output),
@@ -632,6 +653,17 @@ function updateAuthSessionFromOutput(session: InternalAuthSession): void {
   if (ready && session.status === "starting") {
     session.status = "waiting";
     session.markReady();
+    // GitHub prints its device code and then pauses at "Press Enter to open".
+    // The web UI already opens the URL itself; advancing stdin lets gh move on
+    // to polling for the approval instead of leaving a successful browser login
+    // stuck behind an invisible terminal prompt.
+    if (session.provider === "github") {
+      const stdin = session.process.stdin;
+      if (stdin && typeof stdin !== "number") {
+        stdin.write("\n");
+        void Promise.resolve(stdin.flush()).catch(() => {});
+      }
+    }
   }
 }
 
@@ -658,6 +690,21 @@ export async function startCodingAgentAuth(
 ): Promise<CodingAgentAuthSession> {
   const provider = authProviderFor(kind);
   if (!provider) throw new Error(`${CODING_AGENT_LABELS[kind]} does not support browser login yet`);
+  return startAuthSession(kind, provider, opts);
+}
+
+/** Tool connections share the same device-login session owner as coding
+ * agents. That keeps popup handling, polling, expiry, and cancellation on one
+ * path while exposing a truthful tool-specific endpoint to the UI. */
+export async function startToolAuth(kind: "github"): Promise<CodingAgentAuthSession> {
+  return startAuthSession(kind, "github");
+}
+
+async function startAuthSession(
+  kind: CodingAgentKind | "github",
+  provider: AuthProvider,
+  opts: { claudeAccountId?: string } = {},
+): Promise<CodingAgentAuthSession> {
   const binary = authProviderBinary(provider);
   if (!binary) throw new Error(`Install ${AUTH_PROVIDER_LABELS[provider]} before signing in`);
   const claudeConfigDir =
