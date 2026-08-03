@@ -1,7 +1,7 @@
 // Running Claude Code sessions: enumerate live `claude` processes and tail
 // their on-disk transcripts (~/.claude/projects/<proj>/<sessionId>.jsonl).
 import { readFile, readdir, readlink } from "node:fs/promises";
-import { statSync, readFileSync } from "node:fs";
+import { statSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { join, basename } from "node:path";
 import { panePidForSession, tmuxHasSession, tmuxTargetForPid, capturePane, isBusy } from "./tmux";
 import { isManagedName, listManaged, patchManaged, type ManagedSession } from "./managed";
@@ -1021,6 +1021,71 @@ type CodexThread = {
 type CodexHead = { id: string; cwd: string | null; createdAt: number | null; firstUserText: string | null };
 const codexHeadCache = new Map<string, CodexHead | null>();
 
+// ...and because it is immutable, it survives a restart too.
+//
+// The in-memory cache above made every poll after the first one cheap, but the
+// first one still read and parsed the head of EVERY rollout on the box — 3,515
+// files and 1.8GB here. That was the last freeze left: measured at 10.6s on the
+// rebuild ~a minute after each deploy, during which the whole server stopped.
+//
+// The heads are keyed by path and a rollout's header never changes, so the map
+// is valid forever. Writing it out means a restart reads one file instead of
+// thousands: measured here, the first rebuild after a restart goes from 3.9s to
+// 0.25s across 3,517 rollouts.
+//
+// The prompts are stored whole, which makes the file ~10MB at that count and
+// grows it by a few KB per new codex session. That is deliberate: `samePrompt`
+// binds a live codex process to its rollout by comparing the full first prompt
+// against the process command line, so a truncated copy would silently stop
+// matching long prompts. Storing a hash for matching and a short preview for
+// display would shrink this a lot, and is the right move if the file ever
+// becomes the problem — it is not while it replaces reading 1.8GB.
+//
+// A path that has since been deleted is dropped when we next look at it; a
+// corrupt or foreign-version file just fails to load and we rebuild from
+// scratch, which is only as slow as before.
+const CODEX_HEAD_CACHE_VERSION = 1;
+const codexHeadCachePath = () => join(PATHS.data, "codex-heads.json");
+let codexHeadCacheLoaded = false;
+let codexHeadCacheDirty = 0;
+let codexHeadFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
+function loadCodexHeadCache(): void {
+  if (codexHeadCacheLoaded) return;
+  codexHeadCacheLoaded = true;
+  try {
+    const raw = JSON.parse(readFileSync(codexHeadCachePath(), "utf8")) as {
+      version?: number;
+      heads?: Record<string, CodexHead | null>;
+    };
+    if (raw.version !== CODEX_HEAD_CACHE_VERSION || !raw.heads) return;
+    for (const [path, head] of Object.entries(raw.heads)) codexHeadCache.set(path, head);
+  } catch {
+    // No cache, unreadable, or written by another version: parse as before.
+  }
+}
+
+/** Persist after a burst of new parses rather than on every one. */
+function scheduleCodexHeadFlush(): void {
+  if (codexHeadFlushTimer || codexHeadCacheDirty === 0) return;
+  codexHeadFlushTimer = setTimeout(() => {
+    codexHeadFlushTimer = null;
+    const pending = codexHeadCacheDirty;
+    codexHeadCacheDirty = 0;
+    try {
+      const heads: Record<string, CodexHead | null> = {};
+      for (const [path, head] of codexHeadCache) heads[path] = head;
+      const tmp = `${codexHeadCachePath()}.${process.pid}.tmp`;
+      writeFileSync(tmp, JSON.stringify({ version: CODEX_HEAD_CACHE_VERSION, heads }));
+      renameSync(tmp, codexHeadCachePath());
+    } catch {
+      // Best effort: a cache we could not write is a slow start, not a failure.
+      codexHeadCacheDirty = pending;
+    }
+  }, 5_000);
+  (codexHeadFlushTimer as { unref?: () => void }).unref?.();
+}
+
 async function parseCodexHead(path: string): Promise<CodexHead | null> {
   try {
     const first = (await Bun.file(path).slice(0, 128 * 1024).text()).split("\n")[0];
@@ -1043,12 +1108,14 @@ async function parseCodexHead(path: string): Promise<CodexHead | null> {
 }
 
 async function codexThreads(): Promise<CodexThread[]> {
+  loadCodexHeadCache();
   const out: CodexThread[] = [];
   for (const path of await codexRolloutFiles()) {
     let head = codexHeadCache.get(path);
     if (head === undefined) {
       head = await parseCodexHead(path);
       codexHeadCache.set(path, head);
+      codexHeadCacheDirty++;
     }
     if (!head) continue;
     let updatedAt: number | null = null;
@@ -1057,6 +1124,7 @@ async function codexThreads(): Promise<CodexThread[]> {
     } catch {}
     out.push({ id: head.id, path, cwd: head.cwd, createdAt: head.createdAt, updatedAt, firstUserText: head.firstUserText });
   }
+  scheduleCodexHeadFlush();
   return out;
 }
 
