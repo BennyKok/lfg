@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - Toasts follow their edge (v0.1.221)
+
+- Top-anchored toasts now dismiss upward through the top edge, including
+  background toasts in a collapsed stack, instead of slipping downward.
+
 ## August 3, 2026 - A welcome that reflects the room (v0.1.220)
 
 - The mobile Live welcome now keeps its compact, bell-free single line while
