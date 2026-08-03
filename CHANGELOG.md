@@ -4,6 +4,19 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - Photos upload small by default (v0.1.236)
+
+- Images attached to any composer are now downscaled and re-encoded in the
+  browser before they upload: a 1.6 MB phone photo goes up as a 96 KB WebP, so
+  attachments land in a fraction of the time on a phone connection.
+- Tap **HD** on an attachment chip to send the untouched original instead, and
+  tap it again to go back to the compressed copy. Sending while an image is
+  still compressing waits for the small copy rather than racing it.
+- Annotated screenshots are compressed on the same terms, images already small
+  enough are left alone, and GIFs keep their animation.
+- Re-encoding also drops camera EXIF, so a photo's GPS coordinates no longer
+  ride along with the upload.
+
 ## August 3, 2026 - Listing sessions gets out of everything else's way (v0.1.235)
 
 - Binding a newly started Codex session to its transcript used to search every

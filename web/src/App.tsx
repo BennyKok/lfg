@@ -23,6 +23,7 @@ import { api, lfgAssetUrl, lfgFetch, lfgUpload } from "./lib/lfg-client";
 import { cacheProjectFilter, readCachedProjectFilter } from "./lib/project-filter";
 import { resolveRosterUser } from "./lib/roster-user";
 import { uploadFile as uploadFileThroughTransport } from "./lib/upload";
+import { compressImageFile, isCompressibleImage } from "./lib/image-compress";
 import { AppCrash } from "./components/app-crash";
 import { EmbeddedConnectGate } from "./components/embedded-connect-gate";
 import {
@@ -629,6 +630,17 @@ type ComposerAttachment = {
   status: "ready" | "uploading" | "uploaded" | "failed";
   progress?: number;
   error?: string;
+  // Image attachments upload downscaled by default (see lib/image-compress).
+  // Both copies are kept in memory so the HD toggle is instant and reversible;
+  // `file` is always whichever of the two is currently going to the server.
+  /** Full-resolution original, set only when a smaller copy was produced. */
+  original?: File;
+  /** The downscaled copy, set only when it beat the original. */
+  compressed?: File;
+  /** The user asked for full resolution on this attachment. */
+  hd?: boolean;
+  /** Downscale still running — the upload starts when it settles. */
+  preparing?: boolean;
 };
 
 type UploadedAttachment = { name: string; path: string };
@@ -1355,6 +1367,13 @@ function applyAnnotatedAttachment(
       const next = { ...att, file, name: file.name, size: file.size, type: file.type, previewUrl, status: "ready" as const };
       delete next.progress;
       delete next.error;
+      // The annotated bytes supersede both the original and its downscaled
+      // copy — keeping either would let the HD toggle restore an image without
+      // the user's drawing on it.
+      delete next.original;
+      delete next.compressed;
+      delete next.hd;
+      delete next.preparing;
       replaced = next;
       return next;
     }),
@@ -1518,7 +1537,7 @@ function AgentIconStrip<K extends AgentKind>({
 }
 
 // The attachment chip row shared by every composer (chat, new session, fork):
-// thumbnail / file icon, name, upload progress, annotate + remove. `locked`
+// thumbnail / file icon, name, upload progress, HD, annotate + remove. `locked`
 // chips (already handed to an in-flight send) render but can't be edited.
 function ComposerAttachmentChips({
   items,
@@ -1526,12 +1545,14 @@ function ComposerAttachmentChips({
   disabled = false,
   onAnnotate,
   onRemove,
+  onToggleHd,
 }: {
   items: { att: ComposerAttachment; locked?: boolean }[];
   className?: string;
   disabled?: boolean;
   onAnnotate: (id: string) => void;
   onRemove: (id: string) => void;
+  onToggleHd?: (id: string, hd: boolean) => void;
 }) {
   if (!items.length) return null;
   return (
@@ -1540,7 +1561,9 @@ function ComposerAttachmentChips({
         <div
           key={att.id}
           className={cn(
-            "group relative flex h-12 max-w-52 shrink-0 items-center gap-2 overflow-hidden rounded-lg border bg-muted/55 pl-1.5 pr-1.5 text-xs",
+            // Wide enough that "96 KB · compressed" and the HD toggle fit on
+            // one line next to the thumbnail; the row scrolls horizontally.
+            "group relative flex h-12 max-w-64 shrink-0 items-center gap-2 overflow-hidden rounded-lg border bg-muted/55 pl-1.5 pr-1.5 text-xs",
             att.status === "failed" ? "border-destructive/40 bg-destructive/10" : "border-border/70",
           )}
           title={att.error || att.name}
@@ -1554,12 +1577,16 @@ function ComposerAttachmentChips({
           )}
           <div className="min-w-0">
             <div className="truncate font-medium text-foreground">{att.name}</div>
-            <div className="text-[11px] text-muted-foreground">
-              {att.status === "uploading"
-                ? `Uploading ${att.progress ?? 0}%`
-                : att.status === "failed"
-                  ? "Failed"
-                  : formatBytes(att.size)}
+            <div className="truncate text-[11px] text-muted-foreground">
+              {att.preparing
+                ? "Compressing…"
+                : att.status === "uploading"
+                  ? `Uploading ${att.progress ?? 0}%`
+                  : att.status === "failed"
+                    ? "Failed"
+                    : att.original && !att.hd
+                      ? `${formatBytes(att.size)} · compressed`
+                      : formatBytes(att.size)}
             </div>
           </div>
           {att.status === "uploading" ? (
@@ -1576,6 +1603,31 @@ function ComposerAttachmentChips({
                 style={{ width: `${att.progress ?? 0}%` }}
               />
             </div>
+          ) : null}
+          {/* Images upload downscaled by default; this is the opt-out. Only
+              shown when a smaller copy actually exists, so it never appears on
+              an image that is already being sent at full resolution. */}
+          {att.original && att.compressed && onToggleHd ? (
+            <button
+              type="button"
+              className={cn(
+                "flex h-6 shrink-0 items-center justify-center rounded-full px-1.5 text-[10px] font-bold tracking-wide disabled:pointer-events-none disabled:opacity-40",
+                att.hd
+                  ? "bg-foreground text-background"
+                  : "text-muted-foreground hover:bg-background hover:text-foreground",
+              )}
+              onClick={() => onToggleHd(att.id, !att.hd)}
+              aria-pressed={!!att.hd}
+              aria-label={`Upload ${att.name} in full resolution`}
+              title={
+                att.hd
+                  ? `Full resolution (${formatBytes(att.original.size)}) — tap to compress to ${formatBytes(att.compressed.size)}`
+                  : `Compressed to ${formatBytes(att.compressed.size)} — tap for full resolution (${formatBytes(att.original.size)})`
+              }
+              disabled={disabled || locked}
+            >
+              HD
+            </button>
           ) : null}
           {att.previewUrl ? (
             <button
@@ -1630,15 +1682,18 @@ function useComposerAttachments({
   const previewUrls = useRef<string[]>([]);
   const extraRef = useRef(onPatchExtra);
   extraRef.current = onPatchExtra;
-  const { prefetchUpload, resolveUpload, forgetUpload, forgetAllUploads } = useEagerUploads({
-    endpoint,
-    onPatch: (id, patch) => {
-      setAttachments((current) =>
-        current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
-      );
-      extraRef.current?.(id, patch);
-    },
-  });
+  const patchAttachment = useCallback((id: string, patch: Partial<ComposerAttachment>) => {
+    setAttachments((current) =>
+      current.map((item) => (item.id === id ? { ...item, ...patch } : item)),
+    );
+    extraRef.current?.(id, patch);
+  }, []);
+  const {
+    prefetchUpload,
+    resolveUpload: resolveUploadTask,
+    forgetUpload: forgetUploadTask,
+    forgetAllUploads: forgetAllUploadTasks,
+  } = useEagerUploads({ endpoint, onPatch: patchAttachment });
 
   useEffect(() => {
     return () => {
@@ -1652,6 +1707,62 @@ function useComposerAttachments({
   // inside setAttachments (which React may call twice).
   const attachmentsRef = useRef(attachments);
   attachmentsRef.current = attachments;
+
+  // In-flight downscales, by attachment id. An image chip appears immediately
+  // (with its thumbnail) while the compressed copy is still being produced, and
+  // the send path awaits this so someone who hits enter mid-compress still gets
+  // the small copy rather than a surprise full-size upload.
+  const preparedRef = useRef(new Map<string, Promise<ComposerAttachment>>());
+
+  const prepareAttachment = useCallback(
+    (att: ComposerAttachment): Promise<ComposerAttachment> => {
+      const task = compressImageFile(att.file)
+        .catch(() => ({ file: att.file, compressed: false }))
+        .then(({ file, compressed }) => {
+          const current = attachmentsRef.current.find((item) => item.id === att.id);
+          // Removed while compressing: there is nothing left to upload.
+          if (!current) return att;
+          // Annotated or otherwise replaced while compressing: those bytes
+          // supersede this copy and already have their own upload running.
+          if (current.file !== att.file) return current;
+          const patch: Partial<ComposerAttachment> = compressed
+            ? {
+                file,
+                name: file.name,
+                size: file.size,
+                type: file.type,
+                original: att.file,
+                compressed: file,
+                hd: false,
+                preparing: false,
+              }
+            : { preparing: false };
+          patchAttachment(att.id, patch);
+          const prepared = { ...current, ...patch };
+          prefetchUpload(prepared);
+          return prepared;
+        });
+      preparedRef.current.set(att.id, task);
+      return task;
+    },
+    [patchAttachment, prefetchUpload],
+  );
+
+  // The one way bytes start moving. Images worth downscaling are prepared
+  // first; everything else (and every image already small enough) uploads as
+  // it is. Both the attach path and the annotator go through here, so an
+  // annotated screenshot is compressed on the same terms as the original.
+  const startAttachmentUpload = useCallback(
+    (att: ComposerAttachment) => {
+      if (!isCompressibleImage(att.file)) {
+        prefetchUpload(att);
+        return;
+      }
+      patchAttachment(att.id, { preparing: true });
+      void prepareAttachment({ ...att, preparing: true });
+    },
+    [patchAttachment, prefetchUpload, prepareAttachment],
+  );
 
   const addFiles = useCallback(
     (files: FileList | File[]) => {
@@ -1679,10 +1790,68 @@ function useComposerAttachments({
       attachmentsRef.current = [...attachmentsRef.current, ...next];
       setAttachments(attachmentsRef.current);
       // Push the bytes now instead of waiting for send, so the upload is
-      // normally already finished by the time the user submits.
-      next.forEach(prefetchUpload);
+      // normally already finished by the time the user submits. Images are
+      // downscaled first — the small copy is what uploads unless the user picks
+      // HD on the chip.
+      for (const att of next) startAttachmentUpload(att);
     },
-    [max, prefetchUpload],
+    [max, startAttachmentUpload],
+  );
+
+  // The HD opt-out: swap the chip back to the full-resolution original (or back
+  // to the compressed copy) and re-upload. Restarting the upload mints a fresh
+  // token inside useEagerUploads, so the superseded attempt can no longer write
+  // its path or progress back into this attachment.
+  const setAttachmentHd = useCallback(
+    (id: string, hd: boolean) => {
+      const current = attachmentsRef.current.find((item) => item.id === id);
+      if (!current) return;
+      const file = hd ? current.original : current.compressed;
+      if (!file || current.file === file) return;
+      const patch: Partial<ComposerAttachment> = {
+        file,
+        name: file.name,
+        size: file.size,
+        type: file.type,
+        hd,
+        status: "ready",
+        progress: 0,
+        error: undefined,
+      };
+      patchAttachment(id, patch);
+      prefetchUpload({ ...current, ...patch });
+    },
+    [patchAttachment, prefetchUpload],
+  );
+
+  const forgetUpload = useCallback(
+    (id: string) => {
+      preparedRef.current.delete(id);
+      forgetUploadTask(id);
+    },
+    [forgetUploadTask],
+  );
+
+  const forgetAllUploads = useCallback(() => {
+    preparedRef.current.clear();
+    forgetAllUploadTasks();
+  }, [forgetAllUploadTasks]);
+
+  // Send path. An attachment that is still compressing must not go up at full
+  // size just because the user was quick, so wait for the downscale to settle
+  // and then upload whatever the composer holds now — which also picks up a
+  // later HD toggle or annotation.
+  const resolveUpload = useCallback(
+    async (att: ComposerAttachment): Promise<UploadedAttachment> => {
+      const pending = preparedRef.current.get(att.id);
+      const prepared = pending ? await pending.catch(() => null) : null;
+      const current = attachmentsRef.current.find((item) => item.id === att.id);
+      // `current` still reading as preparing means the ref hasn't caught up
+      // with the patch that finished the downscale; `prepared` is that result.
+      const target = current && !current.preparing ? current : (prepared ?? current ?? att);
+      return resolveUploadTask(target);
+    },
+    [resolveUploadTask],
   );
 
   const removeAttachment = useCallback(
@@ -1756,7 +1925,13 @@ function useComposerAttachments({
       }}
       onSave={(file) => {
         if (annotatingId) {
-          applyAnnotatedAttachment(setAttachments, previewUrls, annotatingId, file, prefetchUpload);
+          applyAnnotatedAttachment(
+            setAttachments,
+            previewUrls,
+            annotatingId,
+            file,
+            startAttachmentUpload,
+          );
         }
         setAnnotatingId(null);
       }}
@@ -1769,6 +1944,7 @@ function useComposerAttachments({
       disabled={disabled}
       onAnnotate={setAnnotatingId}
       onRemove={removeAttachment}
+      onToggleHd={setAttachmentHd}
     />
   );
 
@@ -1778,10 +1954,14 @@ function useComposerAttachments({
     draggingFiles,
     addFiles,
     removeAttachment,
+    setAttachmentHd,
     setAnnotatingId,
     fileInputRef,
     previewUrls,
-    prefetchUpload,
+    // Deliberately the compressing entry point rather than the raw uploader:
+    // nothing outside this hook should be able to push an image at full size
+    // without the user asking for HD.
+    startAttachmentUpload,
     resolveUpload,
     forgetUpload,
     forgetAllUploads,
@@ -11909,6 +12089,7 @@ function SessionChatBody({
             disabled={sending}
             onAnnotate={files.setAnnotatingId}
             onRemove={removeAttachment}
+            onToggleHd={files.setAttachmentHd}
           />
           <div
             className={cn(
@@ -16529,6 +16710,7 @@ function NewSessionDialog({
         ]}
         onAnnotate={setAnnotatingId}
         onRemove={removeAttachment}
+        onToggleHd={files.setAttachmentHd}
       />
 
       {/* The drawer variant keeps its always-open controls row; the inline
