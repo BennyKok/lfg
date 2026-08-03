@@ -44,7 +44,8 @@ describe("resume cache migration", () => {
       VALUES
         ('grok-session', 'grok', 0),
         ('cursor-session', 'cursor', 0),
-        ('other-session', 'claude', 0);
+        ('other-session', 'claude', 0),
+        ('managed-session', 'claude', 1);
     `);
     const nativeTuiSql = readFileSync(
       new URL("./migrations/resume-cache/003_native_tui_resume.sql", import.meta.url),
@@ -61,6 +62,19 @@ describe("resume cache migration", () => {
       "utf8",
     );
     db.exec(identitySql);
+    db.exec(`
+      UPDATE resumable_sessions
+      SET mtime_ms = 42
+      WHERE session_id IN ('grok-session', 'cursor-session', 'other-session', 'managed-session');
+      UPDATE resumable_sessions
+      SET backend = 'aisdk', resume_handle = session_id, managed = 1
+      WHERE session_id = 'managed-session';
+    `);
+    const historicalTitleSql = readFileSync(
+      new URL("./migrations/resume-cache/005_refresh_historical_titles.sql", import.meta.url),
+      "utf8",
+    );
+    db.exec(historicalTitleSql);
 
     const columns = db.query<{ name: string }, []>("PRAGMA table_info(resumable_sessions)").all();
     expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining([
@@ -73,11 +87,21 @@ describe("resume cache migration", () => {
     ]));
     expect(db.query<{ session_id: string }, []>(
       "SELECT session_id FROM resumable_sessions WHERE resumable = 1 ORDER BY session_id",
-    ).all().map((row) => row.session_id)).toEqual(["cursor-session", "grok-session"]);
+    ).all().map((row) => row.session_id)).toEqual([
+      "cursor-session",
+      "grok-session",
+      "managed-session",
+    ]);
     expect(db.query<{ backend: string | null }, []>(
       "SELECT backend FROM resumable_sessions WHERE session_id = 'grok-session'",
     ).get()?.backend).toBeNull();
-    expect(db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(4);
+    expect(db.query<{ mtime_ms: number }, []>(
+      "SELECT mtime_ms FROM resumable_sessions WHERE session_id = 'other-session'",
+    ).get()?.mtime_ms).toBe(-1);
+    expect(db.query<{ mtime_ms: number }, []>(
+      "SELECT mtime_ms FROM resumable_sessions WHERE session_id = 'managed-session'",
+    ).get()?.mtime_ms).toBe(42);
+    expect(db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(5);
     db.close();
   });
 });

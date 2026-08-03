@@ -390,6 +390,25 @@ function managedTitle(
   );
 }
 
+// Historical scans may use a same-cwd managed record to recover project/owner
+// metadata after the exact runtime record is gone. A cwd match is not a session
+// identity match, though: reusing its title would stamp the newest managed
+// session's prompt onto every older transcript in that repository.
+export function managedHistoricalTitle(
+  m: ManagedSession | undefined,
+  sessionId: string,
+  overrides: Record<string, string>,
+): string | null {
+  if (overrides[sessionId]) return overrides[sessionId];
+  if (!m || (m.sessionId !== sessionId && m.nativeSessionId !== sessionId)) return null;
+  return (
+    (m.sessionId && overrides[m.sessionId]) ||
+    (m.nativeSessionId && overrides[m.nativeSessionId]) ||
+    m.title ||
+    null
+  );
+}
+
 export function managedLaunchRow(
   m: ManagedSession,
   overrides: Record<string, string>,
@@ -2711,7 +2730,7 @@ async function refreshResumableCacheOnce(focusSessionId?: string): Promise<void>
     if (budget-- <= 0) break; // remainder backfills on the next refresh
     const cwd = await cwdForTranscript(c.path).catch(() => null);
     const managedRec = managedById.get(c.id) ?? (cwd ? managedByCwd.get(cwd) : undefined);
-    let title = managedTitle(managedRec, c.id, managedRec?.nativeSessionId, overrides);
+    let title = managedHistoricalTitle(managedRec, c.id, overrides);
     if (!title) title = await firstPromptTitle(c.path).catch(() => null);
     if (!title) title = cwd ? basename(cwd) : "—";
     changed.push({
@@ -2741,7 +2760,7 @@ async function refreshResumableCacheOnce(focusSessionId?: string): Promise<void>
       cwd: t.cwd,
       project: managedRec?.project || projectName(t.cwd, { repoRoot: managedRec?.repoRoot }),
       title:
-        managedTitle(managedRec, t.id, managedRec?.nativeSessionId, overrides) ||
+        managedHistoricalTitle(managedRec, t.id, overrides) ||
         t.firstUserText ||
         (t.cwd ? basename(t.cwd) : "—"),
       lastActivityAt: t.updatedAt ?? t.createdAt,

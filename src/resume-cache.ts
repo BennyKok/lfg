@@ -164,6 +164,13 @@ function init(): Database {
     );
     d.exec(migration);
   }
+  if (version < 5) {
+    const migration = readFileSync(
+      new URL("./migrations/resume-cache/005_refresh_historical_titles.sql", import.meta.url),
+      "utf8",
+    );
+    d.exec(migration);
+  }
   initialized = true;
   return d;
 }
