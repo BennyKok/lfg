@@ -6,28 +6,30 @@ const sonner = () => readFile("web/src/components/ui/sonner.tsx", "utf8");
 const styles = () => readFile("web/src/index.css", "utf8");
 
 describe("contextual mobile Live header", () => {
-  test("morphs the logo into a personalized notification target after two seconds", async () => {
+  test("rests on a larger welcome and only visits status while work is moving", async () => {
     const source = await app();
     expect(source).toContain("setShowHeaderBrandIntro(false), 2000");
     expect(source).toContain("function LiveHeaderContext({");
     expect(source).toContain("const welcomeMessage = `Welcome, ${firstName}`");
     expect(source).toContain('`${busyCount} agent${busyCount === 1 ? "" : "s"} building`');
-    expect(source).toContain(': "Ready to build"');
+    expect(source).toContain("const actionInMotion = busyCount > 0;");
+    expect(source).toContain("const dwellMs = showAmbientStatus ? 2800 : 8000;");
+    expect(source).toContain("intro || questionCount || !actionInMotion");
     expect(source).toContain("setShowAmbientStatus((current) => !current)");
     expect(source).toContain('getPropertyValue("--text-swap-dur")');
     expect(source).toContain('ambientSwapState === "exit" && "is-exit"');
     expect(source).toContain('ambientSwapState === "enter" && "is-enter-start"');
     expect(source).toContain("<ShimmerText>{headline}</ShimmerText>");
-    expect(source).toContain("const showCard = intro || questionCount > 0;");
+    expect(source).toContain("const showCard = intro;");
     expect(source).toContain("surface={showCard}");
     expect(source).toContain('showCard && "glass-island"');
-    expect(source).toContain('questionCount ? "px-3" : "px-1"');
-    expect(source).toContain('? "text-[12px] font-semibold"');
+    expect(source).toContain('"flex min-w-0 items-center px-1 transition-all duration-300 ease-ios"');
+    expect(source).toContain('? "text-[14px] font-semibold"');
+    expect(source).toContain(": actionInMotion && showAmbientStatus");
     expect(source).toContain('? "text-[12px] font-medium"');
-    expect(source).toContain(': "text-[14px] font-semibold"');
-    expect(source).toContain("{questionCount ? (");
-    expect(source).toContain('<Bell className="size-4 shrink-0 fill-primary/15 text-primary" aria-hidden />');
-    expect(source).toContain("{detail ? (");
+    expect(source).toContain(': "text-[16px] font-semibold"');
+    expect(source).not.toContain('<Bell className="size-4 shrink-0 fill-primary/15 text-primary" aria-hidden />');
+    expect(source).not.toContain("{detail ? (");
     expect(source).toContain('onOpenNotifications={() => setTab("notifications")}');
   });
 
@@ -40,10 +42,11 @@ describe("contextual mobile Live header", () => {
     expect(styleSource).toContain("animation: none !important");
   });
 
-  test("uses the center surface for urgent questions on mobile", async () => {
+  test("keeps urgent questions accessible without restoring a badge", async () => {
     const source = await app();
     expect(source).toContain("const { questions } = useAsk();");
-    expect(source).toContain('"Tap to open notifications"');
+    expect(source).toContain("Tap to open notifications");
+    expect(source).toContain("const showCard = intro;");
     expect(source).toContain("embedded ? null : isMobile ? null");
   });
 });

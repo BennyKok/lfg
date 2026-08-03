@@ -7055,9 +7055,9 @@ function ProductBrand({
 
 // Mobile Live uses the otherwise-empty span between the account controls and
 // the screen edge as a small contextual surface. It begins as the familiar LFG
-// mark, then expands into a personal status line. Questions take precedence
-// over ambient working state because they are the only notification that needs
-// an immediate decision; every state opens the unified Notification Center.
+// mark, then expands into a personal status line. The welcome is the resting
+// state; activity only interrupts it while work is genuinely in motion.
+// Questions take precedence, but keep the same quiet plain-text treatment.
 function LiveHeaderContext({
   intro,
   user,
@@ -7076,34 +7076,33 @@ function LiveHeaderContext({
   const firstNamePart = rawName.split(/\s+/)[0] || "there";
   const firstName = `${firstNamePart.charAt(0).toUpperCase()}${firstNamePart.slice(1)}`;
   const questionCount = questions.length;
-  const showCard = intro || questionCount > 0;
+  const showCard = intro;
+  const actionInMotion = busyCount > 0;
   const [showAmbientStatus, setShowAmbientStatus] = useState(false);
   const [ambientSwapState, setAmbientSwapState] = useState<"idle" | "exit" | "enter">("idle");
   const ambientTextRef = useRef<HTMLSpanElement>(null);
   const ambientSwapTimerRef = useRef<number | null>(null);
-  const ambientContext = busyCount
-    ? `${busyCount} agent${busyCount === 1 ? "" : "s"} building`
-    : "Ready to build";
+  const ambientContext = `${busyCount} agent${busyCount === 1 ? "" : "s"} building`;
   const welcomeMessage = `Welcome, ${firstName}`;
   const headline = questionCount
     ? questionCount === 1
       ? `${firstName}, an agent needs you`
       : `${firstName}, ${questionCount} agents need you`
-    : showAmbientStatus
+    : actionInMotion && showAmbientStatus
       ? ambientContext
       : welcomeMessage;
-  const detail = questionCount
-    ? "Tap to open notifications"
-    : null;
 
   useEffect(() => {
-    if (intro || questionCount) {
+    if (intro || questionCount || !actionInMotion) {
       setShowAmbientStatus(false);
       setAmbientSwapState("idle");
       return;
     }
 
-    const interval = window.setInterval(() => {
+    // Let the personal welcome breathe. Activity gets a shorter cameo, then
+    // yields back to the welcome instead of competing with it equally.
+    const dwellMs = showAmbientStatus ? 2800 : 8000;
+    const dwellTimer = window.setTimeout(() => {
       setAmbientSwapState("exit");
       const swapDuration = Number.parseFloat(
         window.getComputedStyle(document.documentElement).getPropertyValue("--text-swap-dur"),
@@ -7112,16 +7111,16 @@ function LiveHeaderContext({
         setShowAmbientStatus((current) => !current);
         setAmbientSwapState("enter");
       }, swapDuration);
-    }, 3200);
+    }, dwellMs);
 
     return () => {
-      window.clearInterval(interval);
+      window.clearTimeout(dwellTimer);
       if (ambientSwapTimerRef.current !== null) {
         window.clearTimeout(ambientSwapTimerRef.current);
         ambientSwapTimerRef.current = null;
       }
     };
-  }, [intro, questionCount]);
+  }, [actionInMotion, intro, questionCount, showAmbientStatus]);
 
   useLayoutEffect(() => {
     if (ambientSwapState !== "enter") return;
@@ -7146,12 +7145,20 @@ function LiveHeaderContext({
           haptic("selection");
           onOpenNotifications();
         }}
-        aria-label={intro ? "LFG" : detail ? `${headline}. ${detail}` : `${welcomeMessage}. ${ambientContext}`}
+        aria-label={
+          intro
+            ? "LFG"
+            : questionCount
+              ? `${headline}. Tap to open notifications`
+              : actionInMotion
+                ? `${welcomeMessage}. ${ambientContext}`
+                : welcomeMessage
+        }
         title={intro ? "LFG" : "Open notifications"}
         className={cn(
           "relative flex h-11 w-full items-center overflow-hidden rounded-full text-left transition-colors active:scale-[0.98]",
           showCard && "glass-island",
-          questionCount && !intro ? "bg-primary/10 text-primary" : "text-foreground",
+          "text-foreground",
         )}
       >
         <span
@@ -7166,14 +7173,10 @@ function LiveHeaderContext({
         <span
           aria-live={questionCount ? "polite" : "off"}
           className={cn(
-            "flex min-w-0 items-center gap-2 transition-all duration-300 ease-ios",
-            questionCount ? "px-3" : "px-1",
+            "flex min-w-0 items-center px-1 transition-all duration-300 ease-ios",
             intro ? "translate-y-1 opacity-0" : "translate-y-0 opacity-100 delay-150",
           )}
         >
-          {questionCount ? (
-            <Bell className="size-4 shrink-0 fill-primary/15 text-primary" aria-hidden />
-          ) : null}
           <span className="min-w-0 leading-none">
             <span
               ref={ambientTextRef}
@@ -7182,29 +7185,19 @@ function LiveHeaderContext({
                 ambientSwapState === "exit" && "is-exit",
                 ambientSwapState === "enter" && "is-enter-start",
                 questionCount
-                  ? "text-[12px] font-semibold"
-                  : showAmbientStatus
+                  ? "text-[14px] font-semibold"
+                  : actionInMotion && showAmbientStatus
                     ? "text-[12px] font-medium"
-                    : "text-[14px] font-semibold",
+                    : "text-[16px] font-semibold",
               )}
             >
-              {!questionCount && showAmbientStatus ? (
+              {!questionCount && actionInMotion && showAmbientStatus ? (
                 <ShimmerText>{headline}</ShimmerText>
               ) : (
                 headline
               )}
             </span>
-            {detail ? (
-              <span className="mt-1 block truncate text-[10px] font-medium text-primary/75">
-                {detail}
-              </span>
-            ) : null}
           </span>
-          {questionCount ? (
-            <span className="ml-auto flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground">
-              {questionCount > 9 ? "9+" : questionCount}
-            </span>
-          ) : null}
         </span>
       </button>
     </NavIsland>

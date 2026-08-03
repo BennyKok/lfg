@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - A welcome that knows when to speak (v0.1.225)
+
+- The mobile Live welcome now gets a full eight seconds before briefly yielding
+  to agent activity, and activity appears only while an agent is actually
+  working — idle rooms stay on the welcome instead of cycling filler.
+- The welcome is larger, while agent questions use the same clean plain-text
+  treatment instead of switching the header into a bell-and-count badge.
+
 ## August 3, 2026 - A clean way out (v0.1.224)
 
 - `lfg uninstall` now removes the LFG service, command, MCP registrations, and
