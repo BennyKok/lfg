@@ -3597,9 +3597,10 @@ function parseLiveEvent<T>(data: string): T | null {
 
 // Whether a session card starts collapsed when we've never seen it before (no
 // persisted choice). true = lazy by default: a fresh session does NOT open a
-// transcript stream until you expand it; you still see it working/idle/blocked
+// transcript stream until it is opened; you still see it working/idle/blocked
 // from the list badges. Flip to false to restore the old "everything expanded"
 // behavior. Per-session choices (localStorage `lfg-collapsed:<sid>`) win over this.
+// Desktop only: mobile never streams a card (see useExpandedIds).
 const DEFAULT_COLLAPSED = true;
 
 // Whether a card is collapsed, given its persisted choice and the default above.
@@ -3661,6 +3662,11 @@ function markCreatedSid(sid: string): void {
 // user toggles a card (and the browser fires `storage` for other tabs); we
 // recompute from localStorage on either. Drives which sessions actually stream.
 function useExpandedIds(sessions: Session[], forceExpanded = false): string[] {
+  // Mobile has no in-place expanded card any more — the list is a summary and a
+  // session is read by opening it — so the ONLY mobile stream is the one the open
+  // sheet forces. A card's persisted desktop collapse choice must not resurrect a
+  // stream behind a row that can't show it.
+  const isMobile = useIsMobile();
   const sids = useMemo(
     () => sessions.map((s) => s.sessionId).filter((id): id is string => !!id),
     [sessions],
@@ -3670,10 +3676,11 @@ function useExpandedIds(sessions: Session[], forceExpanded = false): string[] {
     () =>
       sids.filter(
         (sid) =>
-          forcedStreamSids.has(sid) || (forceExpanded ? true : !isCollapsedSid(sid)),
+          forcedStreamSids.has(sid) ||
+          (isMobile ? false : forceExpanded ? true : !isCollapsedSid(sid)),
       ),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [sidKey, forceExpanded],
+    [sidKey, forceExpanded, isMobile],
   );
   const [expanded, setExpanded] = useState<string[]>(read);
   useEffect(() => {
@@ -13520,10 +13527,6 @@ const SessionCard = memo(function SessionCard({
   // card border so it's clear which session is listening.
   const [dictating, setDictating] = useState(false);
   const headRef = useRef<HTMLDivElement>(null);
-  // Collapsed state persists per session so a card stays the way you left it
-  // across reloads / re-renders (localStorage, keyed by sid).
-  const collapseKey = sid ? `lfg-collapsed:${sid}` : null;
-  const [collapsed, setCollapsed] = useState<boolean>(() => (sid ? isCollapsedSid(sid) : false));
   const [headH, setHeadH] = useState(44);
   const [swipeOpen, setSwipeOpen] = useState(false);
   const [swipeIntent, setSwipeIntent] = useState<"archive" | null>(null);
@@ -13541,7 +13544,7 @@ const SessionCard = memo(function SessionCard({
                        // leave a left gap before the icon + "Archive" label
   const COMMIT = 0.55; // drag past this fraction of the card → archive on release
 
-  // Measure the header so a collapsed card animates down to exactly its height.
+  // Measure the header so the mobile card sits at exactly its header height.
   useEffect(() => {
     const el = headRef.current;
     if (!el) return;
@@ -13551,33 +13554,6 @@ const SessionCard = memo(function SessionCard({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
-
-  // Remember collapse state per session across reloads.
-  useEffect(() => {
-    if (!collapseKey) return;
-    try {
-      localStorage.setItem(collapseKey, collapsed ? "1" : "0");
-    } catch {
-      /* private mode / quota — non-fatal */
-    }
-    // Notify the app-level stream manager so it opens/closes this session's
-    // transcript stream as the card expands/collapses (lazy streaming).
-    window.dispatchEvent(new Event("lfg-collapse-change"));
-  }, [collapseKey, collapsed]);
-
-  // React to collapse changes made outside this card. The local `collapsed`
-  // state is only seeded on mount, so without this an already-mounted card
-  // would not sync when localStorage is rewritten underneath it.
-  useEffect(() => {
-    if (!sid) return;
-    const sync = () => setCollapsed(isCollapsedSid(sid));
-    window.addEventListener("lfg-collapse-change", sync);
-    window.addEventListener("storage", sync);
-    return () => {
-      window.removeEventListener("lfg-collapse-change", sync);
-      window.removeEventListener("storage", sync);
-    };
-  }, [sid]);
 
   const setTransform = (pxX: number, pxY: number) => {
     const el = sectionRef.current;
@@ -13707,46 +13683,13 @@ const onTouchStart = (e: ReactTouchEvent) => {
     }
   };
 
-  // ── tap the title → morphing full-height sheet; long-press → collapse ──────
+  // ── tap the title → morphing full-height sheet ────────────────────────────
   // The sheet itself lives at the parent (so it can switch between sessions and
   // force whichever sid it shows into the live stream); the card just reports the
-  // tap and the title's rect to anchor the morph. Long-press instead toggles the
-  // card's collapsed state, since it's the less-frequent action.
-  const LONG_PRESS_MS = 420;
-  const pressTimer = useRef<number | null>(null);
-  const pressOrigin = useRef({ x: 0, y: 0 });
-  const longPressFired = useRef(false);
-
-  const clearLongPress = () => {
-    if (pressTimer.current !== null) {
-      clearTimeout(pressTimer.current);
-      pressTimer.current = null;
-    }
-  };
-
-  const onTitlePointerDown = (e: React.PointerEvent<HTMLElement>) => {
-    if (!isMobile) return;
-    longPressFired.current = false;
-    pressOrigin.current = { x: e.clientX, y: e.clientY };
-    pressTimer.current = window.setTimeout(() => {
-      pressTimer.current = null;
-      if (openRef.current !== "none") return; // mid swipe action — ignore
-      longPressFired.current = true;
-      haptic("selection");
-      setCollapsed((v) => !v);
-    }, LONG_PRESS_MS);
-  };
-
-  const onTitlePointerMove = (e: React.PointerEvent<HTMLElement>) => {
-    if (pressTimer.current === null) return;
-    const dx = Math.abs(e.clientX - pressOrigin.current.x);
-    const dy = Math.abs(e.clientY - pressOrigin.current.y);
-    if (dx > 10 || dy > 10) clearLongPress(); // moved → it's a scroll/swipe
-  };
-
+  // tap and the title's rect to anchor the morph. There is no in-place expand on
+  // mobile any more: the row is the summary, the sheet is the session.
   const onHeaderTap = (e: React.MouseEvent<HTMLElement>) => {
     if (!isMobile) return;
-    if (longPressFired.current) { longPressFired.current = false; return; }
     if (drag.current.justSwiped) { drag.current.justSwiped = false; return; }
     if (openRef.current !== "none") { closeSwipe(); return; }
     if (!onOpenSheet || !sid) return;
@@ -13754,10 +13697,10 @@ const onTouchStart = (e: ReactTouchEvent) => {
     onOpenSheet(sid, e.currentTarget.getBoundingClientRect());
   };
 
-  // A collapsed mobile card is stripped to the essentials (no model chip, no
-  // actions menu, transcript unmounted) — both to keep it light and to make the
-  // collapse tween cheap (nothing heavy to lay out per frame).
-  const collapsedView = isMobile && collapsed;
+  // Mobile cards are always the stripped-down row (no model chip, no actions
+  // menu, transcript and composer unmounted): light to render, and the only way
+  // into a session is opening it. Desktop keeps the full in-grid card.
+  const collapsedView = isMobile;
 
   return (
     <div className={cn("relative min-w-0 md:static", variant === "stage" && "md:h-full")}>
@@ -13781,7 +13724,7 @@ const onTouchStart = (e: ReactTouchEvent) => {
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
         onTouchEnd={onTouchEnd}
-        style={isMobile && collapsed ? { height: headH } : undefined}
+        style={isMobile ? { height: headH } : undefined}
         className={cn(
           "live-pane relative z-[1] flex h-[22rem] touch-pan-y flex-col overflow-hidden rounded-xl border bg-card text-card-foreground transition-[height,transform,border-color,box-shadow] duration-300 ease-ios md:static md:transition-[border-color,box-shadow]",
           entering && "lfg-card-in",
@@ -13839,10 +13782,6 @@ const onTouchStart = (e: ReactTouchEvent) => {
                 e.stopPropagation();
                 startRename();
               }}
-              onPointerDown={onTitlePointerDown}
-              onPointerMove={onTitlePointerMove}
-              onPointerUp={clearLongPress}
-              onPointerCancel={clearLongPress}
               onDragStart={(e) => e.preventDefault()}
               onSelect={(e) => e.preventDefault()}
               onContextMenu={(e) => e.preventDefault()}
@@ -13862,7 +13801,7 @@ const onTouchStart = (e: ReactTouchEvent) => {
                 <div className="truncate text-[15px] font-semibold leading-tight">
                   {titleForSession(session)}
                 </div>
-                {isMobile && collapsed && latest ? (
+                {isMobile && latest ? (
                   <div className="truncate text-[11px] leading-tight text-muted-foreground">
                     {latest}
                   </div>
