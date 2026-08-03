@@ -4,6 +4,16 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - A Live header that knows what is happening (v0.1.216)
+
+- On mobile, the Live header now introduces the LFG mark for two seconds and
+  then turns that same island into a personal welcome using the active profile.
+- The welcome stays useful after hello: it shows how many agents are building,
+  changes into an urgent notification when an agent needs input, and opens the
+  unified Notification Center when tapped.
+- Toasts now arrive at the top center, immediately below the mobile header,
+  instead of competing with the persistent composer at the bottom of the screen.
+
 ## August 3, 2026 - Faster, complete mic messages (v0.1.215)
 
 - Releasing the mic no longer discards the realtime transcription's final
