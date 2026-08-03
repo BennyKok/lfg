@@ -11,6 +11,9 @@ describe("contextual mobile Live header", () => {
     expect(source).toContain("function LiveHeaderContext({");
     expect(source).toContain("`Welcome, ${firstName}`");
     expect(source).toContain('"What are we building today?"');
+    expect(source).toContain("const showCard = intro || questionCount > 0;");
+    expect(source).toContain("surface={showCard}");
+    expect(source).toContain('showCard && "glass-island"');
     expect(source).toContain('onOpenNotifications={() => setTab("notifications")}');
   });
 

@@ -6922,20 +6922,25 @@ export function App() {
   );
 }
 
-// The shared "island" shell: a 1px gradient border (p-px) wrapping a rounded
-// pill, with the same soft shadow the bottom nav uses. Children supply their own
-// rounded-full interior so each island can size itself to its contents.
+// The shared "island" shell: normally a 1px gradient border (p-px) wrapping a
+// rounded pill, with the same soft shadow the bottom nav uses. The mobile
+// welcome can opt out of that surface while keeping the same sizing/transition
+// shell. Children supply their own rounded-full interior.
 function NavIsland({
   children,
   className,
+  surface = true,
 }: {
   children: React.ReactNode;
   className?: string;
+  surface?: boolean;
 }) {
   return (
     <div
       className={cn(
-        "rounded-full bg-gradient-to-b from-white/70 via-white/25 to-white/10 p-px shadow-[0_8px_28px_rgba(0,0,0,0.18)] dark:from-white/25 dark:via-white/10 dark:to-white/5",
+        "rounded-full",
+        surface &&
+          "bg-gradient-to-b from-white/70 via-white/25 to-white/10 p-px shadow-[0_8px_28px_rgba(0,0,0,0.18)] dark:from-white/25 dark:via-white/10 dark:to-white/5",
         className,
       )}
     >
@@ -7023,6 +7028,7 @@ function LiveHeaderContext({
   const firstNamePart = rawName.split(/\s+/)[0] || "there";
   const firstName = `${firstNamePart.charAt(0).toUpperCase()}${firstNamePart.slice(1)}`;
   const questionCount = questions.length;
+  const showCard = intro || questionCount > 0;
   const headline = questionCount
     ? questionCount === 1
       ? `${firstName}, an agent needs you`
@@ -7036,6 +7042,7 @@ function LiveHeaderContext({
 
   return (
     <NavIsland
+      surface={showCard}
       className={cn(
         "shrink-0 overflow-hidden transition-[width] duration-500 ease-ios",
         intro ? "w-11" : "w-[min(17rem,calc(100vw-6.75rem))]",
@@ -7050,7 +7057,8 @@ function LiveHeaderContext({
         aria-label={intro ? "LFG" : `${headline}. ${detail}`}
         title={intro ? "LFG" : "Open notifications"}
         className={cn(
-          "glass-island relative flex h-11 w-full items-center overflow-hidden rounded-full text-left transition-colors active:scale-[0.98]",
+          "relative flex h-11 w-full items-center overflow-hidden rounded-full text-left transition-colors active:scale-[0.98]",
+          showCard && "glass-island",
           questionCount && !intro ? "bg-primary/10 text-primary" : "text-foreground",
         )}
       >
