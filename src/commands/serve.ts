@@ -4342,6 +4342,9 @@ export async function cmdServe() {
               sessionId: artifact.sessionId,
               sessionTitle:
                 titles[artifact.sessionId] ?? managedBySession.get(artifact.sessionId)?.title,
+              agent: managedBySession.get(artifact.sessionId)?.agent,
+              project: managedBySession.get(artifact.sessionId)?.project,
+              sessionStartedAt: managedBySession.get(artifact.sessionId)?.createdAt,
               ts: artifact.updatedAt ?? artifact.createdAt,
               lastRefreshedAt: artifact.refresh?.lastSuccessAt,
               refreshStatus: artifact.refresh?.status,

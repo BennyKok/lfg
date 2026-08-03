@@ -6,8 +6,10 @@
 import { useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   CheckCheck,
+  ChevronRight,
   LayoutDashboard,
   Loader2,
+  MessageSquareText,
   Play,
   RotateCcw,
   Trash2,
@@ -166,6 +168,7 @@ function notificationDayLabel(ts: number, now: number): string {
 
 export default function ShippedPage({
   onOpenSession,
+  onOpenArtifactSession,
   onReviewSession,
   liveSessionIds,
   notificationIdentity,
@@ -173,6 +176,7 @@ export default function ShippedPage({
   active = true,
 }: {
   onOpenSession: (sessionId: string) => void;
+  onOpenArtifactSession?: (artifact: GalleryArtifact) => void;
   onReviewSession?: (post: ShipPost) => void;
   liveSessionIds: Set<string>;
   notificationIdentity?: string | null;
@@ -589,7 +593,22 @@ export default function ShippedPage({
                       </div>
                     </div>
                   </button>
-                  <div className="absolute bottom-1.5 right-1.5 flex items-center gap-0.5">
+                  {a.sessionId ? (
+                    <button
+                      type="button"
+                      onClick={() => onOpenArtifactSession?.(a)}
+                      aria-label={`Open related session for ${a.title || a.caption || a.name}`}
+                      title={a.sessionTitle || a.project || "Open related session"}
+                      className="flex w-full items-center gap-1.5 border-t border-border/60 px-2.5 py-2 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-foreground/[0.03] hover:text-foreground"
+                    >
+                      <MessageSquareText className="size-3 shrink-0" aria-hidden />
+                      <span className="min-w-0 flex-1 truncate text-left">
+                        {a.sessionTitle || a.project || "Related session"}
+                      </span>
+                      <ChevronRight className="size-3 shrink-0" aria-hidden />
+                    </button>
+                  ) : null}
+                  <div className="absolute right-1.5 top-1.5 flex items-center gap-0.5 rounded-full bg-background/80 backdrop-blur">
                     {a.refreshEnabled !== undefined ? (
                       <button
                         type="button"

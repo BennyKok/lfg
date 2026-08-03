@@ -518,6 +518,8 @@ export type Session = {
   // normal Live workspace, but its first composer send must resume the session
   // instead of posting to the inactive transport.
   shippedReview?: boolean;
+  /** Context badge for a historical session opened outside the Live roster. */
+  reviewLabel?: string;
 };
 
 type User = { email: string; name?: string; avatar?: string };
@@ -5406,13 +5408,22 @@ export function App() {
     () => allLiveSessions.map((s) => s.sessionId).filter((id): id is string => !!id),
     [allLiveSessions],
   );
-  const openShippedSession = useCallback(
-    (post: ShipPost) => {
-      if (!post.sessionId) return;
+  const openHistoricalSession = useCallback(
+    (source: {
+      sessionId?: string;
+      agent?: string;
+      project?: string;
+      title?: string;
+      sessionTitle?: string;
+      startedAt?: number;
+      lastActivityAt?: number;
+      reviewLabel: string;
+    }) => {
+      if (!source.sessionId) return;
       const live = allLiveSessions.find(
         (session) =>
-          session.sessionId === post.sessionId ||
-          session.nativeSessionId === post.sessionId,
+          session.sessionId === source.sessionId ||
+          session.nativeSessionId === source.sessionId,
       );
       setTab("live");
       if (live?.sessionId) {
@@ -5421,18 +5432,47 @@ export function App() {
         return;
       }
       setShippedReview({
-        agent: post.agent,
-        project: post.project,
-        title: post.sessionTitle || post.title,
-        sessionId: post.sessionId,
-        startedAt: post.firstTs,
-        lastActivityAt: post.ts,
+        agent: source.agent,
+        project: source.project,
+        title: source.sessionTitle || source.title,
+        sessionId: source.sessionId,
+        startedAt: source.startedAt,
+        lastActivityAt: source.lastActivityAt,
         assignedUser: identity || null,
         shippedReview: true,
+        reviewLabel: source.reviewLabel,
       });
-      setLiveFocus({ sid: post.sessionId, n: Date.now() });
+      setLiveFocus({ sid: source.sessionId, n: Date.now() });
     },
     [allLiveSessions, identity, setTab],
+  );
+  const openShippedSession = useCallback(
+    (post: ShipPost) =>
+      openHistoricalSession({
+        sessionId: post.sessionId,
+        agent: post.agent,
+        project: post.project,
+        title: post.title,
+        sessionTitle: post.sessionTitle,
+        startedAt: post.firstTs,
+        lastActivityAt: post.ts,
+        reviewLabel: "Shipped",
+      }),
+    [openHistoricalSession],
+  );
+  const openArtifactSession = useCallback(
+    (artifact: GalleryArtifact) =>
+      openHistoricalSession({
+        sessionId: artifact.sessionId,
+        agent: artifact.agent,
+        project: artifact.project,
+        title: artifact.title || artifact.caption || artifact.name,
+        sessionTitle: artifact.sessionTitle,
+        startedAt: artifact.sessionStartedAt,
+        lastActivityAt: artifact.ts,
+        reviewLabel: "Artifact",
+      }),
+    [openHistoricalSession],
   );
 
   // Once a reviewed session appears in the live fleet, swap the historical
@@ -6683,6 +6723,7 @@ export function App() {
                 active={tab === "artifacts"}
                 liveSessionIds={new Set()}
                 onOpenSession={() => {}}
+                onOpenArtifactSession={openArtifactSession}
               />
             </Suspense>
           </div>
@@ -13824,7 +13865,7 @@ const onTouchStart = (e: ReactTouchEvent) => {
             grid layout needs it here. */}
         {session.shippedReview ? (
           <span className="shrink-0 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400">
-            Shipped
+            {session.reviewLabel || "Shipped"}
           </span>
         ) : (
           <SessionStatusDot busy={busy} className="lg:hidden" />
@@ -18753,6 +18794,9 @@ export type GalleryArtifact = {
   caption?: string;
   sessionId?: string;
   sessionTitle?: string;
+  agent?: string;
+  project?: string;
+  sessionStartedAt?: number;
   ts: number;
   version?: number;
   size?: number;
