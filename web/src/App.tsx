@@ -6473,6 +6473,9 @@ export function App() {
             intro={showHeaderBrandIntro}
             user={users.find((user) => user.email === identity)}
             identity={identity}
+            busyCount={liveSessions.filter(
+              (session) => !!liveStream.busyBySid[session.sessionId ?? ""],
+            ).length}
             onOpenNotifications={() => setTab("notifications")}
           />
         ) : (
@@ -7052,11 +7055,13 @@ function LiveHeaderContext({
   intro,
   user,
   identity,
+  busyCount,
   onOpenNotifications,
 }: {
   intro: boolean;
   user?: User;
   identity?: string | null;
+  busyCount: number;
   onOpenNotifications: () => void;
 }) {
   const { questions } = useAsk();
@@ -7065,11 +7070,14 @@ function LiveHeaderContext({
   const firstName = `${firstNamePart.charAt(0).toUpperCase()}${firstNamePart.slice(1)}`;
   const questionCount = questions.length;
   const showCard = intro || questionCount > 0;
+  const ambientContext = busyCount
+    ? `${busyCount} agent${busyCount === 1 ? "" : "s"} building`
+    : "Ready to build";
   const headline = questionCount
     ? questionCount === 1
       ? `${firstName}, an agent needs you`
       : `${firstName}, ${questionCount} agents need you`
-    : `Welcome, ${firstName}`;
+    : `Welcome, ${firstName} · ${ambientContext}`;
   const detail = questionCount
     ? "Tap to open notifications"
     : null;
@@ -7079,11 +7087,7 @@ function LiveHeaderContext({
       surface={showCard}
       className={cn(
         "shrink-0 overflow-hidden transition-[width] duration-500 ease-ios",
-        intro
-          ? "w-11"
-          : questionCount
-            ? "w-[min(17rem,calc(100vw-6.75rem))]"
-            : "w-[min(11rem,calc(100vw-6.75rem))]",
+        intro ? "w-11" : "w-[min(17rem,calc(100vw-6.75rem))]",
       )}
     >
       <button
@@ -7112,7 +7116,8 @@ function LiveHeaderContext({
         <span
           aria-live="polite"
           className={cn(
-            "flex min-w-0 items-center gap-2 px-3 transition-all duration-300 ease-ios",
+            "flex min-w-0 items-center gap-2 transition-all duration-300 ease-ios",
+            questionCount ? "px-3" : "px-1",
             intro ? "translate-y-1 opacity-0" : "translate-y-0 opacity-100 delay-150",
           )}
         >
@@ -7120,7 +7125,12 @@ function LiveHeaderContext({
             <Bell className="size-4 shrink-0 fill-primary/15 text-primary" aria-hidden />
           ) : null}
           <span className="min-w-0 leading-none">
-            <span className="block truncate text-[12px] font-semibold tracking-[-0.01em]">
+            <span
+              className={cn(
+                "block truncate font-semibold tracking-[-0.01em]",
+                questionCount ? "text-[12px]" : "text-[14px]",
+              )}
+            >
               {headline}
             </span>
             {detail ? (

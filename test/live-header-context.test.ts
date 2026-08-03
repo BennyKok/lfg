@@ -9,11 +9,14 @@ describe("contextual mobile Live header", () => {
     const source = await app();
     expect(source).toContain("setShowHeaderBrandIntro(false), 2000");
     expect(source).toContain("function LiveHeaderContext({");
-    expect(source).toContain("`Welcome, ${firstName}`");
+    expect(source).toContain("`Welcome, ${firstName} · ${ambientContext}`");
+    expect(source).toContain('`${busyCount} agent${busyCount === 1 ? "" : "s"} building`');
+    expect(source).toContain(': "Ready to build"');
     expect(source).toContain("const showCard = intro || questionCount > 0;");
     expect(source).toContain("surface={showCard}");
     expect(source).toContain('showCard && "glass-island"');
-    expect(source).toContain(': "w-[min(11rem,calc(100vw-6.75rem))]"');
+    expect(source).toContain('questionCount ? "px-3" : "px-1"');
+    expect(source).toContain('questionCount ? "text-[12px]" : "text-[14px]"');
     expect(source).toContain("{questionCount ? (");
     expect(source).toContain('<Bell className="size-4 shrink-0 fill-primary/15 text-primary" aria-hidden />');
     expect(source).toContain("{detail ? (");
