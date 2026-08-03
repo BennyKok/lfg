@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - Your Computer, ready first (v0.1.231)
+
+- Managed hosts can now open a credential-free Computer directly and keep
+  Claude, Codex, and other provider connections as optional Settings actions.
+- Ordinary embedded LFG installs retain the existing first-run connection
+  guide unless their host explicitly takes ownership of onboarding.
+
 ## August 3, 2026 - A focused first choice (v0.1.230)
 
 - Grok is temporarily hidden from the first-run Computer connection choices.
