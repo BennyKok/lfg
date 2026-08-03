@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - Every artifact leads home (v0.1.219)
+
+- Artifact cards now show the conversation that created them. Open the related
+  session straight from the gallery, including finished sessions that need to
+  be reviewed or resumed.
+
 ## August 3, 2026 - A quieter mobile hello (v0.1.218)
 
 - The mobile Live welcome is now one compact line with no bell icon or
