@@ -83,16 +83,14 @@ function elevenLabsRealtimeStream(handlers: SttStreamHandlers): SttStreamBridge 
   const key = process.env.ELEVENLABS_API_KEY;
   if (!key) return null;
   const model = process.env.ELEVENLABS_STT_REALTIME_MODEL || "scribe_v2_realtime";
-  // Commit strategy decides WHO finalizes (commits) a turn:
-  //   "vad"    — ElevenLabs' own server-side VAD commits on detected silence.
-  //              This is load-immune: it does NOT depend on the voice worker's
-  //              local Silero VAD producing an end-of-turn "flush", which lagged
-  //              under box load and left turns transcribed-but-never-submitted
-  //              (you'd see the caption fill in, but the agent never replied).
-  //   "manual" — legacy: only the worker's flush commits a turn.
+  // Commit strategy decides WHO finalizes (commits) a turn. Dictation now has a
+  // reliable browser-owned boundary (tap/release or its local silence timer), so
+  // manual is the deterministic default: realtime partials still stream while
+  // speaking, then exactly one explicit flush finalizes the take. Server VAD is
+  // retained as an opt-in for older/external streaming clients.
   // Tunables map to the realtime API query params (silence to wait before a
   // commit, and the speech/silence probability bar).
-  const commitStrategy = process.env.ELEVENLABS_STT_COMMIT_STRATEGY || "vad";
+  const commitStrategy = process.env.ELEVENLABS_STT_COMMIT_STRATEGY || "manual";
   const serverVad = commitStrategy === "vad";
   const qs = new URLSearchParams({ model_id: model });
   if (serverVad) {
@@ -115,6 +113,10 @@ function elevenLabsRealtimeStream(handlers: SttStreamHandlers): SttStreamBridge 
   const outbox: string[] = [];
   let buf: Uint8Array[] = [];
   let bufBytes = 0;
+  // Audio is normally drained upstream every ~100ms without committing. Track
+  // whether any of it still needs a boundary so flush()+close() cannot emit two
+  // commits for one take (close follows every successful browser flush).
+  let uncommittedAudio = false;
   const FLUSH_BYTES = 3200; // ~100 ms @ 16 kHz mono s16le
 
   const sendRaw = (s: string) => {
@@ -139,7 +141,10 @@ function elevenLabsRealtimeStream(handlers: SttStreamHandlers): SttStreamBridge 
     // commit from the worker's flush or we'd double-finalize one utterance.
     const doCommit = commit && !serverVad;
     if (bufBytes === 0) {
-      if (doCommit) sendChunk("", true);
+      if (doCommit && uncommittedAudio) {
+        sendChunk("", true);
+        uncommittedAudio = false;
+      }
       return;
     }
     const merged = new Uint8Array(bufBytes);
@@ -151,6 +156,7 @@ function elevenLabsRealtimeStream(handlers: SttStreamHandlers): SttStreamBridge 
     buf = [];
     bufBytes = 0;
     sendChunk(Buffer.from(merged).toString("base64"), doCommit);
+    uncommittedAudio = !doCommit;
   };
 
   up.addEventListener("open", () => {

@@ -2282,6 +2282,10 @@ function useDictation(opts: {
     committed: string;
     partial: string;
     broken: boolean;
+    // stop() must leave the session reachable until the final websocket event
+    // arrives. This flag preserves stop's idempotency during that short window
+    // without detaching the event handlers from the session they need to finish.
+    stopping: boolean;
     // Resolvers waiting for the next "final" frame — settled by the flush we send
     // on stop, so we hand back the committed tail instead of a clipped partial.
     finalWaiters: Array<() => void>;
@@ -2364,7 +2368,6 @@ function useDictation(opts: {
   const stop = useCallback(
     async (auto = false, discard = false) => {
       const s = sessionRef.current;
-      sessionRef.current = null;
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
       rawLevelRef.current = 0;
@@ -2389,6 +2392,17 @@ function useDictation(opts: {
         setState("idle");
         return;
       }
+      // Keep this session in sessionRef while its flush is in flight: websocket
+      // handlers use that identity check to reject stale events. Clearing it
+      // here made them reject the final we were actively waiting for, forcing
+      // every stop through the 1.8s timeout and sometimes submitting a clipped
+      // partial. `stopping` makes repeated stop triggers no-ops instead.
+      if (s.stopping) return;
+      s.stopping = true;
+      const finish = () => {
+        if (sessionRef.current === s) sessionRef.current = null;
+        setState("idle");
+      };
       if (s.vad !== null) clearInterval(s.vad);
       // Stop feeding the mic first so no frame races the flush/close below.
       s.proc.disconnect();
@@ -2408,7 +2422,7 @@ function useDictation(opts: {
       };
       if (discard) {
         closeWs();
-        setState("idle");
+        finish();
         onCancelRef.current?.(capturedBaseRef.current);
         return;
       }
@@ -2427,12 +2441,17 @@ function useDictation(opts: {
       // resolve on the first `final` frame OR a timeout so a missing commit can't
       // hang the button in "transcribing".
       if (s.ws && s.ws.readyState === WebSocket.OPEN && !s.broken) {
+        // Server-side VAD may already have committed the whole take before our
+        // slower browser silence timer fires. In that case there is no trailing
+        // hypothesis to wait for; submitting the committed text immediately
+        // removes a guaranteed timeout from the common hands-free path.
+        const needsFinal = !s.committed || !!s.partial;
         try {
           s.ws.send(JSON.stringify({ type: "flush" }));
         } catch {
           s.broken = true;
         }
-        if (!s.broken) {
+        if (!s.broken && needsFinal) {
           await new Promise<void>((resolve) => {
             let done = false;
             const fin = () => {
@@ -2451,7 +2470,7 @@ function useDictation(opts: {
 
       if (streamed && !s.broken) {
         deliver(streamed);
-        setState("idle");
+        finish();
         return;
       }
 
@@ -2461,7 +2480,7 @@ function useDictation(opts: {
       const total = s.chunks.reduce((n, c) => n + c.length, 0);
       if (!total) {
         if (streamed) deliver(streamed);
-        setState("idle");
+        finish();
         return;
       }
       const merged = new Float32Array(total);
@@ -2484,7 +2503,7 @@ function useDictation(opts: {
         // Batch also failed — fall back to whatever the stream gave us, if any.
         if (streamed) deliver(streamed);
       }
-      setState("idle");
+      finish();
     },
     [releaseStream],
   );
@@ -2796,6 +2815,7 @@ function useDictation(opts: {
         committed: "",
         partial: "",
         broken: false,
+        stopping: false,
         finalWaiters: [],
       };
       // Connect last: audio only starts flowing once the session (and its socket
