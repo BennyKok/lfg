@@ -119,7 +119,10 @@ import {
 import { findingReference } from "./lib/finding-reference";
 import { setThemePreference, THEME_CHANGE_EVENT } from "./lib/theme";
 import { startsInBottomSystemGestureZone } from "./lib/touch-gestures";
-import { retainLivePinnedSessions } from "./lib/pinned-sessions";
+import {
+  retainLivePinnedSessions,
+  smartClearSessionIds,
+} from "./lib/pinned-sessions";
 import { pendingLiveFocusRequest } from "./lib/live-focus";
 import { latestDistinctShippedSessions } from "./lib/recent-shipped";
 import { ConnectionStatusToasts } from "./ConnectionStatus";
@@ -5869,22 +5872,42 @@ export function App() {
   // Manage Sessions templates below spawn an agent to exercise judgement; this
   // is the plumbing version for "just clear them" — no LLM involved.
   async function clearIdleSessions() {
-    const targets = liveSessions.filter((s) => s.sessionId && !s.busy);
-    const busyCount = liveSessions.length - targets.length;
-    if (!targets.length) {
-      toast.info(busyCount ? "Every session in scope is still working" : "No sessions to clear");
+    const pinnedSessionIds = readPinnedSessions();
+    const pinnedSet = new Set(pinnedSessionIds);
+    const ids = smartClearSessionIds(liveSessions, pinnedSessionIds);
+    const pinnedCount = liveSessions.filter(
+      (session) => !!session.sessionId && pinnedSet.has(session.sessionId),
+    ).length;
+    const busyCount = liveSessions.filter(
+      (session) => !!session.busy && (!session.sessionId || !pinnedSet.has(session.sessionId)),
+    ).length;
+    if (!ids.length) {
+      toast.info(
+        pinnedCount
+          ? "No unpinned idle sessions to clear"
+          : busyCount
+            ? "Every session in scope is still working"
+            : "No sessions to clear",
+      );
       return;
     }
     const confirmed = await appDialog.confirm({
-      title: `Archive ${targets.length} idle session${targets.length === 1 ? "" : "s"}?`,
-      description: busyCount
-        ? `${busyCount} session${busyCount === 1 ? " is" : "s are"} still working and will be left running. The idle sessions can be resumed later from Recent sessions.`
-        : "They will leave the live view and can be resumed later from Recent sessions.",
+      title: `Archive ${ids.length} idle session${ids.length === 1 ? "" : "s"}?`,
+      description: [
+        pinnedCount
+          ? `${pinnedCount} pinned session${pinnedCount === 1 ? "" : "s"} will be left running.`
+          : "",
+        busyCount
+          ? `${busyCount} session${busyCount === 1 ? " is" : "s are"} still working and will be left running.`
+          : "",
+        "The idle sessions can be resumed later from Recent sessions.",
+      ]
+        .filter(Boolean)
+        .join(" "),
       confirmLabel: "Archive sessions",
       destructive: true,
     });
     if (!confirmed) return;
-    const ids = targets.map((s) => s.sessionId as string);
     // Drop the cards now; the server tombstones the pids so the next poll
     // agrees (same optimistic path as a single close).
     ids.forEach((sid) => removeSession(sid));
@@ -7227,7 +7250,7 @@ function ManageSessionsMenu({
             >
               <span className="text-sm font-medium text-destructive">Clear idle sessions</span>
               <span className="text-xs text-muted-foreground">
-                Ends every non-working session now. No agent.
+                Ends every unpinned, non-working session now. No agent.
               </span>
             </DropdownMenuItem>
             <DropdownMenuSeparator />

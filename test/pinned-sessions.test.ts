@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { retainLivePinnedSessions } from "../web/src/lib/pinned-sessions.ts";
+import {
+  retainLivePinnedSessions,
+  smartClearSessionIds,
+} from "../web/src/lib/pinned-sessions.ts";
 
 describe("retainLivePinnedSessions", () => {
   test("removes a deleted session from browser-local pins", () => {
@@ -18,5 +21,22 @@ describe("retainLivePinnedSessions", () => {
         ["visible-project", "other-project"],
       ),
     ).toEqual(["visible-project", "other-project"]);
+  });
+});
+
+describe("smartClearSessionIds", () => {
+  test("selects only idle sessions that are not pinned", () => {
+    expect(
+      smartClearSessionIds(
+        [
+          { sessionId: "idle" },
+          { sessionId: "pinned-idle" },
+          { sessionId: "working", busy: true },
+          { sessionId: "pinned-working", busy: true },
+          {},
+        ],
+        ["pinned-idle", "pinned-working"],
+      ),
+    ).toEqual(["idle"]);
   });
 });
