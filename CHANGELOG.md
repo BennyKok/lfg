@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - A welcome with a pulse (v0.1.222)
+
+- The mobile Live header now cycles between the personal welcome and current
+  agent activity. Status appears as a smaller shimmering line, while the soft
+  text swap respects reduced-motion preferences and urgent questions still
+  take priority.
+
 ## August 3, 2026 - Toasts follow their edge (v0.1.221)
 
 - Top-anchored toasts now dismiss upward through the top edge, including
