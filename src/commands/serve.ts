@@ -4,6 +4,10 @@ import { tmpdir, homedir, loadavg, cpus, totalmem, freemem } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { marked } from "marked";
+import {
+  AgentAdmissionController,
+  computerAgentAdmissionContext,
+} from "../agent-admission.ts";
 import { PATHS, appVersion, installInfo } from "../config.ts";
 import { claudeOauthToken as sharedClaudeOauthToken } from "../claude-creds.ts";
 import {
@@ -470,32 +474,27 @@ function publicSessionUrl(sessionId: string): string | null {
 // if you understand the exposure.
 const HOST = process.env.LFG_HOST ?? "127.0.0.1";
 const MAX_LFG_SUBAGENT_DEPTH = 4;
+const agentAdmission = new AgentAdmissionController();
 
 // Admission gate for activating a NEW agent (create / cold resume / fork).
-// Two independent, reject-only controls layered above the systemd slice's hard
-// memory bound:
-//   • agentsPaused  → 503, a manual drain switch (nothing new spins up).
-//   • maxLiveAgents → 429, a soft cap on WORKING agents (0 = unlimited).
-// The cap counts agents with a turn in flight (Session.busy) — the intensive
-// ones — NOT idle-but-open sessions, so a wall of parked sessions never blocks
-// new work. Returns a Response to reject, or null to proceed. NOTE: soft check —
-// concurrent creates can both pass before either starts working, so the cap can
-// be transiently exceeded. The slice remains the authoritative memory bound.
-async function activationGate(): Promise<Response | null> {
+// Cloud Computers use the trusted bootstrap plan and cannot be overridden by a
+// dashboard setting. Ordinary LFG installs retain their local setting cap.
+// The returned reservation is held until the managed launching row exists, so
+// concurrent requests cannot both pass an async list read and oversubscribe.
+async function activationGate(): Promise<Response | { release: () => void }> {
   const settings = getGlobalSettingsSync();
   if (settings.agentsPaused) {
     return err(503, "agent activation is paused");
   }
-  if (settings.maxLiveAgents > 0) {
-    const working = (await listSessionsCached().catch(() => [])).filter((s) => s.busy).length;
-    if (working >= settings.maxLiveAgents) {
-      return err(
-        429,
-        `max working agents (${settings.maxLiveAgents}) reached — wait for one to finish its turn`,
-      );
-    }
-  }
-  return null;
+  const computer = computerAgentAdmissionContext();
+  const limit = computer?.limit ?? settings.maxLiveAgents;
+  if (limit === 0) return { release: () => {} };
+  const reservation = agentAdmission.tryAcquire(limit, await listSessionsCached().catch(() => []));
+  if (reservation.ok) return reservation;
+  const context = computer
+    ? `your ${computer.plan} Computer plan allows ${computer.limit} concurrent agents`
+    : `max live agents (${limit}) reached`;
+  return err(429, `${context}; ${reservation.active} active — upgrade your Computer or wait for one to finish`);
 }
 
 // Current memory of the aggregate agent slice (the cgroup every contained agent
@@ -3458,7 +3457,8 @@ export async function cmdServe() {
         // clear the same pause / cap gate as a create. (The already-live branch
         // above returned early and is never gated — it spawns nothing.)
         const resumeGate = await activationGate();
-        if (resumeGate) return resumeGate;
+        if (resumeGate instanceof Response) return resumeGate;
+        try {
         const cachedResume = getCachedResumableSession(sessionId);
         const pinnedClaudeAccountId = claudeAccountIdForSession(sessionId) ?? undefined;
 
@@ -3742,6 +3742,9 @@ export async function cmdServe() {
         }
         console.log(`[resume] agent-sdk resume ${sessionId} → pane ${tmuxName} (cwd ${cwd})`);
         return json({ ok: true, tmuxName, cwd, sessionId, resumedFrom: sessionId, agent: "aisdk" });
+        } finally {
+          resumeGate.release();
+        }
       }
 
       {
@@ -4025,7 +4028,8 @@ export async function cmdServe() {
         // subagent alike. Fork reaches here via its internal POST to
         // /api/sessions/new, so it inherits this gate for free.
         const gate = await activationGate();
-        if (gate) return gate;
+        if (gate instanceof Response) return gate;
+        try {
         const tmuxName = `lfg-${randomBytes(3).toString("hex")}`;
         const isSubagent = spawnedBy === "subagent";
         const cwdResolved = await resolveSessionCwd(repo.cwd, tmuxName, {
@@ -4247,6 +4251,9 @@ export async function cmdServe() {
           // they are contractually forbidden from guessing URLs themselves.
           sessionUrl: publicSessionUrl(launchId),
         });
+        } finally {
+          gate.release();
+        }
       }
 
       // Move an existing session under a different parent (or detach it to a
