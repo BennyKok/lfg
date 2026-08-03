@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - Pinned means protected (v0.1.214)
+
+- Smart clear now leaves pinned sessions running while it archives the other
+  idle sessions in scope. Its confirmation also calls out how many pinned
+  sessions are being protected.
+
 ## August 3, 2026 - The last freeze, at startup (v0.1.213)
 
 - Restarting LFG used to stall it for several seconds about a minute in, while
