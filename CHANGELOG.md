@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - Agents stop before the Computer does (v0.1.237)
+
+- Cloud Computers now reserve memory before starting an agent and keep enough
+  headroom for LFG, the operating system, and the secure tunnel to stay alive.
+- Simultaneous starts share one atomic memory budget, so a launch burst cannot
+  race the machine into an out-of-memory crash. When memory is tight, LFG asks
+  the user to finish an agent or upgrade instead of starting work that will die.
+
 ## August 3, 2026 - Photos upload small by default (v0.1.236)
 
 - Images attached to any composer are now downscaled and re-encoded in the
