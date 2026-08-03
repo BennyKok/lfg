@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - More room for parallel work (v0.1.233)
+
+- Cloud Computers now admit up to 1 simultaneous agent on Free, 5 on Personal,
+  16 on Pro, and 24 on Always On, with atomic reservations preventing a burst
+  of launches from exceeding the plan's limit.
+
 ## August 3, 2026 - Forking stays put (v0.1.232)
 
 - Fork and Continue now open in a stable modal on phones instead of a draggable
