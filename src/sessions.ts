@@ -122,6 +122,17 @@ type TmuxProbe = {
   targetForPid(pid: number | null): string | null;
   hasSession(name: string): boolean;
   panePid(name: string): number | null;
+  /**
+   * Fill the pane map without blocking, before anything asks for it.
+   *
+   * The three accessors above are synchronous because dozens of call sites in
+   * the rebuild use them that way, and the map they share was therefore built
+   * with a synchronous `tmux list-panes` — ~5.5ms with the event loop frozen,
+   * every rebuild. Priming it with an awaited spawn first means the sync path
+   * finds it already populated and never has to fork. The sync path stays as
+   * the fallback: if priming fails, behaviour is exactly what it was.
+   */
+  prime?(): Promise<void>;
 };
 
 const defaultTmuxProbe: TmuxProbe = {
@@ -136,26 +147,33 @@ function makeTmuxProbe(profile: SessionProfile | null): TmuxProbe {
   const panePids = new Map<string, number | null>();
   const targets = new Map<number, string | null>();
 
+  const PANE_ARGV = [
+    "tmux",
+    "list-panes",
+    "-a",
+    "-F",
+    "#{pane_pid} #{session_name}:#{window_index}.#{pane_index}",
+  ];
+
+  const parsePanes = (out: string): Map<number, string> => {
+    const m = new Map<number, string>();
+    for (const line of out.split("\n")) {
+      const sp = line.indexOf(" ");
+      if (sp < 0) continue;
+      const pid = Number(line.slice(0, sp));
+      const target = line.slice(sp + 1).trim();
+      if (pid && target) m.set(pid, target);
+    }
+    return m;
+  };
+
   const paneMap = () => {
     if (panes) return panes;
     return profileSync(profile, "tmuxPaneMap_ms", () => {
-      const m = new Map<number, string>();
+      let m = new Map<number, string>();
       try {
-        const r = Bun.spawnSync([
-          "tmux",
-          "list-panes",
-          "-a",
-          "-F",
-          "#{pane_pid} #{session_name}:#{window_index}.#{pane_index}",
-        ]);
-        const out = new TextDecoder().decode(r.stdout);
-        for (const line of out.split("\n")) {
-          const sp = line.indexOf(" ");
-          if (sp < 0) continue;
-          const pid = Number(line.slice(0, sp));
-          const target = line.slice(sp + 1).trim();
-          if (pid && target) m.set(pid, target);
-        }
+        const r = Bun.spawnSync(PANE_ARGV);
+        m = parsePanes(new TextDecoder().decode(r.stdout));
       } catch {}
       panes = m;
       return m;
@@ -163,6 +181,18 @@ function makeTmuxProbe(profile: SessionProfile | null): TmuxProbe {
   };
 
   return {
+    async prime() {
+      if (panes) return;
+      await profileAsync(profile, "tmuxPanePrime_ms", async () => {
+        try {
+          const proc = Bun.spawn(PANE_ARGV, { stdout: "pipe", stderr: "ignore" });
+          const [out] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+          panes = parsePanes(out);
+        } catch {
+          // Leave `panes` unset: the synchronous path rebuilds it as before.
+        }
+      });
+    },
     targetForPid(pid) {
       if (!pid) return null;
       if (targets.has(pid)) return targets.get(pid) ?? null;
@@ -1826,6 +1856,9 @@ async function cachedFirstTitle(path: string): Promise<string | null> {
 export async function listSessions(): Promise<Session[]> {
   const profile = listSessionsProfile();
   const tmux = makeTmuxProbe(profile);
+  // Fork for the pane map once, up front and off the event loop, instead of
+  // letting the first synchronous accessor do it in the middle of the rebuild.
+  await tmux.prime?.();
   // Drop just-closed sessions up front (see closing.ts): /close kills the
   // process but it lingers for a poll or two, so without this a stopped session
   // flickers back into the list until pgrep stops seeing it.
