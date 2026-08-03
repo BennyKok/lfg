@@ -10,6 +10,13 @@ describe("contextual mobile Live header", () => {
     const source = await app();
     expect(source).toContain("setShowHeaderBrandIntro(false), 2000");
     expect(source).toContain("function LiveHeaderContext({");
+    expect(source).toContain('isMobile && tab === "live"');
+    expect(source).toContain("hosted={embedded}");
+    expect(source).toContain("<ProductBrand compact hosted={hosted} />");
+    expect(source).toContain(
+      'w-[min(17rem,calc(100vw-var(--lfg-host-top-inset)-1.5rem))]',
+    );
+    expect(source).not.toContain('isMobile && tab === "live" && !embedded');
     expect(source).toContain("const welcomeMessage = `Welcome, ${firstName}`");
     expect(source).toContain('`${busyCount} agent${busyCount === 1 ? "" : "s"} building`');
     expect(source).toContain("const actionInMotion = busyCount > 0;");

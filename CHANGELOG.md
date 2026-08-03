@@ -4,6 +4,15 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - The welcome comes home to omg (v0.1.239)
+
+- omg.dev's mobile Computer now shows the same personal Live welcome, active
+  agent count, and agent-question handoff as standalone LFG instead of falling
+  back to a static logo.
+- The shared header automatically leaves room for omg.dev's account and plan
+  controls, so hosted and standalone surfaces keep one behavior without
+  overlapping their independently owned chrome.
+
 ## August 3, 2026 - Continued sessions keep their names (v0.1.238)
 
 - Continuing a session into a replacement now carries over the source session's

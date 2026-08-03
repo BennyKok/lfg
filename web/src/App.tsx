@@ -6692,16 +6692,37 @@ export function App() {
           isMobile && "mobile-scroll-header-fade",
         )}
       >
-      {embedded && isMobile ? (
-        /* Brand only. The project chip that used to sit on the right is gone:
-           the composer already carries one, so the same folder name was printed
-           twice on a phone-width header, and the two chips are wired to the
-           same state anyway (the composer's project sheet drives projectFilter).
-           This also matches the non-embedded mobile header, which has never
-           shown the chip — mobile reaches Shipped/Artifacts by swiping, not
-           through the filter menu's Pages group. The right side stays padded
-           for the host's own island (--lfg-host-top-inset). */
-        <header className="z-40 flex shrink-0 items-center justify-between gap-2 pb-1 pl-3 pr-[calc(0.75rem+var(--lfg-host-top-inset))] pt-[calc(0.5rem+env(safe-area-inset-top))]">
+      {isMobile && tab === "live" ? (
+        /* Live has one mobile header in standalone and embedded surfaces. The
+           host still owns the right-side account/settings island; its inset
+           narrows this shared welcome instead of selecting a different header
+           implementation. That keeps welcome, activity, and Ask transitions
+           identical everywhere LFG's Live view is mounted. */
+        <header
+          className={cn(
+            "z-40 flex min-w-0 shrink-0 items-center pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))]",
+            embedded
+              ? "pl-3 pr-[calc(0.75rem+var(--lfg-host-top-inset))]"
+              : "px-2 md:px-3",
+          )}
+        >
+          <LiveHeaderContext
+            intro={showHeaderBrandIntro}
+            hosted={embedded}
+            user={users.find((user) => user.email === identity)}
+            identity={identity}
+            busyCount={liveSessions.filter(
+              (session) => !!liveStream.busyBySid[session.sessionId ?? ""],
+            ).length}
+            onOpenNotifications={() => setTab("notifications")}
+          />
+        </header>
+      ) : embedded && isMobile ? (
+        /* Secondary embedded pages retain the compact omg mark. Mobile reaches
+           Shipped and Artifacts by swiping, while the composer owns project
+           selection. The right side stays padded for the host's own island
+           (--lfg-host-top-inset). */
+        <header className="z-40 flex shrink-0 items-center pb-1 pl-3 pr-[calc(0.75rem+var(--lfg-host-top-inset))] pt-[calc(0.5rem+env(safe-area-inset-top))]">
           <NavIsland className="shrink-0">
             <div
               className="glass-island flex size-11 items-center justify-center rounded-full"
@@ -6717,50 +6738,38 @@ export function App() {
          history. The host owns identity/settings chrome, not LFG's page
          navigation, so the individual chrome below is gated instead. */
       <header className="relative z-40 flex shrink-0 items-center justify-between gap-2 px-2 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))] md:px-3">
-        {isMobile && tab === "live" && !embedded ? (
-          <LiveHeaderContext
-            intro={showHeaderBrandIntro}
-            user={users.find((user) => user.email === identity)}
-            identity={identity}
-            busyCount={liveSessions.filter(
-              (session) => !!liveStream.busyBySid[session.sessionId ?? ""],
-            ).length}
-            onOpenNotifications={() => setTab("notifications")}
-          />
-        ) : (
-          <NavIsland className="shrink-0">
-            <div className="glass-island flex h-11 items-center rounded-full px-1.5">
-              {tab === "live" || tab === "notifications" || tab === "artifacts" ? (
-                <button
-                  type="button"
-                  onClick={() => setTab("live")}
-                  aria-label="Live"
-                  aria-current={tab === "live" ? "page" : undefined}
-                  className="flex items-center rounded-full px-1.5 transition-transform active:scale-[0.96]"
-                >
-                  {/* Embedded shows omg's mark, matching the mobile embed header
-                      and the rail — the frame must never look like a second app. */}
-                  <ProductBrand compact hosted={embedded} />
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() =>
-                    // Embedded has no Settings page of its own to fall back to.
-                    setTab(embedded || tab === "settings" ? "live" : "settings")
-                  }
-                  aria-label="Back"
-                  className="flex h-8 items-center gap-1 rounded-full pl-1.5 pr-3 text-[13px] font-medium tracking-[-0.01em] text-muted-foreground transition-colors duration-200 ease-out hover:text-foreground active:scale-[0.96]"
-                >
-                  <ChevronLeft className="size-[18px]" />
-                  <span>
-                    {embedded || tab === "settings" ? "Live" : "Settings"}
-                  </span>
-                </button>
-              )}
-            </div>
-          </NavIsland>
-        )}
+        <NavIsland className="shrink-0">
+          <div className="glass-island flex h-11 items-center rounded-full px-1.5">
+            {tab === "live" || tab === "notifications" || tab === "artifacts" ? (
+              <button
+                type="button"
+                onClick={() => setTab("live")}
+                aria-label="Live"
+                aria-current={tab === "live" ? "page" : undefined}
+                className="flex items-center rounded-full px-1.5 transition-transform active:scale-[0.96]"
+              >
+                {/* Embedded shows omg's mark, matching the mobile embed header
+                    and the rail — the frame must never look like a second app. */}
+                <ProductBrand compact hosted={embedded} />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() =>
+                  // Embedded has no Settings page of its own to fall back to.
+                  setTab(embedded || tab === "settings" ? "live" : "settings")
+                }
+                aria-label="Back"
+                className="flex h-8 items-center gap-1 rounded-full pl-1.5 pr-3 text-[13px] font-medium tracking-[-0.01em] text-muted-foreground transition-colors duration-200 ease-out hover:text-foreground active:scale-[0.96]"
+              >
+                <ChevronLeft className="size-[18px]" />
+                <span>
+                  {embedded || tab === "settings" ? "Live" : "Settings"}
+                </span>
+              </button>
+            )}
+          </div>
+        </NavIsland>
 
         <NavIsland className="shrink-0">
           <div className="glass-island flex h-11 items-center gap-1.5 rounded-full px-2">
@@ -7304,12 +7313,14 @@ function ProductBrand({
 // Questions take precedence, but keep the same quiet plain-text treatment.
 function LiveHeaderContext({
   intro,
+  hosted = false,
   user,
   identity,
   busyCount,
   onOpenNotifications,
 }: {
   intro: boolean;
+  hosted?: boolean;
   user?: User;
   identity?: string | null;
   busyCount: number;
@@ -7380,7 +7391,11 @@ function LiveHeaderContext({
       surface={showCard}
       className={cn(
         "shrink-0 overflow-hidden transition-[width] duration-500 ease-ios",
-        intro ? "w-11" : "w-[min(17rem,calc(100vw-6.75rem))]",
+        intro
+          ? "w-11"
+          : hosted
+            ? "w-[min(17rem,calc(100vw-var(--lfg-host-top-inset)-1.5rem))]"
+            : "w-[min(17rem,calc(100vw-6.75rem))]",
       )}
     >
       <button
@@ -7391,14 +7406,16 @@ function LiveHeaderContext({
         }}
         aria-label={
           intro
-            ? "LFG"
+            ? hosted
+              ? "omg.dev"
+              : "LFG"
             : questionCount
               ? `${headline}. Tap to open notifications`
               : actionInMotion
                 ? `${welcomeMessage}. ${ambientContext}`
                 : welcomeMessage
         }
-        title={intro ? "LFG" : "Open notifications"}
+        title={intro ? (hosted ? "omg.dev" : "LFG") : "Open notifications"}
         className={cn(
           "relative flex h-11 w-full items-center overflow-hidden rounded-full text-left transition-colors active:scale-[0.98]",
           showCard && "glass-island",
@@ -7412,7 +7429,7 @@ function LiveHeaderContext({
             intro ? "scale-100 opacity-100" : "scale-75 opacity-0",
           )}
         >
-          <ProductBrand compact />
+          <ProductBrand compact hosted={hosted} />
         </span>
         <span
           aria-live={questionCount ? "polite" : "off"}
