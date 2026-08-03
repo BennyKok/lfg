@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - Every link opens in the right folder (v0.1.229)
+
+- Tapping an Ask question now opens the conversation that asked it, while an
+  explicit More action expands the full question and reply composer in place.
+- Opening a session from Notifications or Artifacts now selects that session's
+  folder automatically, so the destination is visible in the correct scope.
+
 ## August 3, 2026 - Your Computer meets your tools (v0.1.228)
 
 - The first-run Computer connection flow now has two focused steps: connect a
