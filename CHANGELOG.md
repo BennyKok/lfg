@@ -4,6 +4,15 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - Computer plans guard their real capacity (v0.1.226)
+
+- Cloud Computers now enforce their plan's agent concurrency at LFG's single
+  session-admission boundary: Free/Trial 1, Personal 2, Pro 4, Always On 8.
+- Concurrent launch races reserve a slot before any asynchronous work, so a
+  burst of requests cannot overfill the machine while sessions are registering.
+- A live plan change is read from the control-plane-owned plan file on every
+  admission, so downgrades lower the cap immediately without restarting LFG.
+
 ## August 3, 2026 - A welcome that knows when to speak (v0.1.225)
 
 - The mobile Live welcome now gets a full eight seconds before briefly yielding
