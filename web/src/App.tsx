@@ -4731,6 +4731,16 @@ export function App() {
   const [identity, setIdentity] = useState<string | null>(() =>
     localStorage.getItem("lfg_user"),
   );
+  // The mobile Live header introduces the product mark, then gives that prime
+  // strip of screen back to the person using it. Start the two-second hold only
+  // once bootstrap is ready so a slow connection does not consume the intro
+  // behind the startup state.
+  const [showHeaderBrandIntro, setShowHeaderBrandIntro] = useState(true);
+  useEffect(() => {
+    if (loading) return;
+    const timer = window.setTimeout(() => setShowHeaderBrandIntro(false), 2000);
+    return () => window.clearTimeout(timer);
+  }, [loading]);
 
   // Mobile viewport sizing. iOS can return from the app switcher with stale
   // `dvh`/fixed-viewport metrics; a pinch zoom fixes it because WebKit is forced
@@ -6265,7 +6275,7 @@ export function App() {
           onSessionChange={setCodingAgentAuth}
           onComplete={completeCodingAgentAuth}
         />
-        <Toaster position="bottom-center" />
+        <Toaster position="top-center" />
       </>
     );
   }
@@ -6418,38 +6428,50 @@ export function App() {
          history. The host owns identity/settings chrome, not LFG's page
          navigation, so the individual chrome below is gated instead. */
       <header className="relative z-40 flex shrink-0 items-center justify-between gap-2 px-2 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))] md:px-3">
-        <NavIsland className="shrink-0">
-          <div className="glass-island flex h-11 items-center rounded-full px-1.5">
-            {tab === "live" || tab === "notifications" || tab === "artifacts" ? (
-              <button
-                type="button"
-                onClick={() => setTab("live")}
-                aria-label="Live"
-                aria-current={tab === "live" ? "page" : undefined}
-                className="flex items-center rounded-full px-1.5 transition-transform active:scale-[0.96]"
-              >
-                {/* Embedded shows omg's mark, matching the mobile embed header
-                    and the rail — the frame must never look like a second app. */}
-                <ProductBrand compact hosted={embedded} />
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() =>
-                  // Embedded has no Settings page of its own to fall back to.
-                  setTab(embedded || tab === "settings" ? "live" : "settings")
-                }
-                aria-label="Back"
-                className="flex h-8 items-center gap-1 rounded-full pl-1.5 pr-3 text-[13px] font-medium tracking-[-0.01em] text-muted-foreground transition-colors duration-200 ease-out hover:text-foreground active:scale-[0.96]"
-              >
-                <ChevronLeft className="size-[18px]" />
-                <span>
-                  {embedded || tab === "settings" ? "Live" : "Settings"}
-                </span>
-              </button>
-            )}
-          </div>
-        </NavIsland>
+        {isMobile && tab === "live" && !embedded ? (
+          <LiveHeaderContext
+            intro={showHeaderBrandIntro}
+            user={users.find((user) => user.email === identity)}
+            identity={identity}
+            busyCount={liveSessions.filter(
+              (session) => !!liveStream.busyBySid[session.sessionId ?? ""],
+            ).length}
+            onOpenNotifications={() => setTab("notifications")}
+          />
+        ) : (
+          <NavIsland className="shrink-0">
+            <div className="glass-island flex h-11 items-center rounded-full px-1.5">
+              {tab === "live" || tab === "notifications" || tab === "artifacts" ? (
+                <button
+                  type="button"
+                  onClick={() => setTab("live")}
+                  aria-label="Live"
+                  aria-current={tab === "live" ? "page" : undefined}
+                  className="flex items-center rounded-full px-1.5 transition-transform active:scale-[0.96]"
+                >
+                  {/* Embedded shows omg's mark, matching the mobile embed header
+                      and the rail — the frame must never look like a second app. */}
+                  <ProductBrand compact hosted={embedded} />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() =>
+                    // Embedded has no Settings page of its own to fall back to.
+                    setTab(embedded || tab === "settings" ? "live" : "settings")
+                  }
+                  aria-label="Back"
+                  className="flex h-8 items-center gap-1 rounded-full pl-1.5 pr-3 text-[13px] font-medium tracking-[-0.01em] text-muted-foreground transition-colors duration-200 ease-out hover:text-foreground active:scale-[0.96]"
+                >
+                  <ChevronLeft className="size-[18px]" />
+                  <span>
+                    {embedded || tab === "settings" ? "Live" : "Settings"}
+                  </span>
+                </button>
+              )}
+            </div>
+          </NavIsland>
+        )}
 
         <NavIsland className="shrink-0">
           <div className="glass-island flex h-11 items-center gap-1.5 rounded-full px-2">
@@ -6482,7 +6504,7 @@ export function App() {
                 )}
               </>
             ) : null}
-            {embedded ? null : (
+            {embedded ? null : isMobile ? null : (
               <AskNavButton
                 active={tab === "notifications"}
                 onOpen={() => setTab("notifications")}
@@ -6879,7 +6901,7 @@ export function App() {
           }
         }}
       />
-      <Toaster position="bottom-center" />
+      <Toaster position="top-center" />
     </div>
     {loading ? <AppStartupStatus /> : null}
     {terminalSid ? (
@@ -6975,6 +6997,107 @@ function ProductBrand({
         omg.dev
       </span>
     </span>
+  );
+}
+
+// Mobile Live uses the otherwise-empty span between the account controls and
+// the screen edge as a small contextual surface. It begins as the familiar LFG
+// mark, then expands into a personal status line. Questions take precedence
+// over ambient working state because they are the only notification that needs
+// an immediate decision; every state opens the unified Notification Center.
+function LiveHeaderContext({
+  intro,
+  user,
+  identity,
+  busyCount,
+  onOpenNotifications,
+}: {
+  intro: boolean;
+  user?: User;
+  identity?: string | null;
+  busyCount: number;
+  onOpenNotifications: () => void;
+}) {
+  const { questions } = useAsk();
+  const rawName = user?.name?.trim() || shortUser(identity);
+  const firstNamePart = rawName.split(/\s+/)[0] || "there";
+  const firstName = `${firstNamePart.charAt(0).toUpperCase()}${firstNamePart.slice(1)}`;
+  const questionCount = questions.length;
+  const headline = questionCount
+    ? questionCount === 1
+      ? `${firstName}, an agent needs you`
+      : `${firstName}, ${questionCount} agents need you`
+    : `Welcome, ${firstName}`;
+  const detail = questionCount
+    ? "Tap to open notifications"
+    : busyCount
+      ? `${busyCount} agent${busyCount === 1 ? " is" : "s are"} building now`
+      : "What are we building today?";
+
+  return (
+    <NavIsland
+      className={cn(
+        "shrink-0 overflow-hidden transition-[width] duration-500 ease-ios",
+        intro ? "w-11" : "w-[min(17rem,calc(100vw-6.75rem))]",
+      )}
+    >
+      <button
+        type="button"
+        onClick={() => {
+          haptic("selection");
+          onOpenNotifications();
+        }}
+        aria-label={intro ? "LFG" : `${headline}. ${detail}`}
+        title={intro ? "LFG" : "Open notifications"}
+        className={cn(
+          "glass-island relative flex h-11 w-full items-center overflow-hidden rounded-full text-left transition-colors active:scale-[0.98]",
+          questionCount && !intro ? "bg-primary/10 text-primary" : "text-foreground",
+        )}
+      >
+        <span
+          aria-hidden
+          className={cn(
+            "absolute inset-0 flex items-center justify-center transition-all duration-300 ease-ios",
+            intro ? "scale-100 opacity-100" : "scale-75 opacity-0",
+          )}
+        >
+          <ProductBrand compact />
+        </span>
+        <span
+          aria-live="polite"
+          className={cn(
+            "flex min-w-0 items-center gap-2 px-3 transition-all duration-300 ease-ios",
+            intro ? "translate-y-1 opacity-0" : "translate-y-0 opacity-100 delay-150",
+          )}
+        >
+          <Bell
+            className={cn(
+              "size-4 shrink-0",
+              questionCount ? "fill-primary/15 text-primary" : "text-muted-foreground",
+            )}
+            aria-hidden
+          />
+          <span className="min-w-0 leading-none">
+            <span className="block truncate text-[12px] font-semibold tracking-[-0.01em]">
+              {headline}
+            </span>
+            <span
+              className={cn(
+                "mt-1 block truncate text-[10px] font-medium",
+                questionCount ? "text-primary/75" : "text-muted-foreground",
+              )}
+            >
+              {detail}
+            </span>
+          </span>
+          {questionCount ? (
+            <span className="ml-auto flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground">
+              {questionCount > 9 ? "9+" : questionCount}
+            </span>
+          ) : null}
+        </span>
+      </button>
+    </NavIsland>
   );
 }
 

@@ -32,7 +32,10 @@ const Toaster = ({ ...props }: ToasterProps) => {
       }}
       mobileOffset={{
         bottom: "var(--lfg-above-orb)",
-        top: "calc(env(safe-area-inset-top) + 0.75rem)",
+        // Mobile Live owns the top strip with its contextual island. Keep the
+        // toast stack immediately below the measured chrome (which also grows
+        // for the install/error callouts) so both surfaces stay readable.
+        top: "calc(var(--lfg-mobile-header-height) + 0.5rem)",
       }}
       style={
         {
