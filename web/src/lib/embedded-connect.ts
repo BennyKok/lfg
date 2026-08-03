@@ -101,6 +101,9 @@ export function hasConnectedGateProvider(agents: ConnectAgentInfo[]): boolean {
  * payload never arrived (or failed) — gating on that would trap the user behind
  * a card we cannot resolve, so it stays closed.
  *
+ * A managed host can set `connectionOnboarding: false` when it already owns a
+ * credential-free default and exposes optional providers in Settings.
+ *
  * `bare` closes it outright. The gate replaces the ENTIRE tree — it returns
  * before the shell — which is right for a framed full app (the frame's whole
  * job is to run sessions, and it can't run one without an agent) and wrong for
@@ -115,7 +118,9 @@ export function shouldShowEmbeddedConnectGate(input: {
   agents: ConnectAgentInfo[];
   dismissed?: boolean;
   bare?: boolean;
+  connectionOnboarding?: boolean;
 }): boolean {
+  if (input.connectionOnboarding === false) return false;
   if (input.bare) return false;
   if (!input.embedded || input.dismissed) return false;
   if (!input.agents.length) return false;

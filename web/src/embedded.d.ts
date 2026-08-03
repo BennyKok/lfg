@@ -30,6 +30,12 @@ export interface LfgAppSurfaceProps {
   assetBaseUrl?: string;
   sessionId?: string | null;
   className?: string;
+  /**
+   * Show LFG's embedded first-run provider connection gate. Defaults to true.
+   * Managed hosts that preselect a credential-free agent can disable this and
+   * keep provider connections as an optional Settings action.
+   */
+  connectionOnboarding?: boolean;
   errorSink?: LfgErrorSink;
 }
 

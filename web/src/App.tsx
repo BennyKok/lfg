@@ -11,6 +11,7 @@ import {
 import type { AppSearch } from "./lib/app-search";
 import { isEmbedded, readLocationEmbedFlag } from "./lib/embed";
 import { useBareSurface } from "./lib/bare-surface";
+import { useEmbeddedHostOptions } from "./lib/embedded-host-options";
 import {
   embeddedConnectOptions,
   shouldShowEmbeddedConnectGate,
@@ -4422,6 +4423,7 @@ export function App() {
   // Host-mounted single page: suppress every piece of LFG shell chrome the
   // host already renders (header, brand, nav, composer).
   const bare = useBareSurface();
+  const { connectionOnboarding } = useEmbeddedHostOptions();
   // Session deep-links win over filter/identity work so the target card opens
   // as soon as bootstrap returns sessions.
   const prioritizeSession = shouldPrioritizeSession(deepLinkSearch) || !!sessionDeepLinkRef.current;
@@ -6332,6 +6334,7 @@ export function App() {
   const connectGateRequired = shouldShowEmbeddedConnectGate({
     embedded,
     bare,
+    connectionOnboarding,
     agents: codingAgents,
     dismissed: connectGateSkipped || !!sessionDeepLinkRef.current,
   });
@@ -6339,6 +6342,7 @@ export function App() {
   const connectGateOpen =
     embedded &&
     !bare &&
+    connectionOnboarding &&
     !connectGateSkipped &&
     !sessionDeepLinkRef.current &&
     connectGateStarted.current;

@@ -52,6 +52,20 @@ describe("embedded connect gate visibility", () => {
     expect(shouldShowEmbeddedConnectGate({ embedded: false, agents: FRESH_BOX })).toBe(false);
   });
 
+  test("a managed credential-free host can own provider onboarding", () => {
+    expect(
+      shouldShowEmbeddedConnectGate({
+        embedded: true,
+        agents: FRESH_BOX,
+        connectionOnboarding: false,
+      }),
+    ).toBe(false);
+    // Default stays provider-first for ordinary embedded hosts.
+    expect(
+      shouldShowEmbeddedConnectGate({ embedded: true, agents: FRESH_BOX }),
+    ).toBe(true);
+  });
+
   test("closes the moment Claude connects", () => {
     const connected = [agent("claude", { authed: true }), agent("codex")];
     expect(hasConnectedGateProvider(connected)).toBe(true);
