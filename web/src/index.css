@@ -509,6 +509,12 @@ html.lfg-keyboard-open {
       width: 100% !important;
       transform: none !important;
     }
+
+    /* Mobile owns the top edge, so tuck the collapsed background layers back
+       toward that edge instead of letting the stack fold down over content. */
+    [data-sonner-toast][data-y-position="top"][data-expanded="false"][data-front="false"] {
+      --lift-amount: calc(-1 * var(--gap)) !important;
+    }
   }
 
   .cn-toast [data-content] {

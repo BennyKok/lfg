@@ -6322,7 +6322,7 @@ export function App() {
           onSessionChange={setCodingAgentAuth}
           onComplete={completeCodingAgentAuth}
         />
-        <Toaster position="top-center" />
+        <Toaster position={isMobile ? "top-center" : "bottom-center"} />
       </>
     );
   }
@@ -6949,7 +6949,7 @@ export function App() {
           }
         }}
       />
-      <Toaster position="top-center" />
+      <Toaster position={isMobile ? "top-center" : "bottom-center"} />
     </div>
     {loading ? <AppStartupStatus /> : null}
     {terminalSid ? (

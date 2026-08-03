@@ -52,26 +52,33 @@ describe("contextual mobile Live header", () => {
 });
 
 describe("toast placement", () => {
-  test("mounts every toast stack at the top center below mobile chrome", async () => {
+  test("mounts toasts at the bottom on desktop and below the chrome on mobile", async () => {
     const source = await app();
-    expect(source).not.toContain('<Toaster position="bottom-center" />');
-    expect(source.match(/<Toaster position="top-center" \/>/g)?.length).toBe(2);
+    expect(
+      source.match(/<Toaster position=\{isMobile \? "top-center" : "bottom-center"\} \/>/g)
+        ?.length,
+    ).toBe(2);
     expect(await sonner()).toContain(
       'top: "calc(var(--lfg-mobile-header-height) + 0.5rem)"',
     );
   });
 
-  test("dismisses top-anchored toasts back through the top edge", async () => {
+  test("folds and dismisses mobile top toasts back toward the top edge", async () => {
     const wrapper = await sonner();
+    const css = await styles();
     expect(wrapper).toContain(
       'const edgeSwipeDirection = position.startsWith("top") ? "top" : "bottom"',
     );
     expect(wrapper).toContain(
       "swipeDirections={swipeDirections ?? [edgeSwipeDirection]}",
     );
-    expect(await styles()).toContain(
+    expect(css).toContain(
+      '[data-y-position="top"][data-expanded="false"][data-front="false"]',
+    );
+    expect(css).toContain("--lift-amount: calc(-1 * var(--gap)) !important;");
+    expect(css).toContain(
       '[data-y-position="top"][data-removed="true"][data-front="false"][data-expanded="false"]',
     );
-    expect(await styles()).toContain("--y: translateY(-40%);");
+    expect(css).toContain("--y: translateY(-40%);");
   });
 });
