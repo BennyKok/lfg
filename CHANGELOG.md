@@ -4,6 +4,13 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - Continued sessions keep their names (v0.1.238)
+
+- Continuing a session into a replacement now carries over the source session's
+  displayed name, including names you set yourself, instead of naming the new
+  session from its internal handoff prompt. Ordinary forks still get their own
+  independent name.
+
 ## August 3, 2026 - Agents stop before the Computer does (v0.1.237)
 
 - Cloud Computers now reserve memory before starting an agent and keep enough
