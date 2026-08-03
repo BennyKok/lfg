@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - A lighter mobile welcome (v0.1.217)
+
+- The mobile Live welcome now sits directly on the page instead of inside a
+  frosted card. The introductory LFG mark and urgent agent-question states
+  still keep their pill treatment so notifications remain easy to spot and tap.
+
 ## August 3, 2026 - A Live header that knows what is happening (v0.1.216)
 
 - On mobile, the Live header now introduces the LFG mark for two seconds and
