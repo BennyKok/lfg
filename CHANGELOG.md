@@ -4,6 +4,11 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 3, 2026 - A focused first choice (v0.1.230)
+
+- Grok is temporarily hidden from the first-run Computer connection choices.
+  Its existing login and runtime support remain intact for a future return.
+
 ## August 3, 2026 - Every link opens in the right folder (v0.1.229)
 
 - Tapping an Ask question now opens the conversation that asked it, while an

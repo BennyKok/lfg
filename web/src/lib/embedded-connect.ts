@@ -45,18 +45,29 @@ export type ToolConnectOption = {
   connected: boolean;
 };
 
-/** Providers the embedded gate offers, in display order. All three reuse the
- *  existing browser-login path; every other agent kind is terminal-only,
- *  which a framed surface cannot show. */
+/** Providers the embedded gate recognizes, in display order. Hidden entries
+ *  still count as connected so an existing Grok user is never sent back
+ *  through first-run setup; visibility is a product choice, not an auth fork. */
 const GATE_PROVIDERS: {
   provider: "claude" | "codex" | "grok";
   label: string;
+  showInOnboarding: boolean;
   /** Actual roster keys that can drive this provider's install/login flow. */
   kinds: string[];
 }[] = [
-  { provider: "claude", label: "Claude Code", kinds: ["claude", "aisdk"] },
-  { provider: "codex", label: "Codex", kinds: ["codex", "codex-aisdk"] },
-  { provider: "grok", label: "Grok", kinds: ["grok"] },
+  {
+    provider: "claude",
+    label: "Claude Code",
+    showInOnboarding: true,
+    kinds: ["claude", "aisdk"],
+  },
+  {
+    provider: "codex",
+    label: "Codex",
+    showInOnboarding: true,
+    kinds: ["codex", "codex-aisdk"],
+  },
+  { provider: "grok", label: "Grok", showInOnboarding: false, kinds: ["grok"] },
 ];
 
 const GATE_PROVIDER_KINDS = new Set(GATE_PROVIDERS.flatMap((entry) => entry.kinds));
@@ -116,6 +127,7 @@ export function shouldShowEmbeddedConnectGate(input: {
 export function embeddedConnectOptions(agents: ConnectAgentInfo[]): ConnectOption[] {
   const options: ConnectOption[] = [];
   for (const entry of GATE_PROVIDERS) {
+    if (!entry.showInOnboarding) continue;
     const agent = entry.kinds
       .map((kind) => agents.find((item) => item.key === kind))
       .find((item) => item !== undefined);

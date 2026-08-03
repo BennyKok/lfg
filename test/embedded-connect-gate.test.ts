@@ -145,11 +145,11 @@ describe("embedded connect gate visibility", () => {
 });
 
 describe("embedded connect options", () => {
-  test("offers Claude Code, Codex, and Grok in order", () => {
+  test("offers Claude Code and Codex while Grok is hidden", () => {
     const options = embeddedConnectOptions(FRESH_BOX);
-    expect(options.map((o) => o.kind)).toEqual(["aisdk", "codex-aisdk", "grok"]);
-    expect(options.map((o) => o.label)).toEqual(["Claude Code", "Codex", "Grok"]);
-    expect(options.map((o) => o.provider)).toEqual(["claude", "codex", "grok"]);
+    expect(options.map((o) => o.kind)).toEqual(["aisdk", "codex-aisdk"]);
+    expect(options.map((o) => o.label)).toEqual(["Claude Code", "Codex"]);
+    expect(options.map((o) => o.provider)).toEqual(["claude", "codex"]);
   });
 
   test("reports a missing CLI separately from a missing login", () => {
