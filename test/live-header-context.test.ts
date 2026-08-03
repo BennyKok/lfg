@@ -10,10 +10,13 @@ describe("contextual mobile Live header", () => {
     expect(source).toContain("setShowHeaderBrandIntro(false), 2000");
     expect(source).toContain("function LiveHeaderContext({");
     expect(source).toContain("`Welcome, ${firstName}`");
-    expect(source).toContain('"What are we building today?"');
     expect(source).toContain("const showCard = intro || questionCount > 0;");
     expect(source).toContain("surface={showCard}");
     expect(source).toContain('showCard && "glass-island"');
+    expect(source).toContain(': "w-[min(11rem,calc(100vw-6.75rem))]"');
+    expect(source).toContain("{questionCount ? (");
+    expect(source).toContain('<Bell className="size-4 shrink-0 fill-primary/15 text-primary" aria-hidden />');
+    expect(source).toContain("{detail ? (");
     expect(source).toContain('onOpenNotifications={() => setTab("notifications")}');
   });
 

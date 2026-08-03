@@ -6433,9 +6433,6 @@ export function App() {
             intro={showHeaderBrandIntro}
             user={users.find((user) => user.email === identity)}
             identity={identity}
-            busyCount={liveSessions.filter(
-              (session) => !!liveStream.busyBySid[session.sessionId ?? ""],
-            ).length}
             onOpenNotifications={() => setTab("notifications")}
           />
         ) : (
@@ -7014,13 +7011,11 @@ function LiveHeaderContext({
   intro,
   user,
   identity,
-  busyCount,
   onOpenNotifications,
 }: {
   intro: boolean;
   user?: User;
   identity?: string | null;
-  busyCount: number;
   onOpenNotifications: () => void;
 }) {
   const { questions } = useAsk();
@@ -7036,16 +7031,18 @@ function LiveHeaderContext({
     : `Welcome, ${firstName}`;
   const detail = questionCount
     ? "Tap to open notifications"
-    : busyCount
-      ? `${busyCount} agent${busyCount === 1 ? " is" : "s are"} building now`
-      : "What are we building today?";
+    : null;
 
   return (
     <NavIsland
       surface={showCard}
       className={cn(
         "shrink-0 overflow-hidden transition-[width] duration-500 ease-ios",
-        intro ? "w-11" : "w-[min(17rem,calc(100vw-6.75rem))]",
+        intro
+          ? "w-11"
+          : questionCount
+            ? "w-[min(17rem,calc(100vw-6.75rem))]"
+            : "w-[min(11rem,calc(100vw-6.75rem))]",
       )}
     >
       <button
@@ -7054,7 +7051,7 @@ function LiveHeaderContext({
           haptic("selection");
           onOpenNotifications();
         }}
-        aria-label={intro ? "LFG" : `${headline}. ${detail}`}
+        aria-label={intro ? "LFG" : detail ? `${headline}. ${detail}` : headline}
         title={intro ? "LFG" : "Open notifications"}
         className={cn(
           "relative flex h-11 w-full items-center overflow-hidden rounded-full text-left transition-colors active:scale-[0.98]",
@@ -7078,25 +7075,18 @@ function LiveHeaderContext({
             intro ? "translate-y-1 opacity-0" : "translate-y-0 opacity-100 delay-150",
           )}
         >
-          <Bell
-            className={cn(
-              "size-4 shrink-0",
-              questionCount ? "fill-primary/15 text-primary" : "text-muted-foreground",
-            )}
-            aria-hidden
-          />
+          {questionCount ? (
+            <Bell className="size-4 shrink-0 fill-primary/15 text-primary" aria-hidden />
+          ) : null}
           <span className="min-w-0 leading-none">
             <span className="block truncate text-[12px] font-semibold tracking-[-0.01em]">
               {headline}
             </span>
-            <span
-              className={cn(
-                "mt-1 block truncate text-[10px] font-medium",
-                questionCount ? "text-primary/75" : "text-muted-foreground",
-              )}
-            >
-              {detail}
-            </span>
+            {detail ? (
+              <span className="mt-1 block truncate text-[10px] font-medium text-primary/75">
+                {detail}
+              </span>
+            ) : null}
           </span>
           {questionCount ? (
             <span className="ml-auto flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold leading-none text-primary-foreground">
