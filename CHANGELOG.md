@@ -4,7 +4,7 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
-## August 3, 2026 - The last freeze, at startup (v0.1.212)
+## August 3, 2026 - The last freeze, at startup (v0.1.213)
 
 - Restarting LFG used to stall it for several seconds about a minute in, while
   it re-read the header of every Codex session ever recorded on the box — 3,517
