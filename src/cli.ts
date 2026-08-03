@@ -9,6 +9,7 @@ Usage:
   lfg whatsapp [run|sessions]      Run the optional WhatsApp control sidecar
   lfg connect <code>               Pair this box to a remote-access relay (EXPERIMENTAL)
   lfg setup                        Provision this box (Bun, tmux, Tailscale, service)
+  lfg uninstall [--purge --yes]    Remove LFG (preserves sessions/config by default)
 
 Env (read from process env / .env, see .env.example):
   LFG_PORT, LFG_HOST, LFG_REPOS_ROOT
@@ -45,6 +46,10 @@ async function main() {
     case "setup": {
       const { cmdSetup } = await import("./commands/setup.ts");
       return await cmdSetup(rest);
+    }
+    case "uninstall": {
+      const { cmdUninstall } = await import("./commands/uninstall.ts");
+      return await cmdUninstall(rest);
     }
     case undefined:
     case "help":

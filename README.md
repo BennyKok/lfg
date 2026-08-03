@@ -36,6 +36,18 @@ downloads the latest release, writes `.env`, and starts `lfg` as a user service
 bound to loopback. On a fresh Ubuntu/Debian box, add
 `LFG_INSTALL_SYSTEM_DEPS=1` so it may `apt-get` the base packages.
 
+Update or remove the installation through LFG itself:
+
+```bash
+lfg setup                     # update and re-run idempotent provisioning
+lfg uninstall                 # remove LFG; keep sessions and config for reinstall
+lfg uninstall --purge --yes   # also permanently delete sessions and config
+```
+
+Uninstall removes LFG's service, command, MCP registrations, and release files.
+It leaves shared prerequisites such as Bun, Tailscale, tmux, and coding-agent
+CLIs alone. Source checkouts are also preserved unless explicitly purged.
+
 Next: [connect a coding agent](#connect-a-coding-agent) so you have something to
 run, and [reach it from your phone](#reach-it-from-your-phone).
 
