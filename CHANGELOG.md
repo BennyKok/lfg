@@ -4,6 +4,8 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 4, 2026 - Thinking at your fingertips (v0.1.249)
+
 - The live-session menu now labels its thinking control simply as "Thinking",
   matching the other session-launch controls.
 - The new-session composer now turns its Thinking control into a tactile effort
