@@ -2,6 +2,14 @@
 
 Recent product updates and deployment notes.
 
+## August 4, 2026 - Settings controls stay clear (v0.1.253)
+
+- Settings now shows a real on/off switch for pausing new agents, so the
+  current state and the available action are visible without guessing that the
+  whole row is clickable.
+- Mobile secondary pages now leave enough room below the floating back header,
+  keeping the first settings content from colliding with navigation.
+
 ## August 4, 2026 - New sessions show up when you make them (v0.1.252)
 
 - A newly created session now appears in the list immediately instead of after
