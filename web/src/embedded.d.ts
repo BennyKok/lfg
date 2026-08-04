@@ -25,6 +25,13 @@ export interface LfgErrorSink {
   appVersion?: string;
 }
 
+/** Presentation-only identity supplied by an embedding host. */
+export interface EmbeddedViewer {
+  id: string;
+  name: string;
+  avatar?: string;
+}
+
 export interface LfgAppSurfaceProps {
   transport: LfgTransport;
   assetBaseUrl?: string;
@@ -36,6 +43,11 @@ export interface LfgAppSurfaceProps {
    * keep provider connections as an optional Settings action.
    */
   connectionOnboarding?: boolean;
+  /**
+   * Personalizes hosted welcome/status copy without changing LFG roster,
+   * session ownership, filtering, or authorization semantics.
+   */
+  viewer?: EmbeddedViewer;
   errorSink?: LfgErrorSink;
 }
 

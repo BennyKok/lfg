@@ -30,6 +30,28 @@ describe("embed detection", () => {
   });
 });
 
+describe("host viewer contract", () => {
+  test("keeps hosted viewer identity presentation-only", () => {
+    const embedded = require("node:fs").readFileSync("web/src/embedded.tsx", "utf8") as string;
+    const options = require("node:fs").readFileSync(
+      "web/src/lib/embedded-host-options.tsx",
+      "utf8",
+    ) as string;
+    const declarations = require("node:fs").readFileSync(
+      "web/src/embedded.d.ts",
+      "utf8",
+    ) as string;
+
+    expect(embedded).toContain("viewer?: EmbeddedViewer;");
+    expect(embedded).toContain("value={{ connectionOnboarding, viewer }}");
+    expect(options).toContain("viewer?: EmbeddedViewer;");
+    expect(declarations).toContain("export interface EmbeddedViewer");
+    expect(declarations).toContain("viewer?: EmbeddedViewer;");
+    expect(options).toContain("never assign sessions or change authorization");
+    expect(embedded).not.toMatch(/body:\s*JSON\.stringify\([^)]*viewer/);
+  });
+});
+
 describe("session prioritization + search validation", () => {
   test("validateAppSearch keeps session and embed contracts", () => {
     expect(validateAppSearch({ session: "abc", embed: "1" })).toEqual({

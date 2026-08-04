@@ -12,6 +12,7 @@ describe("contextual mobile Live header", () => {
     expect(source).toContain("function LiveHeaderContext({");
     expect(source).toContain('isMobile && tab === "live"');
     expect(source).toContain("hosted={embedded}");
+    expect(source).toContain("viewerName={viewer?.name}");
     expect(source).toContain("<ProductBrand compact hosted={hosted} />");
     expect(source).toContain(
       'w-[min(17rem,calc(100vw-var(--lfg-host-top-inset)-1.5rem))]',
@@ -21,6 +22,9 @@ describe("contextual mobile Live header", () => {
     );
     expect(source).not.toContain('isMobile && tab === "live" && !embedded');
     expect(source).toContain("const welcomeMessage = `Welcome, ${firstName}`");
+    expect(source).toContain(
+      "viewerName?.trim() || user?.name?.trim() || shortUser(identity)",
+    );
     expect(source).toContain('`${busyCount} agent${busyCount === 1 ? "" : "s"} building`');
     expect(source).toContain("const actionInMotion = busyCount > 0;");
     expect(source).toContain("const dwellMs = showAmbientStatus ? 2800 : 8000;");

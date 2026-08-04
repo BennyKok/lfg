@@ -4640,7 +4640,7 @@ export function App() {
   // Host-mounted single page: suppress every piece of LFG shell chrome the
   // host already renders (header, brand, nav, composer).
   const bare = useBareSurface();
-  const { connectionOnboarding } = useEmbeddedHostOptions();
+  const { connectionOnboarding, viewer } = useEmbeddedHostOptions();
   // Session deep-links win over filter/identity work so the target card opens
   // as soon as bootstrap returns sessions.
   const prioritizeSession = shouldPrioritizeSession(deepLinkSearch) || !!sessionDeepLinkRef.current;
@@ -6745,6 +6745,7 @@ export function App() {
           <LiveHeaderContext
             intro={showHeaderBrandIntro}
             hosted={embedded}
+            viewerName={viewer?.name}
             user={users.find((user) => user.email === identity)}
             identity={identity}
             busyCount={liveSessions.filter(
@@ -7367,6 +7368,7 @@ function ProductBrand({
 function LiveHeaderContext({
   intro,
   hosted = false,
+  viewerName,
   user,
   identity,
   busyCount,
@@ -7374,13 +7376,18 @@ function LiveHeaderContext({
 }: {
   intro: boolean;
   hosted?: boolean;
+  viewerName?: string;
   user?: User;
   identity?: string | null;
   busyCount: number;
   onOpenNotifications: () => void;
 }) {
   const { questions } = useAsk();
-  const rawName = user?.name?.trim() || shortUser(identity);
+  // Hosted identity is presentation-only and intentionally wins over the LFG
+  // roster. omg Computers have no roster by design, so deriving this welcome
+  // from session ownership would either say "Unassigned" or reintroduce the
+  // rejected-user bug that roster-less hosted instances were built to avoid.
+  const rawName = viewerName?.trim() || user?.name?.trim() || shortUser(identity);
   const firstNamePart = rawName.split(/\s+/)[0] || "there";
   const firstName = `${firstNamePart.charAt(0).toUpperCase()}${firstNamePart.slice(1)}`;
   const questionCount = questions.length;

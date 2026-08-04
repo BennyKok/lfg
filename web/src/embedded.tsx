@@ -11,9 +11,14 @@ import { RootErrorBoundary } from "./App";
 import { AppDialogProvider } from "./components/ui/app-dialog";
 import { configureLfgTransport, type LfgErrorSink } from "./lib/lfg-client";
 import { BareSurfaceProvider } from "./lib/bare-surface";
-import { EmbeddedHostOptionsProvider } from "./lib/embedded-host-options";
+import {
+  EmbeddedHostOptionsProvider,
+  type EmbeddedViewer,
+} from "./lib/embedded-host-options";
 import { claimSurfaceAttribute } from "./lib/surface-attribute";
 import { createLfgRouter } from "./router";
+
+export type { EmbeddedViewer } from "./lib/embedded-host-options";
 
 export { createGrantTransport } from "@lfg-dev/client";
 export type {
@@ -34,6 +39,12 @@ export interface LfgAppSurfaceProps {
    * keep provider connections as an optional Settings action.
    */
   connectionOnboarding?: boolean;
+  /**
+   * Presentation-only identity for the person viewing a hosted surface.
+   * This personalizes welcome/status copy but never participates in LFG's
+   * roster, session ownership, filtering, or authorization.
+   */
+  viewer?: EmbeddedViewer;
   /**
    * Central sink for client errors, in addition to the report that goes through
    * the transport into the user's own lfg instance. A hosted surface should set
@@ -192,6 +203,7 @@ export function LfgAppSurface({
   sessionId,
   className,
   connectionOnboarding = true,
+  viewer,
   errorSink,
 }: LfgAppSurfaceProps) {
   // A full LFG app is the sole owner of its runtime transport. Install it
@@ -210,7 +222,7 @@ export function LfgAppSurface({
 
   return (
     <div className={className} data-lfg-app-surface="">
-      <EmbeddedHostOptionsProvider value={{ connectionOnboarding }}>
+      <EmbeddedHostOptionsProvider value={{ connectionOnboarding, viewer }}>
         <BareSurfaceProvider bare={false}>
           <RootErrorBoundary>
             <AppDialogProvider>

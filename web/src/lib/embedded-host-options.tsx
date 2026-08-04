@@ -7,6 +7,18 @@ export interface EmbeddedHostOptions {
    * and exposes provider connections later in its own Settings surface.
    */
   connectionOnboarding: boolean;
+  /**
+   * Presentation-only identity supplied by an embedding host. It is deliberately
+   * separate from LFG's roster: a hosted Computer is already account-scoped,
+   * and showing its viewer must never assign sessions or change authorization.
+   */
+  viewer?: EmbeddedViewer;
+}
+
+export interface EmbeddedViewer {
+  id: string;
+  name: string;
+  avatar?: string;
 }
 
 const EmbeddedHostOptionsContext = createContext<EmbeddedHostOptions>({
