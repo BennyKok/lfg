@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 4, 2026 - The first message is yours again (v0.1.241)
+
+- LFG's launch instructions are shorter while preserving the narration,
+  verification, shipping, landing, and session-safety rules agents need.
+- The runtime contract now appears as its own collapsed instructions block in
+  the transcript, so the user's actual first message is immediately readable;
+  existing session history benefits without being rewritten.
+
 ## August 4, 2026 - One reconnect, one message (v0.1.240)
 
 - Embedded Computer surfaces now share the same reconnect notification from
