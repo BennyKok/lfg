@@ -2,6 +2,12 @@
 
 Recent product updates and deployment notes.
 
+## [Unreleased]
+
+- Thinking controls now show their selected effort level directly beside the
+  control name and signal-strength indicator, while hold-and-slide adjustments
+  use relative finger movement from the currently selected level.
+
 ## August 4, 2026 - Mobile pages find their place (v0.1.250)
 
 - Fork and Continue now share the composer's tactile Thinking control, with a

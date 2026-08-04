@@ -17097,6 +17097,8 @@ function ComposerThinkingControl({
 }) {
   const holdTimerRef = useRef<number | null>(null);
   const startXRef = useRef(0);
+  const lastPointerXRef = useRef(0);
+  const relativeStepOffsetRef = useRef(0);
   const startIndexRef = useRef(0);
   const previewIndexRef = useRef(0);
   const scrubbingRef = useRef(false);
@@ -17133,6 +17135,7 @@ function ComposerThinkingControl({
     const index = Math.max(0, levels.indexOf(value));
     document.getSelection()?.removeAllRanges();
     previewIndexRef.current = index;
+    relativeStepOffsetRef.current = 0;
     scrubbingRef.current = true;
     suppressMenuRef.current = true;
     setPreviewIndex(index);
@@ -17159,6 +17162,7 @@ function ComposerThinkingControl({
     clearHoldTimer();
     suppressMenuRef.current = false;
     startXRef.current = event.clientX;
+    lastPointerXRef.current = event.clientX;
     startIndexRef.current = currentIndex;
     event.currentTarget.setPointerCapture(event.pointerId);
     const trigger = event.currentTarget;
@@ -17166,16 +17170,23 @@ function ComposerThinkingControl({
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
-    const delta = event.clientX - startXRef.current;
     if (!scrubbingRef.current) {
+      const delta = event.clientX - startXRef.current;
+      lastPointerXRef.current = event.clientX;
       if (Math.abs(delta) > 10) clearHoldTimer();
       return;
     }
     event.preventDefault();
     const stepWidth = Math.max(34, Math.min(52, 240 / Math.max(1, levels.length - 1)));
+    const delta = event.clientX - lastPointerXRef.current;
+    lastPointerXRef.current = event.clientX;
+    relativeStepOffsetRef.current += delta / stepWidth;
     const nextIndex = Math.max(
       0,
-      Math.min(levels.length - 1, Math.round(startIndexRef.current + delta / stepWidth)),
+      Math.min(
+        levels.length - 1,
+        Math.round(startIndexRef.current + relativeStepOffsetRef.current),
+      ),
     );
     if (nextIndex === previewIndexRef.current) return;
     previewIndexRef.current = nextIndex;
@@ -17244,6 +17255,10 @@ function ComposerThinkingControl({
             >
               <ThinkingSignal value={value} levels={levels} />
               <span className="text-xs font-medium">Thinking</span>
+              <span aria-hidden="true" className="text-[11px] text-muted-foreground/60">·</span>
+              <span className="max-w-14 truncate text-[11px] font-medium capitalize text-muted-foreground">
+                {value}
+              </span>
               <ChevronDown className="size-3 shrink-0 text-muted-foreground/70" />
             </button>
           }

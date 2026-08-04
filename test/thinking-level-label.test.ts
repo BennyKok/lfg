@@ -46,10 +46,14 @@ describe("thinking level menu", () => {
     expect(forkDialog).toContain("immersive");
     expect(control).toContain("THINKING_HOLD_MS");
     expect(control).toContain("onPointerMove={handlePointerMove}");
+    expect(control).toContain("event.clientX - lastPointerXRef.current");
+    expect(control).toContain("startIndexRef.current + relativeStepOffsetRef.current");
     expect(control).toContain("Tap to choose · hold and slide to adjust");
     expect(control).toContain("Hold the control and slide for a faster adjustment.");
     expect(control).toContain("createPortal(");
     expect(control).toContain("<ThinkingSignal value={value} levels={levels} />");
+    expect(control).toContain("{value}");
+    expect(control).toContain("capitalize text-muted-foreground");
     expect(control).toContain('WebkitTouchCallout: "none"');
     expect(control).toContain("document.getSelection()?.removeAllRanges()");
     expect(control).not.toContain("<BrainCircuit");
