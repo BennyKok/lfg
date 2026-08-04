@@ -5804,168 +5804,26 @@ export function App() {
     return () => es.close();
   }, [applyLiveStatusRows, liveStatusKey, tab, useWsLive]);
 
-  // Project menu changes, including the Shipped and Artifacts virtual pages.
+  // Project selection and page navigation are separate axes. Notifications and
+  // Artifacts are reached through PagesMenu, never by choosing a project.
   const changeProjectFilter = useCallback((value: string) => {
-    if (value === "__notifications") {
-      setTab("notifications");
-      return;
-    }
-    if (value === "__artifacts") {
-      setTab("artifacts");
-      return;
-    }
     setProjectFilter(value);
     setTab((current) => (current === "shipped" || current === "artifacts" ? "live" : current));
   }, []);
 
   const cycleMobileProjectFilter = useCallback(
     (dir: 1 | -1) => {
-      // Swipe cycles through projects plus the two virtual pages (never the
-      // "All" view — still reachable via the project menu).
-      const options = [...mobileProjectOptions, "__notifications", "__artifacts"];
+      // The composer's project gesture only changes project scope. Secondary
+      // pages are deliberate page navigation through PagesMenu.
+      const options = mobileProjectOptions;
       if (options.length <= 1) return false;
-      const current = tab === "notifications" ? "__notifications" : tab === "artifacts" ? "__artifacts" : projectFilter;
-      const next = cycleProjectFilter(options, current, dir);
-      if (next === current) return false;
-      if (next === "__notifications") {
-        setTab("notifications");
-      } else if (next === "__artifacts") {
-        setTab("artifacts");
-      } else {
-        setTab("live");
-        setProjectFilter(next);
-      }
+      const next = cycleProjectFilter(options, projectFilter, dir);
+      if (next === projectFilter) return false;
+      setProjectFilter(next);
       return true;
     },
-    [mobileProjectOptions, projectFilter, tab],
+    [mobileProjectOptions, projectFilter],
   );
-
-  // True while the post-commit page-swap animation is in flight. A committed
-  // swipe changes tab/projectFilter, which re-attaches the swipe effect below —
-  // without this guard its cleanup wipes the in-flight transform and the new
-  // page flashes centered for a few frames before sliding in (visible flicker).
-  const swipePageAnim = useRef(false);
-  // Handler context read via ref so the touch listeners attach once per page
-  // (tab) instead of re-attaching on every render — cycleMobileProjectFilter's
-  // identity changes with every live-session update, and a mid-drag re-attach
-  // resets the gesture state and silently kills the swipe.
-  const pageSwipeCtx = useRef({ cycleMobileProjectFilter, composerExpanded });
-  pageSwipeCtx.current = { cycleMobileProjectFilter, composerExpanded };
-
-  useEffect(() => {
-    if (!isMobile || (tab !== "live" && tab !== "notifications" && tab !== "artifacts")) return;
-    const main = mainRef.current;
-    if (!main) return;
-    const SWIPE_COMMIT = 64;
-    const EDGE_GUARD = 24;
-    const st = { active: false, decided: false, horizontal: false, x0: 0, y0: 0, dx: 0 };
-    const reducedMotion = () =>
-      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-    const setTx = (px: number) => {
-      main.style.transition = "none";
-      main.style.transform = px ? `translateX(${px}px)` : "";
-      main.style.opacity = px ? String(Math.max(0.72, 1 - Math.abs(px) / 520)) : "";
-    };
-    const release = () => {
-      main.style.transition =
-        "transform 190ms cubic-bezier(0.22,1,0.36,1), opacity 190ms ease-out";
-      main.style.transform = "";
-      main.style.opacity = "";
-    };
-    const finish = (dir: 1 | -1) => {
-      const changed = pageSwipeCtx.current.cycleMobileProjectFilter(dir);
-      if (!changed || reducedMotion()) {
-        release();
-        return;
-      }
-      const width = Math.max(320, window.innerWidth || main.clientWidth || 320);
-      const out = dir === 1 ? -width : width;
-      const inbound = -out;
-      swipePageAnim.current = true;
-      // Covers the full out (130ms) + in (210ms) timeline with headroom.
-      window.setTimeout(() => {
-        swipePageAnim.current = false;
-      }, 480);
-      main.style.transition =
-        "transform 130ms cubic-bezier(0.32,0.72,0,1), opacity 130ms ease-out";
-      main.style.transform = `translateX(${out}px)`;
-      main.style.opacity = "0.15";
-      window.setTimeout(() => {
-        main.style.transition = "none";
-        main.style.transform = `translateX(${inbound}px)`;
-        main.style.opacity = "0.35";
-        requestAnimationFrame(() => {
-          main.style.transition =
-            "transform 210ms cubic-bezier(0.22,1,0.36,1), opacity 210ms ease-out";
-          main.style.transform = "";
-          main.style.opacity = "";
-        });
-      }, 130);
-    };
-    const onStart = (event: TouchEvent) => {
-      if (event.touches.length !== 1 || pageSwipeCtx.current.composerExpanded) return;
-      const target = event.target instanceof Element ? event.target : null;
-      if (!target || blocksLiveProjectSwipe(target)) return;
-      const touch = event.touches[0];
-      const width = window.innerWidth || main.clientWidth || 0;
-      if (touch.clientX < EDGE_GUARD || (width && touch.clientX > width - EDGE_GUARD)) return;
-      st.active = true;
-      st.decided = false;
-      st.horizontal = false;
-      st.x0 = touch.clientX;
-      st.y0 = touch.clientY;
-      st.dx = 0;
-    };
-    const onMove = (event: TouchEvent) => {
-      if (!st.active) return;
-      const touch = event.touches[0];
-      const dx = touch.clientX - st.x0;
-      const dy = touch.clientY - st.y0;
-      if (!st.decided) {
-        if (Math.abs(dx) < 9 && Math.abs(dy) < 9) return;
-        st.decided = true;
-        st.horizontal = Math.abs(dx) > Math.abs(dy) * 1.18;
-        if (!st.horizontal) {
-          st.active = false;
-          return;
-        }
-      }
-      if (!st.horizontal) return;
-      event.preventDefault();
-      st.dx = dx;
-      setTx(dx * 0.48);
-    };
-    const onEnd = () => {
-      if (!st.active) return;
-      const { horizontal, dx } = st;
-      st.active = false;
-      if (!horizontal) return;
-      if (Math.abs(dx) < SWIPE_COMMIT) {
-        release();
-        return;
-      }
-      haptic("selection");
-      finish(dx < 0 ? 1 : -1);
-    };
-    main.addEventListener("touchstart", onStart, { passive: true });
-    main.addEventListener("touchmove", onMove, { passive: false });
-    main.addEventListener("touchend", onEnd, { passive: true });
-    main.addEventListener("touchcancel", onEnd, { passive: true });
-    return () => {
-      main.removeEventListener("touchstart", onStart);
-      main.removeEventListener("touchmove", onMove);
-      main.removeEventListener("touchend", onEnd);
-      main.removeEventListener("touchcancel", onEnd);
-      // A committed swipe re-runs this effect mid-animation (tab/project just
-      // changed); resetting styles here would kill the slide and flash the new
-      // page centered. The animation always ends by clearing the styles itself.
-      if (!swipePageAnim.current) {
-        main.style.transition = "";
-        main.style.transform = "";
-        main.style.opacity = "";
-      }
-    };
-  }, [isMobile, tab]);
 
   // Tab / Shift+Tab cycles the live project filter (mirrors the project menu).
   const projectKb = useRef({ tab, projectFilter, projectOptions, setProjectFilter });
@@ -6663,7 +6521,7 @@ export function App() {
     // repads <main> as it goes) behind the sheet — motion you can see through
     // the backdrop, for a control you can't reach.
     !terminalSid &&
-    (tab === "live" || tab === "notifications" || tab === "artifacts");
+    tab === "live";
   // The mobile scroll surface is absolutely positioned, so it escapes the app
   // shell's host-inset padding and would otherwise run its content underneath
   // the omg Computer nav pill. <main> now ends at the top of that band (see its
@@ -6772,18 +6630,20 @@ export function App() {
           )}
         </header>
       ) : embedded && isMobile ? (
-        /* Secondary embedded pages retain the compact omg mark. Mobile reaches
-           Shipped and Artifacts by swiping, while the composer owns project
-           selection. The right side stays padded for the host's own island
-           (--lfg-host-top-inset). */
+        /* Secondary pages sit below Live in the mobile hierarchy. The host
+           keeps its own right-side island; LFG supplies the page-level back
+           action in the space where the Live welcome normally sits. */
         <header className="z-40 flex shrink-0 items-center pb-1 pl-3 pr-[calc(0.75rem+var(--lfg-host-top-inset))] pt-[calc(0.5rem+env(safe-area-inset-top))]">
           <NavIsland className="shrink-0">
-            <div
-              className="glass-island flex size-11 items-center justify-center rounded-full"
-              aria-label="omg.dev"
+            <button
+              type="button"
+              onClick={() => setTab("live")}
+              aria-label="Back to Live"
+              className="glass-island flex h-11 items-center gap-1 rounded-full pl-2 pr-3 text-[13px] font-medium text-muted-foreground transition-colors hover:text-foreground active:scale-[0.96]"
             >
-              <ProductBrand hosted compact />
-            </div>
+              <ChevronLeft className="size-[18px]" />
+              <span>Live</span>
+            </button>
           </NavIsland>
         </header>
       ) : liveDesktopWorkspace ? null : (
@@ -6794,7 +6654,17 @@ export function App() {
       <header className="relative z-40 flex shrink-0 items-center justify-between gap-2 px-2 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))] md:px-3">
         <NavIsland className="shrink-0">
           <div className="glass-island flex h-11 items-center rounded-full px-1.5">
-            {tab === "live" || tab === "notifications" || tab === "artifacts" ? (
+            {isMobile && (tab === "notifications" || tab === "artifacts") ? (
+              <button
+                type="button"
+                onClick={() => setTab("live")}
+                aria-label="Back to Live"
+                className="flex h-8 items-center gap-1 rounded-full pl-1.5 pr-3 text-[13px] font-medium tracking-[-0.01em] text-muted-foreground transition-colors duration-200 ease-out hover:text-foreground active:scale-[0.96]"
+              >
+                <ChevronLeft className="size-[18px]" />
+                <span>Live</span>
+              </button>
+            ) : tab === "live" || tab === "notifications" || tab === "artifacts" ? (
               <button
                 type="button"
                 onClick={() => setTab("live")}
@@ -6828,14 +6698,13 @@ export function App() {
         <NavIsland className="shrink-0">
           <div className="glass-island flex h-11 items-center gap-1.5 rounded-full px-2">
             {tab === "live" || tab === "notifications" || tab === "artifacts" ? (
-              // The island stays identical across the swipeable pages: on
-              // mobile that's avatar + ask + pages (page identity lives in
-              // the heading and the swipe/composer nav); desktop keeps the
-              // project/page dropdown pill.
+              // Page destinations live in PagesMenu. Desktop also keeps its
+              // project scope control here; mobile project scope lives in the
+              // Live composer and never impersonates a page destination.
               <>
                 {!isMobile ? (
                   <ProjectFilterMenu
-                    value={tab === "notifications" ? "__notifications" : tab === "artifacts" ? "__artifacts" : projectFilter}
+                    value={projectFilter}
                     projects={projectOptions}
                     onChange={changeProjectFilter}
                   />
@@ -7107,11 +6976,10 @@ export function App() {
       {!bare ? (
         <>
           {mobileComposerVisible ? (
-            // Mobile bottom composer: the create flow lives inline, anchored at
-            // the bottom (same component as the desktop drawer,
-            // `variant="inline"`). It persists across the swipeable pages
-            // (Live / Shipped / Artifacts) so you can kick off a session — and
-            // swipe between pages — from anywhere. Hidden behind any full-page
+            // Mobile bottom composer: the create flow belongs to the Live root
+            // page and is anchored at the bottom (same component as the desktop
+            // drawer, `variant="inline"`). Secondary pages intentionally omit
+            // it so they read as pushed page navigation. Hidden behind any full-page
             // surface (artifact viewer, pulled-up terminal) so it cannot stack
             // above the content — `mobileComposerVisible` is the single source
             // of truth, shared with the <main> padding that reserves its space.
@@ -7962,12 +7830,9 @@ function ProjectFilterMenu({
   onOpen?: () => void;
 }) {
   const active = value !== "__all";
-  // Notifications and Artifacts are virtual pages in this menu.
-  const notifications = value === "__notifications";
-  const artifacts = value === "__artifacts";
-  // Swipe cycles through projects + pages (not "All"); the dropdown below
-  // still lists "All projects" as a tappable option.
-  const options = [...projects, "__notifications", "__artifacts"];
+  // Swipe cycles through projects (not "All"); the dropdown below still lists
+  // "All projects" as a tappable option.
+  const options = projects;
   const touchStartY = useRef<number | null>(null);
   const didSwipe = useRef(false);
 
@@ -7986,26 +7851,12 @@ function ProjectFilterMenu({
         ? "border-primary/30 bg-primary/10 text-primary"
         : "border-border bg-muted/70 text-muted-foreground",
   );
-  const triggerTitle = notifications
-    ? "Notifications"
-    : artifacts
-      ? "Artifacts"
-      : active
-        ? shortProject(value)
-        : "All projects";
+  const triggerTitle = active ? shortProject(value) : "All projects";
   const triggerContent = (
     <>
-      {notifications ? (
-        <Bell className="size-3.5 shrink-0" />
-      ) : artifacts ? (
-        <LayoutDashboard className="size-3.5 shrink-0" />
-      ) : (
-        <Folder className="size-3.5 shrink-0" />
-      )}
+      <Folder className="size-3.5 shrink-0" />
       {active ? (
-        <span className="truncate text-xs font-medium">
-          {notifications ? "Notifications" : artifacts ? "Artifacts" : shortProject(value)}
-        </span>
+        <span className="truncate text-xs font-medium">{shortProject(value)}</span>
       ) : null}
     </>
   );
@@ -8015,7 +7866,7 @@ function ProjectFilterMenu({
       <button
         type="button"
         className={triggerClassName}
-        aria-label="Choose project or page"
+        aria-label="Choose project"
         title={triggerTitle}
         onClick={onOpen}
       >
@@ -8027,7 +7878,7 @@ function ProjectFilterMenu({
   return (
     <label
       className={triggerClassName}
-      aria-label="Choose project or page"
+      aria-label="Choose project"
       title={triggerTitle}
       onTouchStart={(event) => {
         touchStartY.current = event.touches[0]?.clientY ?? null;
@@ -8051,7 +7902,7 @@ function ProjectFilterMenu({
       <select
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        aria-label="Choose project or page"
+        aria-label="Choose project"
         className="absolute inset-0 cursor-pointer appearance-none bg-transparent text-transparent opacity-0 outline-none"
         onMouseDown={(event) => {
           // A swipe gesture shouldn't also pop the native picker open afterwards.
@@ -8067,10 +7918,6 @@ function ProjectFilterMenu({
             {shortProject(project)}
           </option>
         ))}
-        <optgroup label="Pages">
-          <option value="__notifications">Notifications</option>
-          <option value="__artifacts">Artifacts</option>
-        </optgroup>
       </select>
     </label>
   );
@@ -8853,12 +8700,6 @@ function blocksSessionSwipe(target: EventTarget | null): boolean {
       "[data-no-composer-swipe]",
     ].join(","),
   );
-}
-
-function blocksLiveProjectSwipe(target: EventTarget | null): boolean {
-  const el = target instanceof Element ? target : null;
-  if (!el) return false;
-  return !!el.closest("form, .live-pane") || blocksSessionSwipe(target);
 }
 
 // Wide screens (≥1024px — incl. iPad in landscape) get the rail + stage

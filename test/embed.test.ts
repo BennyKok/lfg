@@ -176,7 +176,7 @@ describe("mobile overlay scroll contract", () => {
 
     expect(app).toContain("embedded && isMobile");
     expect(app).toContain('tab === "notifications"');
-    expect(app).toContain('"__artifacts"');
+    expect(app).toContain('value="artifacts"');
     expect(app).toContain("projects={projectOptions}");
     expect(app).toContain("onChange={changeProjectFilter}");
     expect(app).toContain("onOpenShipped={openShipped}");
@@ -240,7 +240,7 @@ describe("mobile overlay scroll contract", () => {
     }
     expect(app).toContain("glass-island flex h-11 items-center rounded-full px-1.5");
     expect(app).toContain(
-      "glass-island flex size-11 items-center justify-center rounded-full",
+      'aria-label="Back to Live"',
     );
   });
 
