@@ -16733,6 +16733,7 @@ function NewSessionDialog({
         levels={thinkingLevels}
         onChange={setThinkingLevel}
         flat={variant === "inline"}
+        immersive
       />
 
 
@@ -17156,14 +17157,26 @@ function ThinkingLevelPill({
   levels,
   onChange,
   flat = false,
+  immersive = false,
 }: {
   agent: AgentKind;
   value: ThinkingLevel;
   levels: ThinkingLevel[];
   onChange: (value: ThinkingLevel) => void;
   flat?: boolean;
+  immersive?: boolean;
 }) {
   if (!agentSupportsThinking(agent)) return null;
+  if (immersive) {
+    return (
+      <ComposerThinkingControl
+        value={value}
+        levels={levels}
+        onChange={onChange}
+        flat={flat}
+      />
+    );
+  }
   return (
     <FieldPill flat={flat}>
       <span className="text-xs font-medium">Thinking</span>
@@ -17181,6 +17194,259 @@ function ThinkingLevelPill({
         ))}
       </select>
     </FieldPill>
+  );
+}
+
+const THINKING_HOLD_MS = 360;
+
+// The composer gets a spatial effort control without making every settings
+// surface adopt the same interaction. Tap for an exact menu; hold, then drag
+// horizontally to scrub through the levels without lifting your finger.
+function ComposerThinkingControl({
+  value,
+  levels,
+  onChange,
+  flat,
+}: {
+  value: ThinkingLevel;
+  levels: ThinkingLevel[];
+  onChange: (value: ThinkingLevel) => void;
+  flat: boolean;
+}) {
+  const holdTimerRef = useRef<number | null>(null);
+  const startXRef = useRef(0);
+  const startIndexRef = useRef(0);
+  const previewIndexRef = useRef(0);
+  const scrubbingRef = useRef(false);
+  const suppressMenuRef = useRef(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [scrubbing, setScrubbing] = useState(false);
+  const [previewIndex, setPreviewIndex] = useState(() => Math.max(0, levels.indexOf(value)));
+  const [scrubberStyle, setScrubberStyle] = useState<CSSProperties>({});
+
+  const currentIndex = Math.max(0, levels.indexOf(value));
+  const currentProgress = levels.length > 1 ? currentIndex / (levels.length - 1) : 0;
+  const previewProgress = levels.length > 1 ? previewIndex / (levels.length - 1) : 0;
+
+  const clearHoldTimer = () => {
+    if (holdTimerRef.current != null) {
+      window.clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+  };
+
+  useEffect(() => clearHoldTimer, []);
+
+  const placeScrubber = (trigger: HTMLButtonElement) => {
+    const rect = trigger.getBoundingClientRect();
+    const width = Math.min(360, Math.max(248, window.innerWidth - 24));
+    const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + rect.width / 2 - width / 2));
+    const panelHeight = 112;
+    const top = rect.top - panelHeight - 12 >= 12
+      ? rect.top - panelHeight - 12
+      : Math.min(window.innerHeight - panelHeight - 12, rect.bottom + 12);
+    setScrubberStyle({ left, top, width, transformOrigin: `${rect.left + rect.width / 2 - left}px 100%` });
+  };
+
+  const beginScrub = (trigger: HTMLButtonElement) => {
+    const index = Math.max(0, levels.indexOf(value));
+    previewIndexRef.current = index;
+    scrubbingRef.current = true;
+    suppressMenuRef.current = true;
+    setPreviewIndex(index);
+    setMenuOpen(false);
+    placeScrubber(trigger);
+    setScrubbing(true);
+    haptic("heavy");
+  };
+
+  const finishScrub = (commit: boolean) => {
+    clearHoldTimer();
+    if (!scrubbingRef.current) return;
+    scrubbingRef.current = false;
+    setScrubbing(false);
+    if (commit) {
+      const next = levels[previewIndexRef.current];
+      if (next && next !== value) onChange(next);
+      haptic("success");
+    }
+  };
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (event.button !== 0 || !levels.length) return;
+    clearHoldTimer();
+    suppressMenuRef.current = false;
+    startXRef.current = event.clientX;
+    startIndexRef.current = currentIndex;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const trigger = event.currentTarget;
+    holdTimerRef.current = window.setTimeout(() => beginScrub(trigger), THINKING_HOLD_MS);
+  };
+
+  const handlePointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const delta = event.clientX - startXRef.current;
+    if (!scrubbingRef.current) {
+      if (Math.abs(delta) > 10) clearHoldTimer();
+      return;
+    }
+    event.preventDefault();
+    const stepWidth = Math.max(34, Math.min(52, 240 / Math.max(1, levels.length - 1)));
+    const nextIndex = Math.max(
+      0,
+      Math.min(levels.length - 1, Math.round(startIndexRef.current + delta / stepWidth)),
+    );
+    if (nextIndex === previewIndexRef.current) return;
+    previewIndexRef.current = nextIndex;
+    setPreviewIndex(nextIndex);
+    haptic("selection");
+  };
+
+  const handlePointerUp = (event: React.PointerEvent<HTMLButtonElement>) => {
+    clearHoldTimer();
+    if (scrubbingRef.current) {
+      event.preventDefault();
+      finishScrub(true);
+    }
+  };
+
+  const handlePointerCancel = () => {
+    finishScrub(false);
+    suppressMenuRef.current = false;
+  };
+
+  const chooseLevel = (next: string) => {
+    if (!levels.includes(next)) return;
+    onChange(next);
+    setMenuOpen(false);
+    haptic("selection");
+  };
+
+  return (
+    <>
+      <DropdownMenu
+        open={menuOpen}
+        onOpenChange={(nextOpen) => {
+          if (nextOpen && (scrubbingRef.current || suppressMenuRef.current)) return;
+          setMenuOpen(nextOpen);
+        }}
+      >
+        <DropdownMenuTrigger
+          render={
+            <button
+              type="button"
+              aria-label={`Thinking: ${value}. Tap to choose; hold and slide to adjust.`}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              title="Tap to choose · hold and slide to adjust"
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+              onPointerCancel={handlePointerCancel}
+              onClick={(event) => {
+                if (!suppressMenuRef.current) return;
+                event.preventDefault();
+                event.stopPropagation();
+                suppressMenuRef.current = false;
+              }}
+              style={{ touchAction: "none" }}
+              className={cn(
+                "relative inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-full text-foreground transition-all duration-200 active:scale-[0.98]",
+                flat ? "px-1" : "bg-muted px-3",
+                scrubbing && "scale-[1.02] bg-foreground/10",
+              )}
+            >
+              <BrainCircuit className="size-3.5 shrink-0 text-muted-foreground" />
+              <span className="text-xs font-medium">Thinking</span>
+              <span
+                aria-hidden="true"
+                className="relative ml-0.5 h-1 w-6 overflow-hidden rounded-full bg-foreground/10"
+              >
+                <span
+                  className="absolute inset-y-0 left-0 rounded-full bg-foreground/55 transition-[width] duration-200"
+                  style={{ width: `${Math.max(12, currentProgress * 100)}%` }}
+                />
+              </span>
+              <ChevronDown className="size-3 shrink-0 text-muted-foreground/70" />
+            </button>
+          }
+        />
+        <DropdownMenuContent side="top" align="start" sideOffset={8} className="min-w-52">
+          <DropdownMenuRadioGroup value={value} onValueChange={chooseLevel}>
+            <DropdownMenuLabel className="flex items-center justify-between gap-4">
+              <span>Thinking</span>
+              <span className="font-medium text-foreground capitalize">{value}</span>
+            </DropdownMenuLabel>
+            {levels.map((level, index) => (
+              <DropdownMenuRadioItem key={level} value={level} className="capitalize">
+                <span className="flex-1">{level}</span>
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "size-1.5 rounded-full bg-foreground/15",
+                    index <= currentIndex && "bg-foreground/55",
+                  )}
+                />
+              </DropdownMenuRadioItem>
+            ))}
+          </DropdownMenuRadioGroup>
+          <p className="px-3 pt-1 pb-2 text-[11px] text-muted-foreground">
+            Hold the control and slide for a faster adjustment.
+          </p>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      {scrubbing
+        ? createPortal(
+            <div
+              role="status"
+              aria-live="polite"
+              aria-label={`Thinking level ${levels[previewIndex] ?? value}`}
+              style={scrubberStyle}
+              className="pointer-events-none fixed z-[220] origin-bottom animate-in fade-in-0 zoom-in-90 slide-in-from-bottom-2 duration-200"
+            >
+              <div className="overflow-hidden rounded-[1.6rem] bg-popover/95 px-5 py-4 text-popover-foreground shadow-2xl ring-1 ring-foreground/10 backdrop-blur-2xl">
+                <div className="mb-3 flex items-center justify-between gap-4">
+                  <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                    <BrainCircuit className="size-4" /> Thinking
+                  </span>
+                  <span className="text-sm font-semibold capitalize">
+                    {levels[previewIndex] ?? value}
+                  </span>
+                </div>
+                <div className="relative h-7">
+                  <div className="absolute inset-x-1 top-3 h-1 rounded-full bg-gradient-to-r from-sky-400/35 via-violet-400/55 to-fuchsia-400/80" />
+                  {levels.map((level, index) => {
+                    const progress = levels.length > 1 ? index / (levels.length - 1) : 0;
+                    const active = index === previewIndex;
+                    return (
+                      <span
+                        key={level}
+                        aria-hidden="true"
+                        className={cn(
+                          "absolute top-3 size-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-popover ring-2 ring-foreground/25 transition-all duration-150",
+                          index <= previewIndex && "ring-violet-400/80",
+                          active && "size-4 bg-foreground ring-4 ring-violet-400/30 shadow-[0_0_20px_rgba(167,139,250,0.65)]",
+                        )}
+                        style={{ left: `${progress * 100}%` }}
+                      />
+                    );
+                  })}
+                  <span
+                    aria-hidden="true"
+                    className="absolute top-3 h-8 w-12 -translate-x-1/2 -translate-y-1/2 rounded-full bg-violet-400/10 blur-md transition-[left] duration-100"
+                    style={{ left: `${previewProgress * 100}%` }}
+                  />
+                </div>
+                <div className="mt-1 flex items-center justify-between text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                  <span>Faster</span>
+                  <span>Deeper</span>
+                </div>
+              </div>
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
   );
 }
 

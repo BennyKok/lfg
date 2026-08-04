@@ -6,6 +6,9 @@ Recent product updates and deployment notes.
 
 - The live-session menu now labels its thinking control simply as "Thinking",
   matching the other session-launch controls.
+- The new-session composer now turns its Thinking control into a tactile effort
+  slider on long press, with tap-to-pick fallback, live level previews, and
+  haptic feedback while scrubbing.
 
 ## August 4, 2026 - A hosted welcome that knows you (v0.1.248)
 
