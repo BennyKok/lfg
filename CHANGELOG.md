@@ -2,7 +2,7 @@
 
 Recent product updates and deployment notes.
 
-## [Unreleased]
+## August 4, 2026 - Thinking at a glance (v0.1.251)
 
 - Thinking controls now show their selected effort level directly beside the
   control name and signal-strength indicator, while hold-and-slide adjustments
