@@ -73,6 +73,12 @@ describe("LFG icon assets", () => {
     expect(index).toContain('navigator.serviceWorker.register("/sw.js")');
     expect(index).toContain("lfg:boot-recover:");
     expect(index).toContain("LFG_FORCE_RELOAD");
+    // Stuck black splash must surface a recovery UI, not spin forever.
+    expect(index).toContain("showStuckSplashRecovery");
+    expect(index).toContain("lfg did not finish loading");
+    // Never reload on controllerchange when sessionStorage is unusable —
+    // that path is an infinite black flash loop on some iOS installs.
+    expect(index).toContain('if (!storageSet("lfg:sw-controller-reload", "1")) return;');
   });
 
   // A suspended PWA can run one shell across many deploys, so a waiting worker

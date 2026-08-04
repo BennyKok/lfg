@@ -9,6 +9,9 @@ Recent product updates and deployment notes.
   registers from the page itself, clears the dead shell cache, and reloads.
 - Offline launches without a usable shell show a retry / clear-cache screen
   instead of a solid black window.
+- If the black splash is still up after ten seconds, the page now shows an
+  explicit recovery UI (retry / reset install data) instead of hanging forever
+  — including when site data was already cleared and the app still never mounts.
 
 ## August 4, 2026 - Black LFG PWA self-heals (v0.1.254)
 

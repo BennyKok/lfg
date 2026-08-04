@@ -145,8 +145,109 @@
          never runs — so its service-worker register() + controllerchange
          reload never fire, and the home-screen app stays black forever.
          Register the worker from this inline script, adopt waiting workers,
-         and on an entry-module failure wipe shell/asset caches once + reload. */
+         and on an entry-module failure wipe shell/asset caches once + reload.
+         If the splash is still up after several seconds, show a recovery UI
+         instead of an endless black screen (common when the network path to
+         the box is down or the entry module never evaluates). */
       (function () {
+        var bootRecovering = false;
+
+        function storageGet(key) {
+          try {
+            return sessionStorage.getItem(key);
+          } catch (e) {
+            return null;
+          }
+        }
+        function storageSet(key, value) {
+          try {
+            sessionStorage.setItem(key, value);
+            return true;
+          } catch (e) {
+            return false;
+          }
+        }
+
+        function purgeShellCaches() {
+          if (!("caches" in window)) return Promise.resolve();
+          return caches.keys().then(function (keys) {
+            return Promise.all(
+              keys
+                .filter(function (key) {
+                  return (
+                    key.indexOf("lfg-shell-") === 0 ||
+                    key.indexOf("lfg-assets-") === 0
+                  );
+                })
+                .map(function (key) {
+                  return caches.delete(key);
+                }),
+            );
+          });
+        }
+
+        function hardResetPwa() {
+          if (bootRecovering) return;
+          bootRecovering = true;
+          var chain = purgeShellCaches();
+          if ("serviceWorker" in navigator) {
+            chain = chain
+              .then(function () {
+                return navigator.serviceWorker.getRegistrations();
+              })
+              .then(function (regs) {
+                return Promise.all(
+                  regs.map(function (reg) {
+                    return reg.unregister();
+                  }),
+                );
+              });
+          }
+          chain
+            .catch(function () {})
+            .then(function () {
+              location.replace("/?pwa_reset=" + Date.now());
+            });
+        }
+
+        function showStuckSplashRecovery(reason) {
+          var splash = document.getElementById("app-splash");
+          if (!splash || !splash.parentNode) return;
+          // App already replaced the splash.
+          if (!document.getElementById("app-splash")) return;
+          var root = document.getElementById("root");
+          if (!root) return;
+          // If React mounted, root no longer contains #app-splash as sole child
+          // of a cold document — but createRoot replaces contents, so splash gone.
+          if (!document.getElementById("app-splash")) return;
+
+          root.innerHTML =
+            '<main style="min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:2rem;text-align:center;gap:0.85rem;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#000;color:#f4f4f5">' +
+            "<h1 style=\"margin:0;font-size:1.15rem;font-weight:600\">lfg did not finish loading</h1>" +
+            '<p style="margin:0;max-width:22rem;line-height:1.45;color:#a1a1aa;font-size:.95rem">' +
+            (reason ||
+              "The app shell is up but the UI never mounted. This is usually a network path to the box (Tailscale) or a broken install.") +
+            "</p>" +
+            '<p style="margin:0;max-width:22rem;line-height:1.45;color:#71717a;font-size:.8rem">Open this same URL in Safari. If Safari works, delete the home-screen icon and re-add it from Safari.</p>' +
+            '<div style="display:flex;flex-wrap:wrap;gap:0.5rem;justify-content:center;margin-top:0.35rem">' +
+            '<button type="button" id="lfg-boot-retry" style="appearance:none;border:0;border-radius:999px;padding:.7rem 1.15rem;font:inherit;font-weight:600;background:#0a84ff;color:#fff">Retry</button>' +
+            '<button type="button" id="lfg-boot-reset" style="appearance:none;border:0;border-radius:999px;padding:.7rem 1.15rem;font:inherit;font-weight:600;background:#27272a;color:#f4f4f5">Reset install data</button>' +
+            "</div></main>";
+          var retry = document.getElementById("lfg-boot-retry");
+          var reset = document.getElementById("lfg-boot-reset");
+          if (retry) retry.onclick = function () {
+            location.reload();
+          };
+          if (reset) reset.onclick = hardResetPwa;
+        }
+
+        // Stuck on the black splash with no React mount.
+        setTimeout(function () {
+          if (!document.getElementById("app-splash")) return;
+          if (document.querySelector("[data-startup-state]")) return;
+          showStuckSplashRecovery();
+        }, 10000);
+
         if (!("serviceWorker" in navigator)) return;
 
         var regPromise = navigator.serviceWorker.register("/sw.js").catch(function () {
@@ -166,12 +267,10 @@
         });
 
         navigator.serviceWorker.addEventListener("controllerchange", function () {
-          // A migration worker took over while this document was still the
-          // dead shell. Reload once onto the fresh controller.
-          try {
-            if (sessionStorage.getItem("lfg:sw-controller-reload") === "1") return;
-            sessionStorage.setItem("lfg:sw-controller-reload", "1");
-          } catch (e) {}
+          // Only reload when we successfully latch — if storage is unavailable,
+          // reloading on every controllerchange can spin a black flash loop.
+          if (storageGet("lfg:sw-controller-reload") === "1") return;
+          if (!storageSet("lfg:sw-controller-reload", "1")) return;
           location.reload();
         });
 
@@ -183,28 +282,17 @@
             var src = target.src || "";
             if (src.indexOf("/assets/") === -1) return;
             var latch = "lfg:boot-recover:" + (src.split("/").pop() || "entry");
-            try {
-              if (sessionStorage.getItem(latch) === "1") return;
-              sessionStorage.setItem(latch, "1");
-            } catch (e) {}
-            Promise.resolve(regPromise)
-              .then(function () {
-                return caches.keys();
-              })
-              .then(function (keys) {
-                return Promise.all(
-                  keys
-                    .filter(function (key) {
-                      return (
-                        key.indexOf("lfg-shell-") === 0 ||
-                        key.indexOf("lfg-assets-") === 0
-                      );
-                    })
-                    .map(function (key) {
-                      return caches.delete(key);
-                    }),
-                );
-              })
+            if (storageGet(latch) === "1") {
+              showStuckSplashRecovery(
+                "The app bundle failed to load even after one recovery try.",
+              );
+              return;
+            }
+            if (!storageSet(latch, "1")) {
+              showStuckSplashRecovery("The app bundle failed to load.");
+              return;
+            }
+            purgeShellCaches()
               .catch(function () {})
               .then(function () {
                 location.reload();
