@@ -2,6 +2,13 @@
 
 Recent product updates and deployment notes.
 
+## August 4, 2026 - Black LFG PWA self-heals (v0.1.254)
+
+- An installed LFG home-screen app that was stuck on a black screen after a
+  deploy now clears its stale shell cache once and reloads onto the current
+  build, instead of sitting on missing content-hashed chunks until you wipe
+  the app by hand.
+
 ## August 4, 2026 - Settings controls stay clear (v0.1.253)
 
 - Settings now shows a real on/off switch for pausing new agents, so the
