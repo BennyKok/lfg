@@ -2,6 +2,14 @@
 
 Recent product updates and deployment notes.
 
+## August 4, 2026 - Black LFG PWA actually recovers (v0.1.255)
+
+- A home-screen LFG app stuck on a black screen after a deploy now recovers
+  even when the old shell never loaded the app bundle: the service worker
+  registers from the page itself, clears the dead shell cache, and reloads.
+- Offline launches without a usable shell show a retry / clear-cache screen
+  instead of a solid black window.
+
 ## August 4, 2026 - Black LFG PWA self-heals (v0.1.254)
 
 - An installed LFG home-screen app that was stuck on a black screen after a
