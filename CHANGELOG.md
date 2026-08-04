@@ -9,6 +9,12 @@ Recent product updates and deployment notes.
 - Embedded Computer surfaces now share the same reconnect notification from
   interruption through recovery, so returning to Home or Settings cannot show
   "Reconnected" twice for one physical connection.
+- Cloud Computers now archive the minimum number of oldest idle, durable agents
+  needed to admit new work safely; their transcripts remain available from
+  Resume, and the new session appears immediately instead of failing on memory.
+- Plan concurrency is authoritative throughout LFG: Free allows 1 active agent,
+  Personal 5, Pro 16, and Always-on 24, including the Settings and Performance
+  surfaces users see.
 
 ## August 3, 2026 - The welcome comes home to omg (v0.1.239)
 
