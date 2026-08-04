@@ -16391,7 +16391,7 @@ function NewSessionDialog({
         // Started at attach time; usually already resolved by now.
         const uploaded = files.length ? await Promise.all(files.map(resolveUpload)) : [];
         const composedPrompt = composeAttachmentMessage(taskPrompt, uploaded);
-        const res = await api<{ sessionId?: string }>("/api/sessions/new", {
+        const res = await api<{ sessionId?: string; archivedSessionCount?: number }>("/api/sessions/new", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -16408,6 +16408,12 @@ function NewSessionDialog({
         if (sid) {
           markCreatedSid(sid);
           markCollapsedSid(sid);
+        }
+        if (res.archivedSessionCount) {
+          toast.info(
+            `Archived ${res.archivedSessionCount} idle session${res.archivedSessionCount === 1 ? "" : "s"} to free memory`,
+            { description: "Their transcripts are still available from Resume." },
+          );
         }
         setPromptStashStatus(stashed?.id, "sent");
         await onCreated({ launchId: sid, sessionId: sid });

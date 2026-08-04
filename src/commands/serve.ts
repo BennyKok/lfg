@@ -498,7 +498,7 @@ function formatMemory(bytes: number): string {
 // dashboard setting. Ordinary LFG installs retain their local setting cap.
 // The returned reservation is held until the managed launching row exists, so
 // concurrent requests cannot both pass an async list read and oversubscribe.
-async function activationGate(): Promise<Response | { release: () => void }> {
+async function activationGate(): Promise<Response | { release: () => void; reclaimed?: number }> {
   const settings = getGlobalSettingsSync();
   if (settings.agentsPaused) {
     return err(503, "agent activation is paused");
@@ -506,13 +506,15 @@ async function activationGate(): Promise<Response | { release: () => void }> {
   const computer = computerAgentAdmissionContext();
   const limit = computer?.limit ?? settings.maxLiveAgents;
   if (limit === 0) return { release: () => {} };
-  const memory = computer
-    ? agentLaunchMemoryBudget(totalmem(), hostAvailableMemoryBytes())
-    : undefined;
-  const reservation = agentAdmission.tryAcquire(
+  const reservation = await agentAdmission.acquire(
     limit,
-    await listSessionsCached().catch(() => []),
-    memory,
+    async () => ({
+      sessions: await listSessions().catch(() => []),
+      memory: computer
+        ? agentLaunchMemoryBudget(totalmem(), hostAvailableMemoryBytes())
+        : undefined,
+    }),
+    computer ? archiveIdleDurableAgentsForMemory : undefined,
   );
   if (reservation.ok) return reservation;
   if (reservation.reason === "memory") {
@@ -578,6 +580,7 @@ async function serverStats() {
   const live = sessions.length;
   const working = sessions.filter((s) => s.busy).length;
   const settings = getGlobalSettingsSync();
+  const computer = computerAgentAdmissionContext();
   const slice = sliceMemoryBytes();
   const disk = hostDiskBytes();
   const [load1, load5, load15] = loadavg();
@@ -591,7 +594,7 @@ async function serverStats() {
       live,
       working,
       idle: Math.max(0, live - working),
-      max: settings.maxLiveAgents, // 0 = unlimited
+      max: computer?.limit ?? settings.maxLiveAgents, // 0 = unlimited
       paused: settings.agentsPaused,
     },
     memory: {
@@ -1219,6 +1222,44 @@ async function closeLiveSession(
     mode,
   });
   return { ok: true, mode };
+}
+
+// A Cloud Computer may wake with several completed command-file harnesses
+// restored from RAM. They are durable but still resident, so treating them as
+// neither active nor reclaimable makes the next launch impossible. On memory
+// pressure, archive the oldest idle durable harnesses through the normal close
+// owner until the launch budget is healthy: each transcript is indexed for
+// Resume before its process is stopped. Busy, launching, and process-bound
+// sessions are never touched.
+async function archiveIdleDurableAgentsForMemory(): Promise<number> {
+  const sessions = await listSessions();
+  const candidates = sessions
+    .filter(
+      (session) =>
+        !!session.sessionId &&
+        session.managed &&
+        isCommandFileAgent(session.agent) &&
+        !session.busy &&
+        !session.launching,
+    )
+    .sort(
+      (a, b) =>
+        (a.lastActivityAt ?? a.startedAt ?? 0) -
+        (b.lastActivityAt ?? b.startedAt ?? 0),
+    );
+  let archived = 0;
+  for (const session of candidates) {
+    const sessionId = session.sessionId as string;
+    const outcome = await closeLiveSession(session, sessionId, {
+      sessionId,
+      source: "computer_memory_reclaim",
+    });
+    if (!outcome.ok) continue;
+    archived++;
+    const memory = agentLaunchMemoryBudget(totalmem(), hostAvailableMemoryBytes());
+    if (memory.availableBytes >= memory.reserveBytes + memory.launchBytes) break;
+  }
+  return archived;
 }
 
 // When an agent explicitly chooses to close after publishing, the POST response
@@ -2227,7 +2268,13 @@ export async function cmdServe() {
       }
       if (path === "/api/settings") {
         if (req.method === "GET") {
-          return json({ settings: await getGlobalSettings() });
+          const settings = await getGlobalSettings();
+          const computer = computerAgentAdmissionContext();
+          return json({
+            settings: computer
+              ? { ...settings, maxLiveAgents: computer.limit }
+              : settings,
+          });
         }
         if (req.method === "POST") {
           const b = (await req.json().catch(() => null)) as Partial<GlobalSettings> | null;
@@ -2238,6 +2285,13 @@ export async function cmdServe() {
             patch.timeZone = timeZone;
           }
           if (b?.maxLiveAgents !== undefined) {
+            const computer = computerAgentAdmissionContext();
+            if (computer) {
+              return err(
+                403,
+                `${computer.plan} concurrency is managed by your Computer plan`,
+              );
+            }
             const max = Number(b.maxLiveAgents);
             if (!Number.isInteger(max) || max < 0 || max > MAX_LIVE_AGENTS_LIMIT)
               return err(400, `maxLiveAgents must be an integer from 0 to ${MAX_LIVE_AGENTS_LIMIT} (0 = unlimited)`);
@@ -4299,6 +4353,7 @@ export async function cmdServe() {
           // External surfaces (relay bridges) attach it as a tappable card;
           // they are contractually forbidden from guessing URLs themselves.
           sessionUrl: publicSessionUrl(launchId),
+          archivedSessionCount: gate.reclaimed ?? 0,
         });
         } finally {
           gate.release();

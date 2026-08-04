@@ -109,6 +109,32 @@ describe("Computer agent admission", () => {
     expect(admission.tryAcquire(10, [], budget).ok).toBe(true);
   });
 
+  test("memory reclaim and reservation have one asynchronous owner", async () => {
+    const gib = 1024 ** 3;
+    const admission = new AgentAdmissionController();
+    let available = 1.5 * gib;
+    let reclaimed = 0;
+    const inspect = async () => ({
+      sessions: [],
+      memory: agentLaunchMemoryBudget(4 * gib, available),
+    });
+    const reclaim = async () => {
+      reclaimed++;
+      available = 2.75 * gib;
+      return 2;
+    };
+
+    const [first, second] = await Promise.all([
+      admission.acquire(1, inspect, reclaim),
+      admission.acquire(1, inspect, reclaim),
+    ]);
+
+    expect(first).toMatchObject({ ok: true, reclaimed: 2 });
+    expect(second).toMatchObject({ ok: false, reason: "limit", reserved: 1 });
+    expect(reclaimed).toBe(1);
+    if (first.ok) first.release();
+  });
+
   test("a launch storm stops exactly at every paid plan ceiling", () => {
     for (const [plan, limit] of [
       ["computer_5", 5],

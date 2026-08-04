@@ -112,7 +112,7 @@ export function activeAgentCount(sessions: readonly AgentActivity[]): number {
 }
 
 export type AgentAdmission =
-  | { ok: true; release: () => void }
+  | { ok: true; release: () => void; reclaimed?: number }
   | { ok: false; reason: "limit"; active: number; reserved: number }
   | {
       ok: false;
@@ -125,6 +125,44 @@ export type AgentAdmission =
 
 export class AgentAdmissionController {
   private readonly pending = new Map<string, number>();
+  private transition: Promise<void> = Promise.resolve();
+
+  /**
+   * Serializes the complete inspect -> optional reclaim -> reserve transition.
+   * A memory-pressure reclaim awaits process shutdown, so `tryAcquire` alone
+   * cannot own that transition atomically. Keeping the queue here makes one
+   * controller the sole admission owner even while cleanup is asynchronous.
+   */
+  async acquire(
+    limit: number,
+    inspect: () => Promise<{
+      sessions: readonly AgentActivity[];
+      memory?: AgentMemoryBudget;
+    }>,
+    reclaim?: () => Promise<number>,
+  ): Promise<AgentAdmission> {
+    let releaseTransition!: () => void;
+    const previous = this.transition;
+    this.transition = new Promise<void>((resolve) => {
+      releaseTransition = resolve;
+    });
+    await previous;
+    try {
+      let snapshot = await inspect();
+      let admission = this.tryAcquire(limit, snapshot.sessions, snapshot.memory);
+      if (!admission.ok && admission.reason === "memory" && reclaim) {
+        const reclaimed = await reclaim();
+        if (reclaimed > 0) {
+          snapshot = await inspect();
+          admission = this.tryAcquire(limit, snapshot.sessions, snapshot.memory);
+          if (admission.ok) return { ...admission, reclaimed };
+        }
+      }
+      return admission;
+    } finally {
+      releaseTransition();
+    }
+  }
 
   tryAcquire(
     limit: number,
