@@ -54,15 +54,25 @@ describe("LFG icon assets", () => {
   test("forces one service-worker cache reset for stale PWA shells", async () => {
     const worker = await readFile("web/public/sw.js", "utf8");
     expect(worker).toContain("lfg-cache-reset-crisp-icon-v1");
-    // Black standalone launches (stale shell + missing hashed chunks, or a
-    // pre-settings-fix shell) get a second one-time purge.
-    expect(worker).toContain("lfg-cache-reset-black-shell-v1");
+    // Black standalone launches (stale shell + missing hashed chunks) get a
+    // one-time purge that also navigates open clients — purge alone left
+    // shells whose entry chunk never ran still black.
+    expect(worker).toContain("lfg-cache-reset-black-shell-v2");
     expect(worker).toContain("forceTakeoverAndPurgeShellCaches");
+    expect(worker).toContain("reloadControlledClients");
+    expect(worker).toContain("offlineShellResponse");
+    expect(worker).toContain('cache: "no-store"');
     expect(worker).toContain('key.startsWith("lfg-shell-")');
     expect(worker).toContain('key.startsWith("lfg-assets-")');
     expect(worker).toContain("await self.skipWaiting()");
     expect(worker).toContain("keys.includes(CRISP_ICON_CACHE_RESET)");
     expect(worker).toContain("keys.includes(BLACK_SHELL_CACHE_RESET)");
+
+    // Recovery must not depend on the app bundle loading (that is the failure).
+    const index = await readFile("web/index.html", "utf8");
+    expect(index).toContain('navigator.serviceWorker.register("/sw.js")');
+    expect(index).toContain("lfg:boot-recover:");
+    expect(index).toContain("LFG_FORCE_RELOAD");
   });
 
   // A suspended PWA can run one shell across many deploys, so a waiting worker

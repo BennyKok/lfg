@@ -139,6 +139,81 @@
         </div>
       </div>
     </div>
+    <script>
+      /* PWA recovery that does NOT depend on the app bundle.
+         If a stale installed shell names deleted /assets/* chunks, main.tsx
+         never runs — so its service-worker register() + controllerchange
+         reload never fire, and the home-screen app stays black forever.
+         Register the worker from this inline script, adopt waiting workers,
+         and on an entry-module failure wipe shell/asset caches once + reload. */
+      (function () {
+        if (!("serviceWorker" in navigator)) return;
+
+        var regPromise = navigator.serviceWorker.register("/sw.js").catch(function () {
+          return null;
+        });
+
+        regPromise.then(function (reg) {
+          if (!reg) return;
+          if (reg.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" });
+          reg.update().catch(function () {});
+        });
+
+        navigator.serviceWorker.addEventListener("message", function (event) {
+          if (event.data && event.data.type === "LFG_FORCE_RELOAD") {
+            location.reload();
+          }
+        });
+
+        navigator.serviceWorker.addEventListener("controllerchange", function () {
+          // A migration worker took over while this document was still the
+          // dead shell. Reload once onto the fresh controller.
+          try {
+            if (sessionStorage.getItem("lfg:sw-controller-reload") === "1") return;
+            sessionStorage.setItem("lfg:sw-controller-reload", "1");
+          } catch (e) {}
+          location.reload();
+        });
+
+        window.addEventListener(
+          "error",
+          function (event) {
+            var target = event && event.target;
+            if (!target || target.tagName !== "SCRIPT") return;
+            var src = target.src || "";
+            if (src.indexOf("/assets/") === -1) return;
+            var latch = "lfg:boot-recover:" + (src.split("/").pop() || "entry");
+            try {
+              if (sessionStorage.getItem(latch) === "1") return;
+              sessionStorage.setItem(latch, "1");
+            } catch (e) {}
+            Promise.resolve(regPromise)
+              .then(function () {
+                return caches.keys();
+              })
+              .then(function (keys) {
+                return Promise.all(
+                  keys
+                    .filter(function (key) {
+                      return (
+                        key.indexOf("lfg-shell-") === 0 ||
+                        key.indexOf("lfg-assets-") === 0
+                      );
+                    })
+                    .map(function (key) {
+                      return caches.delete(key);
+                    }),
+                );
+              })
+              .catch(function () {})
+              .then(function () {
+                location.reload();
+              });
+          },
+          true,
+        );
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

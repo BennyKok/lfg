@@ -23,39 +23,69 @@ const VERSION = "__VERSION__";
 const SHELL_CACHE = `lfg-shell-${VERSION}`;
 const ASSET_CACHE = `lfg-assets-${VERSION}`;
 // One-time migration markers. The first worker that carries a new marker takes
-// over immediately (skipWaiting), purges prior shell/asset caches, and the
-// page's controllerchange handler reloads onto the fresh build. Markers stay
+// over immediately (skipWaiting), purges prior shell/asset caches, claims
+// clients, and navigates every open window onto a fresh document. Markers stay
 // behind forever so later releases return to the normal user-approved update
 // flow (toast → Reload) instead of yanking the app out from under a session.
 //
 //   • crisp-icon-v1 — v0.1.138 small icon (already rolled out).
-//   • black-shell-v1 — installed PWAs that paired a cached shell with deleted
-//     content-hashed chunks (or a pre-settings-fix shell) and cold-launched
-//     into a black screen. Drop every lfg-shell-* / lfg-assets-* cache once.
+//   • black-shell-v1 — first attempt; purge only (no forced client navigate).
+//   • black-shell-v2 — installed PWAs still black: purge + claim + navigate so
+//     a shell whose entry chunk never ran (so main.tsx never reloaded) still
+//     recovers without the user wiping site data by hand.
 const CRISP_ICON_CACHE_RESET = "lfg-cache-reset-crisp-icon-v1";
-const BLACK_SHELL_CACHE_RESET = "lfg-cache-reset-black-shell-v1";
+const BLACK_SHELL_CACHE_RESET_V1 = "lfg-cache-reset-black-shell-v1";
+const BLACK_SHELL_CACHE_RESET = "lfg-cache-reset-black-shell-v2";
 const KEEP = new Set([
   SHELL_CACHE,
   ASSET_CACHE,
   CRISP_ICON_CACHE_RESET,
+  BLACK_SHELL_CACHE_RESET_V1,
   BLACK_SHELL_CACHE_RESET,
 ]);
 
-async function forceTakeoverAndPurgeShellCaches(keys) {
+let forceClientReloadOnActivate = false;
+
+async function purgeShellAndAssetCaches(keys) {
   await Promise.all(
     keys
       .filter((key) => key.startsWith("lfg-shell-") || key.startsWith("lfg-assets-"))
       .map((key) => caches.delete(key)),
   );
+}
+
+async function forceTakeoverAndPurgeShellCaches(keys) {
+  await purgeShellAndAssetCaches(keys);
+  forceClientReloadOnActivate = true;
   await self.skipWaiting();
+}
+
+async function reloadControlledClients() {
+  const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  await Promise.all(
+    all.map(async (client) => {
+      try {
+        if ("navigate" in client) {
+          await client.navigate(client.url || "/");
+          return;
+        }
+      } catch {
+        // fall through
+      }
+      try {
+        client.postMessage({ type: "LFG_FORCE_RELOAD" });
+      } catch {
+        // client may be gone
+      }
+    }),
+  );
 }
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
-      // Newest migration first: a device that never got crisp-icon still needs
-      // the black-shell purge, and opening both markers is idempotent.
+      // Newest migration first.
       if (!keys.includes(BLACK_SHELL_CACHE_RESET)) {
         await caches.open(BLACK_SHELL_CACHE_RESET);
         await forceTakeoverAndPurgeShellCaches(keys);
@@ -77,12 +107,24 @@ self.addEventListener("activate", (event) => {
         keys.filter((key) => !KEEP.has(key)).map((key) => caches.delete(key)),
       );
       await self.clients.claim();
+      if (forceClientReloadOnActivate) {
+        forceClientReloadOnActivate = false;
+        await reloadControlledClients();
+      }
     })(),
   );
 });
 
 self.addEventListener("message", (event) => {
   if (event.data?.type === "SKIP_WAITING") self.skipWaiting();
+  if (event.data?.type === "PURGE_SHELL_CACHES") {
+    event.waitUntil(
+      (async () => {
+        const keys = await caches.keys();
+        await purgeShellAndAssetCaches(keys);
+      })(),
+    );
+  }
 });
 
 // Immutable, content-hashed build output — safe to serve from cache forever.
@@ -93,7 +135,62 @@ function isImmutableAsset(url) {
 // Static shell files worth an offline fallback (served network-first).
 function isShell(url, request) {
   if (request.mode === "navigate") return true;
+  // iOS standalone sometimes issues document loads without mode=navigate.
+  if (request.destination === "document") return true;
   return /\.(svg|png|ico|webmanifest|woff2?)$/.test(url.pathname);
+}
+
+function offlineShellResponse() {
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="theme-color" content="#000000"/>
+<title>lfg — offline</title>
+<style>
+  html,body{margin:0;min-height:100%;background:#000;color:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}
+  main{min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:2rem;text-align:center;gap:1rem}
+  h1{font-size:1.15rem;font-weight:600;margin:0}
+  p{margin:0;max-width:22rem;line-height:1.45;color:#a1a1aa;font-size:.95rem}
+  button{appearance:none;border:0;border-radius:999px;padding:.7rem 1.15rem;font:inherit;font-weight:600;background:#0a84ff;color:#fff}
+  button.secondary{background:#27272a;color:#f4f4f5}
+  .row{display:flex;flex-wrap:wrap;gap:.5rem;justify-content:center;margin-top:.5rem}
+</style>
+</head>
+<body>
+<main>
+  <h1>Can't reach this lfg box</h1>
+  <p>The installed app is offline or the server did not answer. Check Tailscale / network, then retry. If it stays black after you are online, clear the stale shell cache.</p>
+  <div class="row">
+    <button type="button" id="retry">Retry</button>
+    <button type="button" class="secondary" id="reset">Clear cache &amp; reload</button>
+  </div>
+</main>
+<script>
+document.getElementById("retry").onclick=function(){location.reload()};
+document.getElementById("reset").onclick=async function(){
+  try{
+    if(navigator.serviceWorker&&navigator.serviceWorker.controller){
+      navigator.serviceWorker.controller.postMessage({type:"PURGE_SHELL_CACHES"});
+    }
+    var keys=await caches.keys();
+    await Promise.all(keys.filter(function(k){return k.indexOf("lfg-shell-")===0||k.indexOf("lfg-assets-")===0}).map(function(k){return caches.delete(k)}));
+    var regs=await navigator.serviceWorker.getRegistrations();
+    await Promise.all(regs.map(function(r){return r.unregister()}));
+  }catch(e){}
+  location.replace("/?pwa_reset="+Date.now());
+};
+</script>
+</body>
+</html>`;
+  return new Response(html, {
+    status: 503,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+    },
+  });
 }
 
 async function cacheFirst(request) {
@@ -109,7 +206,9 @@ async function cacheFirst(request) {
 
 async function networkFirst(request) {
   try {
-    const response = await fetch(request);
+    // Bypass the HTTP cache so a stuck installed PWA cannot keep a dead
+    // index.html that names deleted /assets/* chunks.
+    const response = await fetch(request, { cache: "no-store" });
     if (response && response.ok) {
       const copy = response.clone();
       caches.open(SHELL_CACHE).then((c) => c.put(request, copy)).catch(() => {});
@@ -118,9 +217,10 @@ async function networkFirst(request) {
   } catch {
     const cached = await caches.match(request);
     if (cached) return cached;
-    if (request.mode === "navigate") {
+    if (request.mode === "navigate" || request.destination === "document") {
       const shell = await caches.match("/");
       if (shell) return shell;
+      return offlineShellResponse();
     }
     throw new Error("offline");
   }
