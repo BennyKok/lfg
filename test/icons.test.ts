@@ -54,8 +54,15 @@ describe("LFG icon assets", () => {
   test("forces one service-worker cache reset for stale PWA shells", async () => {
     const worker = await readFile("web/public/sw.js", "utf8");
     expect(worker).toContain("lfg-cache-reset-crisp-icon-v1");
+    // Black standalone launches (stale shell + missing hashed chunks, or a
+    // pre-settings-fix shell) get a second one-time purge.
+    expect(worker).toContain("lfg-cache-reset-black-shell-v1");
+    expect(worker).toContain("forceTakeoverAndPurgeShellCaches");
+    expect(worker).toContain('key.startsWith("lfg-shell-")');
+    expect(worker).toContain('key.startsWith("lfg-assets-")');
     expect(worker).toContain("await self.skipWaiting()");
     expect(worker).toContain("keys.includes(CRISP_ICON_CACHE_RESET)");
+    expect(worker).toContain("keys.includes(BLACK_SHELL_CACHE_RESET)");
   });
 
   // A suspended PWA can run one shell across many deploys, so a waiting worker

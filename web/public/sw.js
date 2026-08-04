@@ -22,22 +22,49 @@
 const VERSION = "__VERSION__";
 const SHELL_CACHE = `lfg-shell-${VERSION}`;
 const ASSET_CACHE = `lfg-assets-${VERSION}`;
-// One-time migration: v0.1.138 introduced a dedicated small icon, but an
-// already-open iOS PWA can keep executing the previous shell while a new
-// worker waits behind its Reload toast. The first worker carrying this marker
-// takes over immediately, clears the old shell caches during activation, and
-// triggers the existing controllerchange reload. The fixed marker then stays
-// behind so later releases return to the normal user-approved update flow.
+// One-time migration markers. The first worker that carries a new marker takes
+// over immediately (skipWaiting), purges prior shell/asset caches, and the
+// page's controllerchange handler reloads onto the fresh build. Markers stay
+// behind forever so later releases return to the normal user-approved update
+// flow (toast → Reload) instead of yanking the app out from under a session.
+//
+//   • crisp-icon-v1 — v0.1.138 small icon (already rolled out).
+//   • black-shell-v1 — installed PWAs that paired a cached shell with deleted
+//     content-hashed chunks (or a pre-settings-fix shell) and cold-launched
+//     into a black screen. Drop every lfg-shell-* / lfg-assets-* cache once.
 const CRISP_ICON_CACHE_RESET = "lfg-cache-reset-crisp-icon-v1";
-const KEEP = new Set([SHELL_CACHE, ASSET_CACHE, CRISP_ICON_CACHE_RESET]);
+const BLACK_SHELL_CACHE_RESET = "lfg-cache-reset-black-shell-v1";
+const KEEP = new Set([
+  SHELL_CACHE,
+  ASSET_CACHE,
+  CRISP_ICON_CACHE_RESET,
+  BLACK_SHELL_CACHE_RESET,
+]);
+
+async function forceTakeoverAndPurgeShellCaches(keys) {
+  await Promise.all(
+    keys
+      .filter((key) => key.startsWith("lfg-shell-") || key.startsWith("lfg-assets-"))
+      .map((key) => caches.delete(key)),
+  );
+  await self.skipWaiting();
+}
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
-      if (keys.includes(CRISP_ICON_CACHE_RESET)) return;
-      await caches.open(CRISP_ICON_CACHE_RESET);
-      await self.skipWaiting();
+      // Newest migration first: a device that never got crisp-icon still needs
+      // the black-shell purge, and opening both markers is idempotent.
+      if (!keys.includes(BLACK_SHELL_CACHE_RESET)) {
+        await caches.open(BLACK_SHELL_CACHE_RESET);
+        await forceTakeoverAndPurgeShellCaches(keys);
+        return;
+      }
+      if (!keys.includes(CRISP_ICON_CACHE_RESET)) {
+        await caches.open(CRISP_ICON_CACHE_RESET);
+        await forceTakeoverAndPurgeShellCaches(keys);
+      }
     })(),
   );
 });
