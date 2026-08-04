@@ -2,6 +2,18 @@
 
 Recent product updates and deployment notes.
 
+## August 4, 2026 - New sessions show up when you make them (v0.1.252)
+
+- A newly created session now appears in the list immediately instead of after
+  a delay of several seconds. The create call returns the session itself, and
+  a session no longer falls out of the list entirely while its agent is still
+  starting up.
+- The "Creating session…" indicator now stays up until the new session is
+  actually on screen, rather than finishing before there is anything to see.
+- An OpenCode session that fails on its first turn — a rate-limited or
+  overloaded provider, a bad key — now says so in the transcript instead of
+  sitting on "Working" forever with nothing in it.
+
 ## August 4, 2026 - Thinking at a glance (v0.1.251)
 
 - Thinking controls now show their selected effort level directly beside the
