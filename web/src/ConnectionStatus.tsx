@@ -40,8 +40,11 @@ export function ConnectionStatusToasts({
     }
 
     if (status === "live" && wasDisconnected) {
-      toast.dismiss(WS_TOAST_ID);
-      toast.success("Reconnected", { duration: 2000 });
+      // Embedded hosts can mount more than one logical surface (for example,
+      // the live app plus Settings) over one shared physical socket. Both
+      // observers see the same recovery. Keep success in the connection-owned
+      // toast slot too, so one reconnect can never render one toast per surface.
+      toast.success("Reconnected", { id: WS_TOAST_ID, duration: 2000 });
     }
     // "connecting" (initial load) and steady-state "live" stay silent — no nagging.
   // eslint-disable-next-line react-hooks/exhaustive-deps
