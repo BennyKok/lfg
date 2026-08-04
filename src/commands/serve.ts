@@ -89,6 +89,7 @@ import {
 } from "../ask/store.ts";
 import {
   listSessions,
+  managedLaunchRow,
   readTitleOverrides,
   resolveTranscript,
   setSessionTitle,
@@ -173,7 +174,7 @@ import {
 } from "../live-ws.ts";
 import { appendCmd as appendAisdkCmd, removeEntry as removeAisdkEntry, readEntry as readAisdkEntry, findEntryByAnyId as findAisdkEntryByAnyId, isEntryBusy as isAisdkEntryBusy, isPidAlive as isAisdkPidAlive, patchEntry as patchAisdkEntry, terminateHarnessProcess } from "../aisdk-registry.ts";
 import { markClosed } from "../closing.ts";
-import { assignUser, resolveSessionUserTag, rosterEmails, userRoster } from "../users.ts";
+import { assignUser, resolveSessionUserTag, rosterEmails, userAssignments, userRoster } from "../users.ts";
 import {
   addOnboardingProfile,
   getOnboarding,
@@ -4337,12 +4338,36 @@ export async function cmdServe() {
         }
         if (agent === "aisdk" || agent === "opencode" || agent === "cursor")
           patchManaged(tmuxName, { launchState: "running" });
+        // The spawn (and the launchState patch above) changed what the session
+        // list contains, so retire any snapshot taken during it.
+        invalidateListSessionsCache();
+        // Hand the caller the session row itself, not just an id. A client that
+        // gets only an id has to go re-derive the row from GET /api/sessions,
+        // which is a full process+transcript scan — so the create is instant
+        // but the card can take seconds to appear, and the "Creating session…"
+        // spinner ends before the user sees anything. managedLaunchRow builds
+        // the same row listSessions would from the record we just wrote, with
+        // no scan, so the card can render the moment this response lands.
+        const createdRow = await (async () => {
+          try {
+            const record = listManaged().find((m) => m.tmuxName === tmuxName);
+            if (!record) return null;
+            return managedLaunchRow(record, await readTitleOverrides(), userAssignments());
+          } catch {
+            // Never fail a successful create over a display convenience — the
+            // client falls back to refreshing the list.
+            return null;
+          }
+        })();
         return json({
           ok: true,
           tmuxName,
           cwd,
           sessionId: launchId,
           agent,
+          // The full row for the session just created (null if it could not be
+          // built), so clients can render it without a list round trip.
+          session: createdRow,
           parentSessionId: parent?.sessionId ?? parentId ?? null,
           subagentDepth,
           // Echo the resolved tag so callers (MCP subagent tools, CLI) can see

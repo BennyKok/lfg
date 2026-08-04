@@ -3866,6 +3866,12 @@ function removeForcedStreamSid(sid: string): void {
 // entrance animation. Module-level (not state) so it survives the re-render that
 // brings the new card in; the card reads it on its first mount and the entry is
 // auto-pruned so the animation never replays on later reorders/re-renders.
+// Ceiling on how long a session row seeded from POST /api/sessions/new may
+// outlive a session list that omits it. Matches the server's boot grace: only a
+// session that died on startup should ever reach this, and without it such a
+// session would leave a permanent phantom card.
+const SEEDED_SESSION_MAX_AGE_MS = 30_000;
+
 const recentlyCreatedSids = new Set<string>();
 function markCreatedSid(sid: string): void {
   recentlyCreatedSids.add(sid);
@@ -4806,6 +4812,13 @@ export function App() {
   const sessionTitleQueuesRef = useRef(new Map<string, Promise<void>>());
   const sessionsFetchRevisionRef = useRef(0);
   const sessionsAppliedFetchRevisionRef = useRef(0);
+  // Rows handed back by POST /api/sessions/new, held until GET /api/sessions
+  // reports them itself. The create response is authoritative and instant; the
+  // list is a periodically-rebuilt scan, so for a beat after a create the list
+  // can legitimately not know about a session that definitely exists. Without
+  // this the new card either waits for the next poll, or appears and then
+  // vanishes on the first refresh whose snapshot predates it.
+  const seededSessionsRef = useRef(new Map<string, { session: Session; at: number }>());
   const [users, setUsers] = useState<User[]>([]);
   // Server-side first-run state (profiles/steps/completion) + whether the
   // full-screen onboarding flow is showing. See loadCore for the gate.
@@ -5310,7 +5323,18 @@ export function App() {
     }
   }, [hideToastedFinding, showToastedFinding]);
 
-  const refreshSessions = useCallback(async (_opts?: { retireLaunchId?: string }) => {
+  const refreshSessions = useCallback(async (opts?: { retireLaunchId?: string; seed?: Session | null }) => {
+    const seeded = seededSessionsRef.current;
+    // Show the freshly-created session BEFORE the list round trip. This is what
+    // lets the "Creating session…" spinner end on real feedback rather than on
+    // a fetch that may not mention the session yet.
+    const seed = opts?.seed;
+    if (seed?.sessionId) {
+      seeded.set(seed.sessionId, { session: seed, at: Date.now() });
+      setSessions((current) =>
+        current.some((s) => s.sessionId === seed.sessionId) ? current : [...current, seed],
+      );
+    }
     const fetchRevision = ++sessionsFetchRevisionRef.current;
     const payload = await api<{ sessions: Session[] }>("/api/sessions");
     // Guard to [] — `sessions` is consumed by `.filter()`/`.map()` on render
@@ -5339,6 +5363,19 @@ export function App() {
       }
       return { ...session, title: rename.title };
     });
+    // Re-add any created-but-not-yet-listed session, and retire each seed the
+    // moment the server's own list vouches for it. The age ceiling matches the
+    // server's boot grace: past it, a session missing from the list is missing
+    // because it died, and a phantom card would be a lie.
+    const listed = new Set(sessionList.map((s) => s.sessionId));
+    const now = Date.now();
+    for (const [sid, entry] of seeded) {
+      if (listed.has(sid) || now - entry.at > SEEDED_SESSION_MAX_AGE_MS) {
+        seeded.delete(sid);
+        continue;
+      }
+      sessionList.push(entry.session);
+    }
     setSessions(sessionList);
     setError((current) => (current === "not found" ? null : current));
     // Prune tombstones the server has finally forgotten, so the set can't grow
@@ -7004,7 +7041,10 @@ export function App() {
               onClose={() => setComposerExpanded(false)}
               onCreated={async (result) => {
                 const launchId = result?.launchId;
-                await refreshSessions(launchId ? { retireLaunchId: launchId } : undefined);
+                await refreshSessions({
+                  ...(launchId ? { retireLaunchId: launchId } : {}),
+                  seed: result?.session ?? null,
+                });
               }}
             />
           ) : null}
@@ -7060,10 +7100,10 @@ export function App() {
         onClose={() => {
           setNewOpen(false);
         }}
-        onCreated={async () => {
+        onCreated={async (result) => {
           setNewOpen(false);
           setTab("live");
-          await refreshSessions();
+          await refreshSessions({ seed: result?.session ?? null });
         }}
       />
 
@@ -15792,7 +15832,7 @@ function NewSessionDialog({
   projectOptions?: string[];
   onProjectChange?: (value: string) => void;
   onClose: () => void;
-  onCreated: (result?: { launchId?: string; sessionId?: string }) => Promise<void>;
+  onCreated: (result?: { launchId?: string; sessionId?: string; session?: Session | null }) => Promise<void>;
   // Inline only: horizontal swipes cycle the live-view project filter.
   onProjectSwipe?: (dir: 1 | -1) => boolean;
   onReposChanged: () => Promise<void>;
@@ -16447,7 +16487,13 @@ function NewSessionDialog({
         // Started at attach time; usually already resolved by now.
         const uploaded = files.length ? await Promise.all(files.map(resolveUpload)) : [];
         const composedPrompt = composeAttachmentMessage(taskPrompt, uploaded);
-        const res = await api<{ sessionId?: string; archivedSessionCount?: number }>("/api/sessions/new", {
+        const res = await api<{
+          sessionId?: string;
+          // The created row, so the list can render it without waiting for the
+          // next /api/sessions scan to notice it.
+          session?: Session | null;
+          archivedSessionCount?: number;
+        }>("/api/sessions/new", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -16472,7 +16518,7 @@ function NewSessionDialog({
           );
         }
         setPromptStashStatus(stashed?.id, "sent");
-        await onCreated({ launchId: sid, sessionId: sid });
+        await onCreated({ launchId: sid, sessionId: sid, session: res?.session ?? null });
       } catch (err) {
         setPromptStashStatus(stashed?.id, "draft");
         setPromptState((current) => current || taskPrompt);

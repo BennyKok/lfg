@@ -4,6 +4,7 @@ import {
   isTrustedUploadPermission,
   pendingToPrompt,
   permissionToPrompt,
+  sessionErrorText,
   shouldPublishDraftPart,
   toolPartMessages,
 } from "./opencode-aisdk-session.ts";
@@ -201,5 +202,48 @@ describe("opencode tool part streaming", () => {
     const rows = feed([{ status: "completed", input: { a: 1 }, output: "x".repeat(50_000) }]);
     expect(rows[1].text.length).toBeLessThan(4_100);
     expect(rows[1].text.endsWith("[truncated]")).toBe(true);
+  });
+});
+
+describe("opencode session.error handling", () => {
+  // Regression: a session whose first turn was rate limited sat "Working"
+  // forever with an empty transcript. OpenCode reported the failure only as a
+  // session.error event — which nothing read — while session.prompt() never
+  // returned. Reading the event is what turns that into a visible failure.
+  test("surfaces a provider rate limit as turn error text", () => {
+    expect(
+      sessionErrorText({
+        sessionID: "ses_1",
+        error: {
+          name: "UnknownError",
+          data: { message: "AI_APICallError: Rate limit exceeded. Please try again later." },
+        },
+      }),
+    ).toBe("AI_APICallError: Rate limit exceeded. Please try again later.");
+  });
+
+  test("surfaces a provider auth failure", () => {
+    expect(
+      sessionErrorText({
+        error: { name: "ProviderAuthError", data: { providerID: "opencode", message: "no key" } },
+      }),
+    ).toBe("no key");
+  });
+
+  test("ignores our own interrupt", () => {
+    expect(
+      sessionErrorText({ error: { name: "MessageAbortedError", data: { message: "aborted" } } }),
+    ).toBeNull();
+  });
+
+  test("falls back to the error name when there is no message", () => {
+    expect(sessionErrorText({ error: { name: "MessageOutputLengthError", data: {} } })).toBe(
+      "MessageOutputLengthError",
+    );
+  });
+
+  test("ignores an event carrying no error", () => {
+    expect(sessionErrorText({ sessionID: "ses_1" })).toBeNull();
+    expect(sessionErrorText(null)).toBeNull();
   });
 });

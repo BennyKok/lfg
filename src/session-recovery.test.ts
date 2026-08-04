@@ -131,4 +131,45 @@ describe("command-file session boot recovery", () => {
 
     expect(managedLaunchRow(managed, {}, {})).toBeNull();
   });
+
+  // Regression: serve flips launchState to "running" the moment spawn() returns,
+  // but a command-file harness only writes its registry entry once its process
+  // is actually up (seconds later, for opencode a whole server boot). The row
+  // used to require one or the other, so for that entire window listSessions
+  // returned NOTHING for a session that had definitely just been created — the
+  // reason a brand-new session took seconds to appear in the UI.
+  test("keeps a just-spawned command-file session listed while its harness boots", () => {
+    const key = "66666666-6666-4666-8666-666666666666";
+    const managed = {
+      tmuxName: "lfg-still-booting",
+      cwd: root,
+      createdAt: Date.now(),
+      agent: "opencode" as const,
+      sessionId: key,
+      nativeSessionId: key,
+      model: "opencode/claude-sonnet-4-6",
+      launchState: "running" as const,
+    };
+
+    const row = managedLaunchRow(managed, {}, {});
+    expect(row?.sessionId).toBe(key);
+    // It is listed, but honestly: no harness yet means it cannot take a message.
+    expect(row?.launching).toBe(true);
+  });
+
+  test("drops a command-file session that never registered a harness", () => {
+    const key = "77777777-7777-4777-8777-777777777777";
+    const managed = {
+      tmuxName: "lfg-never-booted",
+      cwd: root,
+      createdAt: Date.now() - 5 * 60_000,
+      agent: "opencode" as const,
+      sessionId: key,
+      nativeSessionId: key,
+      model: "opencode/claude-sonnet-4-6",
+      launchState: "running" as const,
+    };
+
+    expect(managedLaunchRow(managed, {}, {})).toBeNull();
+  });
 });

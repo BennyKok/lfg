@@ -299,6 +299,34 @@ export function answersForIndex(pending: OcPendingQuestion, index: number): stri
   });
 }
 
+/**
+ * Readable one-liner for a `session.error` event, or null when the event says
+ * nothing worth surfacing.
+ *
+ * OpenCode reports a provider stream failure (rate limit, auth, overload) ONLY
+ * as this event — `session.prompt()` does not reject and, for at least some
+ * failures, never returns at all. A session whose very first turn is rate
+ * limited therefore used to sit `busy: true` forever with an empty transcript,
+ * which reads in the UI as a session that started and silently died. Treating
+ * this event as a turn outcome is what makes that failure visible.
+ *
+ * MessageAbortedError is excluded on purpose: that is our own interrupt path
+ * (session.abort), which the caller already handles and which is not an error
+ * the user needs to be told about.
+ *
+ * @internal exported for unit tests
+ */
+export function sessionErrorText(props: unknown): string | null {
+  const error = (props as { error?: { name?: string; data?: Record<string, unknown> } } | null)
+    ?.error;
+  if (!error) return null;
+  const name = typeof error.name === "string" ? error.name : "";
+  if (name === "MessageAbortedError") return null;
+  const message = error.data?.message;
+  if (typeof message === "string" && message.trim()) return message.trim();
+  return name || "OpenCode reported an error for this turn";
+}
+
 function latestOpencodeError(opencodeSessionId: string): string | null {
   try {
     const log = readFileSync(
@@ -601,6 +629,12 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
   let draining = false;
   let closing = false;
   let turnActive = false;
+  // Set by the `session.error` event for the turn currently in flight. A
+  // provider failure is reported ONLY on the event stream, and the matching
+  // session.prompt() call can hang indefinitely instead of rejecting, so the
+  // event has to be able to end the turn on its own. `notify` resolves the race
+  // runTurn waits on; the text becomes the assistant message the user sees.
+  const turnErrorRef: { current: { text: string; notify: () => void } | null } = { current: null };
   // True while OpenCode's `question` tool is waiting for a human answer.
   // busy is cleared for this window so the UI shows "needs answer" instead of
   // a permanent Working spinner; the underlying session.prompt() stays open.
@@ -933,6 +967,17 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
         if (ev?.type === "session.idle" && (evSession == null || evSession === ocSessionId)) {
           draft = "";
         }
+        // Provider/stream failure. Record it and wake runTurn out of its
+        // (possibly never-returning) session.prompt() so the turn ends with a
+        // visible error instead of a session stuck on Working forever.
+        if (ev?.type === "session.error" && (evSession == null || evSession === ocSessionId)) {
+          const text = sessionErrorText(props);
+          const pending = turnErrorRef.current;
+          if (text && pending) {
+            pending.text = text;
+            pending.notify();
+          }
+        }
       }
     } catch {
       // Event stream is best-effort; drafts just won't animate if it drops.
@@ -954,15 +999,35 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
     openQuestionRef.current = null;
     openPermissionRef.current = null;
     publishDraft("", true);
+    // Arm the session.error escape hatch for this turn before the prompt is
+    // sent, so an error that arrives while the request is still opening still
+    // has somewhere to land.
+    const failed = Promise.withResolvers<"error">();
+    turnErrorRef.current = { text: "", notify: () => failed.resolve("error") };
     try {
-      const res = await client.session.prompt({
-        path: { id: ocSessionId! },
-        query: { directory: cwd },
-        body: {
-          ...(modelRef(model) ? { model: modelRef(model) } : {}),
-          parts: [{ type: "text", text: prompt }],
-        },
-      });
+      const settled = await Promise.race([
+        client.session.prompt({
+          path: { id: ocSessionId! },
+          query: { directory: cwd },
+          body: {
+            ...(modelRef(model) ? { model: modelRef(model) } : {}),
+            parts: [{ type: "text", text: prompt }],
+          },
+        }),
+        failed.promise,
+      ]);
+      if (settled === "error") {
+        const msg = turnErrorRef.current?.text || "OpenCode reported an error for this turn";
+        console.error(`opencode-aisdk-session turn failed: ${msg}`);
+        writeAssistant([{ type: "text", text: `OpenCode turn failed for ${model}: ${msg}` }], true);
+        // The prompt request may never return on its own after a stream error;
+        // abort it so the next queued turn is not stuck behind a dead one.
+        await client.session
+          .abort({ path: { id: ocSessionId! }, query: { directory: cwd } })
+          .catch(() => {});
+        return;
+      }
+      const res = settled;
       if (res.error) {
         const msg = JSON.stringify(res.error).slice(0, 500);
         console.error(`opencode-aisdk-session turn failed: ${msg}`);
@@ -1001,6 +1066,7 @@ export async function cmdOpencodeAisdkSession(argv: string[]): Promise<void> {
       }
     } finally {
       turnActive = false;
+      turnErrorRef.current = null;
       clearQuestionState(false);
       publishDraft("", true);
     }

@@ -56,6 +56,10 @@ const TITLE_MAX = 72;
 const TOOL_USE_TEXT_MAX = 4_000;
 const TOOL_RESULT_TEXT_MAX = 8_000;
 const PROFILE_LIST_SESSIONS = process.env.LFG_PROFILE_LIST_SESSIONS === "1";
+// How long a just-spawned command-file session stays listed before its harness
+// has registered itself. Generous enough for a cold opencode server boot on a
+// loaded box, short enough that a harness which died on startup drops out fast.
+const MANAGED_BOOT_GRACE_MS = 30_000;
 const DIRECT_INDEX_MANAGED_AGENTS = new Set<ManagedSession["agent"]>([
   "aisdk",
   "codex-aisdk",
@@ -457,7 +461,17 @@ export function managedLaunchRow(
     ? candidateEntry
     : null;
   if (!commandFile && !tmux.hasSession(m.tmuxName)) return null;
-  if (commandFile && m.launchState !== "launching" && !directEntry) return null;
+  // A command-file harness registers itself (data/aisdk/<key>.json) only once
+  // its process is actually up — bun start plus, for opencode, booting a local
+  // server, which is seconds. But serve flips launchState to "running" the
+  // instant spawn() returns. Between those two moments the session matched
+  // NEITHER arm of the old guard, so listSessions dropped it entirely: a
+  // session that had definitely been created was in no list at all for its
+  // whole boot. That is the main reason a new session took seconds to appear.
+  // Keep showing it through a bounded boot window, then let it go so a harness
+  // that died on startup does not linger forever.
+  const booting = commandFile && !directEntry && Date.now() - m.createdAt < MANAGED_BOOT_GRACE_MS;
+  if (commandFile && m.launchState !== "launching" && !directEntry && !booting) return null;
   const pid = commandFile ? (directEntry?.harnessPid ?? 0) : (tmux.panePid(m.tmuxName) ?? 0);
   if (pid && isClosing(pid)) return null;
   const tmuxTarget = commandFile
@@ -505,7 +519,10 @@ export function managedLaunchRow(
     spawnedBy: m.spawnedBy ?? null,
     capabilityVersion: m.capabilityVersion ?? null,
     capabilitiesStale: m.capabilityVersion !== LFG_CAPABILITY_VERSION,
-    launching: m.launchState === "launching",
+    // Still booting counts as launching: the record says "running" but the
+    // harness has not come up yet, and the card should say so rather than
+    // present an agent that cannot take a message yet as ready.
+    launching: m.launchState === "launching" || booting,
     startedAt: m.createdAt,
     transcriptPath,
     lastActivityAt: m.createdAt,
