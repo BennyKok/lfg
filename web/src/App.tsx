@@ -1167,22 +1167,41 @@ const STATUS_DOT_IDLE = "bg-success/30 ring-1 ring-inset ring-success/20";
 
 function SessionStatusDot({
   busy,
+  paused = false,
   variant = "inline",
   className,
 }: {
   busy: boolean;
+  paused?: boolean;
   // "inline": a standalone dot in a header row, showing busy AND idle.
-  // "avatar": pinned to an agent avatar, and only ever drawn for busy — see
-  //   below for why idle earns nothing there.
+  // "avatar": pinned to an agent avatar, and drawn for busy or paused sessions.
   variant?: "inline" | "avatar";
   className?: string;
 }) {
   // On an avatar, idle is the resting state of nearly every row, so a dot for
   // it was a wall of green marking "nothing is happening" — the rail already
   // groups and counts sessions, which is where you read the shape of the fleet.
-  // Only "working right now" earns a mark, and it sits opposite the account
-  // number, which owns the bottom-right corner on every agent icon in the app.
-  if (variant === "avatar" && !busy) return null;
+  // Only "working right now" or "paused for input" earns a mark, and it sits
+  // opposite the account number, which owns the bottom-right corner on every
+  // agent icon in the app.
+  if (variant === "avatar" && !busy && !paused) return null;
+  if (paused) {
+    return (
+      <span
+        aria-label="paused"
+        title="Paused"
+        className={cn(
+          "flex shrink-0 items-center justify-center rounded-full bg-warning/15 text-warning",
+          variant === "avatar"
+            ? "absolute -right-0.5 -top-0.5 size-3.5 ring-2 ring-card"
+            : "size-4 ring-1 ring-inset ring-warning/30",
+          className,
+        )}
+      >
+        <Pause className="size-2.5" fill="currentColor" strokeWidth={0} />
+      </span>
+    );
+  }
   return (
     <span
       aria-label={busy ? "working" : "idle"}
@@ -10996,7 +11015,11 @@ const RailItem = memo(function RailItem({
       >
         <span className="relative flex size-6 shrink-0 items-center justify-center">
           <SessionAgentIcon session={session} className="size-6 rounded-md" />
-          <SessionStatusDot busy={busy} variant="avatar" />
+          <SessionStatusDot
+            busy={busy}
+            paused={session.status === "blocked"}
+            variant="avatar"
+          />
           {topPinned && collapsed ? (
             <Pin
               aria-label="Pinned to top"
@@ -11277,9 +11300,11 @@ function StaleCapabilitiesBanner({ session }: { session: Session }) {
 function PausedBanner({
   session,
   onRefresh,
+  onContinue,
 }: {
   session: Session;
   onRefresh: () => Promise<void>;
+  onContinue: () => Promise<void>;
 }) {
   const authFlow = useContext(CodingAgentAuthContext);
   const [working, setWorking] = useState(false);
@@ -11338,6 +11363,18 @@ function PausedBanner({
     }
   }
 
+  async function continueSession() {
+    setWorking(true);
+    setErr(null);
+    try {
+      await onContinue();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setWorking(false);
+    }
+  }
+
   const title =
     reason === "restart_recovered"
       ? "Session recovered after restart"
@@ -11369,10 +11406,20 @@ function PausedBanner({
     <div className="border-b border-warning/30 bg-warning/12 px-3 py-2 text-xs">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <div className="font-semibold text-warning">⏸ {title}</div>
+          <div className="font-semibold text-warning">{title}</div>
           <div className="mt-0.5 text-foreground/70">{detail}</div>
           {err ? <div className="mt-1 text-destructive">{err}</div> : null}
         </div>
+        {reason === "restart_recovered" ? (
+          <button
+            type="button"
+            onClick={() => void continueSession()}
+            disabled={working}
+            className="shrink-0 rounded-lg bg-warning px-3 py-1.5 font-medium text-white disabled:opacity-50"
+          >
+            {working ? "Continuing…" : "Continue"}
+          </button>
+        ) : null}
         {canSwitchClaude ? (
           <button
             type="button"
@@ -12088,7 +12135,11 @@ function SessionChatBody({
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <StaleCapabilitiesBanner session={session} />
-      <PausedBanner session={session} onRefresh={onRefresh} />
+      <PausedBanner
+        session={session}
+        onRefresh={onRefresh}
+        onContinue={() => sendMessage(undefined, "Continue.")}
+      />
       <ChatStream
         sid={sid}
         messages={chatMessages}
@@ -14193,14 +14244,6 @@ const onTouchStart = (e: ReactTouchEvent) => {
               </div>
             </button>
           )}
-        {session.status === "blocked" ? (
-          <span
-            className="shrink-0 rounded-full bg-warning/15 px-2 py-0.5 text-[10px] font-semibold text-warning ring-1 ring-inset ring-warning/30"
-            title={session.statusDetail || "Build paused"}
-          >
-            ⏸ paused
-          </span>
-        ) : null}
         {pinned ? (
           <span
             aria-label="Pinned to top"
@@ -14255,7 +14298,11 @@ const onTouchStart = (e: ReactTouchEvent) => {
             {session.reviewLabel || "Shipped"}
           </span>
         ) : (
-          <SessionStatusDot busy={busy} className="lg:hidden" />
+          <SessionStatusDot
+            busy={busy}
+            paused={session.status === "blocked"}
+            className="lg:hidden"
+          />
         )}
         {!collapsedView && (
           <SessionActionsMenu
