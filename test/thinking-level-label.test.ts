@@ -22,4 +22,14 @@ describe("thinking level menu", () => {
     expect(source.match(/<ThinkingLevelPill/g)?.length).toBe(3);
     expect(source).not.toContain('aria-label="Thinking level"');
   });
+
+  test("uses Thinking for the live-session menu label", async () => {
+    const source = await app();
+    const start = source.indexOf("function SessionThinkingLevelSubmenu(");
+    const end = source.indexOf("function SessionTitleSheet(", start);
+    const submenu = source.slice(start, end);
+
+    expect(submenu).toContain('<span className="flex-1">Thinking</span>');
+    expect(submenu).toContain("<DropdownMenuLabel>Thinking level</DropdownMenuLabel>");
+  });
 });

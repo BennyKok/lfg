@@ -4,6 +4,9 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+- The live-session menu now labels its thinking control simply as "Thinking",
+  matching the other session-launch controls.
+
 ## August 4, 2026 - A hosted welcome that knows you (v0.1.248)
 
 - Embedded LFG surfaces can now receive the signed-in viewer's display identity

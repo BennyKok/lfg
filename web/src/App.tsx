@@ -12997,7 +12997,7 @@ function SessionThinkingLevelSubmenu({
         ) : (
           <BrainCircuit className="size-4" />
         )}
-        <span className="flex-1">Thinking level</span>
+        <span className="flex-1">Thinking</span>
         <span className="text-xs text-muted-foreground">
           {session.thinkingLevel || "Default"}
         </span>
