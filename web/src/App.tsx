@@ -6670,7 +6670,7 @@ export function App() {
         /* Secondary pages sit below Live in the mobile hierarchy. The host
            keeps its own right-side island; LFG supplies the page-level back
            action in the space where the Live welcome normally sits. */
-        <header className="z-40 flex shrink-0 items-center pb-1 pl-3 pr-[calc(0.75rem+var(--lfg-host-top-inset))] pt-[calc(0.5rem+env(safe-area-inset-top))]">
+        <header className="z-40 flex shrink-0 items-center pb-3 pl-3 pr-[calc(0.75rem+var(--lfg-host-top-inset))] pt-[calc(0.5rem+env(safe-area-inset-top))]">
           <NavIsland className="shrink-0">
             <button
               type="button"
@@ -6688,7 +6688,7 @@ export function App() {
          Artifacts with no chrome at all — no way back to Live except browser
          history. The host owns identity/settings chrome, not LFG's page
          navigation, so the individual chrome below is gated instead. */
-      <header className="relative z-40 flex shrink-0 items-center justify-between gap-2 px-2 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))] md:px-3">
+      <header className="relative z-40 flex shrink-0 items-center justify-between gap-2 px-2 pb-3 pt-[calc(0.5rem+env(safe-area-inset-top))] md:px-3 md:pb-1">
         <NavIsland className="shrink-0">
           <div className="glass-island flex h-11 items-center rounded-full px-1.5">
             {isMobile && (tab === "notifications" || tab === "artifacts") ? (
@@ -18792,24 +18792,16 @@ function AgentConcurrencySettingsSection({
             <ChevronDown className="size-3 text-muted-foreground/70" />
           </label>
         </div>
-        {/* Pause switch */}
-        <button
-          type="button"
-          onClick={() => void togglePause(!settings.agentsPaused)}
-          disabled={pausing}
-          className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left transition-colors duration-150 ease-ios hover:bg-foreground/[0.03] active:bg-foreground/[0.06] disabled:opacity-60"
-        >
+        <div className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left">
           <div className="flex min-w-0 items-center gap-3">
             <span className={cn(
-              "flex size-7 shrink-0 items-center justify-center rounded-[7px] text-white",
+              "flex size-7 shrink-0 items-center justify-center rounded-[7px] text-white transition-colors duration-200 ease-apple",
               settings.agentsPaused ? "bg-warning" : "bg-foreground/70",
             )}>
-              {settings.agentsPaused ? <Play className="size-4" /> : <Pause className="size-4" />}
+              <Pause className="size-4" />
             </span>
             <div className="min-w-0">
-              <div className="text-sm font-medium">
-                {settings.agentsPaused ? "Resume new agents" : "Pause new agents"}
-              </div>
+              <div className="text-sm font-medium">Pause new agents</div>
               <div className={cn(
                 "text-xs",
                 settings.agentsPaused ? "font-medium text-warning" : "text-muted-foreground",
@@ -18820,7 +18812,13 @@ function AgentConcurrencySettingsSection({
               </div>
             </div>
           </div>
-        </button>
+          <Switch
+            checked={settings.agentsPaused}
+            onCheckedChange={(next) => void togglePause(next)}
+            disabled={pausing}
+            aria-label="Pause new agents"
+          />
+        </div>
       </div>
       <p className="px-4 text-xs text-muted-foreground">
         The limit counts agents actively working (a turn in flight) — the intensive ones — not idle open sessions. New agents past the limit (or while paused) are rejected; in-flight agents keep running. The systemd slice is the hard memory bound.
