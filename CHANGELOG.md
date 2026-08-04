@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 4, 2026 - One reconnect, one message (v0.1.240)
+
+- Embedded Computer surfaces now share the same reconnect notification from
+  interruption through recovery, so returning to Home or Settings cannot show
+  "Reconnected" twice for one physical connection.
+
 ## August 3, 2026 - The welcome comes home to omg (v0.1.239)
 
 - omg.dev's mobile Computer now shows the same personal Live welcome, active
