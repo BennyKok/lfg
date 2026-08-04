@@ -145,6 +145,7 @@ import {
   spawnManagedCodexSession,
   spawnManagedGrokSession,
   spawnManagedCursorSession,
+  relaunchCursorSessionWithModel,
   spawnManagedAisdkSession,
   spawnManagedCodexAisdkSession,
   spawnManagedOpencodeAisdkSession,
@@ -4207,6 +4208,7 @@ export async function cmdServe() {
               : undefined,
           launchState: "launching",
           model: launchModel,
+          thinkingLevel,
           claudeAccountId,
           title: requestedTitle || body?.prompt?.slice(0, 72),
           project: repo.project,
@@ -5166,6 +5168,69 @@ export async function cmdServe() {
           }
           const msg = enqueueMessage(m[1], `/model ${model}`);
           return json({ ok: true, msg });
+        }
+      }
+
+      // Change the reasoning effort used by subsequent turns of a live
+      // session. Command-file SDK backends update their in-memory control
+      // plane; native Claude/Grok TUIs already expose direct slash commands.
+      // Cursor's effort is part of its model variant, so an idle Cursor pane is
+      // resumed on the matching variant while preserving the same chat.
+      {
+        const m = path.match(/^\/api\/sessions\/([0-9a-fA-F-]{36})\/thinking-level$/);
+        if (m && req.method === "POST") {
+          const body = (await req.json().catch(() => null)) as {
+            thinkingLevel?: string;
+          } | null;
+          const thinkingLevel = body?.thinkingLevel?.trim();
+          if (!thinkingLevel) return err(400, "expected { thinkingLevel }");
+          const sess = (await listSessions()).find((s) => s.sessionId === m[1]);
+          if (!sess) return err(404, "session not found");
+          const supported = thinkingLevelsForAgent(sess.agent);
+          // Claude Agent SDK supports `max` as a launch option, but its live
+          // Settings API currently accepts only through `xhigh`.
+          const allowed = sess.agent === "aisdk"
+            ? supported?.filter((level) => level !== "max")
+            : supported;
+          if (!allowed)
+            return err(409, `mid-session thinking-level change is not supported for ${sess.agent} sessions`);
+          if (!allowed.includes(thinkingLevel))
+            return err(400, `unknown thinking level "${thinkingLevel}" for ${sess.agent} (expected one of ${allowed.join(", ")})`);
+
+          if (sess.agent === "aisdk" || sess.agent === "codex-aisdk" || sess.agent === "pi") {
+            const entry = findAisdkEntryByAnyId(m[1]);
+            if (!entry) return err(409, "session control process is unavailable");
+            appendAisdkCmd(entry.sessionId, { type: "set_thinking_level", thinkingLevel });
+            patchAisdkEntry(entry.sessionId, { thinkingLevel });
+          } else if (sess.agent === "claude" || sess.agent === "grok") {
+            if (!sess.tmuxTarget)
+              return err(409, "session is not in a tmux pane — cannot change thinking level");
+            enqueueMessage(m[1], `/effort ${thinkingLevel}`);
+          } else if (sess.agent === "cursor") {
+            if (sess.busy)
+              return err(409, "wait for the current Cursor turn to finish before changing thinking level");
+            if (!sess.tmuxTarget || !sess.cwd || !sess.nativeSessionId || !sess.model)
+              return err(409, "cannot relaunch Cursor: live pane, chat id, cwd, or model is unknown");
+            if (sess.model === "auto")
+              return err(409, "Cursor auto mode does not expose a selectable thinking level");
+            const baseModel = sess.model.replace(/\[[^\]]*\]$/, "");
+            const model = resolveModelForAgent("cursor", baseModel, thinkingLevel);
+            if (!model) return err(409, "no Cursor model variant matches that thinking level");
+            const relaunched = relaunchCursorSessionWithModel({
+              tmuxTarget: sess.tmuxTarget,
+              cwd: sess.cwd,
+              nativeSessionId: sess.nativeSessionId,
+              model,
+            });
+            if (!relaunched.ok) return err(500, relaunched.error || "Cursor relaunch failed");
+            if (sess.tmuxName) patchManaged(sess.tmuxName, { model });
+          } else {
+            return err(409, `mid-session thinking-level change is not supported for ${sess.agent} sessions`);
+          }
+
+          if (sess.tmuxName) patchManaged(sess.tmuxName, { thinkingLevel });
+          invalidateListSessionsCache();
+          return json({ ok: true, thinkingLevel });
         }
       }
 

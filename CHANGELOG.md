@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 4, 2026 - Thinking controls, in the moment (v0.1.243)
+
+- Live session headers now show the active thinking level and let you change it
+  for subsequent turns without starting over; each agent offers only the levels
+  its current runtime supports.
+
 ## August 4, 2026 - Mobile controls return (v0.1.242)
 
 - The standalone mobile Live header once again shows its top-right account and

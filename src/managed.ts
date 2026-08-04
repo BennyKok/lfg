@@ -39,6 +39,8 @@ export type ManagedSession = {
   launchState?: "launching" | "running" | "failed";
   launchError?: string;
   model?: string;
+  /** Reasoning effort selected for subsequent turns, when the agent supports it. */
+  thinkingLevel?: string;
   /** Isolated Claude subscription account pinned when this session launched. */
   claudeAccountId?: string;
   title?: string;

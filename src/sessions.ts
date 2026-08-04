@@ -310,6 +310,10 @@ export type Session = {
   // `/model` switch, not just the launch flag), falling back to the launch
   // `--model` arg. null when not yet known (e.g. no assistant output yet).
   model: string | null;
+  // Reasoning effort currently selected for subsequent turns. Null for agents
+  // without a live effort control or older sessions launched before it was
+  // tracked.
+  thinkingLevel?: string | null;
   // Health of the session as far as the build is concerned. "ok" = running
   // normally; "blocked" = the session can't make forward progress until a
   // human acts (e.g. its model was retired/disabled, or the agent ran out of
@@ -514,6 +518,7 @@ export function managedLaunchRow(
       agent === "codex" || agent === "codex-aisdk" || agent === "opencode" || agent === "grok" || agent === "cursor" || agent === "hermes"
         ? model
         : modelAlias(model),
+    thinkingLevel: m.thinkingLevel ?? null,
     ...computeStatus(null, null),
   };
 }
@@ -2025,6 +2030,7 @@ export async function listSessions(): Promise<Session[]> {
       managed: isManagedName(tmuxName),
       assignedUser: tmuxName ? (assigns[tmuxName] ?? null) : null,
       model,
+      thinkingLevel: managedRec?.thinkingLevel ?? e.cmd.match(/--effort\s+(\S+)/)?.[1] ?? null,
       status: health.status,
       statusReason: health.statusReason,
       statusDetail: health.statusDetail,
@@ -2164,6 +2170,10 @@ export async function listSessions(): Promise<Session[]> {
       // Codex model isn't switchable mid-session from lfg; surface the launch
       // arg verbatim (its names are catalog-driven, not the Claude aliases).
       model: p.cmd.match(/--model\s+(\S+)/)?.[1] ?? null,
+      thinkingLevel:
+        managedRec?.thinkingLevel ??
+        p.cmd.match(/reasoning_effort=(?:"([^"]+)"|'([^']+)'|(\S+))/)?.slice(1).find(Boolean) ??
+        null,
       ...computeStatus(last, null),
     });
   }
@@ -2242,6 +2252,7 @@ export async function listSessions(): Promise<Session[]> {
       managed: !!managedRec || (tmuxName ? isManagedName(tmuxName) : false),
       assignedUser: tmuxName ? (assigns[tmuxName] ?? null) : null,
       model: summary?.current_model_id ?? cmd.match(/--model\s+(\S+)/)?.[1] ?? null,
+      thinkingLevel: managedRec?.thinkingLevel ?? cmd.match(/--(?:reasoning-)?effort\s+(\S+)/)?.[1] ?? null,
       ...computeStatus(last, null),
     });
   }
@@ -2274,6 +2285,7 @@ export async function listSessions(): Promise<Session[]> {
       managed: true,
       assignedUser: assigns[m.tmuxName] ?? null,
       model: cmd.match(/--model\s+(\S+)/)?.[1] ?? null,
+      thinkingLevel: m.thinkingLevel ?? cmd.match(/--(?:reasoning-)?effort\s+(\S+)/)?.[1] ?? null,
       ...computeStatus(null, null),
     });
   }
@@ -2374,6 +2386,7 @@ export async function listSessions(): Promise<Session[]> {
       managed: true,
       assignedUser: assigns[m.tmuxName] ?? null,
       model: m.model ?? cmd.match(/--model\s+(\S+)/)?.[1] ?? null,
+      thinkingLevel: m.thinkingLevel ?? null,
       ...computeStatus(last, null),
     });
   }
@@ -2459,6 +2472,7 @@ export async function listSessions(): Promise<Session[]> {
       // pass them through raw. modelAlias would leave them unchanged anyway, but
       // be explicit about intent.
       model: isCodex || isOpencode ? e.model : modelAlias(e.model),
+      thinkingLevel: e.thinkingLevel ?? managedRec?.thinkingLevel ?? null,
       ...(e.recoveredAt
         ? {
             status: "blocked" as const,

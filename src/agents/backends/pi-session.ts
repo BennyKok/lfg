@@ -156,7 +156,7 @@ export async function cmdPiSession(argv: string[]): Promise<void> {
   // own session id (learned right after the RpcClient starts).
   const keyArg = arg(argv, "--key");
   const model = arg(argv, "--model") ?? "sonnet";
-  const thinkingLevel = arg(argv, "--thinking-level");
+  let thinkingLevel = arg(argv, "--thinking-level");
   const cwd = arg(argv, "--cwd") ?? process.cwd();
   const tmuxName = arg(argv, "--managed-name") ?? arg(argv, "--tmux") ?? "";
   const recoveredAt = Number(arg(argv, "--recovered-at")) || null;
@@ -397,6 +397,15 @@ export async function cmdPiSession(argv: string[]): Promise<void> {
       }
     } else if (cmd.type === "interrupt") {
       interrupt();
+    } else if (cmd.type === "set_thinking_level") {
+      const next = piThinkingFor(cmd.thinkingLevel);
+      if (!next) return;
+      thinkingLevel = cmd.thinkingLevel;
+      void client.setThinkingLevel(next as Parameters<typeof client.setThinkingLevel>[0]).then(() => {
+        patchEntry(key, { thinkingLevel });
+      }).catch((error) => {
+        console.error(`pi-session thinking-level change failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
     } else if (cmd.type === "close") {
       shutdown();
     }

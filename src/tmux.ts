@@ -821,6 +821,38 @@ export function spawnManagedCursorSession(opts: ManagedCursorSessionOptions): {
   return { ok: true, nativeSessionId };
 }
 
+// Cursor encodes reasoning effort in its parameterized model id. Changing the
+// level therefore means resuming the same chat with a different explicit model
+// variant. Keep the stable tmux pane/runtime while replacing only the Cursor
+// process, mirroring the unavailable-model recovery path for Claude.
+export function relaunchCursorSessionWithModel(opts: {
+  tmuxTarget: string;
+  cwd: string;
+  nativeSessionId: string;
+  model: string;
+}): { ok: boolean; error?: string } {
+  const dec = new TextDecoder();
+  ensureCursorFolderTrusted(opts.cwd);
+  const r = Bun.spawnSync(cursorRelaunchArgv(opts));
+  if (r.exitCode !== 0)
+    return { ok: false, error: dec.decode(r.stderr) || "respawn-pane failed" };
+  return { ok: true };
+}
+
+export function cursorRelaunchArgv(opts: {
+  tmuxTarget: string;
+  cwd: string;
+  nativeSessionId: string;
+  model: string;
+}): string[] {
+  return [
+    "tmux", "respawn-pane", "-k", "-c", opts.cwd, "-t", opts.tmuxTarget,
+    cursorBin(), "--yolo", "--sandbox", "disabled",
+    "--resume", opts.nativeSessionId,
+    "--model", opts.model,
+  ];
+}
+
 export function spawnManagedHermesSession(opts: {
   name: string;
   cwd: string;

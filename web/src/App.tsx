@@ -502,6 +502,7 @@ export type Session = {
   managed?: boolean;
   assignedUser?: string | null;
   model?: string | null;
+  thinkingLevel?: string | null;
   parentSessionId?: string | null;
   parentNativeSessionId?: string | null;
   parentAgent?: string | null;
@@ -12854,6 +12855,95 @@ function RailSessionContextMenu({
   );
 }
 
+const LIVE_THINKING_AGENTS = new Set([
+  "claude",
+  "aisdk",
+  "codex-aisdk",
+  "grok",
+  "cursor",
+  "pi",
+]);
+
+function SessionThinkingLevelMenu({
+  session,
+  onRefresh,
+  onError,
+}: {
+  session: Session;
+  onRefresh: () => Promise<void>;
+  onError: (error: string | null) => void;
+}) {
+  const sid = session.sessionId;
+  const agent = session.agent as AgentKind | undefined;
+  const supportedLevels = useAgentThinkingLevels(agent ?? "aisdk");
+  const levels = agent === "aisdk"
+    ? supportedLevels.filter((level) => level !== "max")
+    : supportedLevels;
+  const [changing, setChanging] = useState(false);
+  if (
+    !sid ||
+    !agent ||
+    session.shippedReview ||
+    !LIVE_THINKING_AGENTS.has(agent) ||
+    (agent === "cursor" && session.model === "auto") ||
+    !levels.length
+  ) return null;
+
+  async function changeThinkingLevel(thinkingLevel: string) {
+    if (!sid || !thinkingLevel || thinkingLevel === session.thinkingLevel || changing) return;
+    setChanging(true);
+    onError(null);
+    try {
+      await api(`/api/sessions/${sid}/thinking-level`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ thinkingLevel }),
+      });
+      localStorage.setItem("lfg_thinking_level", thinkingLevel);
+      await onRefresh();
+      toast.success(`Thinking level set to ${thinkingLevel}`);
+    } catch (error) {
+      onError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setChanging(false);
+    }
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <button
+            type="button"
+            disabled={changing}
+            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-muted/70 disabled:opacity-60"
+            aria-label="Change thinking level"
+            title="Change thinking level for the next turn"
+          />
+        }
+      >
+        {changing ? <Loader2 className="size-3 animate-spin" /> : <Gauge className="size-3" />}
+        <span>{session.thinkingLevel || "thinking"}</span>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-36">
+        <DropdownMenuRadioGroup
+          value={session.thinkingLevel ?? ""}
+          onValueChange={(value) =>
+            void changeThinkingLevel(typeof value === "string" ? value : "")
+          }
+        >
+          <DropdownMenuLabel>Thinking level</DropdownMenuLabel>
+          {levels.map((level) => (
+            <DropdownMenuRadioItem key={level} value={level}>
+              {level}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function SessionTitleSheet({
   sid,
   session,
@@ -13391,6 +13481,11 @@ function SessionTitleSheet({
               {idx + 1}/{order.length}
             </span>
           ) : null}
+          <SessionThinkingLevelMenu
+            session={session}
+            onRefresh={onRefresh}
+            onError={setError}
+          />
           <SessionActionsMenu
             session={session}
             busy={busy}
@@ -14154,6 +14249,13 @@ const onTouchStart = (e: ReactTouchEvent) => {
             {session.model}
           </span>
         ) : null)}
+        {!collapsedView ? (
+          <SessionThinkingLevelMenu
+            session={session}
+            onRefresh={onRefresh}
+            onError={setError}
+          />
+        ) : null}
         {/* Redundant on wide screens: the rail row for this session already
             carries the same dot on its avatar, so only the narrow (no-rail)
             grid layout needs it here. */}

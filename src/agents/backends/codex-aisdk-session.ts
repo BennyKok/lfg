@@ -188,7 +188,7 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
   // codex thread id (which we learn at thread.started on turn 1).
   const keyArg = arg(argv, "--key");
   const model = arg(argv, "--model") ?? "gpt-5.5";
-  const thinkingLevel = arg(argv, "--thinking-level");
+  let thinkingLevel = arg(argv, "--thinking-level");
   const cwd = arg(argv, "--cwd") ?? process.cwd();
   const tmuxName = arg(argv, "--managed-name") ?? arg(argv, "--tmux") ?? "";
   const recoveredAt = Number(arg(argv, "--recovered-at")) || null;
@@ -221,11 +221,10 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
   const codexPathOverride = resolveCodexPathOverride();
   // Omitting `env` inherits process.env (HOME → ~/.codex auth, LFG_* for MCP).
   const codex = new Codex(codexPathOverride ? { codexPathOverride } : {});
-  const opts = threadOptions(model, cwd, thinkingLevel ?? undefined);
-  const thread = resumeThreadId
-    ? codex.resumeThread(resumeThreadId, opts)
-    : codex.startThread(opts);
-
+  let threadThinkingLevel = thinkingLevel;
+  let thread = resumeThreadId
+    ? codex.resumeThread(resumeThreadId, threadOptions(model, cwd, thinkingLevel ?? undefined))
+    : codex.startThread(threadOptions(model, cwd, thinkingLevel ?? undefined));
   let threadId: string | null = resumeThreadId ?? null;
 
   // Control-plane registry entry — the moment this exists (and our pid is
@@ -267,6 +266,14 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
       { id: crypto.randomUUID(), role: "user", kind: "text", text: prompt, ts: Date.now() },
     ]);
     try {
+      // Thread options are fixed on a Codex SDK Thread. Recreate the handle
+      // only after an effort change; once the first turn has supplied its id,
+      // resume preserves the same persisted conversation.
+      if (thinkingLevel !== threadThinkingLevel) {
+        const opts = threadOptions(model, cwd, thinkingLevel ?? undefined);
+        thread = threadId ? codex.resumeThread(threadId, opts) : codex.startThread(opts);
+        threadThinkingLevel = thinkingLevel;
+      }
       const { events } = await thread.runStreamed(prompt, { signal });
       publishDraft("", true);
       for await (const event of events) {
@@ -358,6 +365,9 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
       }
     } else if (cmd.type === "interrupt") {
       currentAc?.abort();
+    } else if (cmd.type === "set_thinking_level") {
+      thinkingLevel = cmd.thinkingLevel;
+      patchEntry(key, { thinkingLevel });
     } else if (cmd.type === "close") {
       shutdown();
     }

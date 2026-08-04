@@ -86,6 +86,7 @@ export type AisdkEntry = {
 export type AisdkCommand =
   | { type: "send"; text: string }
   | { type: "set_model"; model: string }
+  | { type: "set_thinking_level"; thinkingLevel: string }
   | { type: "interrupt" }
   | { type: "close" }
   // OpenCode (and future headless) interactive questions — option index is the

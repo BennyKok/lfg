@@ -418,6 +418,20 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
       if (cmd.text.trim()) send(cmd.text);
     } else if (cmd.type === "interrupt") {
       void q.interrupt().catch(() => {});
+    } else if (cmd.type === "set_thinking_level") {
+      const nextEffort = effortFor(cmd.thinkingLevel);
+      // The query launch option accepts `max`, but the SDK's documented live
+      // Settings layer currently stops at `xhigh`.
+      if (!nextEffort || nextEffort === "max") return;
+      // Claude's streaming SDK exposes live flag settings on the same process.
+      // effortLevel is the setting behind the interactive `/effort` command;
+      // applying it here changes subsequent turns without adding a fake chat
+      // message or restarting the conversation.
+      void q.applyFlagSettings({ effortLevel: nextEffort }).then(() => {
+        patchEntry(sessionId, { thinkingLevel: cmd.thinkingLevel });
+      }).catch((error) => {
+        console.error(`aisdk-session thinking-level change failed: ${error instanceof Error ? error.message : String(error)}`);
+      });
     } else if (cmd.type === "close") {
       shutdown();
     }

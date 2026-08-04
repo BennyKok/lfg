@@ -21,6 +21,7 @@ import {
   spawnManagedSession,
   managedCopilotSessionArgv,
   managedCursorSessionArgv,
+  cursorRelaunchArgv,
   managedGrokSessionArgv,
   cursorChatIdFromOutput,
   containedAgentCommand,
@@ -127,6 +128,28 @@ describe("coding agent adapter contract", () => {
     ]);
     expect(cursorChatIdFromOutput(`Created chat: ${nativeSessionId}\n`)).toBe(nativeSessionId);
     expect(cursorChatIdFromOutput("chat creation failed")).toBeNull();
+  });
+
+  test("cursor thinking changes preserve the chat and replace only its model variant", () => {
+    const nativeSessionId = "74cb7cba-1e83-4c70-b0e0-248cce3ad5f4";
+    const argv = cursorRelaunchArgv({
+      tmuxTarget: "lfg-test:0.0",
+      cwd: "/tmp/lfg-test",
+      nativeSessionId,
+      model: "claude-opus[effort=high]",
+    });
+
+    expect(argv.slice(0, 7)).toEqual([
+      "tmux", "respawn-pane", "-k", "-c", "/tmp/lfg-test", "-t", "lfg-test:0.0",
+    ]);
+    expect(argv.slice(argv.indexOf("--resume"), argv.indexOf("--resume") + 2)).toEqual([
+      "--resume",
+      nativeSessionId,
+    ]);
+    expect(argv.slice(argv.indexOf("--model"), argv.indexOf("--model") + 2)).toEqual([
+      "--model",
+      "claude-opus[effort=high]",
+    ]);
   });
 
   test("grok managed sessions resume their native conversation", () => {
