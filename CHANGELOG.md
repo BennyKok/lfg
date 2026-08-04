@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 4, 2026 - A hosted welcome that knows you (v0.1.248)
+
+- Embedded LFG surfaces can now receive the signed-in viewer's display identity
+  from their host, so omg.dev's mobile Computer greets the person by name while
+  keeping LFG session ownership and authorization completely separate.
+
 ## August 4, 2026 - Questions stay in the conversation (v0.1.247)
 
 - Questions that need your input now appear inside the session that asked them,
