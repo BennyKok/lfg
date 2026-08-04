@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 4, 2026 - Mobile controls return (v0.1.242)
+
+- The standalone mobile Live header once again shows its top-right account and
+  pages island alongside the personal welcome. Hosted omg.dev surfaces still
+  leave that corner to the host's own controls.
+
 ## August 4, 2026 - The first message is yours again (v0.1.241)
 
 - LFG's launch instructions are shorter while preserving the narration,

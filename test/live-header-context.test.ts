@@ -16,6 +16,9 @@ describe("contextual mobile Live header", () => {
     expect(source).toContain(
       'w-[min(17rem,calc(100vw-var(--lfg-host-top-inset)-1.5rem))]',
     );
+    expect(source).toMatch(
+      /isMobile && tab === "live"[\s\S]*?<LiveHeaderContext[\s\S]*?embedded \? null : \([\s\S]*?<UserFilterMenu[\s\S]*?<PagesMenu/,
+    );
     expect(source).not.toContain('isMobile && tab === "live" && !embedded');
     expect(source).toContain("const welcomeMessage = `Welcome, ${firstName}`");
     expect(source).toContain('`${busyCount} agent${busyCount === 1 ? "" : "s"} building`');

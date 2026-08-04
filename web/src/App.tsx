@@ -6701,7 +6701,7 @@ export function App() {
            identical everywhere LFG's Live view is mounted. */
         <header
           className={cn(
-            "z-40 flex min-w-0 shrink-0 items-center pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))]",
+            "z-40 flex min-w-0 shrink-0 items-center justify-between gap-2 pb-1 pt-[calc(0.5rem+env(safe-area-inset-top))]",
             embedded
               ? "pl-3 pr-[calc(0.75rem+var(--lfg-host-top-inset))]"
               : "px-2 md:px-3",
@@ -6717,6 +6717,23 @@ export function App() {
             ).length}
             onOpenNotifications={() => setTab("notifications")}
           />
+          {embedded ? null : (
+            <NavIsland className="shrink-0">
+              <div className="glass-island flex h-11 items-center gap-1.5 rounded-full px-2">
+                <UserFilterMenu
+                  value={userFilter}
+                  users={users}
+                  onChange={changeUserFilter}
+                />
+                <PagesMenu
+                  tab={tab}
+                  onOpenTab={setTab}
+                  extraTabs={extNavTabs}
+                  showSettings
+                />
+              </div>
+            </NavIsland>
+          )}
         </header>
       ) : embedded && isMobile ? (
         /* Secondary embedded pages retain the compact omg mark. Mobile reaches
