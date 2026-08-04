@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 4, 2026 - Recovery needs one tap (v0.1.245)
+
+- Sessions recovered after a host restart now offer a one-tap Continue action,
+  and paused sessions use a clear pause icon in place of the normal green idle
+  dot without relying on emoji labels.
+
 ## August 4, 2026 - Thinking controls tuck in (v0.1.244)
 
 - The live thinking-level selector now lives inside the existing session menu
