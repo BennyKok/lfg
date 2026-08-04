@@ -3,6 +3,7 @@ import {
   LFG_CAPABILITIES,
   LFG_CAPABILITY_VERSION,
   lfgCapabilityAccess,
+  lfgRuntimeContract,
   withLfgRuntimeContract,
 } from "./lfg-capabilities.ts";
 
@@ -14,15 +15,19 @@ describe("LFG runtime capabilities", () => {
     expect(prompt).toContain("lfg_input");
     expect(prompt).toContain("to:'thread'");
     expect(prompt).toContain("to:'shipped'");
-    expect(prompt).toContain("SHIP, THEN DECIDE");
-    expect(prompt).toContain("SHIPPED IS NOT DEPLOYED");
     expect(prompt).toContain("closeSession:true");
-    expect(prompt).toContain("quick chats");
+    expect(prompt).toContain("closeSession:false");
+    expect(prompt).toContain("Shipped is not deployed");
     expect(prompt).toContain("scripts/land-session.sh");
     expect(prompt).toContain("uncommitted, unmerged, or not deployed");
     expect(prompt).toContain("lfg_find_sessions");
     expect(prompt).toContain("lfg_close_session");
     expect(prompt).toEndWith("=== USER TASK ===\nFix the mobile navigation");
+  });
+
+  test("keeps the runtime contract compact", () => {
+    expect(lfgRuntimeContract().split("\n").length).toBeLessThanOrEqual(10);
+    expect(lfgRuntimeContract().length).toBeLessThan(2_400);
   });
 
   test("does not duplicate the contract", () => {

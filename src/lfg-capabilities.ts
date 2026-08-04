@@ -3,7 +3,7 @@ import type { CodingAgentKind } from "./coding-agents.ts";
 // Bump whenever an agent-facing LFG capability or its operating guidance
 // changes. Managed sessions persist the value they launched with, which lets
 // the UI identify long-lived sessions whose MCP/tool catalog predates a ship.
-export const LFG_CAPABILITY_VERSION = "2026-07-29.3";
+export const LFG_CAPABILITY_VERSION = "2026-08-04.1";
 
 export const LFG_CAPABILITIES = [
   {
@@ -48,29 +48,22 @@ export function shortSessionId(id: string): string {
 
 export const LFG_MCP_INSTRUCTIONS = [
   `This is LFG's agent capability server (capability version ${LFG_CAPABILITY_VERSION}).`,
-  "The agent<->human channel is two verbs: lfg_output (tell) and lfg_input (ask).",
-  "Narrate your decisions and progress continuously through lfg_output so the session never goes dark; show verification media and verified completions the same way.",
-  "Decide autonomously and keep moving — use lfg_input only for a genuinely irreversible decision (non-blocking) or to consult the advisor. Use lfg_capabilities to detect a stale long-lived session, and LFG-managed delegation when delegation is explicitly requested.",
+  "Use lfg_output for every update to the human: narrate progress, show evidence, and publish verified results.",
+  "Decide autonomously; use lfg_input only for a genuinely irreversible decision or to consult the advisor. Use LFG-managed delegation only when delegation is explicitly requested.",
   `Session ids are returned in short form (${SHORT_SESSION_ID_LENGTH}-char prefix, like a git short sha). Pass them back exactly as given — any unambiguous prefix resolves to the full id.`,
 ].join(" ");
 
 export function lfgRuntimeContract(): string {
   return [
     `=== LFG RUNTIME CONTRACT (capability version ${LFG_CAPABILITY_VERSION}) ===`,
-    "- You are running as an LFG-managed coding agent. LFG features are part of the product workflow, not optional implementation trivia.",
-    "- The whole agent<->human channel is TWO verbs: `lfg_output` (tell the human) and `lfg_input` (ask the human). Reach for these first.",
-    "- NARRATE as you work: keep the human posted through `lfg_output` with `to:'thread'` at each meaningful decision or step. Do not go dark — a silent session is a failed session. This is a duty, not an option.",
-    "- Show evidence with `lfg_output` `to:'session'` — attach screenshots/recordings as `media`, or publish a self-contained report/dashboard as `html` (re-use `id` to update in place).",
-    "- SHIP, THEN DECIDE: publish a verified result with `lfg_output` `to:'shipped'`, a concise headline, tweet-length result, strongest evidence, and an explicit `closeSession` decision. Use `closeSession:true` only when the assigned task and conversation are genuinely finished; that successful call closes the session into the resumable roster and must be your final action. Use `closeSession:false` for quick chats, when immediate follow-up is likely, or whenever the session should remain live, and you may continue working afterward. Never ship planning, diagnosis-in-progress, partial work, or blocked work.",
-    "- SHIPPED IS NOT DEPLOYED: a Shipped post records a verified result but does not itself prove a production deployment. Never say work is deployed or use `closeSession:true` when the user's requested deployment has not been verified; narrate what remains and keep the session open.",
-    "- SOURCE CHANGES MUST LAND FIRST: when working in LFG's repository, commit the intended changes and run `scripts/land-session.sh` from the session worktree before shipping. It serializes the branch onto current `origin/main`, syncs/builds the local main checkout, and restarts LFG. Shipping is rejected while changes are uncommitted, unmerged, or not deployed at the current main revision.",
-    "- DECIDE, don't park: make the reasonable call yourself and narrate it. Use `lfg_input` (`from:'user'`) ONLY for a genuinely irreversible, risky, or ambiguous decision — never to check in or report progress. It is fire-and-forget: do not poll or block; the answer arrives later. Use `from:'advisor'` to consult LFG's advisor.",
-    "- The channel adapter owns transport identity and credentials; never request phone numbers or channel credentials.",
-    "- Use `lfg_find_sessions` to locate ended or historical sessions by id, owner, project, text, or last-activity range; use `lfg_list_sessions` for the live fleet.",
-    "- When the user or governing instructions explicitly request delegation, prefer `lfg_create_subagent` or `lfg_delegate_*` so children remain visible and linked in LFG.",
-    "- Use `lfg_close_session` only after resolving another session's exact id with `lfg_list_sessions`; never close your own session.",
-    `- Session ids are shown in short form (${SHORT_SESSION_ID_LENGTH}-char prefix, like a git short sha). Pass them back exactly as given; any unambiguous prefix resolves to the full id, and an ambiguous one is rejected rather than guessed.`,
-    "- If an exact LFG tool is unavailable, call `lfg_capabilities`. Report that the session needs a capability refresh only when it returns `stale: true`; otherwise report that the capability is unsupported. Do not reverse-engineer or call LFG's private HTTP endpoints as a substitute.",
+    "- You are an LFG-managed coding agent. Use `lfg_output` for everything sent to the human and `lfg_input` only when an answer is genuinely required.",
+    "- Keep the human posted: `lfg_output` with `to:'thread'` narrates meaningful progress; `to:'session'` shows screenshot/video evidence or a self-contained HTML report.",
+    "- Finish verified work with `lfg_output` `to:'shipped'`, a concise result and evidence. Set `closeSession:true` only when the task and conversation are finished, and make that your final action; otherwise use `closeSession:false`. Never ship partial or blocked work.",
+    "- Shipped is not deployed. If deployment was requested, verify it before claiming it or closing the session. For LFG source changes, commit and run `scripts/land-session.sh` before shipping; shipping rejects uncommitted, unmerged, or not deployed revisions.",
+    "- Decide and continue when safe. Use `lfg_input` `from:'user'` only for an irreversible, risky, or ambiguous decision; it is fire-and-forget, so do not poll. Use `from:'advisor'` for technical advice.",
+    "- Never request channel identity or credentials. Use `lfg_find_sessions` for history and `lfg_list_sessions` for live sessions. Before using `lfg_close_session`, resolve the target and never close your own session.",
+    "- Delegate only when explicitly requested, using `lfg_create_subagent` or `lfg_delegate_*` so children remain linked and visible.",
+    `- Session ids use an ${SHORT_SESSION_ID_LENGTH}-character prefix. Pass them back exactly as shown. If an LFG tool is missing, call \`lfg_capabilities\`; report a refresh only when it returns \`stale: true\`, otherwise report the feature as unsupported.`,
     "=== END LFG RUNTIME CONTRACT ===",
   ].join("\n");
 }

@@ -220,6 +220,7 @@ import {
   parseMessageAttachments,
   type MessageAttachment,
 } from "./lib/message-attachments";
+import { parseLfgPromptEnvelope } from "./lib/lfg-prompt-envelope";
 import {
   messagesForTranscriptView,
   type TranscriptView,
@@ -14809,6 +14810,42 @@ function UserBubble({ html, pending }: { html: string; pending?: boolean }) {
   );
 }
 
+// LFG's launch contract travels inside the first user turn because several
+// agent CLIs have no separate system-prompt channel. Keep it available for
+// inspection without making the user read through it to find their own task.
+function LfgInstructionsBlock({
+  instructions,
+  version,
+}: {
+  instructions: string;
+  version: string | null;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="flex max-w-[85%] flex-col items-end">
+      <button
+        type="button"
+        className="flex items-center gap-1.5 rounded-lg border border-border/70 bg-muted/45 px-2.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+      >
+        <ScrollText className="size-3.5" aria-hidden="true" />
+        <span>LFG instructions</span>
+        {version ? <span className="font-mono opacity-60">{version}</span> : null}
+        <ChevronRight
+          className={cn("size-3 transition-transform", open && "rotate-90")}
+          aria-hidden="true"
+        />
+      </button>
+      {open ? (
+        <pre className="mt-1 max-h-72 w-[min(42rem,85vw)] max-w-full overflow-auto whitespace-pre-wrap rounded-xl border border-border/70 bg-muted/30 p-3 text-left font-mono text-[11px] leading-relaxed text-muted-foreground">
+          {instructions}
+        </pre>
+      ) : null}
+    </div>
+  );
+}
+
 const MESSAGE_LONG_PRESS_MS = 460;
 const MESSAGE_LONG_PRESS_SLOP_PX = 10;
 
@@ -15043,14 +15080,21 @@ function MessageBubble({
   const sendMorphRef = useSendMorph<HTMLDivElement>(
     message.role === "user" && !!message.pending,
   );
+  const lfgEnvelope = useMemo(
+    () => (message.role === "user" ? parseLfgPromptEnvelope(message.text || "") : null),
+    [message.role, message.text],
+  );
   // Attachments ride along in the user's text as absolute upload paths (the
   // agent needs them); split them back out so the bubble shows the images.
   const userContent = useMemo(
     () =>
       message.role === "user"
-        ? renderableUserContent(message.text || "", message.html)
+        ? renderableUserContent(
+            lfgEnvelope?.task ?? message.text ?? "",
+            lfgEnvelope ? undefined : message.html,
+          )
         : { html: "", attachments: [] as MessageAttachment[] },
-    [message.role, message.text, message.html],
+    [message.role, message.text, message.html, lfgEnvelope],
   );
   if (isRequestInterruptedMessage(message)) {
     return (
@@ -15184,21 +15228,29 @@ function MessageBubble({
   }
 
   const isUser = message.role === "user";
-  if (isUser && userContent.attachments.length > 0) {
+  if (isUser) {
     return (
       <AiMessage
         ref={sendMorphRef}
         className={cn("msg", entering && "lfg-msg-in", message.pending && "lfg-user-send")}
         from="user"
       >
-        {/* w-full keeps MessageActions' 85% cap resolving against a definite
-            width (see its own note) now that a column sits between them. */}
+        {/* w-full keeps each 85% cap resolving against a definite width. The
+            launch contract is visually separate from the user's actual task. */}
         <div className="flex w-full min-w-0 flex-col items-end gap-1.5">
-          <UserAttachments attachments={userContent.attachments} pending={message.pending} />
+          {lfgEnvelope ? (
+            <LfgInstructionsBlock
+              instructions={lfgEnvelope.instructions}
+              version={lfgEnvelope.version}
+            />
+          ) : null}
+          {userContent.attachments.length > 0 ? (
+            <UserAttachments attachments={userContent.attachments} pending={message.pending} />
+          ) : null}
           {/* A caption is optional: attach an image with nothing typed and the
               picture is the whole message, with no empty bubble under it. */}
           {userContent.html ? (
-            <MessageActions text={message.text || ""} isUser>
+            <MessageActions text={lfgEnvelope?.task ?? message.text ?? ""} isUser>
               <UserBubble html={userContent.html} pending={message.pending} />
             </MessageActions>
           ) : null}
@@ -15219,32 +15271,24 @@ function MessageBubble({
         // entrance, so the two never double up).
         isUser && message.pending && "lfg-user-send",
       )}
-      from={isUser ? "user" : "assistant"}
+      from="assistant"
     >
-      <MessageActions text={message.text || ""} isUser={isUser}>
-        {isUser ? (
-          // User turns are plain/escaped and rendered as a content-width bubble
-          // hugged to the right. Long turns collapse to ~10 lines with a
-          // "Show more" toggle. Pending state is handled in the border so the
-          // text stays steady while the send is in flight.
-          <UserBubble html={userContent.html} pending={message.pending} />
-        ) : (
-          // Assistant turns render markdown from the raw source via Streamdown,
-          // which tolerates half-finished markdown mid-stream (no html injection).
-          <MessageContent>
-            {message.text ? (
-              <MessageResponse
-                animated={STREAMING_RESPONSE_ANIMATION}
-                isAnimating={isDraftAssistantMessage(message) && !message.catchUp}
-                mode={isDraftAssistantMessage(message) ? "streaming" : "static"}
-              >
-                {message.text}
-              </MessageResponse>
-            ) : (
-              <TypingIndicator />
-            )}
-          </MessageContent>
-        )}
+      <MessageActions text={message.text || ""} isUser={false}>
+        {/* Assistant turns render markdown from the raw source via Streamdown,
+            which tolerates half-finished markdown mid-stream (no html injection). */}
+        <MessageContent>
+          {message.text ? (
+            <MessageResponse
+              animated={STREAMING_RESPONSE_ANIMATION}
+              isAnimating={isDraftAssistantMessage(message) && !message.catchUp}
+              mode={isDraftAssistantMessage(message) ? "streaming" : "static"}
+            >
+              {message.text}
+            </MessageResponse>
+          ) : (
+            <TypingIndicator />
+          )}
+        </MessageContent>
       </MessageActions>
     </AiMessage>
   );
