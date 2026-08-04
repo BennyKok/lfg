@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 4, 2026 - Thinking controls tuck in (v0.1.244)
+
+- The live thinking-level selector now lives inside the existing session menu
+  on desktop and mobile, keeping session headers focused while still showing
+  the current level at a glance in the menu.
+
 ## August 4, 2026 - Thinking controls, in the moment (v0.1.243)
 
 - Live session headers now show the active thinking level and let you change it

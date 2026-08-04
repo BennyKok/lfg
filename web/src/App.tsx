@@ -151,6 +151,7 @@ import {
   Bot,
   Boxes,
   Braces,
+  BrainCircuit,
   CalendarClock,
   ClipboardList,
   Copy,
@@ -12590,6 +12591,11 @@ function SessionActionsMenu({
               </DropdownMenuRadioGroup>
             </DropdownMenuSubContent>
           </DropdownMenuSub>
+          <SessionThinkingLevelSubmenu
+            session={session}
+            onRefresh={onRefresh}
+            onError={onError}
+          />
           {onTogglePin ? (
             <DropdownMenuItem disabled={!sid} onClick={() => sid && onTogglePin(sid)}>
               <Pin className="size-4" fill={pinned ? "currentColor" : "none"} />
@@ -12864,7 +12870,7 @@ const LIVE_THINKING_AGENTS = new Set([
   "pi",
 ]);
 
-function SessionThinkingLevelMenu({
+function SessionThinkingLevelSubmenu({
   session,
   onRefresh,
   onError,
@@ -12910,22 +12916,19 @@ function SessionThinkingLevelMenu({
   }
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        render={
-          <button
-            type="button"
-            disabled={changing}
-            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground hover:bg-muted/70 disabled:opacity-60"
-            aria-label="Change thinking level"
-            title="Change thinking level for the next turn"
-          />
-        }
-      >
-        {changing ? <Loader2 className="size-3 animate-spin" /> : <Gauge className="size-3" />}
-        <span>{session.thinkingLevel || "thinking"}</span>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-36">
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger disabled={changing}>
+        {changing ? (
+          <Loader2 className="size-4 animate-spin" />
+        ) : (
+          <BrainCircuit className="size-4" />
+        )}
+        <span className="flex-1">Thinking level</span>
+        <span className="text-xs text-muted-foreground">
+          {session.thinkingLevel || "Default"}
+        </span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent align="start" className="min-w-40">
         <DropdownMenuRadioGroup
           value={session.thinkingLevel ?? ""}
           onValueChange={(value) =>
@@ -12939,8 +12942,8 @@ function SessionThinkingLevelMenu({
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   );
 }
 
@@ -13481,11 +13484,6 @@ function SessionTitleSheet({
               {idx + 1}/{order.length}
             </span>
           ) : null}
-          <SessionThinkingLevelMenu
-            session={session}
-            onRefresh={onRefresh}
-            onError={setError}
-          />
           <SessionActionsMenu
             session={session}
             busy={busy}
@@ -14249,13 +14247,6 @@ const onTouchStart = (e: ReactTouchEvent) => {
             {session.model}
           </span>
         ) : null)}
-        {!collapsedView ? (
-          <SessionThinkingLevelMenu
-            session={session}
-            onRefresh={onRefresh}
-            onError={setError}
-          />
-        ) : null}
         {/* Redundant on wide screens: the rail row for this session already
             carries the same dot on its avatar, so only the narrow (no-rail)
             grid layout needs it here. */}
