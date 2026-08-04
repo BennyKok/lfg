@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 4, 2026 - Questions stay in the conversation (v0.1.247)
+
+- Questions that need your input now appear inside the session that asked them,
+  with suggested answers and a freeform reply box available right where the
+  conversation is already open.
+- Thinking-level menus now use the simpler visible label "Thinking" across new
+  sessions, forks, and agent workflows while keeping every level selectable.
+
 ## August 4, 2026 - Image quality stays visible (v0.1.246)
 
 - Every image attachment now shows its HD quality control immediately. Large
