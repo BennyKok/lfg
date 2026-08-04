@@ -328,6 +328,7 @@ import {
   AskNavButton,
   AskProvider,
   QuestionNotification,
+  SessionQuestionPanel,
   stripMd,
   useAsk,
 } from "./components/ask-center";
@@ -12161,6 +12162,8 @@ function SessionChatBody({
         onLoadOlderMessages={loadOlderMessages}
       />
 
+      <SessionQuestionPanel sessionIds={[session.sessionId, session.nativeSessionId]} />
+
       <PromptPanel prompt={prompt} sid={sid} onError={onError} />
 
       {error ? (
@@ -13809,22 +13812,12 @@ function ForkSessionDialog({
 
             <ModelPicker value={model} models={models} onChange={setModel} width="max-w-28" />
 
-            {agentSupportsThinking(agent) ? (
-              <FieldPill>
-                <select
-                  value={thinkingLevel}
-                  onChange={(e) => setThinkingLevel(e.target.value as ThinkingLevel)}
-                  aria-label="Thinking level"
-                  className="max-w-24 appearance-none truncate bg-transparent pr-1 text-xs font-medium outline-none"
-                >
-                  {thinkingLevels.map((item) => (
-                    <option key={item} value={item}>
-                      {item}
-                    </option>
-                  ))}
-                </select>
-              </FieldPill>
-            ) : null}
+            <ThinkingLevelPill
+              agent={agent}
+              value={thinkingLevel}
+              levels={thinkingLevels}
+              onChange={setThinkingLevel}
+            />
           </div>
 
           <div className="mt-4 flex items-center gap-2">
@@ -17136,7 +17129,7 @@ function FieldPill({ icon, children, flat = false }: { icon?: ReactNode; childre
   return (
     <label
       className={cn(
-        "inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-full text-foreground",
+        "relative inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-full text-foreground",
         flat ? "px-1" : "bg-muted px-3",
       )}
     >
@@ -17166,11 +17159,13 @@ function ThinkingLevelPill({
   if (!agentSupportsThinking(agent)) return null;
   return (
     <FieldPill flat={flat}>
+      <span className="text-xs font-medium">Thinking</span>
       <select
         value={value}
         onChange={(e) => onChange(e.target.value as ThinkingLevel)}
-        aria-label="Thinking level"
-        className="max-w-24 appearance-none truncate bg-transparent pr-1 text-xs font-medium outline-none"
+        aria-label="Thinking"
+        title={`Thinking: ${value}`}
+        className="absolute inset-0 size-full cursor-pointer appearance-none opacity-0"
       >
         {levels.map((item) => (
           <option key={item} value={item}>

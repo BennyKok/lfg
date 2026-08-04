@@ -38,6 +38,21 @@ describe("questions live inside the Notification Center", () => {
     expect(center).not.toContain("Show more");
   });
 
+  test("the owning session renders and answers its ask-user questions in place", async () => {
+    const source = await app();
+    const center = await askCenter();
+    expect(source).toContain(
+      "<SessionQuestionPanel sessionIds={[session.sessionId, session.nativeSessionId]} />",
+    );
+    expect(center).toContain("export function SessionQuestionPanel({");
+    expect(center).toContain("aliases.has(q.sessionId)");
+    expect(center).toContain('<QuestionNotification key={q.id} q={q} compactPreview={false} />');
+    // The shared card owns both suggested answers and a freeform composer, so
+    // the in-session surface cannot drift from the Notification Center path.
+    expect(center).toContain("onClick={() => void answer(q, o)}");
+    expect(center).toContain("onClick={() => void answer(q, draft)}");
+  });
+
   test("a question can always be dismissed, on any device", async () => {
     const center = await askCenter();
     const dismissButton = center.slice(

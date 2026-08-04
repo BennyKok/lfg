@@ -9,7 +9,8 @@
 //   • <AskProvider/>         — the single poll loop + queue, read by everything
 //   • useAsk()               — questions + answer/dismiss for the feed
 //   • <AskNavButton/>        — urgency badge; opens the Notification Center
-//   • <QuestionNotification/>— one answerable cell rendered by the feed
+//   • <QuestionNotification/>— one answerable question card
+//   • <SessionQuestionPanel/>— the owning session's in-conversation reply surface
 
 import {
   createContext,
@@ -247,6 +248,33 @@ export function AskNavButton({
         {count > 9 ? "9+" : count}
       </span>
     </button>
+  );
+}
+
+// Keep an ask-user question in the conversation that raised it. The same
+// session can have an LFG id and a provider-native id (especially after resume),
+// so callers pass both aliases and either one owns the question.
+export function SessionQuestionPanel({
+  sessionIds,
+}: {
+  sessionIds: Array<string | null | undefined>;
+}) {
+  const { questions } = useAsk();
+  const aliases = new Set(sessionIds.filter((id): id is string => !!id));
+  const matching = questions.filter((q) => !!q.sessionId && aliases.has(q.sessionId));
+
+  if (!matching.length) return null;
+  return (
+    <section
+      aria-label={
+        matching.length === 1 ? "Question from this session" : "Questions from this session"
+      }
+      className="max-h-80 shrink-0 overflow-y-auto border-t border-primary/20 bg-primary/5"
+    >
+      {matching.map((q) => (
+        <QuestionNotification key={q.id} q={q} compactPreview={false} />
+      ))}
+    </section>
   );
 }
 
