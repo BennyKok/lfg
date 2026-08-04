@@ -22,6 +22,7 @@ import type { CodingAgentKind } from "./coding-agents";
 import { LFG_CAPABILITY_VERSION } from "./lfg-capabilities.ts";
 import {
   cachedFingerprints,
+  getCachedTranscriptPath,
   upsertResumableRows,
   pruneResumableExcept,
   queryHistoricalCache,
@@ -2281,6 +2282,23 @@ export async function listSessions(): Promise<Session[]> {
     const tmuxTarget = tmux.targetForPid(pid) ?? `${m.tmuxName}:0.0`;
     const cmd = readProcCmd(pid, "grok");
     const project = m.project || projectName(m.cwd, { repoRoot: m.repoRoot });
+    // Process left active_sessions.json but the pane is still up — still bind
+    // the transcript via the remembered native id so the live view does not
+    // flash empty mid-exit.
+    const transcriptPath = m.nativeSessionId
+      ? await profileAsync(profile, "findGrokTranscriptById_ms", () => findGrokTranscriptById(m.nativeSessionId!))
+      : null;
+    let last: SessionMsg | null = null;
+    let lastActivityAt: number | null = m.createdAt;
+    let lastUser: string | null = null;
+    if (transcriptPath) {
+      try {
+        lastActivityAt = statSync(transcriptPath).mtimeMs;
+      } catch {}
+      const meta = await profileAsync(profile, "transcriptTailMeta_ms", () => transcriptTailMeta(transcriptPath, lastActivityAt ?? 0));
+      last = meta.last;
+      lastUser = meta.lastUser;
+    }
     out.push({
       agent: "grok",
       pid,
@@ -2288,22 +2306,22 @@ export async function listSessions(): Promise<Session[]> {
       cwd: m.cwd,
       project,
       title: overrides[m.sessionId!] || (m.cwd ? basename(m.cwd) : project),
-      lastUserText: null,
+      lastUserText: lastUser,
       sessionId: m.sessionId!,
       nativeSessionId: m.nativeSessionId ?? null,
       ...managedLineage(m),
-      launching: m.launchState === "launching",
+      launching: m.launchState === "launching" && !transcriptPath,
       startedAt: m.createdAt,
-      transcriptPath: null,
-      lastActivityAt: m.createdAt,
-      last: null,
+      transcriptPath,
+      lastActivityAt,
+      last,
       tmuxTarget,
       tmuxName: m.tmuxName,
       managed: true,
       assignedUser: assigns[m.tmuxName] ?? null,
       model: cmd.match(/--model\s+(\S+)/)?.[1] ?? null,
       thinkingLevel: m.thinkingLevel ?? cmd.match(/--(?:reasoning-)?effort\s+(\S+)/)?.[1] ?? null,
-      ...computeStatus(null, null),
+      ...computeStatus(last, null),
     });
   }
 
@@ -2664,13 +2682,13 @@ export async function resolveTranscript(sessionId: string): Promise<string | nul
   if (managed?.nativeSessionId && managed.nativeSessionId !== sessionId) {
     const native =
       (managed.agent === "grok"
-        ? findGrokTranscriptById(managed.nativeSessionId)
+        ? await findGrokTranscriptById(managed.nativeSessionId)
         : managed.agent === "codex-aisdk"
           ? await findCodexTranscriptById(managed.nativeSessionId)
           : await findTranscriptById(managed.nativeSessionId)) ??
       (await findTranscriptById(managed.nativeSessionId)) ??
       (await findCodexTranscriptById(managed.nativeSessionId)) ??
-      findGrokTranscriptById(managed.nativeSessionId);
+      (await findGrokTranscriptById(managed.nativeSessionId));
     if (native) return native;
     if (managed.cwd && managed.agent !== "codex-aisdk" && managed.agent !== "grok") {
       for (const d of candidateDirs(managed.cwd)) {
@@ -2680,16 +2698,24 @@ export async function resolveTranscript(sessionId: string): Promise<string | nul
   }
   const managedGrok = listManaged().find((m) => m.agent === "grok" && m.sessionId === sessionId);
   if (managedGrok) {
+    if (managedGrok.nativeSessionId) {
+      const byNative = await findGrokTranscriptById(managedGrok.nativeSessionId);
+      if (byNative) return byNative;
+    }
     const pid = panePidForSession(managedGrok.tmuxName);
     const grokId = pid ? grokSessionIdForPid(pid) : null;
-    if (grokId) return findGrokTranscriptById(grokId);
+    if (grokId) return await findGrokTranscriptById(grokId);
   }
   let p =
     (await findTranscriptById(sessionId)) ??
     (await findCodexTranscriptById(sessionId)) ??
-    findGrokTranscriptById(sessionId) ??
+    (await findGrokTranscriptById(sessionId)) ??
     (await findCursorTranscriptById(sessionId));
   if (p) return p;
+  // Closed dual-id sessions (Grok/Cursor): live managed row is gone, but close
+  // persisted the LFG sessionId → transcript path mapping in resume-cache.
+  const cached = getCachedTranscriptPath(sessionId);
+  if (cached) return cached;
   return null;
 }
 

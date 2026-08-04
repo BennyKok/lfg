@@ -791,7 +791,18 @@ function persistManagedResume(session: Session): void {
     session.nativeSessionId ??
     session.transcriptPath?.match(/[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}/)?.[0] ??
     session.sessionId;
-  const sessionId = backend ? session.sessionId : fileBackedId;
+  // Grok/Cursor mint a stable LFG sessionId for the UI, while the on-disk
+  // transcript is named by the native chat id. After close we removeManaged the
+  // live mapping; if resume-cache only stores the native id, resolveTranscript
+  // (and WS subscribe) for the LFG id return null and the UI shows an empty
+  // transcript. Persist under the LFG id (managed so prune keeps it) with
+  // resumeHandle = native id, and keep a native-id row for the history scan.
+  const dualIdNativeTui =
+    !backend &&
+    (session.agent === "grok" || session.agent === "cursor") &&
+    !!session.nativeSessionId &&
+    session.nativeSessionId !== session.sessionId;
+  const sessionId = backend || dualIdNativeTui ? session.sessionId : fileBackedId;
   const agent =
     backend === "codex-aisdk" || session.agent === "codex"
       ? "codex"
@@ -804,23 +815,43 @@ function persistManagedResume(session: Session): void {
             : session.agent === "cursor"
               ? "cursor"
               : "claude";
-  upsertResumableRows([{
-    sessionId,
+  const path = backend ? sessionIndexKey(session.sessionId) : session.transcriptPath;
+  const mtimeMs = session.lastActivityAt ?? Date.now();
+  const base = {
     cwd: session.cwd,
     project: session.project,
     title: session.title,
-    lastActivityAt: session.lastActivityAt ?? Date.now(),
+    lastActivityAt: mtimeMs,
     lastUserText: session.lastUserText,
     agent,
-    path: backend ? sessionIndexKey(session.sessionId) : session.transcriptPath,
-    mtimeMs: session.lastActivityAt ?? Date.now(),
+    path,
+    mtimeMs,
     backend: backend ?? undefined,
-    resumeHandle: backend ? session.nativeSessionId || session.sessionId : undefined,
     model: session.model,
     assignedUser: session.assignedUser,
-    managed: !!backend,
-    resumable: true,
-  }]);
+    resumable: true as const,
+  };
+  const rows: Parameters<typeof upsertResumableRows>[0] = [{
+    ...base,
+    sessionId,
+    resumeHandle: backend
+      ? session.nativeSessionId || session.sessionId
+      : dualIdNativeTui
+        ? session.nativeSessionId
+        : undefined,
+    // Dual-id LFG-key rows must survive pruneResumableExcept (which only keeps
+    // filesystem-scanned native ids in the unmanaged set).
+    managed: !!backend || dualIdNativeTui,
+  }];
+  if (dualIdNativeTui && session.nativeSessionId) {
+    rows.push({
+      ...base,
+      sessionId: session.nativeSessionId,
+      resumeHandle: session.nativeSessionId,
+      managed: false,
+    });
+  }
+  upsertResumableRows(rows);
 }
 
 // ---------- agent reports ----------

@@ -288,6 +288,28 @@ export function getCachedResumableSession(sessionId: string): ResumableSession |
   return row ? toSession(row) : null;
 }
 
+// Resolve a durable transcript path after the live managed registry is gone.
+// Dual-id native TUIs (Grok/Cursor) mint an LFG sessionId for the UI while the
+// file is named by the native id — look up either side so closed sessions keep
+// serving their chat_history / agent-transcript after removeManaged.
+export function getCachedTranscriptPath(sessionId: string): string | null {
+  if (!sessionId) return null;
+  const d = init();
+  const row = d
+    .query<{ path: string | null }, [string, string, string]>(`
+      SELECT path FROM resumable_sessions
+      WHERE session_id = ? OR resume_handle = ?
+      ORDER BY
+        CASE WHEN session_id = ? THEN 0 ELSE 1 END,
+        last_activity_at IS NULL,
+        last_activity_at DESC
+      LIMIT 1
+    `)
+    .get(sessionId, sessionId, sessionId);
+  const path = row?.path?.trim() || null;
+  return path || null;
+}
+
 export function updateResumableUser(sessionId: string, user: string | null): boolean {
   const result = init()
     .query("UPDATE resumable_sessions SET assigned_user = ? WHERE session_id = ?")
