@@ -2,11 +2,14 @@
 
 Recent product updates and deployment notes.
 
-## [Unreleased]
+## August 4, 2026 - Mobile pages find their place (v0.1.250)
 
 - Fork and Continue now share the composer's tactile Thinking control, with a
   colored signal-strength indicator, selection-safe long press, and a cleaner
   icon-free slider popup.
+- On mobile, Notifications and Artifacts now open as secondary pages from the
+  Pages menu, with an explicit back-to-Live action and no composer or
+  swipe-through project navigation competing with their content.
 
 ## August 4, 2026 - Thinking at your fingertips (v0.1.249)
 
