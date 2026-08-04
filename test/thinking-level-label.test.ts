@@ -33,17 +33,25 @@ describe("thinking level menu", () => {
     expect(submenu).toContain("<DropdownMenuLabel>Thinking level</DropdownMenuLabel>");
   });
 
-  test("limits the immersive hold-and-slide control to the new-session composer", async () => {
+  test("shares the immersive hold-and-slide control with fork and continue", async () => {
     const source = await app();
-    const start = source.indexOf("function ComposerThinkingControl(");
+    const start = source.indexOf("function ThinkingSignal(");
     const end = source.indexOf("function ModelPicker(", start);
     const control = source.slice(start, end);
+    const forkStart = source.indexOf("function ForkSessionDialog(");
+    const forkEnd = source.indexOf("function useOrganicActivityPresence(", forkStart);
+    const forkDialog = source.slice(forkStart, forkEnd);
 
-    expect(source.match(/\simmersive\s*\/>/g)?.length).toBe(1);
+    expect(source.match(/\simmersive\s*\/>/g)?.length).toBe(2);
+    expect(forkDialog).toContain("immersive");
     expect(control).toContain("THINKING_HOLD_MS");
     expect(control).toContain("onPointerMove={handlePointerMove}");
     expect(control).toContain("Tap to choose · hold and slide to adjust");
     expect(control).toContain("Hold the control and slide for a faster adjustment.");
     expect(control).toContain("createPortal(");
+    expect(control).toContain("<ThinkingSignal value={value} levels={levels} />");
+    expect(control).toContain('WebkitTouchCallout: "none"');
+    expect(control).toContain("document.getSelection()?.removeAllRanges()");
+    expect(control).not.toContain("<BrainCircuit");
   });
 });

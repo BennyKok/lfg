@@ -13665,6 +13665,7 @@ function ForkSessionDialog({
               value={thinkingLevel}
               levels={thinkingLevels}
               onChange={setThinkingLevel}
+              immersive
             />
           </div>
 
@@ -17040,7 +17041,47 @@ function ThinkingLevelPill({
 
 const THINKING_HOLD_MS = 360;
 
-// The composer gets a spatial effort control without making every settings
+function ThinkingSignal({
+  value,
+  levels,
+}: {
+  value: ThinkingLevel;
+  levels: ThinkingLevel[];
+}) {
+  const index = Math.max(0, levels.indexOf(value));
+  const progress = levels.length > 1 ? index / (levels.length - 1) : 0;
+  const strength = /^(none|off)$/i.test(value)
+    ? 0
+    : Math.max(1, Math.ceil(((index + 1) / Math.max(1, levels.length)) * 4));
+  const color = `hsl(${200 + progress * 120} 90% 62%)`;
+
+  return (
+    <span
+      aria-hidden="true"
+      className="flex h-4 w-4 shrink-0 select-none items-end justify-center gap-px"
+    >
+      {[4, 7, 10, 13].map((height, index) => {
+        const active = index < strength;
+        return (
+          <span
+            key={height}
+            className={cn(
+              "w-0.5 rounded-full bg-foreground/20 transition-[height,background-color,box-shadow] duration-200",
+              active && index === strength - 1 && "shadow-[0_0_8px_currentColor]",
+            )}
+            style={{
+              height,
+              color: active ? color : undefined,
+              backgroundColor: active ? color : undefined,
+            }}
+          />
+        );
+      })}
+    </span>
+  );
+}
+
+// Session composers get a spatial effort control without making every settings
 // surface adopt the same interaction. Tap for an exact menu; hold, then drag
 // horizontally to scrub through the levels without lifting your finger.
 function ComposerThinkingControl({
@@ -17066,7 +17107,6 @@ function ComposerThinkingControl({
   const [scrubberStyle, setScrubberStyle] = useState<CSSProperties>({});
 
   const currentIndex = Math.max(0, levels.indexOf(value));
-  const currentProgress = levels.length > 1 ? currentIndex / (levels.length - 1) : 0;
   const previewProgress = levels.length > 1 ? previewIndex / (levels.length - 1) : 0;
 
   const clearHoldTimer = () => {
@@ -17091,6 +17131,7 @@ function ComposerThinkingControl({
 
   const beginScrub = (trigger: HTMLButtonElement) => {
     const index = Math.max(0, levels.indexOf(value));
+    document.getSelection()?.removeAllRanges();
     previewIndexRef.current = index;
     scrubbingRef.current = true;
     suppressMenuRef.current = true;
@@ -17183,30 +17224,26 @@ function ComposerThinkingControl({
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerCancel}
+              onContextMenu={(event) => event.preventDefault()}
               onClick={(event) => {
                 if (!suppressMenuRef.current) return;
                 event.preventDefault();
                 event.stopPropagation();
                 suppressMenuRef.current = false;
               }}
-              style={{ touchAction: "none" }}
+              style={{
+                touchAction: "none",
+                WebkitUserSelect: "none",
+                WebkitTouchCallout: "none",
+              } as CSSProperties}
               className={cn(
-                "relative inline-flex h-8 cursor-pointer items-center gap-1.5 rounded-full text-foreground transition-all duration-200 active:scale-[0.98]",
+                "relative inline-flex h-8 cursor-pointer select-none items-center gap-1.5 rounded-full text-foreground transition-all duration-200 active:scale-[0.98]",
                 flat ? "px-1" : "bg-muted px-3",
                 scrubbing && "scale-[1.02] bg-foreground/10",
               )}
             >
-              <BrainCircuit className="size-3.5 shrink-0 text-muted-foreground" />
+              <ThinkingSignal value={value} levels={levels} />
               <span className="text-xs font-medium">Thinking</span>
-              <span
-                aria-hidden="true"
-                className="relative ml-0.5 h-1 w-6 overflow-hidden rounded-full bg-foreground/10"
-              >
-                <span
-                  className="absolute inset-y-0 left-0 rounded-full bg-foreground/55 transition-[width] duration-200"
-                  style={{ width: `${Math.max(12, currentProgress * 100)}%` }}
-                />
-              </span>
               <ChevronDown className="size-3 shrink-0 text-muted-foreground/70" />
             </button>
           }
@@ -17243,13 +17280,11 @@ function ComposerThinkingControl({
               aria-live="polite"
               aria-label={`Thinking level ${levels[previewIndex] ?? value}`}
               style={scrubberStyle}
-              className="pointer-events-none fixed z-[220] origin-bottom animate-in fade-in-0 zoom-in-90 slide-in-from-bottom-2 duration-200"
+              className="pointer-events-none fixed z-[220] origin-bottom select-none animate-in fade-in-0 zoom-in-90 slide-in-from-bottom-2 duration-200"
             >
               <div className="overflow-hidden rounded-[1.6rem] bg-popover/95 px-5 py-4 text-popover-foreground shadow-2xl ring-1 ring-foreground/10 backdrop-blur-2xl">
                 <div className="mb-3 flex items-center justify-between gap-4">
-                  <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-                    <BrainCircuit className="size-4" /> Thinking
-                  </span>
+                  <span className="text-xs font-medium text-muted-foreground">Thinking</span>
                   <span className="text-sm font-semibold capitalize">
                     {levels[previewIndex] ?? value}
                   </span>

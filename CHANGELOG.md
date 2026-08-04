@@ -4,6 +4,10 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+- Fork and Continue now share the composer's tactile Thinking control, with a
+  colored signal-strength indicator, selection-safe long press, and a cleaner
+  icon-free slider popup.
+
 ## August 4, 2026 - Thinking at your fingertips (v0.1.249)
 
 - The live-session menu now labels its thinking control simply as "Thinking",
