@@ -1626,27 +1626,40 @@ function ComposerAttachmentChips({
               />
             </div>
           ) : null}
-          {/* Images upload downscaled by default; this is the opt-out. Only
-              shown when a smaller copy actually exists, so it never appears on
-              an image that is already being sent at full resolution. */}
-          {att.original && att.compressed && onToggleHd ? (
+          {/* Keep the quality affordance visible for every image. It toggles
+              when compression produced a smaller copy; otherwise its selected
+              state explains that the attachment is already full resolution. */}
+          {att.previewUrl && onToggleHd ? (
             <button
               type="button"
               className={cn(
-                "flex h-6 shrink-0 items-center justify-center rounded-full px-1.5 text-[10px] font-bold tracking-wide disabled:pointer-events-none disabled:opacity-40",
-                att.hd
+                "flex h-6 shrink-0 items-center justify-center rounded-full px-1.5 text-[10px] font-bold tracking-wide disabled:pointer-events-none",
+                att.hd || (!att.preparing && !(att.original && att.compressed))
                   ? "bg-foreground text-background"
                   : "text-muted-foreground hover:bg-background hover:text-foreground",
+                att.preparing && "opacity-40",
               )}
               onClick={() => onToggleHd(att.id, !att.hd)}
-              aria-pressed={!!att.hd}
-              aria-label={`Upload ${att.name} in full resolution`}
-              title={
-                att.hd
-                  ? `Full resolution (${formatBytes(att.original.size)}) — tap to compress to ${formatBytes(att.compressed.size)}`
-                  : `Compressed to ${formatBytes(att.compressed.size)} — tap for full resolution (${formatBytes(att.original.size)})`
+              aria-pressed={
+                att.original && att.compressed ? !!att.hd : !att.preparing
               }
-              disabled={disabled || locked}
+              aria-label={
+                att.original && att.compressed
+                  ? `Upload ${att.name} in full resolution`
+                  : att.preparing
+                    ? `Preparing ${att.name} for upload`
+                    : `${att.name} is already full resolution`
+              }
+              title={
+                att.original && att.compressed
+                  ? att.hd
+                    ? `Full resolution (${formatBytes(att.original.size)}) — tap to compress to ${formatBytes(att.compressed.size)}`
+                    : `Compressed to ${formatBytes(att.compressed.size)} — tap for full resolution (${formatBytes(att.original.size)})`
+                  : att.preparing
+                    ? "Checking image size…"
+                    : `Already full resolution (${formatBytes(att.size)})`
+              }
+              disabled={disabled || locked || !(att.original && att.compressed)}
             >
               HD
             </button>

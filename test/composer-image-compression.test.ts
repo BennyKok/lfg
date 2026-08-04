@@ -94,15 +94,18 @@ describe("composer image compression", () => {
     expect(source.match(/onToggleHd=\{(files\.)?setAttachmentHd\}/g)).toHaveLength(3);
   });
 
-  test("the HD control only appears when a smaller copy exists", async () => {
+  test("the HD control stays visible for every image", async () => {
     const source = await app();
     const chips = source.slice(
       source.indexOf("function ComposerAttachmentChips"),
       source.indexOf("// Everything a composer needs to accept files"),
     );
 
-    expect(chips).toContain("att.original && att.compressed && onToggleHd");
-    expect(chips).toContain("aria-pressed={!!att.hd}");
+    expect(chips).toContain("att.previewUrl && onToggleHd");
+    expect(chips).toContain("is already full resolution");
+    expect(chips).toContain(
+      "disabled={disabled || locked || !(att.original && att.compressed)}",
+    );
     expect(chips).toContain('att.preparing\n                ? "Compressing…"');
   });
 });
