@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## [Unreleased]
 
+## August 4, 2026 - Image quality stays visible (v0.1.246)
+
+- Every image attachment now shows its HD quality control immediately. Large
+  images keep the compressed/original toggle, while images already being sent
+  at full resolution show HD selected instead of hiding the control.
+
 ## August 4, 2026 - Recovery needs one tap (v0.1.245)
 
 - Sessions recovered after a host restart now offer a one-tap Continue action,
