@@ -24,13 +24,14 @@
 // ## What remains (and what was removed)
 //
 // Keep: VERSION stamp (byte-different worker per deploy), one generation
-// marker, purge of historical shell/asset caches, reload open clients only
-// when a real shell generation was purged (never on a brand-new install —
-// that reload left fresh icons black), push + badge handlers.
+// marker, purge of historical shell/asset caches, push + badge handlers.
 //
 // Dropped: five historical one-shot KEEP markers (they only opened empty
-// caches forever), and unused cache-purge / unregister message handlers
-// (the page already wipes via window.caches + unregister).
+// caches forever), unused cache-purge / unregister message handlers (the page
+// already wipes via window.caches + unregister), and force-reloading open
+// clients on activate. Client reload is owned by the page: Reload toast or
+// cold-open adopt in main.tsx. Auto-navigating open windows on every deploy
+// interrupted active product use.
 //
 // VERSION is overwritten at serve time from the live index stamp (see serve.ts).
 const VERSION = "__VERSION__";
@@ -39,39 +40,17 @@ const VERSION = "__VERSION__";
 // with everything else — they no longer need to stick around.
 const GEN = "lfg-sw-gen-push-only-v1";
 
-// Set during install when this activation should bounce open windows once.
-let reloadClientsOnActivate = false;
-
 async function purgeStaleCaches(keys) {
   await Promise.all(
     keys.filter((key) => key !== GEN).map((key) => caches.delete(key)),
   );
 }
 
-async function reloadControlledClients() {
-  const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-  await Promise.all(
-    all.map(async (client) => {
-      try {
-        if ("navigate" in client) {
-          await client.navigate(client.url || "/");
-          return;
-        }
-      } catch {
-        // fall through
-      }
-      try {
-        client.postMessage({ type: "LFG_FORCE_RELOAD" });
-      } catch {
-        // client may be gone
-      }
-    }),
-  );
-}
-
 // Taking over from a previous worker is the ONLY job that must never fail.
 // Hand over control FIRST, unconditionally; treat every cache operation as
 // best-effort housekeeping that is not allowed to block the handover.
+// Claiming without a page reload is fine for a push-only worker (no fetch
+// handler) — open tabs keep their current JS until Reload or cold open.
 self.addEventListener("install", (event) => {
   // Not inside waitUntil and not awaited — nothing may sequence ahead of it.
   self.skipWaiting();
@@ -79,18 +58,9 @@ self.addEventListener("install", (event) => {
     (async () => {
       try {
         const keys = await caches.keys();
-        const hadShellCaches = keys.some(
-          (key) => key.startsWith("lfg-shell-") || key.startsWith("lfg-assets-"),
-        );
         if (!keys.includes(GEN)) await caches.open(GEN);
         // Drop historical shell/asset caches and the pile of old reset markers.
         await purgeStaleCaches(keys);
-        if (hadShellCaches) {
-          // Only bounce clients when we actually cleaned a stale shell
-          // generation. Brand-new installs have no shell caches — reloading
-          // them on first activate is what left fresh home-screen icons black.
-          reloadClientsOnActivate = true;
-        }
       } catch {
         // Housekeeping failed. The worker still installs: a running push-only
         // worker with a dirty cache beats a dead install behind a stale one.
@@ -114,14 +84,6 @@ self.addEventListener("activate", (event) => {
         await purgeStaleCaches(keys);
       } catch {
         // Best effort — see install.
-      }
-      if (reloadClientsOnActivate) {
-        reloadClientsOnActivate = false;
-        try {
-          await reloadControlledClients();
-        } catch {
-          // A client that cannot be navigated will pick this up on next launch.
-        }
       }
     })(),
   );

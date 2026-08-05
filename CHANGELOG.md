@@ -2,6 +2,14 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Updates no longer yank open sessions
+
+- A new deploy no longer hard-reloads the app while you are using it. Mid-session
+  you only get the **new version available** toast; the page reloads when you
+  tap **Reload**, or automatically on the next cold open if an update was
+  already waiting. Resume/focus and service-worker takeover no longer force a
+  bounce mid-flow.
+
 ## August 5, 2026 - Ask-user replies no longer arrive empty (v0.1.276)
 
 - Answering an agent question (tap an option or type a reply) now delivers the

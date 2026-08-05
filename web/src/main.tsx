@@ -83,11 +83,15 @@ requestAnimationFrame(() => {
   });
 });
 
-// Service-worker UX that needs the app bundle (toast + resume adopt).
-// Boot-critical registration, takeover reload, and stuck-splash recovery live
-// in index.html so they still run when this module never loads.
+// Service-worker UX that needs the app bundle (toast + cold-open adopt).
+// Boot-critical registration and stuck-splash recovery live in index.html so
+// they still run when this module never loads.
 // The worker itself does NOT intercept navigations or assets — that path made
 // iOS home-screen installs solid black while Safari on the same origin worked.
+//
+// Update policy: never hard-reload an active session. Reload only when the user
+// taps Reload on the toast, or automatically on cold open when a worker is
+// already waiting from a previous visit.
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     void registerServiceWorker();
@@ -95,15 +99,13 @@ if ("serviceWorker" in navigator) {
 }
 
 function activateUpdate(worker: ServiceWorker) {
-  // Hand control to the waiting worker, then always hard-reload.
+  // Hand control to the waiting worker, then hard-reload this document.
   //
-  // Do not rely on controllerchange alone: install already calls skipWaiting(),
-  // so by the time the user taps Reload the worker is often already active and
-  // no second controllerchange will fire. The boot shell also used to latch
-  // reloads in sessionStorage for the whole tab session, so a second update in
-  // the same open app would silently do nothing until the app was closed.
-  // The push-only worker does not intercept assets — a document reload is what
-  // actually picks up the new shell.
+  // Callers are only the Reload toast action and cold-open adopt. Do not rely
+  // on controllerchange for the page bounce: install already skipWaits, so by
+  // the time the user taps Reload the worker is often already active and no
+  // second controllerchange will fire. The push-only worker does not intercept
+  // assets — a document reload is what actually picks up the new shell.
   try {
     worker.postMessage({ type: "SKIP_WAITING" });
   } catch {
@@ -132,11 +134,14 @@ async function registerServiceWorker() {
       updateViaCache: "none",
     });
 
-    // A worker updated during a previous visit may already be waiting. Activate
-    // it immediately on startup so opening the PWA cannot strand the user on an
-    // old app shell until they notice a toast.
+    // Cold open only: a worker that installed during a previous visit may still
+    // be waiting. Taking it on startup is safe — there is no in-flight work —
+    // and avoids stranding a closed-and-reopened PWA on an old shell until the
+    // user notices a toast. Do NOT do this on resume/focus; that interrupted
+    // active product use when deploys landed while the app was backgrounded.
     if (reg.waiting && navigator.serviceWorker.controller) {
       activateUpdate(reg.waiting);
+      return;
     }
 
     reg.addEventListener("updatefound", () => {
@@ -144,7 +149,7 @@ async function registerServiceWorker() {
       if (!installing) return;
       installing.addEventListener("statechange", () => {
         // "installed" while a controller already exists = an update (not the
-        // first-ever install), so it's safe to offer the reload toast.
+        // first-ever install). Offer Reload; never force it mid-session.
         if (installing.state === "installed" && navigator.serviceWorker.controller) {
           promptUpdate(installing);
         }
@@ -152,36 +157,15 @@ async function registerServiceWorker() {
     });
 
     // Cheap freshness checks — reg.update() is a conditional GET on sw.js, not a
-    // full re-boot of the app. Run on an interval and when the tab refocuses.
+    // full re-boot of the app. Run on an interval and when the tab refocuses so
+    // the toast can appear; never auto-reload from these paths.
     const check = () => {
       reg.update().catch(() => {});
     };
     setInterval(check, 60_000);
 
-    // Adopt a pending update when the app is resumed from the background.
-    //
-    // The toast alone was not enough. An installed PWA — iOS especially — is
-    // suspended rather than closed, so it can run the same shell for days: the
-    // worker installs, waits, and the toast sits in a session the user is not
-    // looking at, gets swiped away with the app, or is simply missed. The result
-    // is a device pinned to an old build across many deploys while the server is
-    // serving something newer, which reads as "my changes never shipped".
-    //
-    // Resume is the safe moment to take it: the app was backgrounded, so there
-    // is no in-flight typing or scroll position worth more than being current,
-    // and reloading here is the behaviour a native app update already has. While
-    // the app is in the foreground we still only ever ask, never interrupt.
-    // The actual page reload after takeover is owned by index.html (one path,
-    // no double-reload race with a second listener here).
-    const adoptPendingUpdate = () => {
-      if (reg.waiting && navigator.serviceWorker.controller) {
-        activateUpdate(reg.waiting);
-      }
-    };
-
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState !== "visible") return;
-      adoptPendingUpdate();
       check();
     });
     window.addEventListener("focus", check);

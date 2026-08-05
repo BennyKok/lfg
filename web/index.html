@@ -146,10 +146,11 @@
     <script>
       /* PWA recovery that does NOT depend on the app bundle.
          If a stale installed shell names deleted /assets/* chunks, main.tsx
-         never runs — so its service-worker register() + controllerchange
-         reload never fire, and the home-screen app stays black forever.
-         Register the worker from this inline script, adopt waiting workers,
-         and on an entry-module failure wipe shell/asset caches once + reload.
+         never runs and the home-screen app stays black forever. Register the
+         worker from this inline script (push-only, no fetch interception), and
+         on an entry-module failure wipe shell/asset caches once + reload.
+         Page reloads for updates are owned by main.tsx (toast Reload or cold
+         open) — this shell does not hard-reload on controllerchange.
          If the splash is still up after several seconds, show a recovery UI
          instead of an endless black screen (common when the network path to
          the box is down or the entry module never evaluates). */
@@ -372,34 +373,11 @@
         regPromise.then(function (reg) {
           if (!reg) return;
           beacon("sw-registered", { scope: reg.scope || "" });
-          if (reg.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" });
+          // Do not SKIP_WAITING or reload here. Cold-open adopt + hard-reload
+          // are owned by main.tsx (activateUpdate when reg.waiting). Mid-session
+          // updates only show a toast — a controllerchange reload used to yank
+          // the UI out from under active product use on every deploy.
           reg.update().catch(function () {});
-        });
-
-        navigator.serviceWorker.addEventListener("message", function (event) {
-          if (event.data && event.data.type === "LFG_FORCE_RELOAD") {
-            location.reload();
-          }
-        });
-
-        // First time a controller appears (brand-new install) the page already
-        // has the right HTML — reloading races iOS home-screen boot into black.
-        // Only reload on a later controllerchange (worker update).
-        //
-        // Guard with an in-memory flag only (not sessionStorage). A session-
-        // scoped latch survived reloads in the same tab and blocked every
-        // later update until the app was closed and reopened — so tapping
-        // "Reload" on a second "new version" toast did nothing.
-        var hadController = !!navigator.serviceWorker.controller;
-        var controllerReloading = false;
-        navigator.serviceWorker.addEventListener("controllerchange", function () {
-          if (!hadController) {
-            hadController = true;
-            return;
-          }
-          if (controllerReloading) return;
-          controllerReloading = true;
-          location.reload();
         });
 
         window.addEventListener(

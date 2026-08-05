@@ -66,26 +66,25 @@ describe("LFG icon assets", () => {
     expect(worker).not.toMatch(/event\.data\?\.type === ["']UNREGISTER_AND_RELOAD["']/);
     expect(worker).not.toContain('self.addEventListener("fetch"');
     expect(worker).not.toContain("self.addEventListener('fetch'");
-    expect(worker).toContain("reloadControlledClients");
+    // Open clients are no longer force-navigated on activate — that interrupted
+    // active product use on every deploy. Page owns reload (toast / cold open).
+    expect(worker).not.toContain("reloadControlledClients");
+    expect(worker).not.toContain("reloadClientsOnActivate");
+    expect(worker).not.toContain("LFG_FORCE_RELOAD");
     // skipWaiting must NOT be awaited behind cache work — that ordering let a
     // failing Cache API abort the install and strand a stale intercepting
     // worker forever. See test/sw-takeover.test.ts, which executes this.
     expect(worker).not.toContain("await self.skipWaiting()");
-    // Only reload open windows when purging real shell caches — not on a
-    // brand-new home-screen install (that reload left fresh icons black).
-    expect(worker).toContain("hadShellCaches");
-    expect(worker).toContain("reloadClientsOnActivate");
     expect(worker).toContain('self.addEventListener("push"');
     expect(worker).toContain("async function syncAppBadge()");
 
     const index = await readFile("web/index.html", "utf8");
     expect(index).toContain('updateViaCache: "none"');
-    // Boot recovery owns controllerchange reload (single path).
-    expect(index).toContain("var hadController = !!navigator.serviceWorker.controller");
-    expect(index).toContain("if (!hadController)");
-    // In-memory only — sessionStorage latched the whole tab and blocked later
-    // update reloads until the app was closed.
-    expect(index).toContain("var controllerReloading = false");
+    // Boot shell must not hard-reload on controllerchange — that yanked open
+    // sessions on every deploy. Reload is owned by main.tsx only.
+    expect(index).not.toMatch(/addEventListener\(\s*["']controllerchange["']/);
+    expect(index).not.toContain("controllerReloading");
+    expect(index).not.toContain("LFG_FORCE_RELOAD");
     expect(index).not.toContain('lfg:sw-controller-reload');
     expect(index).toContain("showStuckSplashRecovery");
     // Cancel recovery as soon as the entry module evaluates — do not treat a
@@ -97,15 +96,15 @@ describe("LFG icon assets", () => {
 
     const main = await readFile("web/src/main.tsx", "utf8");
     expect(main).toContain('updateViaCache: "none"');
-    // main.tsx must NOT also listen for controller changes — that double-fired
-    // with index.html and raced fresh installs. Toast + resume adopt only.
+    // main.tsx must NOT listen for controller changes (no auto mid-session reload).
     expect(main).not.toMatch(/addEventListener\(\s*["']controllerchange["']/);
-    expect(main).toContain("adoptPendingUpdate");
-    // Toast Reload must hard-reload; SKIP_WAITING alone is a no-op when install
-    // already called skipWaiting() and controllerchange will not fire again.
+    // Resume must not force-adopt — that interrupted product use.
+    expect(main).not.toContain("adoptPendingUpdate");
+    // Toast Reload + cold-open adopt hard-reload via activateUpdate.
     expect(main).toMatch(
       /function activateUpdate\([\s\S]*?location\.reload\(\)/,
     );
+    expect(main).toContain("promptUpdate");
     // Entry module marks itself so index.html cancels the stuck-splash timer.
     expect(main).toContain("__lfgMarkAppModule");
 
@@ -119,17 +118,20 @@ describe("LFG icon assets", () => {
     expect(manifest).toContain('"start_url": "/"');
   });
 
-  // A suspended PWA can run one shell across many deploys, so a waiting worker
-  // must be adopted on resume rather than left behind a toast nobody taps.
-  test("adopts a waiting worker when the app is resumed", async () => {
+  // Updates may install while the app is open; never hard-reload mid-session or
+  // on resume. Reload only on toast action or cold open with a waiting worker.
+  test("reloads only on toast Reload or cold open, never on resume", async () => {
     const main = await readFile("web/src/main.tsx", "utf8");
-    expect(main).toContain("adoptPendingUpdate");
-    expect(main).toMatch(
-      /visibilitychange[\s\S]{0,220}adoptPendingUpdate\(\)/,
+    expect(main).not.toContain("adoptPendingUpdate");
+    expect(main).not.toMatch(
+      /visibilitychange[\s\S]{0,400}activateUpdate\(/,
     );
-    // Still only ever asks while the app is in the foreground.
     expect(main).toContain("promptUpdate");
-    // Adopt path reloads via activateUpdate (SKIP_WAITING + location.reload).
+    // Cold open: waiting worker at register time → activateUpdate.
+    expect(main).toMatch(
+      /if\s*\(\s*reg\.waiting\s*&&\s*navigator\.serviceWorker\.controller\s*\)\s*\{\s*activateUpdate\(reg\.waiting\)/,
+    );
+    // Reload path: SKIP_WAITING + location.reload.
     expect(main).toMatch(
       /function activateUpdate\([\s\S]*?postMessage\(\{\s*type:\s*["']SKIP_WAITING["']\s*\}\)[\s\S]*?location\.reload\(\)/,
     );
