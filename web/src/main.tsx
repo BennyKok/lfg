@@ -18,6 +18,13 @@ import {
   THEME_STORAGE_KEY,
 } from "./lib/theme";
 
+// Tell the boot shell the entry module is evaluating. Cancels the stuck-splash
+// recovery timer so a slow first paint after a successful download never shows
+// "lfg did not finish loading" for a second and then the real UI.
+(
+  window as unknown as { __lfgMarkAppModule?: () => void }
+).__lfgMarkAppModule?.();
+
 // Capture uncaught errors + unhandled rejections and auto-report them to the
 // backend (which surfaces a finding/push and dispatches an auto-fix agent).
 // Installed first so an early-boot throw is still caught.

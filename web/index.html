@@ -155,6 +155,13 @@
          the box is down or the entry module never evaluates). */
       (function () {
         var bootRecovering = false;
+        // Once the app module evaluates, we are past "network never delivered
+        // the shell" — cancel the stuck recovery even if React has not painted
+        // data-startup-state yet. A 4s timeout was firing mid-download on
+        // phone + Tailscale cold loads (especially after a hard reload), so
+        // users saw "lfg did not finish loading" and then the real UI 1–2s later.
+        var appModuleLoaded = false;
+        var stuckTimer = null;
 
         /* Boot beacons — the device half of /__lfg_pwa_diag.
            A black home-screen window cannot be inspected: no console, no error
@@ -264,7 +271,23 @@
             });
         }
 
+        function clearStuckTimer() {
+          if (stuckTimer != null) {
+            clearTimeout(stuckTimer);
+            stuckTimer = null;
+          }
+        }
+
+        // Called from main.tsx as soon as the entry module evaluates — before
+        // createRoot — so a slow first paint never races into the recovery UI.
+        window.__lfgMarkAppModule = function () {
+          appModuleLoaded = true;
+          clearStuckTimer();
+        };
+
         function showStuckSplashRecovery(reason) {
+          // Module already running: leave the splash (or React) alone.
+          if (appModuleLoaded) return;
           var splash = document.getElementById("app-splash");
           if (!splash || !splash.parentNode) return;
           // App already replaced the splash.
@@ -274,6 +297,7 @@
           // If React mounted, root no longer contains #app-splash as sole child
           // of a cold document — but createRoot replaces contents, so splash gone.
           if (!document.getElementById("app-splash")) return;
+          if (document.querySelector("[data-startup-state]")) return;
 
           root.innerHTML =
             '<main style="min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:2rem;text-align:center;gap:0.85rem;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#000;color:#f4f4f5">' +
@@ -295,14 +319,40 @@
           if (reset) reset.onclick = hardResetPwa;
         }
 
-        // Stuck on the black splash with no React mount. Keep this short —
-        // "completely black" reports mean users abandon before a 10s wait.
-        setTimeout(function () {
+        // Stuck on the black splash with no app module. Only escalate when the
+        // entry bundle never arrives — not on a slow-but-successful cold load.
+        // 12s is long enough for phone + Tailscale to pull the shell after a
+        // hard reload; true dead installs still get a recovery UI instead of
+        // an endless black screen.
+        var STUCK_MS = 12000;
+        stuckTimer = setTimeout(function () {
+          stuckTimer = null;
+          if (appModuleLoaded) return;
           if (!document.getElementById("app-splash")) return;
           if (document.querySelector("[data-startup-state]")) return;
-          beacon("stuck", { afterMs: 4000 });
+          beacon("stuck", { afterMs: STUCK_MS });
           showStuckSplashRecovery();
-        }, 4000);
+        }, STUCK_MS);
+
+        // If React mounts without going through __lfgMarkAppModule (tests /
+        // future entry paths), still cancel once the shell is live.
+        try {
+          var rootEl = document.getElementById("root");
+          if (rootEl && typeof MutationObserver === "function") {
+            var bootObserver = new MutationObserver(function () {
+              if (
+                appModuleLoaded ||
+                !document.getElementById("app-splash") ||
+                document.querySelector("[data-startup-state]")
+              ) {
+                appModuleLoaded = true;
+                clearStuckTimer();
+                bootObserver.disconnect();
+              }
+            });
+            bootObserver.observe(rootEl, { childList: true, subtree: true });
+          }
+        } catch (e) {}
 
         if (!("serviceWorker" in navigator)) {
           beacon("sw-failed", { reason: "unsupported" });

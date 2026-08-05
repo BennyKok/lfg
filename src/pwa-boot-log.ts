@@ -291,9 +291,9 @@ export function verdict(all: BootEntry[], windowMs = 15 * 60_000): LaunchVerdict
     return {
       headline: `Loaded, but never mounted (${where})`,
       explanation:
-        "The document ran and reported itself stuck on the splash after 4 seconds, and " +
-        "never mounted. The app bundle is not arriving or not evaluating — check for " +
-        "asset-error entries, and whether an entry-chunk request was even made.",
+        "The document ran and reported itself stuck on the splash after the boot " +
+        "timeout, and never mounted. The app bundle is not arriving or not evaluating " +
+        "— check for asset-error entries, and whether an entry-chunk request was even made.",
       note,
     };
   }

@@ -88,6 +88,11 @@ describe("LFG icon assets", () => {
     expect(index).toContain("var controllerReloading = false");
     expect(index).not.toContain('lfg:sw-controller-reload');
     expect(index).toContain("showStuckSplashRecovery");
+    // Cancel recovery as soon as the entry module evaluates — do not treat a
+    // slow cold load (phone + Tailscale after hard reload) as a dead install.
+    expect(index).toContain("__lfgMarkAppModule");
+    expect(index).toContain("var STUCK_MS = 12000");
+    expect(index).not.toContain("}, 4000);");
     expect(index).toContain("/__lfg_boot");
 
     const main = await readFile("web/src/main.tsx", "utf8");
@@ -101,6 +106,8 @@ describe("LFG icon assets", () => {
     expect(main).toMatch(
       /function activateUpdate\([\s\S]*?location\.reload\(\)/,
     );
+    // Entry module marks itself so index.html cancels the stuck-splash timer.
+    expect(main).toContain("__lfgMarkAppModule");
 
     const serve = await readFile("src/commands/serve.ts", "utf8");
     expect(serve).toContain("/__lfg_pwa_reset");

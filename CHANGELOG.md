@@ -2,6 +2,13 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - No false "did not finish loading" (v0.1.275)
+
+- Cold loads that take a few seconds (phone + Tailscale, or a hard reload after
+  an update) no longer flash **lfg did not finish loading** and then the real
+  UI a moment later. The boot shell cancels that recovery as soon as the app
+  module starts, and only escalates after 12s if the shell never arrives.
+
 ## August 5, 2026 - Reload actually reloads (v0.1.274)
 
 - Tapping **Reload** on the "new version available" toast now hard-refreshes the
