@@ -2,6 +2,13 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Lighter, snappier thinking scrub (v0.1.269)
+
+- Thinking scrub overlay no longer sits in a bordered card — just the matrix,
+  thumb, and labels floating over the UI.
+- Scrubbing is more sensitive: about half the travel per level, and a short
+  horizontal drag starts the gesture immediately instead of waiting out a hold.
+
 ## August 5, 2026 - Pixel-matrix thinking scrubber (v0.1.268)
 
 - Hold-to-scrub Thinking control now matches the Codex density-track language:
