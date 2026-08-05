@@ -56,35 +56,36 @@ describe("LFG icon assets", () => {
     // Push-only worker: intercepting navigations made iOS home-screen installs
     // solid black while Safari on the same origin worked. No fetch handler.
     expect(worker).toContain("lfg-cache-reset-no-fetch-v1");
-    expect(worker).toContain("deliberately has NO fetch handler");
+    expect(worker).toContain("NO fetch handler");
     expect(worker).not.toContain('self.addEventListener("fetch"');
     expect(worker).not.toContain("self.addEventListener('fetch'");
     expect(worker).toContain("reloadControlledClients");
     expect(worker).toContain("await self.skipWaiting()");
-    expect(worker).toContain("await reloadControlledClients()");
+    // Only reload open windows when purging real shell caches — not on a
+    // brand-new home-screen install (that reload left fresh icons black).
+    expect(worker).toContain("hadShellCaches");
+    expect(worker).toContain("reloadClientsOnActivate");
     expect(worker).toContain('self.addEventListener("push"');
     expect(worker).toContain("async function syncAppBadge()");
 
     const index = await readFile("web/index.html", "utf8");
     expect(index).toContain('updateViaCache: "none"');
-    expect(index).toContain("lfg:boot-recover:");
-    expect(index).toContain("LFG_FORCE_RELOAD");
+    expect(index).toContain("var hadController = !!navigator.serviceWorker.controller");
+    expect(index).toContain("if (!hadController)");
     expect(index).toContain("showStuckSplashRecovery");
-    expect(index).toContain("lfg did not finish loading");
-    expect(index).toContain('if (!storageSet("lfg:sw-controller-reload", "1")) return;');
 
     const main = await readFile("web/src/main.tsx", "utf8");
     expect(main).toContain('updateViaCache: "none"');
+    expect(main).toContain("let seenController = !!navigator.serviceWorker.controller");
+    expect(main).toContain("if (!seenController)");
 
     const serve = await readFile("src/commands/serve.ts", "utf8");
     expect(serve).toContain("/__lfg_pwa_reset");
-    expect(serve).toContain("no-store, max-age=0");
     expect(serve).toContain("Home Screen web-app data SEPARATELY");
-    expect(serve).toContain("Delete</strong> the black lfg icon");
 
     const manifest = await readFile("web/public/manifest.webmanifest", "utf8");
-    expect(manifest).toContain('"id":');
-    expect(manifest).toContain("hs=2026-08-05");
+    expect(manifest).toContain('"id": "/lfg-hs-2026-08-05"');
+    expect(manifest).toContain('"start_url": "/"');
   });
 
   // A suspended PWA can run one shell across many deploys, so a waiting worker

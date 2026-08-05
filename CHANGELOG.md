@@ -2,6 +2,14 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Fresh home-screen install no longer reloads into black (v0.1.259)
+
+- A brand-new Add to Home Screen was force-reloading on service-worker activate
+  (and again on controllerchange), which left real iPhones on a solid black
+  screen even after every icon was deleted. Fresh installs no longer reload;
+  only upgrades that purge old shell caches do.
+- Manifest start_url is plain `/` again (install id stays unique).
+
 ## August 5, 2026 - Home-screen loads like Safari (v0.1.258)
 
 - The service worker no longer intercepts page or asset loads. That fetch

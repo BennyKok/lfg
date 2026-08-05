@@ -153,9 +153,16 @@ async function registerServiceWorker() {
     // Registration failed — the app still runs, just without offline/update UX.
   }
 
-  // When the freshly-activated worker takes control, reload once onto it.
+  // When a replacement worker takes control, reload once onto it. Skip the
+  // first controller acquisition (new install) — reloading there races iOS
+  // home-screen cold start and left fresh icons solid black.
   let refreshing = false;
+  let seenController = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!seenController) {
+      seenController = true;
+      return;
+    }
     if (refreshing) return;
     refreshing = true;
     window.location.reload();

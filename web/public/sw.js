@@ -1,27 +1,22 @@
 // lfg service worker — push + install recovery only.
 //
-// History: we used to intercept navigations and /assets/* (network-first shell,
-// cache-first chunks) so the installed PWA felt offline-capable. On iOS that
-// fetch handler is what made home-screen installs go solid black while Safari
-// and Chrome on the same origin worked: the worker could answer document
-// requests with a stale/empty shell the browser tab never hit the same way.
+// History: we used to intercept navigations and /assets/* so the installed PWA
+// felt offline-capable. On iOS that fetch handler made home-screen installs go
+// solid black while Safari/Chrome worked. This worker has NO fetch handler.
 //
-// This worker deliberately has NO fetch handler. Document and asset loads go
-// straight to the network, identical to a normal Safari visit. We keep the
-// worker only so Web Push and the app badge still work, and so one install
-// cycle can wipe every historical lfg-shell-* / lfg-assets-* cache.
+// Also: we must NOT reload every client on every activate. Doing so on a brand
+// new home-screen install caused a reload storm (install → activate → navigate
+// → controllerchange → reload) that left real iPhones on a black screen even
+// after the user deleted every icon. Only reload when upgrading off an old
+// shell/asset cache generation.
 //
-// VERSION is overwritten at serve time from the live index stamp (see serve.ts)
-// so every deploy is a new worker body and triggers install/activate.
+// VERSION is overwritten at serve time from the live index stamp (see serve.ts).
 const VERSION = "__VERSION__";
-// One-time markers kept forever once opened.
 const CRISP_ICON_CACHE_RESET = "lfg-cache-reset-crisp-icon-v1";
 const BLACK_SHELL_CACHE_RESET_V1 = "lfg-cache-reset-black-shell-v1";
 const BLACK_SHELL_CACHE_RESET_V2 = "lfg-cache-reset-black-shell-v2";
 const BLACK_SHELL_CACHE_RESET_V3 = "lfg-cache-reset-black-shell-v3";
 const FORCE_UPDATE_RESET = "lfg-cache-reset-force-update-v1";
-// First worker after we stopped intercepting fetches: drop every old cache and
-// take over so home-screen apps stop serving black shells through respondWith.
 const NO_FETCH_RESET = "lfg-cache-reset-no-fetch-v1";
 const KEEP = new Set([
   CRISP_ICON_CACHE_RESET,
@@ -32,6 +27,9 @@ const KEEP = new Set([
   NO_FETCH_RESET,
 ]);
 
+// Set during install when this activation should bounce open windows once.
+let reloadClientsOnActivate = false;
+
 async function purgeAllLfgCaches(keys) {
   await Promise.all(
     keys
@@ -39,7 +37,6 @@ async function purgeAllLfgCaches(keys) {
         (key) =>
           key.startsWith("lfg-shell-") ||
           key.startsWith("lfg-assets-") ||
-          // Drop unknown leftovers from older workers too.
           (key.startsWith("lfg-") && !KEEP.has(key)),
       )
       .map((key) => caches.delete(key)),
@@ -71,11 +68,19 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
+      const hadShellCaches = keys.some(
+        (key) => key.startsWith("lfg-shell-") || key.startsWith("lfg-assets-"),
+      );
       for (const marker of KEEP) {
         if (!keys.includes(marker)) await caches.open(marker);
       }
-      // Always wipe historical shell/asset caches on install of this generation.
-      await purgeAllLfgCaches(keys);
+      if (hadShellCaches) {
+        await purgeAllLfgCaches(keys);
+        // Only bounce clients when we actually cleaned a stale shell generation.
+        // Brand-new installs have no shell caches — reloading them on first
+        // activate is what left fresh home-screen icons black.
+        reloadClientsOnActivate = true;
+      }
       await self.skipWaiting();
     })(),
   );
@@ -89,7 +94,10 @@ self.addEventListener("activate", (event) => {
         keys.filter((key) => !KEEP.has(key)).map((key) => caches.delete(key)),
       );
       await self.clients.claim();
-      await reloadControlledClients();
+      if (reloadClientsOnActivate) {
+        reloadClientsOnActivate = false;
+        await reloadControlledClients();
+      }
     })(),
   );
 });
@@ -161,7 +169,7 @@ async function showLatest(payload) {
     const sub = await self.registration.pushManager.getSubscription();
     if (sub?.endpoint) feedUrl = `/api/push/pending?endpoint=${encodeURIComponent(sub.endpoint)}`;
   } catch {
-    // no subscription handle
+    // no subscription
   }
 
   const asked = await fetchJson(feedUrl);
