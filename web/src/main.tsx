@@ -63,6 +63,19 @@ createRoot(document.getElementById("root")!).render(
   </StrictMode>,
 );
 
+// Close the loop for /__lfg_pwa_diag: this is the one report that separates "the
+// app never ran" from "the app ran and painted nothing", which is the whole
+// difference between a network/install bug and a UI bug. Sent on the next frame
+// so it reflects a real paint rather than just a render call.
+requestAnimationFrame(() => {
+  const beacon = (window as unknown as { __lfgBeacon?: (phase: string, detail?: unknown) => void })
+    .__lfgBeacon;
+  beacon?.("app-mounted", {
+    rootChildren: document.getElementById("root")?.children.length ?? -1,
+    path: location.pathname,
+  });
+});
+
 // Register the service worker for Web Push + a one-shot cache wipe on update.
 // It intentionally does NOT intercept navigations or assets — that path made
 // iOS home-screen installs solid black while Safari on the same origin worked.

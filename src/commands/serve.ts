@@ -20,6 +20,7 @@ import {
 } from "../self-update.ts";
 import { compressedAssetResponse, maybeCompressResponse } from "../http-compress.ts";
 import { serveLfgMcpRequest } from "../mcp-http.ts";
+import * as pwaBootLog from "../pwa-boot-log.ts";
 import { shortSessionId } from "../lfg-capabilities.ts";
 import {
   getCachedResumableSession,
@@ -1148,6 +1149,139 @@ async function webIndexResponse() {
   });
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+/**
+ * "How far did my PWA actually get?" rendered as a page.
+ *
+ * Written to be read on a phone, and to state a verdict rather than hand over a
+ * wall of rows: the point is to end the black-screen guessing loop, so the first
+ * thing on screen is which layer is at fault.
+ */
+function pwaDiagResponse(url: URL): Response {
+  const noStore = { "Cache-Control": "no-store, max-age=0" };
+  if (url.searchParams.has("clear")) {
+    pwaBootLog.clear();
+    return new Response(null, {
+      status: 303,
+      headers: { Location: "/__lfg_pwa_diag", ...noStore },
+    });
+  }
+  const entries = pwaBootLog.snapshot();
+  const v = pwaBootLog.verdict(entries);
+  if (url.searchParams.has("json")) {
+    return new Response(JSON.stringify({ verdict: v, entries }, null, 2), {
+      headers: { "Content-Type": "application/json", ...noStore },
+    });
+  }
+
+  const now = Date.now();
+  const ago = (t: number) => {
+    const s = Math.max(0, Math.round((now - t) / 1000));
+    if (s < 60) return `${s}s ago`;
+    if (s < 3600) return `${Math.round(s / 60)}m ago`;
+    return `${Math.round(s / 3600)}h ago`;
+  };
+  const shortUa = (ua?: string) => {
+    if (!ua) return "";
+    if (/iPhone/.test(ua)) return "iPhone";
+    if (/iPad/.test(ua)) return "iPad";
+    if (/Android/.test(ua)) return "Android";
+    if (/Macintosh|Mac OS X/.test(ua)) return "Mac";
+    if (/Windows/.test(ua)) return "Windows";
+    if (/Linux/.test(ua)) return "Linux";
+    return ua.slice(0, 20);
+  };
+
+  // Cards, not a table: this page is read on the phone that is failing, and a
+  // six-column table there squeezes every value into a one-character column.
+  const rows = entries
+    .map((e) => {
+      const cls = e.source === "beacon" ? "beacon" : "req";
+      const meta = [e.mode, shortUa(e.ua)].filter(Boolean).join(" · ");
+      const detail = Object.entries(e.detail ?? {})
+        .map(([k, val]) => `<span class="kv"><b>${escapeHtml(k)}</b> ${escapeHtml(String(val))}</span>`)
+        .join("");
+      const repeat = e.repeat && e.repeat > 1 ? `<span class="rep">×${e.repeat}</span>` : "";
+      return `<li class="ev">
+<div class="ev-top"><span class="tag ${cls}">${escapeHtml(e.source)}</span><span class="lbl">${escapeHtml(e.label)}</span>${repeat}<span class="when">${escapeHtml(ago(e.t))}</span></div>
+${meta ? `<div class="meta">${escapeHtml(meta)}</div>` : ""}
+${detail ? `<div class="kvs">${detail}</div>` : ""}
+</li>`;
+    })
+    .join("");
+
+  const html = `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="robots" content="noindex"/>
+<title>lfg — PWA launch diagnostics</title>
+<style>
+html,body{margin:0;background:#000;color:#f4f4f5;font:15px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}
+main{max-width:44rem;margin:0 auto;padding:1.5rem 1rem 4rem}
+h1{font-size:1.1rem;margin:0 0 .25rem}
+.sub{color:#71717a;margin:0;font-size:.85rem}
+.verdict{border:1px solid #27272a;border-radius:.9rem;padding:1rem;margin:1rem 0;background:#09090b}
+.verdict h2{margin:0 0 .4rem;font-size:1.05rem;color:#fff}
+.verdict p{margin:0;color:#a1a1aa;font-size:.92rem}
+.how{color:#a1a1aa;font-size:.88rem;margin:.75rem 0 0;padding-left:1.1rem}
+.how li{margin:.3rem 0}
+.actions{display:flex;gap:.5rem;margin-top:1rem;flex-wrap:wrap}
+a.btn{display:inline-block;text-decoration:none;border-radius:999px;padding:.55rem 1rem;font-size:.85rem;font-weight:600;background:#27272a;color:#f4f4f5}
+a.btn.primary{background:#0a84ff;color:#fff}
+ul.log{list-style:none;margin:1.25rem 0 0;padding:0}
+li.ev{border-bottom:1px solid #18181b;padding:.6rem .1rem}
+.ev-top{display:flex;align-items:center;gap:.5rem}
+.ev-top .lbl{font-weight:600;font-size:.9rem}
+.ev-top .when{margin-left:auto;color:#71717a;font-size:.75rem;white-space:nowrap}
+.rep{font-size:.7rem;color:#71717a}
+.meta{color:#a1a1aa;font-size:.78rem;margin-top:.2rem}
+.kvs{display:flex;flex-wrap:wrap;gap:.3rem;margin-top:.35rem}
+.kv{font-size:.72rem;color:#a1a1aa;background:#18181b;border-radius:.4rem;padding:.15rem .4rem;word-break:break-all}
+.kv b{color:#71717a;font-weight:600}
+.tag{font-size:.65rem;text-transform:uppercase;letter-spacing:.04em;padding:.1rem .35rem;border-radius:999px}
+.tag.req{background:#1e3a5f;color:#bfdbfe}
+.tag.beacon{background:#14532d;color:#bbf7d0}
+.empty{color:#71717a;padding:1.5rem 0;text-align:center}
+</style></head><body>
+<main>
+<h1>PWA launch diagnostics</h1>
+<p class="sub">${entries.length} event${entries.length === 1 ? "" : "s"} recorded · auto-refreshing</p>
+
+<div class="verdict">
+<h2>${escapeHtml(v.headline)}</h2>
+<p>${escapeHtml(v.explanation)}</p>
+</div>
+
+<ol class="how">
+<li>Tap <strong>Clear</strong> below.</li>
+<li>Open the black lfg icon from your Home Screen. Wait ~10 seconds.</li>
+<li>Come back here (from any device) and read the verdict.</li>
+</ol>
+
+<div class="actions">
+<a class="btn primary" href="/__lfg_pwa_diag?clear=1">Clear</a>
+<a class="btn" href="/__lfg_pwa_diag">Refresh</a>
+<a class="btn" href="/__lfg_pwa_diag?json=1">JSON</a>
+</div>
+
+${entries.length ? `<ul class="log">${rows}</ul>` : `<p class="empty">Nothing recorded yet.</p>`}
+</main>
+<script>setTimeout(function(){location.reload()},5000)</script>
+</body></html>`;
+
+  return new Response(html, {
+    headers: { "Content-Type": "text/html; charset=utf-8", ...noStore },
+  });
+}
+
 function json(obj: unknown, init?: ResponseInit) {
   return new Response(JSON.stringify(obj), {
     headers: { "Content-Type": "application/json" },
@@ -2007,6 +2141,11 @@ export async function cmdServe() {
       const path = url.pathname;
       const apiTimingStart = BOOT_API_TIMING_ENDPOINTS.has(path) ? performance.now() : 0;
 
+      // Mark the handful of paths a PWA cold start must hit. This is the only
+      // evidence available when a home-screen install shows a black window: the
+      // page never runs, so nothing can report from the device side.
+      pwaBootLog.recordRequest(path, req.headers);
+
       const response = await (async () => {
       try {
       // The shared MCP endpoint. Agents registered with `--transport http`
@@ -2082,6 +2221,27 @@ export async function cmdServe() {
       // ---- static ----
       if (path === "/" || path === "/index.html") {
         return webIndexResponse();
+      }
+
+      // Boot beacon from index.html. sendBeacon posts text/plain, so the body
+      // is a JSON *string*; parseBeacon validates it. Always 204 — a launch
+      // that is already failing must never be handed another error to handle.
+      if (path === "/__lfg_boot" && req.method === "POST") {
+        try {
+          const body = await req.text();
+          const entry = pwaBootLog.parseBeacon(body, req.headers.get("user-agent") || undefined);
+          if (entry) pwaBootLog.record(entry);
+        } catch {
+          // A truncated beacon is itself unremarkable; never fail the request.
+        }
+        return new Response(null, { status: 204, headers: { "Cache-Control": "no-store" } });
+      }
+
+      // The answer page. Open this from ANY device (laptop, or Safari on the
+      // phone) after tapping the black icon — it reports how far that launch
+      // actually got, which is the question six previous fixes were guessing at.
+      if (path === "/__lfg_pwa_diag") {
+        return pwaDiagResponse(url);
       }
       // Escape hatch for a stuck home-screen install.
       //

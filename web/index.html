@@ -163,6 +163,56 @@
       (function () {
         var bootRecovering = false;
 
+        /* Boot beacons — the device half of /__lfg_pwa_diag.
+           A black home-screen window cannot be inspected: no console, no error
+           page, no way to attach a debugger to someone's phone. Reporting each
+           phase to the server is what turns "it's black" into a named layer.
+           Fire-and-forget by design: never block boot, never throw, and never
+           let a failed beacon become a second failure to debug. */
+        var bootId = String(Date.now()) + "-" + Math.random().toString(36).slice(2, 8);
+        function displayMode() {
+          try {
+            if (navigator.standalone === true) return "standalone";
+            var modes = ["standalone", "minimal-ui", "fullscreen", "browser"];
+            for (var i = 0; i < modes.length; i++) {
+              if (matchMedia("(display-mode: " + modes[i] + ")").matches) return modes[i];
+            }
+          } catch (e) {}
+          return "unknown";
+        }
+        function beacon(phase, detail) {
+          try {
+            var body = JSON.stringify({
+              phase: phase,
+              bootId: bootId,
+              mode: displayMode(),
+              detail: detail || {},
+            });
+            if (navigator.sendBeacon) {
+              navigator.sendBeacon("/__lfg_boot", body);
+              return;
+            }
+            fetch("/__lfg_boot", { method: "POST", body: body, keepalive: true }).catch(
+              function () {},
+            );
+          } catch (e) {}
+        }
+        window.__lfgBeacon = beacon;
+
+        beacon("html-parsed", {
+          ref: document.referrer || "",
+          sw: "serviceWorker" in navigator,
+          controlled: !!(navigator.serviceWorker && navigator.serviceWorker.controller),
+        });
+        document.addEventListener("DOMContentLoaded", function () {
+          beacon("dom-ready", {});
+        });
+        window.addEventListener("error", function (event) {
+          /* Resource errors are reported separately as asset-error below. */
+          if (event && event.target && event.target.tagName === "SCRIPT") return;
+          beacon("page-error", { msg: String((event && event.message) || "").slice(0, 200) });
+        });
+
         function storageGet(key) {
           try {
             return sessionStorage.getItem(key);
@@ -257,22 +307,28 @@
         setTimeout(function () {
           if (!document.getElementById("app-splash")) return;
           if (document.querySelector("[data-startup-state]")) return;
+          beacon("stuck", { afterMs: 4000 });
           showStuckSplashRecovery();
         }, 4000);
 
-        if (!("serviceWorker" in navigator)) return;
+        if (!("serviceWorker" in navigator)) {
+          beacon("sw-failed", { reason: "unsupported" });
+          return;
+        }
 
         // updateViaCache:"none" is load-bearing on iOS. The default lets the
         // HTTP cache satisfy sw.js update checks, so an installed PWA can keep
         // the same dead worker across many deploys and never see recovery code.
         var regPromise = navigator.serviceWorker
           .register("/sw.js", { updateViaCache: "none" })
-          .catch(function () {
+          .catch(function (error) {
+            beacon("sw-failed", { reason: String((error && error.message) || error).slice(0, 200) });
             return null;
           });
 
         regPromise.then(function (reg) {
           if (!reg) return;
+          beacon("sw-registered", { scope: reg.scope || "" });
           if (reg.waiting) reg.waiting.postMessage({ type: "SKIP_WAITING" });
           reg.update().catch(function () {});
         });
@@ -304,6 +360,7 @@
             if (!target || target.tagName !== "SCRIPT") return;
             var src = target.src || "";
             if (src.indexOf("/assets/") === -1) return;
+            beacon("asset-error", { src: src.slice(-80) });
             var latch = "lfg:boot-recover:" + (src.split("/").pop() || "entry");
             if (storageGet(latch) === "1") {
               showStuckSplashRecovery(
