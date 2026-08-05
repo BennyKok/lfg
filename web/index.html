@@ -335,14 +335,20 @@
         // First time a controller appears (brand-new install) the page already
         // has the right HTML — reloading races iOS home-screen boot into black.
         // Only reload on a later controllerchange (worker update).
+        //
+        // Guard with an in-memory flag only (not sessionStorage). A session-
+        // scoped latch survived reloads in the same tab and blocked every
+        // later update until the app was closed and reopened — so tapping
+        // "Reload" on a second "new version" toast did nothing.
         var hadController = !!navigator.serviceWorker.controller;
+        var controllerReloading = false;
         navigator.serviceWorker.addEventListener("controllerchange", function () {
           if (!hadController) {
             hadController = true;
             return;
           }
-          if (storageGet("lfg:sw-controller-reload") === "1") return;
-          if (!storageSet("lfg:sw-controller-reload", "1")) return;
+          if (controllerReloading) return;
+          controllerReloading = true;
           location.reload();
         });
 

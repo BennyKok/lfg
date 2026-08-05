@@ -83,6 +83,10 @@ describe("LFG icon assets", () => {
     // Boot recovery owns controllerchange reload (single path).
     expect(index).toContain("var hadController = !!navigator.serviceWorker.controller");
     expect(index).toContain("if (!hadController)");
+    // In-memory only — sessionStorage latched the whole tab and blocked later
+    // update reloads until the app was closed.
+    expect(index).toContain("var controllerReloading = false");
+    expect(index).not.toContain('lfg:sw-controller-reload');
     expect(index).toContain("showStuckSplashRecovery");
     expect(index).toContain("/__lfg_boot");
 
@@ -92,6 +96,11 @@ describe("LFG icon assets", () => {
     // with index.html and raced fresh installs. Toast + resume adopt only.
     expect(main).not.toMatch(/addEventListener\(\s*["']controllerchange["']/);
     expect(main).toContain("adoptPendingUpdate");
+    // Toast Reload must hard-reload; SKIP_WAITING alone is a no-op when install
+    // already called skipWaiting() and controllerchange will not fire again.
+    expect(main).toMatch(
+      /function activateUpdate\([\s\S]*?location\.reload\(\)/,
+    );
 
     const serve = await readFile("src/commands/serve.ts", "utf8");
     expect(serve).toContain("/__lfg_pwa_reset");
@@ -113,6 +122,10 @@ describe("LFG icon assets", () => {
     );
     // Still only ever asks while the app is in the foreground.
     expect(main).toContain("promptUpdate");
+    // Adopt path reloads via activateUpdate (SKIP_WAITING + location.reload).
+    expect(main).toMatch(
+      /function activateUpdate\([\s\S]*?postMessage\(\{\s*type:\s*["']SKIP_WAITING["']\s*\}\)[\s\S]*?location\.reload\(\)/,
+    );
   });
 
   test("ships each generated PNG at its declared size", async () => {

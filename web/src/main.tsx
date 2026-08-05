@@ -88,7 +88,21 @@ if ("serviceWorker" in navigator) {
 }
 
 function activateUpdate(worker: ServiceWorker) {
-  worker.postMessage({ type: "SKIP_WAITING" });
+  // Hand control to the waiting worker, then always hard-reload.
+  //
+  // Do not rely on controllerchange alone: install already calls skipWaiting(),
+  // so by the time the user taps Reload the worker is often already active and
+  // no second controllerchange will fire. The boot shell also used to latch
+  // reloads in sessionStorage for the whole tab session, so a second update in
+  // the same open app would silently do nothing until the app was closed.
+  // The push-only worker does not intercept assets — a document reload is what
+  // actually picks up the new shell.
+  try {
+    worker.postMessage({ type: "SKIP_WAITING" });
+  } catch {
+    // Worker may already be gone; still reload.
+  }
+  window.location.reload();
 }
 
 function promptUpdate(worker: ServiceWorker) {
