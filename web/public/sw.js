@@ -1,45 +1,50 @@
-// lfg service worker — push + install recovery only.
+// lfg service worker — push notifications + install recovery only.
 //
-// History: we used to intercept navigations and /assets/* so the installed PWA
-// felt offline-capable. On iOS that fetch handler made home-screen installs go
-// solid black while Safari/Chrome worked. This worker has NO fetch handler.
+// ## Why this worker has no fetch handler
 //
-// Also: we must NOT reload every client on every activate. Doing so on a brand
-// new home-screen install caused a reload storm (install → activate → navigate
-// → controllerchange → reload) that left real iPhones on a black screen even
-// after the user deleted every icon. Only reload when upgrading off an old
-// shell/asset cache generation.
+// From day one (June 2026) the worker intercepted navigations and /assets/* so
+// the installed PWA felt offline-capable. On iOS standalone that fetch handler
+// answers the navigation from its own cache. A stale shell naming deleted
+// content-hashed chunks — or an empty/black cached document — produces a solid
+// black window: the phone never requests the page, never runs our JavaScript,
+// and nothing in the page can recover it. Safari on the same origin works
+// because iOS keeps Safari website data and Home Screen web-app data separately.
+//
+// ## Why takeover must not depend on the Cache API
+//
+// July 30 (v0.1.141) put skipWaiting *after* cache work for a one-shot icon
+// reset. That "await cache stuff, then skipWaiting" shape stayed as more reset
+// markers piled up through early August. Any Cache API rejection (iOS storage
+// pressure, an evicted bucket) then failed the install forever, leaving the old
+// intercepting worker in charge — observed as dozens of /sw.js requests and
+// zero document requests.
+//
+// Takeover is unconditional. Cache cleanup is best-effort only.
+//
+// ## What remains (and what was removed)
+//
+// Keep: VERSION stamp (byte-different worker per deploy), one generation
+// marker, purge of historical shell/asset caches, reload open clients only
+// when a real shell generation was purged (never on a brand-new install —
+// that reload left fresh icons black), push + badge handlers.
+//
+// Dropped: five historical one-shot KEEP markers (they only opened empty
+// caches forever), and unused cache-purge / unregister message handlers
+// (the page already wipes via window.caches + unregister).
 //
 // VERSION is overwritten at serve time from the live index stamp (see serve.ts).
 const VERSION = "__VERSION__";
-const CRISP_ICON_CACHE_RESET = "lfg-cache-reset-crisp-icon-v1";
-const BLACK_SHELL_CACHE_RESET_V1 = "lfg-cache-reset-black-shell-v1";
-const BLACK_SHELL_CACHE_RESET_V2 = "lfg-cache-reset-black-shell-v2";
-const BLACK_SHELL_CACHE_RESET_V3 = "lfg-cache-reset-black-shell-v3";
-const FORCE_UPDATE_RESET = "lfg-cache-reset-force-update-v1";
-const NO_FETCH_RESET = "lfg-cache-reset-no-fetch-v1";
-const KEEP = new Set([
-  CRISP_ICON_CACHE_RESET,
-  BLACK_SHELL_CACHE_RESET_V1,
-  BLACK_SHELL_CACHE_RESET_V2,
-  BLACK_SHELL_CACHE_RESET_V3,
-  FORCE_UPDATE_RESET,
-  NO_FETCH_RESET,
-]);
+// Survives purges so later activates know the push-only generation is current.
+// Older markers (crisp-icon, black-shell-v*, force-update, no-fetch) are deleted
+// with everything else — they no longer need to stick around.
+const GEN = "lfg-sw-gen-push-only-v1";
 
 // Set during install when this activation should bounce open windows once.
 let reloadClientsOnActivate = false;
 
-async function purgeAllLfgCaches(keys) {
+async function purgeStaleCaches(keys) {
   await Promise.all(
-    keys
-      .filter(
-        (key) =>
-          key.startsWith("lfg-shell-") ||
-          key.startsWith("lfg-assets-") ||
-          (key.startsWith("lfg-") && !KEEP.has(key)),
-      )
-      .map((key) => caches.delete(key)),
+    keys.filter((key) => key !== GEN).map((key) => caches.delete(key)),
   );
 }
 
@@ -65,21 +70,8 @@ async function reloadControlledClients() {
 }
 
 // Taking over from a previous worker is the ONLY job that must never fail.
-//
-// A stale worker that still has a fetch handler answers navigations from its
-// own cache, so the home-screen app never requests the page, never runs our
-// JavaScript, and shows a black window with no way to recover from inside the
-// page. The single escape route is this worker installing and claiming control.
-//
-// The previous version awaited caches.keys(), six caches.open() calls and a
-// purge BEFORE reaching skipWaiting(). Any one of those rejecting — iOS storage
-// pressure, an evicted bucket, Cache API unavailable in a standalone web app —
-// rejected the waitUntil promise, failed the install, and left the old
-// intercepting worker in charge permanently. The browser then refetched sw.js
-// and failed again, forever.
-//
-// So: hand over control FIRST, unconditionally, and treat every cache operation
-// as best-effort housekeeping that is not allowed to block the handover.
+// Hand over control FIRST, unconditionally; treat every cache operation as
+// best-effort housekeeping that is not allowed to block the handover.
 self.addEventListener("install", (event) => {
   // Not inside waitUntil and not awaited — nothing may sequence ahead of it.
   self.skipWaiting();
@@ -90,11 +82,10 @@ self.addEventListener("install", (event) => {
         const hadShellCaches = keys.some(
           (key) => key.startsWith("lfg-shell-") || key.startsWith("lfg-assets-"),
         );
-        for (const marker of KEEP) {
-          if (!keys.includes(marker)) await caches.open(marker);
-        }
+        if (!keys.includes(GEN)) await caches.open(GEN);
+        // Drop historical shell/asset caches and the pile of old reset markers.
+        await purgeStaleCaches(keys);
         if (hadShellCaches) {
-          await purgeAllLfgCaches(keys);
           // Only bounce clients when we actually cleaned a stale shell
           // generation. Brand-new installs have no shell caches — reloading
           // them on first activate is what left fresh home-screen icons black.
@@ -120,7 +111,7 @@ self.addEventListener("activate", (event) => {
       }
       try {
         const keys = await caches.keys();
-        await Promise.all(keys.filter((key) => !KEEP.has(key)).map((key) => caches.delete(key)));
+        await purgeStaleCaches(keys);
       } catch {
         // Best effort — see install.
       }
@@ -138,24 +129,6 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("message", (event) => {
   if (event.data?.type === "SKIP_WAITING") self.skipWaiting();
-  if (event.data?.type === "PURGE_SHELL_CACHES") {
-    event.waitUntil(
-      (async () => {
-        const keys = await caches.keys();
-        await purgeAllLfgCaches(keys);
-      })(),
-    );
-  }
-  if (event.data?.type === "UNREGISTER_AND_RELOAD") {
-    event.waitUntil(
-      (async () => {
-        const keys = await caches.keys();
-        await Promise.all(keys.map((key) => caches.delete(key)));
-        await self.registration.unregister();
-        await reloadControlledClients();
-      })(),
-    );
-  }
 });
 
 // ── Web Push only (no fetch handler) ────────────────────────────────────────

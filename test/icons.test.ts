@@ -51,12 +51,19 @@ describe("LFG icon assets", () => {
     expect(paths).toContain("/icon-small.svg?v=");
   });
 
-  test("forces one service-worker cache reset for stale PWA shells", async () => {
+  test("keeps the consolidated push-only service worker recovery invariants", async () => {
     const worker = await readFile("web/public/sw.js", "utf8");
     // Push-only worker: intercepting navigations made iOS home-screen installs
     // solid black while Safari on the same origin worked. No fetch handler.
-    expect(worker).toContain("lfg-cache-reset-no-fetch-v1");
-    expect(worker).toContain("NO fetch handler");
+    expect(worker).toContain("lfg-sw-gen-push-only-v1");
+    // Historical one-shot markers were collapsed — they only opened empty
+    // caches forever after the real fix (no fetch + skipWaiting first).
+    expect(worker).not.toContain("lfg-cache-reset-black-shell-v");
+    expect(worker).not.toContain("lfg-cache-reset-crisp-icon-v1");
+    // Only SKIP_WAITING remains on the message channel.
+    expect(worker).toMatch(/event\.data\?\.type === ["']SKIP_WAITING["']/);
+    expect(worker).not.toMatch(/event\.data\?\.type === ["']PURGE_SHELL_CACHES["']/);
+    expect(worker).not.toMatch(/event\.data\?\.type === ["']UNREGISTER_AND_RELOAD["']/);
     expect(worker).not.toContain('self.addEventListener("fetch"');
     expect(worker).not.toContain("self.addEventListener('fetch'");
     expect(worker).toContain("reloadControlledClients");
@@ -73,17 +80,22 @@ describe("LFG icon assets", () => {
 
     const index = await readFile("web/index.html", "utf8");
     expect(index).toContain('updateViaCache: "none"');
+    // Boot recovery owns controllerchange reload (single path).
     expect(index).toContain("var hadController = !!navigator.serviceWorker.controller");
     expect(index).toContain("if (!hadController)");
     expect(index).toContain("showStuckSplashRecovery");
+    expect(index).toContain("/__lfg_boot");
 
     const main = await readFile("web/src/main.tsx", "utf8");
     expect(main).toContain('updateViaCache: "none"');
-    expect(main).toContain("let seenController = !!navigator.serviceWorker.controller");
-    expect(main).toContain("if (!seenController)");
+    // main.tsx must NOT also listen for controller changes — that double-fired
+    // with index.html and raced fresh installs. Toast + resume adopt only.
+    expect(main).not.toMatch(/addEventListener\(\s*["']controllerchange["']/);
+    expect(main).toContain("adoptPendingUpdate");
 
     const serve = await readFile("src/commands/serve.ts", "utf8");
     expect(serve).toContain("/__lfg_pwa_reset");
+    expect(serve).toContain("/__lfg_pwa_diag");
     expect(serve).toContain("Home Screen web-app data SEPARATELY");
 
     const manifest = await readFile("web/public/manifest.webmanifest", "utf8");

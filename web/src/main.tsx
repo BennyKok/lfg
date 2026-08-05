@@ -76,12 +76,11 @@ requestAnimationFrame(() => {
   });
 });
 
-// Register the service worker for Web Push + a one-shot cache wipe on update.
-// It intentionally does NOT intercept navigations or assets — that path made
+// Service-worker UX that needs the app bundle (toast + resume adopt).
+// Boot-critical registration, takeover reload, and stuck-splash recovery live
+// in index.html so they still run when this module never loads.
+// The worker itself does NOT intercept navigations or assets — that path made
 // iOS home-screen installs solid black while Safari on the same origin worked.
-// Each deploy ships a byte-different worker (serve.ts stamps VERSION); we lean
-// on the native update lifecycle, adopt waiting workers on resume, and reload
-// once on controllerchange.
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     void registerServiceWorker();
@@ -107,6 +106,7 @@ async function registerServiceWorker() {
   try {
     // updateViaCache:"none" — iOS otherwise reuses a cached sw.js for update
     // checks, so installed PWAs never receive recovery workers after a deploy.
+    // Idempotent with the early register() in index.html (same URL/scope).
     const reg = await navigator.serviceWorker.register("/sw.js", {
       updateViaCache: "none",
     });
@@ -150,6 +150,8 @@ async function registerServiceWorker() {
     // is no in-flight typing or scroll position worth more than being current,
     // and reloading here is the behaviour a native app update already has. While
     // the app is in the foreground we still only ever ask, never interrupt.
+    // The actual page reload after takeover is owned by index.html (one path,
+    // no double-reload race with a second listener here).
     const adoptPendingUpdate = () => {
       if (reg.waiting && navigator.serviceWorker.controller) {
         activateUpdate(reg.waiting);
@@ -163,21 +165,6 @@ async function registerServiceWorker() {
     });
     window.addEventListener("focus", check);
   } catch {
-    // Registration failed — the app still runs, just without offline/update UX.
+    // Registration failed — the app still runs, just without push/update UX.
   }
-
-  // When a replacement worker takes control, reload once onto it. Skip the
-  // first controller acquisition (new install) — reloading there races iOS
-  // home-screen cold start and left fresh icons solid black.
-  let refreshing = false;
-  let seenController = !!navigator.serviceWorker.controller;
-  navigator.serviceWorker.addEventListener("controllerchange", () => {
-    if (!seenController) {
-      seenController = true;
-      return;
-    }
-    if (refreshing) return;
-    refreshing = true;
-    window.location.reload();
-  });
 }

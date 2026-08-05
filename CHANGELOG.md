@@ -2,6 +2,20 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - PWA recovery, consolidated (v0.1.264)
+
+- After the black home-screen fix, the recovery stack was a pile of one-shot
+  cache markers, dual reload paths, and dead message handlers. Collapsed to one
+  generation marker, a single controllerchange reload (in the boot shell), and
+  the push-only worker that still takes over even when the Cache API is broken.
+- Kept **/__lfg_pwa_diag** and the boot beacons — that page is how we debug the
+  next silent black launch without guessing.
+- Root cause, for the record: shell/asset fetch interception from day one (June)
+  could answer navigations from a stale cache on iOS standalone; July 30 then
+  put `skipWaiting` after cache work, so a Cache API error blocked the only
+  escape forever. The real fix was remove the fetch handler + take over first;
+  the rest of the stack was scaffolding.
+
 ## August 5, 2026 - Both resets in the campfire (v0.1.263)
 
 - Focusing an agent in the Usage Campfire now keeps its nearest restore as the

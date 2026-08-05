@@ -28,12 +28,13 @@ const PRECOMPRESS_SKIP_EXTENSIONS = new Set([
 ]);
 
 // Stamp a per-build version into the service worker's `__VERSION__` placeholder
-// so each deploy ships a byte-different sw.js. That's what makes the browser run
-// the install/activate lifecycle: the versioned caches roll over, every stale
-// build's chunks get purged (instead of piling up forever and slowing the PWA
-// down), and the page's native SW-update listener can raise the reload toast.
-// The version is derived from the hashed entry chunk, so it only changes when
-// the build's actual output changes.
+// so each deploy ships a byte-different sw.js. That is what makes the browser
+// run the install/activate lifecycle (and the page's update toast). The worker
+// is push-only now — it does not version shell/asset caches — but a stable
+// byte body would never re-install after a land that only changed recovery
+// logic. Production serve.ts also re-stamps from the live index mtime/size so
+// a shell-only change still forces takeover. The Vite stamp is derived from
+// the hashed entry chunk.
 function stampServiceWorkerVersion(): Plugin {
   let version = "dev";
   return {
