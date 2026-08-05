@@ -2,6 +2,13 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Agents reason without hidden advisors (v0.1.278)
+
+- LFG agents now handle technical reasoning directly instead of spawning a
+  separate, persistent advisor session. The obsolete advisor MCP tools and
+  voice-consult backend have been removed, so internal advisor sessions no
+  longer appear in the live session list or consume an agent slot.
+
 ## August 5, 2026 - Updates no longer yank open sessions (v0.1.277)
 
 - A new deploy no longer hard-reloads the app while you are using it. Mid-session

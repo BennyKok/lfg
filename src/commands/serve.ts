@@ -116,7 +116,6 @@ import {
 import { isCommandFileAgent } from "../coding-agent-adapters.ts";
 import {
   enqueueTranscriptIndex,
-  indexedRecentMessages,
   indexedMessagePage,
   indexArtifactMessage,
   indexedArtifactPlacement,
@@ -1753,129 +1752,6 @@ function plannedSessionAction(answer: string): {
   return text ? { kind: "send", text } : { kind: "none" };
 }
 
-// ── Voice "deep-think" advisor ──────────────────────────────────────────────
-// The voice brain is Haiku (fast, cheap, 1-2 sentences). For hard questions it
-// escalates here: a persistent Opus aisdk session with full tool + repo access.
-// We keep one advisor alive and reuse it across consults; if it's gone (serve
-// restart, closed), the next consult lazily respawns it.
-const ADVISOR_BRIEF =
-  "You are the deep-thinking advisor for the lfg voice assistant. The user is " +
-  "talking hands-free and the voice assistant escalates its hardest questions " +
-  "to you for more careful reasoning. Think it through, then answer in at most " +
-  "3 short, plain spoken sentences — no markdown, no code blocks, no bullet " +
-  "lists. Be concrete and decisive; the answer is read aloud.";
-let voiceAdvisorId: string | null = null;
-// Which repo the live advisor was spawned against. The working tree is fixed at
-// spawn, so a question about a different repo needs a fresh advisor.
-let voiceAdvisorCwd: string | null = null;
-
-const isAdvisorAnswer = (m: { role: string; kind: string; text?: string }) =>
-  m.role === "assistant" && m.kind === "text" && !!m.text?.trim();
-
-// Poll the advisor transcript until a new assistant answer appears AND settles
-// (no further growth for one interval), or we hit the timeout.
-async function waitForAdvisorAnswer(
-  id: string,
-  baseline: number,
-  timeoutMs: number,
-): Promise<string> {
-  const deadline = Date.now() + timeoutMs;
-  let last = "";
-  while (Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 1200));
-    const tp = await resolveTranscript(id);
-    if (!tp) continue;
-    enqueueTranscriptIndex(tp, id);
-    const answers = (await indexedRecentMessages(tp, id, 2_000)).filter(
-      isAdvisorAnswer,
-    );
-    if (answers.length > baseline) {
-      const text = (answers[answers.length - 1].text || "").trim();
-      if (text && text === last) return text; // stable for one interval — done
-      last = text;
-    }
-  }
-  return last || "I couldn't reach the advisor in time.";
-}
-
-// Send a question to the Opus advisor and return its spoken answer. `cwd` is the
-// repo to explore (defaults to the lfg repo); callers pass the user's
-// currently-scoped repo so the answer has that codebase's full context.
-async function voiceConsult(
-  question: string,
-  cwd: string = SELF_REPO,
-): Promise<string> {
-  const live = await listSessionsCached();
-  let id = voiceAdvisorId;
-  // Reuse the advisor only if it's still alive AND already scoped to the repo we
-  // want to explore — a different repo means its loaded working tree is wrong, so
-  // retire it and spawn fresh.
-  const reusable =
-    !!id && !!live.find((s) => s.sessionId === id) && voiceAdvisorCwd === cwd;
-  if (!reusable) {
-    if (id) await retireVoiceAdvisor();
-    // Spawn a fresh advisor; the brief + first question are the kickoff turn, so
-    // the answer is simply its first assistant message (baseline 0).
-    id = crypto.randomUUID();
-    const r = spawnManagedAisdkSession({
-      name: `lfg-adv-${randomBytes(2).toString("hex")}`,
-      cwd,
-      prompt: `${ADVISOR_BRIEF}\n\nFirst question: ${question}`,
-      model: "opus",
-      sessionId: id,
-    });
-    if (!r.ok) throw new Error(r.error || "advisor spawn failed");
-    voiceAdvisorId = id;
-    voiceAdvisorCwd = cwd;
-    return waitForAdvisorAnswer(id, 0, 120_000);
-  }
-  // Reuse the live advisor: count existing answers, then send and wait for one
-  // more to appear past that baseline. (reusable === true guarantees id here.)
-  if (!id) throw new Error("advisor unexpectedly missing");
-  const tp = await resolveTranscript(id);
-  const baseline = tp
-    ? (await indexedRecentMessages(tp, id, 2_000)).filter(isAdvisorAnswer)
-        .length
-    : 0;
-  appendAisdkCmd(id, { type: "send", text: question });
-  return waitForAdvisorAnswer(id, baseline, 90_000);
-}
-
-// Retire the persistent advisor so the next consult spawns a fresh one. Called
-// when a new voice session starts: the advisor accumulates conversation context
-// across consults, so without this the old session's deep-think history would
-// leak into the new session. Teardown mirrors the aisdk session-close path and
-// is best-effort — a hiccup here must never block a new voice session starting.
-async function retireVoiceAdvisor(): Promise<void> {
-  const id = voiceAdvisorId;
-  voiceAdvisorId = null; // clear first so a concurrent consult respawns cleanly
-  voiceAdvisorCwd = null;
-  if (!id) return;
-  try {
-    const sess = (await listSessions()).find((s) => s.sessionId === id);
-    if (!sess) return; // already gone (serve restart, closed) — nothing to tear down
-    const entry = findAisdkEntryByAnyId(id);
-    const key = entry?.sessionId ?? id;
-    appendAisdkCmd(key, { type: "close" });
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    if (entry && isAisdkPidAlive(entry.harnessPid)) {
-      if (entry.supervisor === "process") terminateHarnessProcess(entry);
-      else if (sess.tmuxName) tmuxKillSession(sess.tmuxName);
-    } else if (!entry?.supervisor && sess.tmuxName) {
-      tmuxKillSession(sess.tmuxName);
-    }
-    markClosed(sess.pid);
-    removeAisdkEntry(key);
-    if (sess.tmuxName) {
-      removeManaged(sess.tmuxName);
-      assignUser(sess.tmuxName, null);
-    }
-    clearResolved(id);
-  } catch {
-    // best-effort: voiceAdvisorId is already null, so the next consult respawns
-  }
-}
-
 // Best available interactive prompt for a session. Prefers a structured
 // AskUserQuestion read from the transcript (exact text, survives the preview /
 // multi-select / wrapped layouts the pane scraper can't follow), and falls back
@@ -2876,24 +2752,6 @@ a{color:#60a5fa}
           } catch (e) {
             return err(400, e instanceof Error ? e.message : "could not submit login code");
           }
-        }
-      }
-
-      // ---- voice deep-think consult: forward a hard question to the persistent
-      // Opus advisor session and return its spoken answer. The voice brain
-      // (Haiku) calls this as a tool when a question needs heavier reasoning.
-      if (path === "/api/voice/consult" && req.method === "POST") {
-        const body = (await req.json().catch(() => null)) as {
-          question?: string;
-          cwd?: string;
-        } | null;
-        const question = body?.question?.trim();
-        if (!question) return err(400, "expected { question }");
-        try {
-          const answer = await voiceConsult(question, body?.cwd?.trim() || undefined);
-          return json({ answer });
-        } catch (e) {
-          return err(502, e instanceof Error ? e.message : "consult failed");
         }
       }
 

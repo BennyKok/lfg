@@ -3,7 +3,7 @@ import type { CodingAgentKind } from "./coding-agents.ts";
 // Bump whenever an agent-facing LFG capability or its operating guidance
 // changes. Managed sessions persist the value they launched with, which lets
 // the UI identify long-lived sessions whose MCP/tool catalog predates a ship.
-export const LFG_CAPABILITY_VERSION = "2026-08-05.1";
+export const LFG_CAPABILITY_VERSION = "2026-08-05.2";
 
 export const LFG_CAPABILITIES = [
   {
@@ -13,9 +13,9 @@ export const LFG_CAPABILITIES = [
   },
   {
     tool: "lfg_input",
-    useWhen: "You need an answer pulled in: from:'user' for a genuinely irreversible/risky/ambiguous decision, or from:'advisor' for a technical answer from LFG's advisor.",
+    useWhen: "A genuinely irreversible, risky, or ambiguous decision requires the human's answer.",
     guidance:
-      "Prefer deciding autonomously — do NOT ask merely to check in. from:'user' is fire-and-forget: raise it once, do not poll or block; the answer arrives later as a user message. from:'advisor' returns a concise answer synchronously.",
+      "Prefer deciding autonomously — do NOT ask merely to check in. This is fire-and-forget: raise it once, do not poll or block; the answer arrives later as a user message.",
   },
   {
     tool: "lfg_find_sessions",
@@ -48,7 +48,7 @@ export function shortSessionId(id: string): string {
 export const LFG_MCP_INSTRUCTIONS = [
   `This is LFG's agent capability server (capability version ${LFG_CAPABILITY_VERSION}).`,
   "Communicate with the human through normal assistant messages. Use lfg_display_image or lfg_display_video when local visual evidence is useful.",
-  "Decide autonomously; use lfg_input only for a genuinely irreversible decision or to consult the advisor. Use LFG-managed delegation only when delegation is explicitly requested.",
+  "Decide autonomously; use lfg_input only for a genuinely irreversible, risky, or ambiguous decision. Use LFG-managed delegation only when delegation is explicitly requested.",
   `Session ids are returned in short form (${SHORT_SESSION_ID_LENGTH}-char prefix, like a git short sha). Pass them back exactly as given — any unambiguous prefix resolves to the full id.`,
 ].join(" ");
 
@@ -58,7 +58,7 @@ export function lfgRuntimeContract(): string {
     "- You are an LFG-managed coding agent. Communicate with the human through normal assistant messages; LFG tool calls do not replace those replies.",
     "- Use `lfg_display_image` or `lfg_display_video` when a local screenshot or recording provides useful evidence in the LFG transcript.",
     "- If deployment was requested, verify it before claiming it. For LFG source changes, commit and run `scripts/land-session.sh` before reporting completion.",
-    "- Decide and continue when safe. Use `lfg_input` `from:'user'` only for an irreversible, risky, or ambiguous decision; it is fire-and-forget, so do not poll. Use `from:'advisor'` for technical advice.",
+    "- Decide and continue when safe. Use `lfg_input` only for an irreversible, risky, or ambiguous decision; it is fire-and-forget, so do not poll.",
     "- Never request channel identity or credentials. Use `lfg_find_sessions` for history and `lfg_list_sessions` for live sessions. Before using `lfg_close_session`, resolve the target and never close your own session.",
     "- Delegate only when explicitly requested, using `lfg_create_subagent` or `lfg_delegate_*` so children remain linked and visible.",
     `- Session ids use an ${SHORT_SESSION_ID_LENGTH}-character prefix. Pass them back exactly as shown. If an LFG tool is missing, call \`lfg_capabilities\`; report a refresh only when it returns \`stale: true\`, otherwise report the feature as unsupported.`,

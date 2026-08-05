@@ -72,9 +72,6 @@ type ImageArtifactResponse = {
     name?: string;
   };
 };
-type AskQuestionResponse = {
-  answer: string;
-};
 type OriginDeliveryResponse = {
   ok?: boolean;
   delivery?: {
@@ -699,35 +696,6 @@ export function buildLfgMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "lfg_ask_question",
-    {
-      title: "Ask LFG A Question",
-      description:
-        "Ask LFG's deep-thinking advisor a technical or informative question and wait for its concise answer. Use this when the human wants an answer from LFG, optionally grounded in a specific repository. This is the opposite direction from lfg_ask_user, which asks the human to make a decision.",
-      inputSchema: {
-        question: z
-          .string()
-          .min(1)
-          .describe("The question for the advisor, in clear plain language."),
-        cwd: z
-          .string()
-          .optional()
-          .describe(
-            "Optional repository directory to inspect for context. Defaults to the LFG repository.",
-          ),
-      },
-    },
-    async ({ question, cwd }) => {
-      const data = await api<AskQuestionResponse>("/api/voice/consult", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ question, cwd }),
-      });
-      return result({ answer: data.answer });
-    },
-  );
-
-  server.registerTool(
     "lfg_send_to_origin",
     {
       title: "Send A Message To The Originating Channel",
@@ -1114,34 +1082,25 @@ export function buildLfgMcpServer(): McpServer {
   server.registerTool(
     "lfg_input",
     {
-      title: "Input From The User Or Advisor (ask)",
+      title: "Input From The User (ask)",
       description:
-        "Pull in an answer when one is genuinely required. `from: 'user'` (default) asks the human to make an irreversible/risky/ambiguous decision; do not use it merely to check in or report progress. It is fire-and-forget: raises a push notification and returns immediately with a question id — do NOT wait, poll, or block; the answer arrives later as a user message starting with [ask-user answer <id>], so continue other safe work or end your turn. `from: 'advisor'` asks LFG's deep-thinking advisor a technical question and waits for a concise answer, optionally grounded in a repo.",
+        "Ask the human only when an irreversible, risky, or ambiguous decision genuinely requires their answer; do not use this merely to check in or report progress. It is fire-and-forget: raises a push notification and returns immediately with a question id — do NOT wait, poll, or block; the answer arrives later as a user message starting with [ask-user answer <id>], so continue other safe work or end your turn.",
       inputSchema: {
         prompt: z
           .string()
           .min(1)
-          .describe("The question. For 'user': lead with the decision in one sentence, at most a couple of short context lines, no markdown. For 'advisor': a clear technical question."),
-        from: z.enum(["user", "advisor"]).optional().describe("'user' (default) asks the human to decide; 'advisor' asks LFG's advisor and returns its answer."),
+          .describe("Lead with the decision in one sentence, at most a couple of short context lines, no markdown."),
+        from: z.literal("user").optional().describe("Optional compatibility field; only 'user' is accepted."),
         options: z
           .array(z.string())
           .max(6)
           .optional()
-          .describe("For 'user': optional one-tap answer suggestions (short labels). The user may still reply with free text."),
-        cwd: z.string().optional().describe("For 'advisor': optional repository directory to inspect for context. Defaults to the LFG repository."),
-        sessionId: z.string().optional().describe("For 'user': session the answer is delivered to. Defaults to LFG_SESSION_ID."),
-        user: z.string().optional().describe("For 'user': user email to notify. Defaults to the calling session's LFG_USER."),
+          .describe("Optional one-tap answer suggestions (short labels). The user may still reply with free text."),
+        sessionId: z.string().optional().describe("Session the answer is delivered to. Defaults to LFG_SESSION_ID."),
+        user: z.string().optional().describe("User email to notify. Defaults to the calling session's LFG_USER."),
       },
     },
-    async ({ prompt, from, options, cwd, sessionId, user }) => {
-      if (from === "advisor") {
-        const data = await api<AskQuestionResponse>("/api/voice/consult", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ question: prompt, cwd }),
-        });
-        return result({ answer: data.answer });
-      }
+    async ({ prompt, options, sessionId, user }) => {
       const sid = await activeSessionId(sessionId);
       const who = user?.trim() || process.env.LFG_USER?.trim() || null;
       const data = await api<{ id: string; status: string }>("/api/ask", {

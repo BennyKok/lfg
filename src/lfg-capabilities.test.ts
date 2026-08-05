@@ -14,6 +14,7 @@ describe("LFG runtime capabilities", () => {
     expect(prompt).toContain(`capability version ${LFG_CAPABILITY_VERSION}`);
     expect(prompt).not.toContain("lfg_output");
     expect(prompt).toContain("lfg_input");
+    expect(prompt).not.toContain("advisor");
     expect(prompt).toContain("normal assistant messages");
     expect(prompt).toContain("lfg_display_image");
     expect(prompt).toContain("lfg_display_video");
@@ -50,9 +51,14 @@ describe("LFG runtime capabilities", () => {
 
   test("keeps visual display tools without registering lfg_output", () => {
     const mcpSource = readFileSync(new URL("./commands/mcp.ts", import.meta.url), "utf8");
+    const serveSource = readFileSync(new URL("./commands/serve.ts", import.meta.url), "utf8");
     expect(mcpSource).not.toContain('registerTool(\n    "lfg_output"');
     expect(mcpSource).toContain('registerTool(\n    "lfg_display_image"');
     expect(mcpSource).toContain('registerTool(\n    "lfg_display_video"');
+    expect(mcpSource).not.toContain('registerTool(\n    "lfg_ask_question"');
+    expect(mcpSource).not.toContain('"advisor"');
+    expect(serveSource).not.toContain('/api/voice/consult');
+    expect(serveSource).not.toContain('ADVISOR_BRIEF');
   });
 
   test("reports honest harness access", () => {

@@ -263,7 +263,7 @@ context, and can run on any configured harness.
 | Origin delivery | `lfg_send_to_origin` |
 | Presentation | `lfg_display_image`, `lfg_display_video`, `lfg_publish_artifact`, `lfg_refresh_artifact`, `lfg_ship` |
 | Delegation | `lfg_create_subagent`, `lfg_delegate_to_agent`, `lfg_delegate_design_task`, `lfg_delegate_backend_task`, `lfg_list_subagents`, `lfg_reparent_session` |
-| Human / advisor | `lfg_ask_user`, `lfg_ask_question` |
+| Human input | `lfg_ask_user`, `lfg_input` |
 | Catalog | `lfg_capabilities`, `lfg_list_repos`, `lfg_list_models` |
 
 Managed sessions launched with an initial task receive a versioned **LFG runtime
