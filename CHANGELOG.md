@@ -2,6 +2,11 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Compact thinking scrub labels (v0.1.273)
+
+- Scrub card is tighter: drops Faster/Deeper, centers the current level, and
+  shows the agent’s real min/max effort names at the ends (e.g. low · xhigh).
+
 ## August 5, 2026 - Thinking scrub card really solid (v0.1.272)
 
 - Scrub overlay uses a dedicated opaque panel class (dark `#1c1c1e` fill +

@@ -17189,6 +17189,8 @@ function ComposerThinkingControl({
   const currentIndex = Math.max(0, levels.indexOf(value));
   const previewProgress = levels.length > 1 ? previewIndex / (levels.length - 1) : 0;
   const previewAccent = thinkingAccentColor(previewProgress);
+  const minLevel = levels[0] ?? value;
+  const maxLevel = levels[levels.length - 1] ?? value;
 
   const clearHoldTimer = () => {
     if (holdTimerRef.current != null) {
@@ -17203,7 +17205,7 @@ function ComposerThinkingControl({
     const rect = trigger.getBoundingClientRect();
     const width = Math.min(360, Math.max(248, window.innerWidth - 24));
     const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + rect.width / 2 - width / 2));
-    const panelHeight = 128;
+    const panelHeight = 96;
     const top = rect.top - panelHeight - 12 >= 12
       ? rect.top - panelHeight - 12
       : Math.min(window.innerHeight - panelHeight - 12, rect.bottom + 12);
@@ -17382,14 +17384,11 @@ function ComposerThinkingControl({
               className="pointer-events-none fixed z-[220] origin-bottom select-none animate-in fade-in-0 zoom-in-90 slide-in-from-bottom-2 duration-200"
             >
               <div className="thinking-scrubber-panel">
-                <div className="mb-3 flex items-center justify-between gap-4">
-                  <span className="text-xs font-medium text-muted-foreground">Thinking</span>
-                  <span
-                    className="text-sm font-semibold capitalize transition-colors duration-150"
-                    style={{ color: previewAccent }}
-                  >
-                    {levels[previewIndex] ?? value}
-                  </span>
+                <div
+                  className="mb-1.5 text-center text-sm font-semibold capitalize transition-colors duration-150"
+                  style={{ color: previewAccent }}
+                >
+                  {levels[previewIndex] ?? value}
                 </div>
                 <div
                   className="thinking-scrubber"
@@ -17407,9 +17406,9 @@ function ComposerThinkingControl({
                   </div>
                   <span aria-hidden="true" className="thinking-scrubber-thumb" />
                 </div>
-                <div className="mt-0.5 flex items-center justify-between text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
-                  <span>Faster</span>
-                  <span>Deeper</span>
+                <div className="mt-1 flex items-center justify-between gap-3 text-[11px] font-medium capitalize text-muted-foreground">
+                  <span>{minLevel}</span>
+                  <span>{maxLevel}</span>
                 </div>
               </div>
             </div>,

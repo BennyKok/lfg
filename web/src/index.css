@@ -1019,8 +1019,8 @@ html.lfg-keyboard-open {
   .thinking-scrubber-panel {
     overflow: hidden;
     border: 1px solid var(--border);
-    border-radius: 1.6rem;
-    padding: 1rem 1.25rem;
+    border-radius: 1.25rem;
+    padding: 0.7rem 0.9rem 0.65rem;
     background: var(--popover);
     color: var(--popover-foreground);
     box-shadow:
@@ -1045,7 +1045,7 @@ html.lfg-keyboard-open {
     --thinking-progress: 0;
     --thinking-accent: rgb(0, 122, 255);
     --thinking-glow: color-mix(in srgb, var(--thinking-accent) 50%, transparent);
-    --thinking-thumb: 1.7rem;
+    --thinking-thumb: 1.45rem;
     --thinking-thumb-half: calc(var(--thinking-thumb) / 2);
     --thinking-thumb-left: calc(
       var(--thinking-thumb-half) + var(--thinking-progress) * (100% - var(--thinking-thumb))
@@ -1057,14 +1057,14 @@ html.lfg-keyboard-open {
     --thinking-tile: calc(var(--thinking-cell) + var(--thinking-gap));
     --thinking-matrix-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='5.5' height='5.5' viewBox='0 0 5.5 5.5'%3E%3Crect x='0.25' y='0.25' width='4' height='4' rx='0.85' fill='white'/%3E%3C/svg%3E");
     position: relative;
-    height: 2.75rem;
+    height: 2.25rem;
   }
 
   .thinking-scrubber-track {
     position: absolute;
     inset-inline: var(--thinking-thumb-half);
     top: 50%;
-    height: 1.45rem;
+    height: 1.2rem;
     transform: translateY(-50%);
     overflow: hidden;
     /* Soft rectangle, not a pill — keeps the density bar squared off. */

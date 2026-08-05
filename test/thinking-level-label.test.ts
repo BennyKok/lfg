@@ -88,6 +88,15 @@ describe("thinking level menu", () => {
     expect(control).toContain('className="thinking-scrubber-panel"');
     expect(css).toContain(".thinking-scrubber-panel");
     expect(css).toContain("background: #1c1c1e");
+    // Compact: current level centered, agent min/max endpoints (not Faster/Deeper).
+    expect(control).toContain("const minLevel = levels[0]");
+    expect(control).toContain("const maxLevel = levels[levels.length - 1]");
+    expect(control).toContain("{minLevel}");
+    expect(control).toContain("{maxLevel}");
+    expect(control).not.toContain(">Faster</span>");
+    expect(control).not.toContain(">Deeper</span>");
+    // Scrub panel no longer titles itself "Thinking" — only the composer pill does.
+    expect(control).not.toContain('text-muted-foreground">Thinking</span>');
     // Dot markers replaced by the pixel-matrix track + chunky squircle thumb.
     expect(control).not.toContain("rounded-full bg-popover ring-2");
     expect(control).not.toContain("from-sky-400/35 via-violet-400/55");
@@ -100,7 +109,7 @@ describe("thinking level menu", () => {
     expect(css).toContain("--thinking-matrix-mask");
     expect(css).toContain("border-radius: 0.52rem");
     expect(css).toContain("border-radius: 0.32rem");
-    expect(css).toContain("height: 1.45rem");
+    expect(css).toContain("height: 1.2rem");
     expect(css).toContain("rgba(0, 122, 255");
     expect(css).toContain("rgba(175, 82, 222");
     expect(css).toContain("rgba(232, 121, 249");
