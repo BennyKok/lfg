@@ -2,6 +2,13 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Home-screen loads like Safari (v0.1.258)
+
+- The service worker no longer intercepts page or asset loads. That fetch
+  handler is what made every iOS home-screen install solid black while Chrome
+  and Safari on the same URL worked. The worker now only handles push
+  notifications and wipes old caches on update.
+
 ## August 5, 2026 - Home-screen vs Safari are different (v0.1.257)
 
 - On iPhone, resetting lfg in Safari does not reset the home-screen app — they

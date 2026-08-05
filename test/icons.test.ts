@@ -53,35 +53,24 @@ describe("LFG icon assets", () => {
 
   test("forces one service-worker cache reset for stale PWA shells", async () => {
     const worker = await readFile("web/public/sw.js", "utf8");
-    expect(worker).toContain("lfg-cache-reset-crisp-icon-v1");
-    // Black standalone launches (stale shell + missing hashed chunks) get a
-    // one-time purge that also navigates open clients — purge alone left
-    // shells whose entry chunk never ran still black. v3 also refuses to
-    // cache/serve empty black HTML as a shell fallback.
-    expect(worker).toContain("lfg-cache-reset-force-update-v1");
+    // Push-only worker: intercepting navigations made iOS home-screen installs
+    // solid black while Safari on the same origin worked. No fetch handler.
+    expect(worker).toContain("lfg-cache-reset-no-fetch-v1");
+    expect(worker).toContain("deliberately has NO fetch handler");
+    expect(worker).not.toContain('self.addEventListener("fetch"');
+    expect(worker).not.toContain("self.addEventListener('fetch'");
     expect(worker).toContain("reloadControlledClients");
-    expect(worker).toContain("offlineShellResponse");
-    expect(worker).toContain("isUsableAppShell");
-    expect(worker).toContain("matchUsableShell");
-    expect(worker).toContain('cache: "no-store"');
-    expect(worker).toContain('key.startsWith("lfg-shell-")');
-    expect(worker).toContain('key.startsWith("lfg-assets-")');
-    // New workers must activate immediately — waiting for a toast the black
-    // screen can never show is how phones stayed on dead builds.
     expect(worker).toContain("await self.skipWaiting()");
     expect(worker).toContain("await reloadControlledClients()");
-    expect(worker).toContain("/__lfg_pwa_reset");
+    expect(worker).toContain('self.addEventListener("push"');
+    expect(worker).toContain("async function syncAppBadge()");
 
-    // Recovery must not depend on the app bundle loading (that is the failure).
     const index = await readFile("web/index.html", "utf8");
     expect(index).toContain('updateViaCache: "none"');
     expect(index).toContain("lfg:boot-recover:");
     expect(index).toContain("LFG_FORCE_RELOAD");
-    // Stuck black splash must surface a recovery UI, not spin forever.
     expect(index).toContain("showStuckSplashRecovery");
     expect(index).toContain("lfg did not finish loading");
-    // Never reload on controllerchange when sessionStorage is unusable —
-    // that path is an infinite black flash loop on some iOS installs.
     expect(index).toContain('if (!storageSet("lfg:sw-controller-reload", "1")) return;');
 
     const main = await readFile("web/src/main.tsx", "utf8");
@@ -90,12 +79,10 @@ describe("LFG icon assets", () => {
     const serve = await readFile("src/commands/serve.ts", "utf8");
     expect(serve).toContain("/__lfg_pwa_reset");
     expect(serve).toContain("no-store, max-age=0");
-    // iOS: Safari reset ≠ home-screen reset — the page must explain that.
     expect(serve).toContain("Home Screen web-app data SEPARATELY");
     expect(serve).toContain("Delete</strong> the black lfg icon");
 
     const manifest = await readFile("web/public/manifest.webmanifest", "utf8");
-    // Bump id/start_url so a re-add is a new install identity, not a revive.
     expect(manifest).toContain('"id":');
     expect(manifest).toContain("hs=2026-08-05");
   });

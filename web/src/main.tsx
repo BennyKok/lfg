@@ -63,14 +63,12 @@ createRoot(document.getElementById("root")!).render(
   </StrictMode>,
 );
 
-// Register the service worker so the app is installable, the shell works
-// offline, and cache-first serving of the hashed /assets/* bundle makes reloads
-// instant (see sw.js). Each deploy ships a byte-different worker, so we can lean
-// on the native SW update lifecycle instead of polling for changed asset hashes:
-// when a new worker finishes installing it sits in "waiting", and we surface a
-// toast. The user clicks Reload → we tell the waiting worker to take over → the
-// resulting controllerchange reloads the page once onto the fresh bundle. We
-// never swap the running app out from under an in-progress session.
+// Register the service worker for Web Push + a one-shot cache wipe on update.
+// It intentionally does NOT intercept navigations or assets — that path made
+// iOS home-screen installs solid black while Safari on the same origin worked.
+// Each deploy ships a byte-different worker (serve.ts stamps VERSION); we lean
+// on the native update lifecycle, adopt waiting workers on resume, and reload
+// once on controllerchange.
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     void registerServiceWorker();
