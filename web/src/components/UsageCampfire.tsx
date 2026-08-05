@@ -692,6 +692,25 @@ function CampfireOverlay({
     return null;
   }, [heroScope, heroReset]);
 
+  // A focused provider can report more than one window (Codex: Session +
+  // Weekly, Claude: 5 hr + 7 day). Keep the soonest reset in the hero, then
+  // retain every other upcoming reset as a compact companion readout instead
+  // of making the user guess when the secondary window comes back.
+  const otherFocusedResets = useMemo(
+    () =>
+      focused && heroReset != null
+        ? (focused.windows ?? [])
+            .filter(
+              (window) =>
+                window.resetsAt != null &&
+                window.resetsAt > now &&
+                window.resetsAt !== heroReset,
+            )
+            .sort((a, b) => (a.resetsAt ?? 0) - (b.resetsAt ?? 0))
+        : [],
+    [focused, heroReset, now],
+  );
+
   // Not every provider reports a reset time. Rather than answer a hover with
   // "No upcoming resets reported", fall back to what that agent DOES know —
   // how much of its window is spent — and relabel the eyebrow to match.
@@ -820,6 +839,21 @@ function CampfireOverlay({
                         ? "No upcoming resets reported"
                         : "No agents reporting usage"}
           </p>
+          {otherFocusedResets.length ? (
+            <div
+              className="mt-0.5 flex flex-col items-center gap-0.5 text-[10px] tabular-nums sm:text-[11px]"
+              style={{ color: TONE.soft }}
+              aria-label="Other upcoming resets"
+            >
+              {otherFocusedResets.map((window) => (
+                <span key={`${window.label}-${window.resetsAt}`}>
+                  <span style={{ color: TONE.label }}>{window.label}</span>
+                  {" restores "}
+                  {formatResetShort(window.resetsAt, now)}
+                </span>
+              ))}
+            </div>
+          ) : null}
           <p className="mt-0.5 text-[10px]" style={{ color: TONE.faint }}>
             {canHover
               ? onSelectAgent
