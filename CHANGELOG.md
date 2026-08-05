@@ -2,6 +2,12 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Pixel-matrix thinking scrubber (v0.1.268)
+
+- Hold-to-scrub Thinking control now matches the Codex density-track language:
+  a thicker bar filled with rounded square cells, a chunky white squircle
+  thumb, and a blue → fuchsia light-up as effort deepens.
+
 ## August 5, 2026 - Scheduled sessions run once (v0.1.267)
 
 - Retrying the same scheduled occurrence now returns its original session
