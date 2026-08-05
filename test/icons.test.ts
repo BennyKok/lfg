@@ -58,8 +58,7 @@ describe("LFG icon assets", () => {
     // one-time purge that also navigates open clients — purge alone left
     // shells whose entry chunk never ran still black. v3 also refuses to
     // cache/serve empty black HTML as a shell fallback.
-    expect(worker).toContain("lfg-cache-reset-black-shell-v3");
-    expect(worker).toContain("forceTakeoverAndPurgeShellCaches");
+    expect(worker).toContain("lfg-cache-reset-force-update-v1");
     expect(worker).toContain("reloadControlledClients");
     expect(worker).toContain("offlineShellResponse");
     expect(worker).toContain("isUsableAppShell");
@@ -67,13 +66,15 @@ describe("LFG icon assets", () => {
     expect(worker).toContain('cache: "no-store"');
     expect(worker).toContain('key.startsWith("lfg-shell-")');
     expect(worker).toContain('key.startsWith("lfg-assets-")');
+    // New workers must activate immediately — waiting for a toast the black
+    // screen can never show is how phones stayed on dead builds.
     expect(worker).toContain("await self.skipWaiting()");
-    expect(worker).toContain("keys.includes(CRISP_ICON_CACHE_RESET)");
-    expect(worker).toContain("keys.includes(BLACK_SHELL_CACHE_RESET)");
+    expect(worker).toContain("await reloadControlledClients()");
+    expect(worker).toContain("/__lfg_pwa_reset");
 
     // Recovery must not depend on the app bundle loading (that is the failure).
     const index = await readFile("web/index.html", "utf8");
-    expect(index).toContain('navigator.serviceWorker.register("/sw.js")');
+    expect(index).toContain('updateViaCache: "none"');
     expect(index).toContain("lfg:boot-recover:");
     expect(index).toContain("LFG_FORCE_RELOAD");
     // Stuck black splash must surface a recovery UI, not spin forever.
@@ -82,6 +83,13 @@ describe("LFG icon assets", () => {
     // Never reload on controllerchange when sessionStorage is unusable —
     // that path is an infinite black flash loop on some iOS installs.
     expect(index).toContain('if (!storageSet("lfg:sw-controller-reload", "1")) return;');
+
+    const main = await readFile("web/src/main.tsx", "utf8");
+    expect(main).toContain('updateViaCache: "none"');
+
+    const serve = await readFile("src/commands/serve.ts", "utf8");
+    expect(serve).toContain("/__lfg_pwa_reset");
+    expect(serve).toContain("no-store, max-age=0");
   });
 
   // A suspended PWA can run one shell across many deploys, so a waiting worker

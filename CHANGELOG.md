@@ -2,7 +2,15 @@
 
 Recent product updates and deployment notes.
 
-## August 5, 2026 - Completely black PWA shows a way out (v0.1.256)
+## August 5, 2026 - PWA actually updates (v0.1.256)
+
+- Home-screen LFG installs were keeping a cached service worker forever on iOS
+  (`updateViaCache` default), so recovery code never arrived. Registration now
+  opts out of HTTP caching for worker updates, new workers activate immediately,
+  and every deploy rewrites the worker identity from the live index stamp.
+- Open `/__lfg_pwa_reset` in Safari to force-clear a stuck install.
+- A home-screen install that only showed solid black no longer falls back to an
+  empty cached HTML document; the splash shows an "lfg" wordmark and recovery UI.
 
 - A home-screen LFG install that only showed a solid black screen no longer
   falls back to an empty cached HTML document. The service worker only reuses

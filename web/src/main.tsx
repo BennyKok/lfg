@@ -94,7 +94,11 @@ function promptUpdate(worker: ServiceWorker) {
 
 async function registerServiceWorker() {
   try {
-    const reg = await navigator.serviceWorker.register("/sw.js");
+    // updateViaCache:"none" — iOS otherwise reuses a cached sw.js for update
+    // checks, so installed PWAs never receive recovery workers after a deploy.
+    const reg = await navigator.serviceWorker.register("/sw.js", {
+      updateViaCache: "none",
+    });
 
     // A worker updated during a previous visit may already be waiting. Activate
     // it immediately on startup so opening the PWA cannot strand the user on an

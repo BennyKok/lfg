@@ -262,9 +262,14 @@
 
         if (!("serviceWorker" in navigator)) return;
 
-        var regPromise = navigator.serviceWorker.register("/sw.js").catch(function () {
-          return null;
-        });
+        // updateViaCache:"none" is load-bearing on iOS. The default lets the
+        // HTTP cache satisfy sw.js update checks, so an installed PWA can keep
+        // the same dead worker across many deploys and never see recovery code.
+        var regPromise = navigator.serviceWorker
+          .register("/sw.js", { updateViaCache: "none" })
+          .catch(function () {
+            return null;
+          });
 
         regPromise.then(function (reg) {
           if (!reg) return;

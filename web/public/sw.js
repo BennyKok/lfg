@@ -15,38 +15,35 @@
 // VERSION is stamped per build (see vite.config.ts), so each deploy ships a
 // byte-different worker: the browser runs the install/activate lifecycle, the
 // new caches replace the old ones, and every stale build's chunks are purged
-// instead of accumulating forever. Normally we do NOT skipWaiting on our own —
-// the page shows a toast and only tells us to take over (SKIP_WAITING) when the
-// user clicks Reload, so we never swap assets out from under a live session.
-// A named, one-time cache migration below is the deliberate exception.
+// instead of accumulating forever.
+//
+// We always skipWaiting + claim + reload controlled clients on activate. A
+// stuck black iOS PWA never reaches the in-app "Reload" toast, so waiting for
+// user approval left phones on dead shells for days. Mid-session reloads after
+// a deploy are acceptable; never updating is not.
 const VERSION = "__VERSION__";
 const SHELL_CACHE = `lfg-shell-${VERSION}`;
 const ASSET_CACHE = `lfg-assets-${VERSION}`;
-// One-time migration markers. The first worker that carries a new marker takes
-// over immediately (skipWaiting), purges prior shell/asset caches, claims
-// clients, and navigates every open window onto a fresh document. Markers stay
-// behind forever so later releases return to the normal user-approved update
-// flow (toast → Reload) instead of yanking the app out from under a session.
+// One-time migration markers (kept forever once opened so each runs once).
 //
-//   • crisp-icon-v1 — v0.1.138 small icon (already rolled out).
-//   • black-shell-v1/v2 — earlier purge attempts (markers kept so they stay done).
-//   • black-shell-v3 — never serve a cached HTML shell that is missing the real
-//     app entry (blank black documents with no scripts). Validate shell HTML
-//     before caching or falling back; otherwise show the offline recovery page.
+//   • crisp-icon-v1 — v0.1.138 small icon.
+//   • black-shell-v1/v2/v3 — black PWA recovery steps (purge / navigate / validate).
+//   • force-update-v1 — always-activate installs so phones that finally fetch a
+//     new sw.js take over immediately instead of sitting in "waiting".
 const CRISP_ICON_CACHE_RESET = "lfg-cache-reset-crisp-icon-v1";
 const BLACK_SHELL_CACHE_RESET_V1 = "lfg-cache-reset-black-shell-v1";
 const BLACK_SHELL_CACHE_RESET_V2 = "lfg-cache-reset-black-shell-v2";
-const BLACK_SHELL_CACHE_RESET = "lfg-cache-reset-black-shell-v3";
+const BLACK_SHELL_CACHE_RESET_V3 = "lfg-cache-reset-black-shell-v3";
+const FORCE_UPDATE_RESET = "lfg-cache-reset-force-update-v1";
 const KEEP = new Set([
   SHELL_CACHE,
   ASSET_CACHE,
   CRISP_ICON_CACHE_RESET,
   BLACK_SHELL_CACHE_RESET_V1,
   BLACK_SHELL_CACHE_RESET_V2,
-  BLACK_SHELL_CACHE_RESET,
+  BLACK_SHELL_CACHE_RESET_V3,
+  FORCE_UPDATE_RESET,
 ]);
-
-let forceClientReloadOnActivate = false;
 
 async function purgeShellAndAssetCaches(keys) {
   await Promise.all(
@@ -54,12 +51,6 @@ async function purgeShellAndAssetCaches(keys) {
       .filter((key) => key.startsWith("lfg-shell-") || key.startsWith("lfg-assets-"))
       .map((key) => caches.delete(key)),
   );
-}
-
-async function forceTakeoverAndPurgeShellCaches(keys) {
-  await purgeShellAndAssetCaches(keys);
-  forceClientReloadOnActivate = true;
-  await self.skipWaiting();
 }
 
 async function reloadControlledClients() {
@@ -87,16 +78,25 @@ self.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
       const keys = await caches.keys();
-      // Newest migration first.
-      if (!keys.includes(BLACK_SHELL_CACHE_RESET)) {
-        await caches.open(BLACK_SHELL_CACHE_RESET);
-        await forceTakeoverAndPurgeShellCaches(keys);
-        return;
+      // Open any missing migration markers and always purge shell/asset caches
+      // when this is the first worker carrying force-update-v1 (or an older
+      // black-shell marker the device never received).
+      const needsPurge =
+        !keys.includes(FORCE_UPDATE_RESET) ||
+        !keys.includes(BLACK_SHELL_CACHE_RESET_V3);
+      for (const marker of [
+        FORCE_UPDATE_RESET,
+        BLACK_SHELL_CACHE_RESET_V3,
+        BLACK_SHELL_CACHE_RESET_V2,
+        BLACK_SHELL_CACHE_RESET_V1,
+        CRISP_ICON_CACHE_RESET,
+      ]) {
+        if (!keys.includes(marker)) await caches.open(marker);
       }
-      if (!keys.includes(CRISP_ICON_CACHE_RESET)) {
-        await caches.open(CRISP_ICON_CACHE_RESET);
-        await forceTakeoverAndPurgeShellCaches(keys);
-      }
+      if (needsPurge) await purgeShellAndAssetCaches(keys);
+      // Always activate immediately — do not wait for a toast the black
+      // screen can never show.
+      await self.skipWaiting();
     })(),
   );
 });
@@ -109,10 +109,7 @@ self.addEventListener("activate", (event) => {
         keys.filter((key) => !KEEP.has(key)).map((key) => caches.delete(key)),
       );
       await self.clients.claim();
-      if (forceClientReloadOnActivate) {
-        forceClientReloadOnActivate = false;
-        await reloadControlledClients();
-      }
+      await reloadControlledClients();
     })(),
   );
 });
@@ -124,6 +121,16 @@ self.addEventListener("message", (event) => {
       (async () => {
         const keys = await caches.keys();
         await purgeShellAndAssetCaches(keys);
+      })(),
+    );
+  }
+  if (event.data?.type === "UNREGISTER_AND_RELOAD") {
+    event.waitUntil(
+      (async () => {
+        const keys = await caches.keys();
+        await Promise.all(keys.map((key) => caches.delete(key)));
+        await self.registration.unregister();
+        await reloadControlledClients();
       })(),
     );
   }
@@ -408,6 +415,11 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith("/api")) return; // never cache API / SSE
+  // Always network for the reset escape hatch — never a cached black shell.
+  if (url.pathname === "/__lfg_pwa_reset") {
+    event.respondWith(fetch(request, { cache: "no-store" }));
+    return;
+  }
 
   if (isImmutableAsset(url)) {
     event.respondWith(cacheFirst(request));

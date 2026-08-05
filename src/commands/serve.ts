@@ -2083,18 +2083,84 @@ export async function cmdServe() {
       if (path === "/" || path === "/index.html") {
         return webIndexResponse();
       }
+      // Escape hatch for a home-screen install that never picks up new sw.js.
+      // Open this URL in Safari (not the home-screen icon) while online — it
+      // unregisters every service worker, wipes lfg caches, and reloads home.
+      if (path === "/__lfg_pwa_reset") {
+        const html = `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="theme-color" content="#000000"/>
+<title>lfg — reset install</title>
+<style>
+html,body{margin:0;min-height:100%;background:#000;color:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}
+main{min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:2rem;text-align:center;gap:1rem}
+h1{font-size:1.2rem;margin:0}p{margin:0;max-width:22rem;color:#a1a1aa;line-height:1.45}
+#status{color:#71717a;font-size:.85rem;min-height:1.2em}
+</style></head><body>
+<main>
+<h1>Resetting lfg install…</h1>
+<p>Clearing service workers and cached shells so the next launch loads the current build.</p>
+<p id="status">Working…</p>
+</main>
+<script>
+(async function () {
+  var status = document.getElementById("status");
+  function say(t) { if (status) status.textContent = t; }
+  try {
+    if ("serviceWorker" in navigator) {
+      var regs = await navigator.serviceWorker.getRegistrations();
+      say("Unregistering " + regs.length + " worker(s)…");
+      await Promise.all(regs.map(function (r) { return r.unregister(); }));
+    }
+    if ("caches" in window) {
+      var keys = await caches.keys();
+      say("Clearing " + keys.length + " cache(s)…");
+      await Promise.all(keys.map(function (k) { return caches.delete(k); }));
+    }
+    say("Done. Opening lfg…");
+  } catch (e) {
+    say("Finished with errors — opening lfg anyway.");
+  }
+  setTimeout(function () {
+    location.replace("/?reset=" + Date.now());
+  }, 400);
+})();
+</script>
+</body></html>`;
+        return new Response(html, {
+          headers: {
+            "Content-Type": "text/html; charset=utf-8",
+            // Never let a stuck worker or HTTP cache pin this escape hatch.
+            "Cache-Control": "no-store, max-age=0",
+          },
+        });
+      }
       if (path === "/sw.js") {
-        const src = await Bun.file(join(WEB_DIR, "sw.js")).text();
-        // Version derived from index.html size + mtime — changes invalidate the SW.
+        let src = await Bun.file(join(WEB_DIR, "sw.js")).text();
+        // Identity every deploy uniquely. Vite stamps a content hash into
+        // VERSION at build time from the entry chunk name — that can stay
+        // stable when only public/sw.js changes. Overwrite with index size +
+        // mtime so a land that rebuilds the shell always produces a new worker
+        // body, which is what triggers the browser install/activate cycle.
         let version = "0";
         try {
           const s = statSync(INDEX_PATH);
-          version = `${s.size}-${Math.floor(s.mtimeMs)}`;
+          version = `${s.size.toString(16)}-${Math.floor(s.mtimeMs).toString(16)}`;
         } catch {}
-        return new Response(src.replace(/__VERSION__/g, version), {
+        if (src.includes("__VERSION__")) {
+          src = src.replaceAll("__VERSION__", version);
+        } else {
+          src = src.replace(/const VERSION = "[^"]*"/, `const VERSION = "${version}"`);
+        }
+        src = `${src}\n/* lfg-sw-deploy:${version} */\n`;
+        return new Response(src, {
           headers: {
             "Content-Type": "application/javascript; charset=utf-8",
-            "Cache-Control": "no-cache",
+            // no-store: iOS was reusing a cached sw.js for update checks even
+            // with no-cache, which left home-screen installs on dead workers.
+            "Cache-Control": "no-store, max-age=0",
             "Service-Worker-Allowed": "/",
           },
         });
