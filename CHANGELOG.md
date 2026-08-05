@@ -2,7 +2,7 @@
 
 Recent product updates and deployment notes.
 
-## August 5, 2026 - Updates no longer yank open sessions
+## August 5, 2026 - Updates no longer yank open sessions (v0.1.277)
 
 - A new deploy no longer hard-reloads the app while you are using it. Mid-session
   you only get the **new version available** toast; the page reloads when you
