@@ -80,6 +80,10 @@ describe("thinking level menu", () => {
     expect(control).toContain("thinkingAccentColor(previewProgress)");
     expect(control).toContain('"--thinking-progress": previewProgress');
     expect(control).toContain('"--thinking-accent": previewAccent');
+    // Float the control without a card chrome so only the matrix + thumb read.
+    expect(control).not.toContain("bg-popover/95");
+    expect(control).not.toContain("ring-1 ring-foreground/10");
+    expect(control).not.toContain("shadow-2xl ring-1");
     // Dot markers replaced by the pixel-matrix track + chunky squircle thumb.
     expect(control).not.toContain("rounded-full bg-popover ring-2");
     expect(control).not.toContain("from-sky-400/35 via-violet-400/55");

@@ -17198,7 +17198,7 @@ function ComposerThinkingControl({
     const rect = trigger.getBoundingClientRect();
     const width = Math.min(360, Math.max(248, window.innerWidth - 24));
     const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + rect.width / 2 - width / 2));
-    const panelHeight = 128;
+    const panelHeight = 108;
     const top = rect.top - panelHeight - 12 >= 12
       ? rect.top - panelHeight - 12
       : Math.min(window.innerHeight - panelHeight - 12, rect.bottom + 12);
@@ -17371,11 +17371,13 @@ function ComposerThinkingControl({
               style={scrubberStyle}
               className="pointer-events-none fixed z-[220] origin-bottom select-none animate-in fade-in-0 zoom-in-90 slide-in-from-bottom-2 duration-200"
             >
-              <div className="overflow-hidden rounded-[1.6rem] bg-popover/95 px-5 py-4 text-popover-foreground shadow-2xl ring-1 ring-foreground/10 backdrop-blur-2xl">
-                <div className="mb-3 flex items-center justify-between gap-4">
-                  <span className="text-xs font-medium text-muted-foreground">Thinking</span>
+              <div className="px-1 py-1 text-foreground">
+                <div className="mb-2 flex items-center justify-between gap-4">
+                  <span className="text-xs font-medium text-muted-foreground drop-shadow-sm">
+                    Thinking
+                  </span>
                   <span
-                    className="text-sm font-semibold capitalize transition-colors duration-150"
+                    className="text-sm font-semibold capitalize drop-shadow-sm transition-colors duration-150"
                     style={{ color: previewAccent }}
                   >
                     {levels[previewIndex] ?? value}
@@ -17397,7 +17399,7 @@ function ComposerThinkingControl({
                   </div>
                   <span aria-hidden="true" className="thinking-scrubber-thumb" />
                 </div>
-                <div className="mt-0.5 flex items-center justify-between text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                <div className="mt-0.5 flex items-center justify-between text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground drop-shadow-sm">
                   <span>Faster</span>
                   <span>Deeper</span>
                 </div>
