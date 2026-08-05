@@ -2,6 +2,18 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - A black PWA can finally say what went wrong (v0.1.260)
+
+- New **/__lfg_pwa_diag** page reports how far a home-screen launch actually
+  got, and names the layer that failed. Open it from any device — a phone stuck
+  on a black screen cannot show you anything, so the answer lives on the server.
+- It distinguishes the cases the last several fixes were guessing between: the
+  phone never reached the box at all (network / Tailscale), the page was sent
+  but never ran, the app bundle never evaluated, or the app mounted and painted
+  nothing.
+- The app now reports its boot phases as it starts, so "it's black" becomes a
+  specific failure instead of a symptom.
+
 ## August 5, 2026 - Fresh home-screen install no longer reloads into black (v0.1.259)
 
 - A brand-new Add to Home Screen was force-reloading on service-worker activate
