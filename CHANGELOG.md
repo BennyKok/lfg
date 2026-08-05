@@ -2,6 +2,13 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Reload actually reloads (v0.1.274)
+
+- Tapping **Reload** on the "new version available" toast now hard-refreshes the
+  app. After the recent service-worker cleanup, that button only asked the
+  worker to take over — and a session latch could block later reloads — so you
+  often had to close and reopen the app to pick up a deploy.
+
 ## August 5, 2026 - Compact thinking scrub labels (v0.1.273)
 
 - Scrub card is tighter: drops Faster/Deeper, centers the current level, and
