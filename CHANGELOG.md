@@ -2,6 +2,13 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Thinking scrub no longer selects text (v0.1.280)
+
+- Dragging out of **Start** to set the thinking effort no longer highlights the
+  session list behind it. The drag now belongs entirely to the gesture — no
+  text selection, no drag-image, and no long-press callout anywhere your finger
+  travels — and everything returns to normal the moment you let go.
+
 ## August 5, 2026 - Hold Start to pick thinking effort (v0.1.279)
 
 - **Press and hold Start** on the new-session composer to raise the thinking
