@@ -64,24 +64,46 @@ async function reloadControlledClients() {
   );
 }
 
+// Taking over from a previous worker is the ONLY job that must never fail.
+//
+// A stale worker that still has a fetch handler answers navigations from its
+// own cache, so the home-screen app never requests the page, never runs our
+// JavaScript, and shows a black window with no way to recover from inside the
+// page. The single escape route is this worker installing and claiming control.
+//
+// The previous version awaited caches.keys(), six caches.open() calls and a
+// purge BEFORE reaching skipWaiting(). Any one of those rejecting — iOS storage
+// pressure, an evicted bucket, Cache API unavailable in a standalone web app —
+// rejected the waitUntil promise, failed the install, and left the old
+// intercepting worker in charge permanently. The browser then refetched sw.js
+// and failed again, forever.
+//
+// So: hand over control FIRST, unconditionally, and treat every cache operation
+// as best-effort housekeeping that is not allowed to block the handover.
 self.addEventListener("install", (event) => {
+  // Not inside waitUntil and not awaited — nothing may sequence ahead of it.
+  self.skipWaiting();
   event.waitUntil(
     (async () => {
-      const keys = await caches.keys();
-      const hadShellCaches = keys.some(
-        (key) => key.startsWith("lfg-shell-") || key.startsWith("lfg-assets-"),
-      );
-      for (const marker of KEEP) {
-        if (!keys.includes(marker)) await caches.open(marker);
+      try {
+        const keys = await caches.keys();
+        const hadShellCaches = keys.some(
+          (key) => key.startsWith("lfg-shell-") || key.startsWith("lfg-assets-"),
+        );
+        for (const marker of KEEP) {
+          if (!keys.includes(marker)) await caches.open(marker);
+        }
+        if (hadShellCaches) {
+          await purgeAllLfgCaches(keys);
+          // Only bounce clients when we actually cleaned a stale shell
+          // generation. Brand-new installs have no shell caches — reloading
+          // them on first activate is what left fresh home-screen icons black.
+          reloadClientsOnActivate = true;
+        }
+      } catch {
+        // Housekeeping failed. The worker still installs: a running push-only
+        // worker with a dirty cache beats a dead install behind a stale one.
       }
-      if (hadShellCaches) {
-        await purgeAllLfgCaches(keys);
-        // Only bounce clients when we actually cleaned a stale shell generation.
-        // Brand-new installs have no shell caches — reloading them on first
-        // activate is what left fresh home-screen icons black.
-        reloadClientsOnActivate = true;
-      }
-      await self.skipWaiting();
     })(),
   );
 });
@@ -89,14 +111,26 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
-      const keys = await caches.keys();
-      await Promise.all(
-        keys.filter((key) => !KEEP.has(key)).map((key) => caches.delete(key)),
-      );
-      await self.clients.claim();
+      // Claim first, for the same reason skipWaiting comes first above: this is
+      // what actually removes the old worker from the navigation path.
+      try {
+        await self.clients.claim();
+      } catch {
+        // Claiming can fail transiently; the next launch controls regardless.
+      }
+      try {
+        const keys = await caches.keys();
+        await Promise.all(keys.filter((key) => !KEEP.has(key)).map((key) => caches.delete(key)));
+      } catch {
+        // Best effort — see install.
+      }
       if (reloadClientsOnActivate) {
         reloadClientsOnActivate = false;
-        await reloadControlledClients();
+        try {
+          await reloadControlledClients();
+        } catch {
+          // A client that cannot be navigated will pick this up on next launch.
+        }
       }
     })(),
   );

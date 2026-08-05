@@ -60,7 +60,10 @@ describe("LFG icon assets", () => {
     expect(worker).not.toContain('self.addEventListener("fetch"');
     expect(worker).not.toContain("self.addEventListener('fetch'");
     expect(worker).toContain("reloadControlledClients");
-    expect(worker).toContain("await self.skipWaiting()");
+    // skipWaiting must NOT be awaited behind cache work — that ordering let a
+    // failing Cache API abort the install and strand a stale intercepting
+    // worker forever. See test/sw-takeover.test.ts, which executes this.
+    expect(worker).not.toContain("await self.skipWaiting()");
     // Only reload open windows when purging real shell caches — not on a
     // brand-new home-screen install (that reload left fresh icons black).
     expect(worker).toContain("hadShellCaches");
