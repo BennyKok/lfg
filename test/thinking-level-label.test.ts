@@ -73,22 +73,25 @@ describe("thinking level menu", () => {
 
     expect(control).toContain('className="thinking-scrubber"');
     expect(control).toContain("thinking-scrubber-track");
+    expect(control).toContain("thinking-scrubber-matrix");
     expect(control).toContain("thinking-scrubber-fill");
     expect(control).toContain("thinking-scrubber-thumb");
     expect(control).toContain("thinking-scrubber-halo");
     expect(control).toContain("thinkingAccentColor(previewProgress)");
     expect(control).toContain('"--thinking-progress": previewProgress');
     expect(control).toContain('"--thinking-accent": previewAccent');
-    // Dot markers replaced by the continuous thick-track + squircle thumb.
+    // Dot markers replaced by the pixel-matrix track + chunky squircle thumb.
     expect(control).not.toContain("rounded-full bg-popover ring-2");
     expect(control).not.toContain("from-sky-400/35 via-violet-400/55");
     expect(source).toContain("THINKING_ACCENT_STOPS");
     expect(source).toContain("function thinkingAccentColor(");
 
     expect(css).toContain(".thinking-scrubber-track");
+    expect(css).toContain(".thinking-scrubber-matrix");
     expect(css).toContain(".thinking-scrubber-thumb");
-    expect(css).toContain("border-radius: 0.42rem");
-    expect(css).toContain("height: 0.7rem");
+    expect(css).toContain("--thinking-matrix-mask");
+    expect(css).toContain("border-radius: 0.52rem");
+    expect(css).toContain("height: 1.45rem");
     expect(css).toContain("rgba(0, 122, 255");
     expect(css).toContain("rgba(175, 82, 222");
     expect(css).toContain("rgba(232, 121, 249");

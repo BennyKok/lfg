@@ -1014,75 +1014,94 @@ html.lfg-keyboard-open {
     }
   }
 
-  /* Hold-to-scrub thinking control: thick track + rounded-square thumb, using
-     the same blue→indigo→violet→fuchsia language as the in-flight send wash.
-     --thinking-progress (0–1) drives fill width, accent morph, and glow.
-     --thinking-thumb is the thumb edge length; travel is inset by half-thumb
-     so the squircle never clips under the panel's overflow:hidden. */
+  /* Hold-to-scrub thinking control — Codex-style pixel-matrix track + chunky
+     rounded-square thumb, tinted with the send-organic blue→indigo→violet→
+     fuchsia wash. --thinking-progress (0–1) drives the lit fill width, matrix
+     density emphasis, accent morph, and glow. Thumb travel is inset by half
+     its edge so the squircle never clips under the panel's overflow:hidden. */
   .thinking-scrubber {
     --thinking-progress: 0;
     --thinking-accent: rgb(0, 122, 255);
-    --thinking-glow: color-mix(in srgb, var(--thinking-accent) 55%, transparent);
-    --thinking-thumb: 1.35rem;
+    --thinking-glow: color-mix(in srgb, var(--thinking-accent) 50%, transparent);
+    --thinking-thumb: 1.7rem;
     --thinking-thumb-half: calc(var(--thinking-thumb) / 2);
     --thinking-thumb-left: calc(
       var(--thinking-thumb-half) + var(--thinking-progress) * (100% - var(--thinking-thumb))
     );
+    /* 4×4 cell grid with a 1.5px gutter — soft rounded squares like the Codex
+       density track, not continuous fill or circular dots. */
+    --thinking-cell: 4px;
+    --thinking-gap: 1.5px;
+    --thinking-tile: calc(var(--thinking-cell) + var(--thinking-gap));
+    --thinking-matrix-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='5.5' height='5.5' viewBox='0 0 5.5 5.5'%3E%3Crect x='0.25' y='0.25' width='4' height='4' rx='0.85' fill='white'/%3E%3C/svg%3E");
     position: relative;
-    height: 2.25rem;
+    height: 2.75rem;
   }
 
   .thinking-scrubber-track {
     position: absolute;
     inset-inline: var(--thinking-thumb-half);
     top: 50%;
-    height: 0.7rem;
+    height: 1.45rem;
     transform: translateY(-50%);
     overflow: hidden;
-    border-radius: 999px;
-    background:
-      linear-gradient(
-        90deg,
-        rgba(0, 122, 255, 0.14),
-        rgba(90, 110, 255, 0.16) 40%,
-        rgba(175, 82, 222, 0.18) 72%,
-        rgba(232, 121, 249, 0.2)
-      ),
-      color-mix(in srgb, var(--foreground) 9%, transparent);
-    box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.14);
+    border-radius: 0.85rem;
+    background: color-mix(in srgb, var(--foreground) 10%, transparent);
+    box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.16);
   }
 
   .dark .thinking-scrubber-track {
-    background:
-      linear-gradient(
-        90deg,
-        rgba(10, 132, 255, 0.18),
-        rgba(100, 120, 255, 0.2) 40%,
-        rgba(191, 90, 242, 0.22) 72%,
-        rgba(232, 121, 249, 0.24)
-      ),
-      color-mix(in srgb, var(--foreground) 12%, transparent);
-    box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.35);
+    background: color-mix(in srgb, var(--foreground) 14%, transparent);
+    box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.4);
   }
 
+  /* Idle matrix: full-width grey cells, denser (brighter) toward the deep end
+     so the track always reads as a density gradient even before a fill. */
+  .thinking-scrubber-matrix {
+    position: absolute;
+    inset: 0.3rem;
+    border-radius: 0.45rem;
+    background: linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--foreground) 18%, transparent) 0%,
+      color-mix(in srgb, var(--foreground) 28%, transparent) 45%,
+      color-mix(in srgb, var(--foreground) 42%, transparent) 100%
+    );
+    -webkit-mask-image: var(--thinking-matrix-mask);
+    -webkit-mask-size: var(--thinking-tile) var(--thinking-tile);
+    -webkit-mask-repeat: repeat;
+    mask-image: var(--thinking-matrix-mask);
+    mask-size: var(--thinking-tile) var(--thinking-tile);
+    mask-repeat: repeat;
+    opacity: 0.85;
+  }
+
+  /* Lit cells up to the thumb: organic send palette + soft wash. Width tracks
+     progress so deeper levels light more of the matrix and push hotter hues. */
   .thinking-scrubber-fill {
-    position: relative;
-    height: 100%;
-    width: calc(var(--thinking-progress) * 100%);
-    min-width: 0.7rem;
-    overflow: hidden;
-    border-radius: inherit;
+    position: absolute;
+    inset-block: 0.3rem;
+    inset-inline-start: 0.3rem;
+    width: max(
+      var(--thinking-cell),
+      calc((100% - 0.6rem) * var(--thinking-progress))
+    );
+    border-radius: 0.45rem;
     background: linear-gradient(
       90deg,
       rgba(0, 122, 255, 0.88) 0%,
-      rgba(90, 110, 255, 0.92) 34%,
-      rgba(175, 82, 222, 0.96) 68%,
+      rgba(90, 110, 255, 0.94) 34%,
+      rgba(175, 82, 222, 0.97) 68%,
       rgba(232, 121, 249, 1) 100%
     );
     background-size: max(100%, calc(100% / max(0.08, var(--thinking-progress)))) 100%;
-    box-shadow:
-      0 0 calc(0.25rem + var(--thinking-progress) * 0.85rem) var(--thinking-glow),
-      inset 0 1px 0 rgba(255, 255, 255, 0.38);
+    -webkit-mask-image: var(--thinking-matrix-mask);
+    -webkit-mask-size: var(--thinking-tile) var(--thinking-tile);
+    -webkit-mask-repeat: repeat;
+    mask-image: var(--thinking-matrix-mask);
+    mask-size: var(--thinking-tile) var(--thinking-tile);
+    mask-repeat: repeat;
+    box-shadow: 0 0 calc(0.3rem + var(--thinking-progress) * 0.7rem) var(--thinking-glow);
     transition:
       width 120ms var(--ease-out, ease-out),
       box-shadow 160ms var(--ease-out, ease-out),
@@ -1093,18 +1112,16 @@ html.lfg-keyboard-open {
     background: linear-gradient(
       90deg,
       rgba(10, 132, 255, 0.92) 0%,
-      rgba(100, 120, 255, 0.94) 34%,
-      rgba(191, 90, 242, 0.97) 68%,
+      rgba(100, 120, 255, 0.95) 34%,
+      rgba(191, 90, 242, 0.98) 68%,
       rgba(240, 140, 255, 1) 100%
     );
     background-size: max(100%, calc(100% / max(0.08, var(--thinking-progress)))) 100%;
-    box-shadow:
-      0 0 calc(0.35rem + var(--thinking-progress) * 1.1rem) var(--thinking-glow),
-      inset 0 1px 0 rgba(255, 255, 255, 0.22);
+    box-shadow: 0 0 calc(0.4rem + var(--thinking-progress) * 0.95rem) var(--thinking-glow);
   }
 
-  /* Soft multi-blob wash borrowed from .lfg-organic-activity-wash — intensifies
-     with progress so deeper levels feel hotter/more saturated. */
+  /* Soft multi-blob wash on the lit cells — same language as the send organic
+     edge, so deeper effort feels hotter without a solid continuous bar. */
   .thinking-scrubber-fill::after {
     position: absolute;
     inset: 0;
@@ -1113,7 +1130,7 @@ html.lfg-keyboard-open {
       radial-gradient(ellipse 42% 140% at 18% 50%, rgba(0, 122, 255, 0.55), transparent 72%),
       radial-gradient(ellipse 48% 160% at 55% 50%, rgba(175, 82, 222, 0.45), transparent 74%),
       radial-gradient(ellipse 40% 150% at 92% 50%, rgba(232, 121, 249, 0.55), transparent 70%);
-    opacity: calc(0.28 + var(--thinking-progress) * 0.72);
+    opacity: calc(0.22 + var(--thinking-progress) * 0.65);
     mix-blend-mode: screen;
     animation: thinking-scrubber-wash 2.6s var(--ease-in-out, ease-in-out) infinite;
   }
@@ -1125,18 +1142,18 @@ html.lfg-keyboard-open {
     z-index: 1;
     width: var(--thinking-thumb);
     height: var(--thinking-thumb);
-    border-radius: 0.42rem;
+    border-radius: 0.52rem;
     background:
       linear-gradient(
-        155deg,
-        color-mix(in srgb, white 92%, var(--thinking-accent)) 0%,
-        color-mix(in srgb, white 70%, var(--thinking-accent)) 100%
+        160deg,
+        #ffffff 0%,
+        color-mix(in srgb, white 88%, var(--thinking-accent)) 100%
       );
     box-shadow:
-      0 0 0 2px color-mix(in srgb, var(--thinking-accent) calc(28% + var(--thinking-progress) * 42%), transparent),
-      0 0 calc(0.45rem + var(--thinking-progress) * 1.1rem) var(--thinking-glow),
-      0 1px 2px rgba(0, 0, 0, 0.22),
-      inset 0 1px 0 rgba(255, 255, 255, 0.85);
+      0 0 0 1px color-mix(in srgb, var(--thinking-accent) calc(12% + var(--thinking-progress) * 28%), transparent),
+      0 1px 3px rgba(0, 0, 0, 0.28),
+      0 0 calc(0.35rem + var(--thinking-progress) * 0.85rem) var(--thinking-glow),
+      inset 0 1px 0 rgba(255, 255, 255, 0.95);
     transform: translate(-50%, -50%);
     transition:
       left 120ms var(--ease-out, ease-out),
@@ -1147,31 +1164,31 @@ html.lfg-keyboard-open {
   .dark .thinking-scrubber-thumb {
     background:
       linear-gradient(
-        155deg,
-        color-mix(in srgb, white 78%, var(--thinking-accent)) 0%,
-        color-mix(in srgb, white 48%, var(--thinking-accent)) 100%
+        160deg,
+        #ffffff 0%,
+        color-mix(in srgb, white 82%, var(--thinking-accent)) 100%
       );
     box-shadow:
-      0 0 0 2px color-mix(in srgb, var(--thinking-accent) calc(36% + var(--thinking-progress) * 48%), transparent),
-      0 0 calc(0.55rem + var(--thinking-progress) * 1.35rem) var(--thinking-glow),
-      0 1px 3px rgba(0, 0, 0, 0.45),
-      inset 0 1px 0 rgba(255, 255, 255, 0.55);
+      0 0 0 1px color-mix(in srgb, var(--thinking-accent) calc(18% + var(--thinking-progress) * 32%), transparent),
+      0 2px 6px rgba(0, 0, 0, 0.45),
+      0 0 calc(0.45rem + var(--thinking-progress) * 1.05rem) var(--thinking-glow),
+      inset 0 1px 0 rgba(255, 255, 255, 0.9);
   }
 
   .thinking-scrubber-halo {
     position: absolute;
     top: 50%;
     left: var(--thinking-thumb-left);
-    width: calc(2.4rem + var(--thinking-progress) * 1.2rem);
-    height: calc(1.6rem + var(--thinking-progress) * 0.6rem);
+    width: calc(2.6rem + var(--thinking-progress) * 1.1rem);
+    height: calc(1.8rem + var(--thinking-progress) * 0.5rem);
     border-radius: 999px;
     background: radial-gradient(
       ellipse at center,
-      color-mix(in srgb, var(--thinking-accent) calc(22% + var(--thinking-progress) * 28%), transparent),
+      color-mix(in srgb, var(--thinking-accent) calc(18% + var(--thinking-progress) * 26%), transparent),
       transparent 72%
     );
-    filter: blur(8px);
-    opacity: calc(0.45 + var(--thinking-progress) * 0.55);
+    filter: blur(9px);
+    opacity: calc(0.4 + var(--thinking-progress) * 0.5);
     transform: translate(-50%, -50%);
     transition:
       left 120ms var(--ease-out, ease-out),

@@ -17198,7 +17198,7 @@ function ComposerThinkingControl({
     const rect = trigger.getBoundingClientRect();
     const width = Math.min(360, Math.max(248, window.innerWidth - 24));
     const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + rect.width / 2 - width / 2));
-    const panelHeight = 120;
+    const panelHeight = 128;
     const top = rect.top - panelHeight - 12 >= 12
       ? rect.top - panelHeight - 12
       : Math.min(window.innerHeight - panelHeight - 12, rect.bottom + 12);
@@ -17392,6 +17392,7 @@ function ComposerThinkingControl({
                 >
                   <span aria-hidden="true" className="thinking-scrubber-halo" />
                   <div className="thinking-scrubber-track">
+                    <div aria-hidden="true" className="thinking-scrubber-matrix" />
                     <div className="thinking-scrubber-fill" />
                   </div>
                   <span aria-hidden="true" className="thinking-scrubber-thumb" />
