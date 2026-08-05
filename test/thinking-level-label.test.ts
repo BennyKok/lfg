@@ -97,6 +97,45 @@ describe("thinking level menu", () => {
     expect(control).toContain("finishScrub(false)");
   });
 
+  test("the scrub drag is consumed rather than smearing a text selection", async () => {
+    const source = await app();
+    const hookStart = source.indexOf("function useThinkingScrub(");
+    const hookEnd = source.indexOf("function ComposerThinkingControl(", hookStart);
+    const hook = source.slice(hookStart, hookEnd);
+    const triggers = source.slice(hookEnd, source.indexOf("function ModelPicker(", hookEnd));
+    const css = await readFile("web/src/index.css", "utf8");
+
+    // `user-select: none` on the trigger is not enough — the browser anchors a
+    // selection on press and extends it over whatever the drag passes over.
+    expect(source).toContain("function preventThinkingDragDefault(");
+    expect(hook).toContain(
+      'document.addEventListener("selectstart", preventThinkingDragDefault, true)',
+    );
+    expect(hook).toContain(
+      'document.addEventListener("dragstart", preventThinkingDragDefault, true)',
+    );
+    // Armed on press, so the drag that *opens* the scrubber is swallowed too.
+    expect(hook).toContain("guardSelection();");
+    // Released on pointer up, pointer cancel, and unmount — no leaked listener
+    // that would silently break selection everywhere else in the app.
+    expect(hook.match(/releaseSelectionGuard\(\);/g)?.length).toBe(3);
+
+    // While the panel is up the whole page belongs to the gesture.
+    expect(hook).toContain('document.body.classList.add("thinking-scrubbing")');
+    expect(hook).toContain('document.body.classList.remove("thinking-scrubbing")');
+    expect(css).toContain("body.thinking-scrubbing");
+    expect(css).toContain("user-select: none !important");
+    expect(css).toContain("cursor: grabbing");
+
+    // Both triggers opt out of selection themselves. Start used to be missing
+    // this while the pill had it.
+    expect(triggers.match(/(?<![A-Za-z])userSelect: "none"/g)?.length).toBe(2);
+    expect(triggers.match(/WebkitUserSelect: "none"/g)?.length).toBe(2);
+    // And neither may be dragged or long-press-called-out.
+    expect(triggers.match(/WebkitTouchCallout: "none"/g)?.length).toBe(2);
+    expect(triggers.match(/touchAction: "none"/g)?.length).toBe(2);
+  });
+
   test("holding Start opens the scrubber and releasing sets the level and launches", async () => {
     const source = await app();
     const start = source.indexOf("function ComposerStartButton(");

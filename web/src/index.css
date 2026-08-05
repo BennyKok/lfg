@@ -1041,6 +1041,22 @@ html.lfg-keyboard-open {
       0 0 0 1px rgba(255, 255, 255, 0.1);
   }
 
+  /* While a scrub is open the whole page belongs to the gesture: no text
+     selection anywhere the finger travels, no iOS callout, and a grabbing
+     cursor so a mouse drag reads as a drag rather than a stalled click. The
+     !important is deliberate — inputs and the composer textarea set their own
+     user-select, and the drag must outrank them for its duration. */
+  body.thinking-scrubbing,
+  body.thinking-scrubbing * {
+    -webkit-user-select: none !important;
+    user-select: none !important;
+    -webkit-touch-callout: none !important;
+  }
+
+  body.thinking-scrubbing {
+    cursor: grabbing;
+  }
+
   /* "Thinking · high" header. The caption names what the gesture is about to
      do (adjust vs. launch), the value is tinted with the live effort accent. */
   .thinking-scrubber-caption {

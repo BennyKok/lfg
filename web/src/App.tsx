@@ -17108,6 +17108,15 @@ function thinkingScrubStepWidth(levelCount: number): number {
   return Math.max(34, Math.min(52, 240 / Math.max(1, levelCount - 1)));
 }
 
+// The scrub drag belongs entirely to the gesture. `user-select: none` on the
+// trigger alone does not stop it: the browser still anchors a selection on
+// press and extends it across whatever the finger passes over, so a drag off
+// the button smears a highlight down the session list behind it. Killing
+// selectstart/dragstart for the life of the press is what actually consumes it.
+function preventThinkingDragDefault(event: Event) {
+  event.preventDefault();
+}
+
 // Same blue → indigo → violet → fuchsia stops as the organic send wash /
 // thinking scrubber fill, so the pill signal and hold-to-scrub control morph
 // together as effort intensifies.
@@ -17225,7 +17234,37 @@ function useThinkingScrub({
     }
   };
 
-  useEffect(() => clearHoldTimer, []);
+  // Armed on press (not on scrub-open) so the drag that *opens* the scrubber is
+  // swallowed too, and released on every exit path including unmount.
+  const selectionGuardedRef = useRef(false);
+  const guardSelection = () => {
+    if (selectionGuardedRef.current) return;
+    selectionGuardedRef.current = true;
+    document.addEventListener("selectstart", preventThinkingDragDefault, true);
+    document.addEventListener("dragstart", preventThinkingDragDefault, true);
+  };
+  const releaseSelectionGuard = () => {
+    if (!selectionGuardedRef.current) return;
+    selectionGuardedRef.current = false;
+    document.removeEventListener("selectstart", preventThinkingDragDefault, true);
+    document.removeEventListener("dragstart", preventThinkingDragDefault, true);
+  };
+
+  useEffect(
+    () => () => {
+      clearHoldTimer();
+      releaseSelectionGuard();
+    },
+    [],
+  );
+
+  // Belt and braces for a selection already in progress when the press landed,
+  // plus the grabbing cursor while the panel is up.
+  useEffect(() => {
+    if (!scrubbing) return;
+    document.body.classList.add("thinking-scrubbing");
+    return () => document.body.classList.remove("thinking-scrubbing");
+  }, [scrubbing]);
 
   // Resync the resting preview when the level changes from elsewhere (session
   // submenu, agent-switch clamp) so the next hold opens on the truth.
@@ -17333,6 +17372,7 @@ function useThinkingScrub({
       gestureOpenedRef.current = false;
       suppressClickRef.current = false;
       startIndexRef.current = currentIndex;
+      guardSelection();
       event.currentTarget.setPointerCapture(event.pointerId);
       // Immediate light tick inside the user-gesture window (iOS often blocks
       // vibrate/switch haptics that fire only after the hold timeout).
@@ -17356,6 +17396,7 @@ function useThinkingScrub({
     },
     onPointerUp: (event: React.PointerEvent<HTMLElement>) => {
       clearHoldTimer();
+      releaseSelectionGuard();
       // Set even when Escape already closed the panel, so an aborted scrub
       // swallows its trailing click instead of falling through to the trigger.
       if (!gestureOpenedRef.current) return;
@@ -17366,6 +17407,7 @@ function useThinkingScrub({
     // A cancelled pointer (scroll takeover, palm rejection) fires no click.
     onPointerCancel: () => {
       clearHoldTimer();
+      releaseSelectionGuard();
       finishScrub(false);
     },
     onContextMenu: (event: React.MouseEvent) => {
@@ -17532,6 +17574,7 @@ function ComposerThinkingControl({
         }}
         style={{
           touchAction: "none",
+          userSelect: "none",
           WebkitUserSelect: "none",
           WebkitTouchCallout: "none",
         } as CSSProperties}
@@ -17609,7 +17652,14 @@ function ComposerStartButton({
         }}
         style={
           {
-            ...(holdable ? { touchAction: "none", WebkitTouchCallout: "none" } : {}),
+            ...(holdable
+              ? {
+                  touchAction: "none",
+                  userSelect: "none",
+                  WebkitUserSelect: "none",
+                  WebkitTouchCallout: "none",
+                }
+              : {}),
             // Ring the button in the live effort colour so the button and the
             // floating panel read as one control during the gesture.
             ...(scrub.scrubbing
