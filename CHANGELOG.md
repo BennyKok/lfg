@@ -2,6 +2,12 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Scheduled sessions run once (v0.1.267)
+
+- Retrying the same scheduled occurrence now returns its original session
+  instead of starting a duplicate after a control-plane restart or lost
+  response.
+
 ## August 5, 2026 - Thinking scrubber glow-up (v0.1.266)
 
 - Hold-to-scrub Thinking control now uses a thicker track and a rounded-square
