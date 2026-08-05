@@ -11,6 +11,7 @@ describe("thinking level menu", () => {
     const pill = source.slice(start, end);
 
     expect(pill).toContain('>Thinking</span>');
+    // Immersive path is slider-only; non-immersive still has a native select.
     expect(pill).toContain('aria-label="Thinking"');
     expect(pill).toContain("title={`Thinking: ${value}`}");
     expect(pill).toContain("{levels.map((item) => (");
@@ -54,17 +55,21 @@ describe("thinking level menu", () => {
     expect(control).toContain("applyScrubDelta");
     expect(control).toContain("onPointerMove={handlePointerMove}");
     expect(control).toContain("startIndexRef.current + relativeStepOffsetRef.current");
-    // Moving before hold completes cancels scrub (keeps tap-to-menu clean).
-    expect(control).toContain("if (Math.abs(delta) > 10) clearHoldTimer()");
+    // Slider-only: no dropdown menu after scrub / on tap.
+    expect(control).not.toContain("<DropdownMenu");
+    expect(control).not.toContain("DropdownMenuContent");
+    expect(control).not.toContain("ChevronDown");
+    expect(control).not.toContain("chooseLevel");
+    expect(control).not.toContain("menuOpen");
+    // Horizontal intent opens the scrubber immediately.
+    expect(control).toContain("beginScrub(event.currentTarget)");
     expect(source).toContain("Math.max(34, Math.min(52, 240 / Math.max(1, levelCount - 1)))");
     // Haptics: arm on pointer down, engage on hold, tick each level, success on release.
     expect(control).toContain('haptic("light")');
     expect(control).toContain('haptic("heavy")');
     expect(control).toContain('haptic("medium")');
     expect(control).toContain("feedback.success()");
-    expect(control).toContain("feedback.select()");
-    expect(control).toContain("Tap to choose · hold and slide to adjust");
-    expect(control).toContain("Hold the control and slide for a faster adjustment.");
+    expect(control).toContain("Hold and slide to adjust");
     expect(control).toContain("createPortal(");
     expect(control).toContain("<ThinkingSignal value={value} levels={levels} />");
     expect(control).toContain("{value}");

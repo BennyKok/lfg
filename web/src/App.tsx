@@ -17159,9 +17159,8 @@ function ThinkingSignal({
   );
 }
 
-// Session composers get a spatial effort control without making every settings
-// surface adopt the same interaction. Tap for an exact menu; hold, then drag
-// horizontally to scrub through the levels without lifting your finger.
+// Session composers: hold (or slide) to open the effort scrubber only — no
+// dropdown menu. Levels are chosen exclusively through the floating slider.
 function ComposerThinkingControl({
   value,
   levels,
@@ -17180,8 +17179,6 @@ function ComposerThinkingControl({
   const startIndexRef = useRef(0);
   const previewIndexRef = useRef(0);
   const scrubbingRef = useRef(false);
-  const suppressMenuRef = useRef(false);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [scrubbing, setScrubbing] = useState(false);
   const [previewIndex, setPreviewIndex] = useState(() => Math.max(0, levels.indexOf(value)));
   const [scrubberStyle, setScrubberStyle] = useState<CSSProperties>({});
@@ -17213,14 +17210,13 @@ function ComposerThinkingControl({
   };
 
   const beginScrub = (trigger: HTMLButtonElement) => {
+    if (scrubbingRef.current) return;
     const index = Math.max(0, levels.indexOf(value));
     document.getSelection()?.removeAllRanges();
     previewIndexRef.current = index;
     relativeStepOffsetRef.current = 0;
     scrubbingRef.current = true;
-    suppressMenuRef.current = true;
     setPreviewIndex(index);
-    setMenuOpen(false);
     placeScrubber(trigger);
     setScrubbing(true);
     // Engage the scrub surface — heavy so the hold-to-slide is unmistakable.
@@ -17244,7 +17240,6 @@ function ComposerThinkingControl({
   const handlePointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
     if (event.button !== 0 || !levels.length) return;
     clearHoldTimer();
-    suppressMenuRef.current = false;
     startXRef.current = event.clientX;
     lastPointerXRef.current = event.clientX;
     startIndexRef.current = currentIndex;
@@ -17279,9 +17274,16 @@ function ComposerThinkingControl({
   const handlePointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
     if (!scrubbingRef.current) {
       const delta = event.clientX - startXRef.current;
+      // Horizontal intent opens the slider immediately (no menu to protect).
+      if (Math.abs(delta) > 8 && holdTimerRef.current != null) {
+        clearHoldTimer();
+        beginScrub(event.currentTarget);
+        lastPointerXRef.current = startXRef.current;
+        applyScrubDelta(event.clientX);
+        event.preventDefault();
+        return;
+      }
       lastPointerXRef.current = event.clientX;
-      // Moving before the hold completes cancels scrub entry (tap-to-menu stays).
-      if (Math.abs(delta) > 10) clearHoldTimer();
       return;
     }
     event.preventDefault();
@@ -17298,89 +17300,37 @@ function ComposerThinkingControl({
 
   const handlePointerCancel = () => {
     finishScrub(false);
-    suppressMenuRef.current = false;
-  };
-
-  const chooseLevel = (next: string) => {
-    if (!levels.includes(next)) return;
-    onChange(next);
-    setMenuOpen(false);
-    feedback.select();
   };
 
   return (
     <>
-      <DropdownMenu
-        open={menuOpen}
-        onOpenChange={(nextOpen) => {
-          if (nextOpen && (scrubbingRef.current || suppressMenuRef.current)) return;
-          setMenuOpen(nextOpen);
-        }}
+      <button
+        type="button"
+        aria-label={`Thinking: ${value}. Hold and slide to adjust.`}
+        title="Hold and slide to adjust"
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
+        onContextMenu={(event) => event.preventDefault()}
+        style={{
+          touchAction: "none",
+          WebkitUserSelect: "none",
+          WebkitTouchCallout: "none",
+        } as CSSProperties}
+        className={cn(
+          "relative inline-flex h-8 cursor-pointer select-none items-center gap-1.5 rounded-full text-foreground transition-all duration-200 active:scale-[0.98]",
+          flat ? "px-1" : "bg-muted px-3",
+          scrubbing && "scale-[1.02] bg-foreground/10",
+        )}
       >
-        <DropdownMenuTrigger
-          render={
-            <button
-              type="button"
-              aria-label={`Thinking: ${value}. Tap to choose; hold and slide to adjust.`}
-              aria-haspopup="menu"
-              aria-expanded={menuOpen}
-              title="Tap to choose · hold and slide to adjust"
-              onPointerDown={handlePointerDown}
-              onPointerMove={handlePointerMove}
-              onPointerUp={handlePointerUp}
-              onPointerCancel={handlePointerCancel}
-              onContextMenu={(event) => event.preventDefault()}
-              onClick={(event) => {
-                if (!suppressMenuRef.current) return;
-                event.preventDefault();
-                event.stopPropagation();
-                suppressMenuRef.current = false;
-              }}
-              style={{
-                touchAction: "none",
-                WebkitUserSelect: "none",
-                WebkitTouchCallout: "none",
-              } as CSSProperties}
-              className={cn(
-                "relative inline-flex h-8 cursor-pointer select-none items-center gap-1.5 rounded-full text-foreground transition-all duration-200 active:scale-[0.98]",
-                flat ? "px-1" : "bg-muted px-3",
-                scrubbing && "scale-[1.02] bg-foreground/10",
-              )}
-            >
-              <ThinkingSignal value={value} levels={levels} />
-              <span className="text-xs font-medium">Thinking</span>
-              <span aria-hidden="true" className="text-[11px] text-muted-foreground/60">·</span>
-              <span className="max-w-14 truncate text-[11px] font-medium capitalize text-muted-foreground">
-                {value}
-              </span>
-              <ChevronDown className="size-3 shrink-0 text-muted-foreground/70" />
-            </button>
-          }
-        />
-        <DropdownMenuContent side="top" align="start" sideOffset={8} className="min-w-52">
-          <DropdownMenuRadioGroup value={value} onValueChange={chooseLevel}>
-            <DropdownMenuLabel className="flex items-center justify-between gap-4">
-              <span>Thinking</span>
-              <span className="font-medium text-foreground capitalize">{value}</span>
-            </DropdownMenuLabel>
-            {levels.map((level, index) => (
-              <DropdownMenuRadioItem key={level} value={level} className="capitalize">
-                <span className="flex-1">{level}</span>
-                <span
-                  aria-hidden="true"
-                  className={cn(
-                    "size-1.5 rounded-full bg-foreground/15",
-                    index <= currentIndex && "bg-foreground/55",
-                  )}
-                />
-              </DropdownMenuRadioItem>
-            ))}
-          </DropdownMenuRadioGroup>
-          <p className="px-3 pt-1 pb-2 text-[11px] text-muted-foreground">
-            Hold the control and slide for a faster adjustment.
-          </p>
-        </DropdownMenuContent>
-      </DropdownMenu>
+        <ThinkingSignal value={value} levels={levels} />
+        <span className="text-xs font-medium">Thinking</span>
+        <span aria-hidden="true" className="text-[11px] text-muted-foreground/60">·</span>
+        <span className="max-w-14 truncate text-[11px] font-medium capitalize text-muted-foreground">
+          {value}
+        </span>
+      </button>
 
       {scrubbing
         ? createPortal(
