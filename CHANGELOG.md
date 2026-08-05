@@ -2,6 +2,21 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Start's effort picker stands upright (v0.1.281)
+
+- Holding **Start** now raises an **upright** effort bar you scrub by sliding
+  up and down, instead of side to side. Start sits in the bottom-right corner
+  where there was barely any room to swipe sideways, so the deeper levels were
+  awkward to reach.
+- The bar is parked **directly above the button**, so your thumb slides along
+  the bar itself rather than beside it, and one level of finger movement lands
+  on exactly one stop. Every level is named down the left with the live one lit.
+- Sideways drift no longer disturbs the choice — only up and down counts.
+- The Thinking pill in the agent controls keeps its horizontal bar, and still
+  takes a drag on either axis.
+- Fixed effort names rendering inconsistently capitalised ("Low" next to
+  "medium", "xhigh").
+
 ## August 5, 2026 - Thinking scrub no longer selects text (v0.1.280)
 
 - Dragging out of **Start** to set the thinking effort no longer highlights the
