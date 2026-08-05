@@ -1017,6 +1017,10 @@ html.lfg-keyboard-open {
   /* Solid card behind the hold-to-scrub control. Explicit fills (not only a
      Tailwind utility) so the panel never goes transparent over the composer. */
   .thinking-scrubber-panel {
+    /* Shared with track + endpoint labels so min/max sit under the bar ends
+       with equal inset on both sides. */
+    --thinking-thumb: 1.45rem;
+    --thinking-thumb-half: calc(var(--thinking-thumb) / 2);
     overflow: hidden;
     border: 1px solid var(--border);
     border-radius: 1.25rem;
@@ -1036,6 +1040,28 @@ html.lfg-keyboard-open {
       0 0 0 1px rgba(255, 255, 255, 0.1);
   }
 
+  /* Min/max effort names aligned to the track ends (same inset as the bar). */
+  .thinking-scrubber-ends {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 0.2rem;
+    padding-inline: var(--thinking-thumb-half);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.2;
+    text-transform: capitalize;
+    color: var(--muted-foreground);
+  }
+
+  .thinking-scrubber-ends > :first-child {
+    text-align: start;
+  }
+
+  .thinking-scrubber-ends > :last-child {
+    text-align: end;
+  }
+
   /* Hold-to-scrub thinking control — Codex-style pixel-matrix track + chunky
      rounded-square thumb, tinted with the send-organic blue→indigo→violet→
      fuchsia wash. --thinking-progress (0–1) drives the lit fill width, matrix
@@ -1045,8 +1071,6 @@ html.lfg-keyboard-open {
     --thinking-progress: 0;
     --thinking-accent: rgb(0, 122, 255);
     --thinking-glow: color-mix(in srgb, var(--thinking-accent) 50%, transparent);
-    --thinking-thumb: 1.45rem;
-    --thinking-thumb-half: calc(var(--thinking-thumb) / 2);
     --thinking-thumb-left: calc(
       var(--thinking-thumb-half) + var(--thinking-progress) * (100% - var(--thinking-thumb))
     );

@@ -17406,7 +17406,7 @@ function ComposerThinkingControl({
                   </div>
                   <span aria-hidden="true" className="thinking-scrubber-thumb" />
                 </div>
-                <div className="mt-1 flex items-center justify-between gap-3 text-[11px] font-medium capitalize text-muted-foreground">
+                <div className="thinking-scrubber-ends">
                   <span>{minLevel}</span>
                   <span>{maxLevel}</span>
                 </div>
