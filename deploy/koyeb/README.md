@@ -9,7 +9,7 @@ to publish first.
 ## Deploy Button
 
 ```md
-[![Deploy to Koyeb](https://www.koyeb.com/static/images/deploy/button.svg)](https://app.koyeb.com/deploy?type=git&repository=github.com/BennyKok/lfg&branch=main&name=lfg)
+[![Deploy to Koyeb](https://www.koyeb.com/static/images/deploy/button.svg)](https://app.koyeb.com/deploy?type=git&repository=github.com/BennyKok/omg.dev&branch=main&name=lfg)
 ```
 
 Recommended variables:

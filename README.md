@@ -1,5 +1,5 @@
 <a href="https://omg.dev">
-  <img src="https://raw.githubusercontent.com/BennyKok/lfg/main/docs/images/lfg-icon.png" alt="lfg icon" width="96" />
+  <img src="https://raw.githubusercontent.com/BennyKok/omg.dev/main/docs/images/lfg-icon.png" alt="lfg icon" width="96" />
 </a>
 
 # lfg
@@ -14,9 +14,9 @@ web UI, and lets you answer prompts or steer work from your phone or laptop.
 [Website](https://omg.dev) · [Quick start](#quick-start) · [Security](#security) · [Contributing](./CONTRIBUTING.md)
 
 <p>
-  <img src="https://raw.githubusercontent.com/BennyKok/lfg/main/docs/images/lfg-screenshot-1.jpg" alt="lfg web UI screenshot" width="31%" />
-  <img src="https://raw.githubusercontent.com/BennyKok/lfg/main/docs/images/lfg-screenshot-2.jpg" alt="lfg scheduled agents screenshot" width="31%" />
-  <img src="https://raw.githubusercontent.com/BennyKok/lfg/main/docs/images/lfg-screenshot-3.jpg" alt="lfg usage limits screenshot" width="31%" />
+  <img src="https://raw.githubusercontent.com/BennyKok/omg.dev/main/docs/images/lfg-screenshot-1.jpg" alt="lfg web UI screenshot" width="31%" />
+  <img src="https://raw.githubusercontent.com/BennyKok/omg.dev/main/docs/images/lfg-screenshot-2.jpg" alt="lfg scheduled agents screenshot" width="31%" />
+  <img src="https://raw.githubusercontent.com/BennyKok/omg.dev/main/docs/images/lfg-screenshot-3.jpg" alt="lfg usage limits screenshot" width="31%" />
 </p>
 
 ---
@@ -70,7 +70,7 @@ checkouts are preserved unless explicitly purged.
 To install without the omg.dev CLI:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BennyKok/lfg/main/scripts/setup.sh | bash
+curl -fsSL https://raw.githubusercontent.com/BennyKok/omg.dev/main/scripts/setup.sh | bash
 ```
 
 Then open **http://127.0.0.1:8766**.
@@ -107,7 +107,7 @@ provision. See [One-click setup on omg.dev](#one-click-setup-on-omgdev).
 ### Run from source instead
 
 ```bash
-git clone https://github.com/BennyKok/lfg.git
+git clone https://github.com/BennyKok/omg.dev.git
 cd lfg
 bun install
 cp .env.example .env
@@ -305,7 +305,7 @@ privately through Tailscale.
 
 ## Deploy to a cloud host
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template?template=https://github.com/BennyKok/lfg)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/new/template?template=https://github.com/BennyKok/omg.dev)
 
 The shared [Dockerfile](./Dockerfile) works for
 [Railway](./deploy/railway/README.md), [Fly.io](./deploy/fly/README.md),

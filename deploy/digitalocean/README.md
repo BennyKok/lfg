@@ -15,7 +15,7 @@ Add a Deploy to DigitalOcean button once the app spec is published from the
 target repo/account:
 
 ```md
-[![Deploy to DO](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/BennyKok/lfg/tree/main)
+[![Deploy to DO](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/BennyKok/omg.dev/tree/main)
 ```
 
 Do not expose the app publicly unless you add authentication in front of `lfg`.
@@ -25,6 +25,6 @@ Do not expose the app publicly unless you add authentication in front of `lfg`.
 For production-style usage, create an Ubuntu Droplet and run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/BennyKok/lfg/main/scripts/setup.sh \
+curl -fsSL https://raw.githubusercontent.com/BennyKok/omg.dev/main/scripts/setup.sh \
   | TS_AUTHKEY=tskey-auth-xxxx bash
 ```

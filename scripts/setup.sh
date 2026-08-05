@@ -7,9 +7,9 @@
 # detected but not installed unless explicitly requested.
 #
 # Brand-new VPS (run as a normal sudo user, NOT root):
-#   curl -fsSL https://raw.githubusercontent.com/BennyKok/lfg/main/scripts/setup.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/BennyKok/omg.dev/main/scripts/setup.sh | bash
 #   # or non-interactively, with the Tailscale auth key supplied up front:
-#   curl -fsSL https://raw.githubusercontent.com/BennyKok/lfg/main/scripts/setup.sh | TS_AUTHKEY=tskey-auth-xxxx bash
+#   curl -fsSL https://raw.githubusercontent.com/BennyKok/omg.dev/main/scripts/setup.sh | TS_AUTHKEY=tskey-auth-xxxx bash
 #
 # Re-run / update after install:
 #   lfg setup
@@ -19,10 +19,10 @@
 set -euo pipefail
 
 # ---- config (override via env) ----
-LFG_REPO_URL="${LFG_REPO_URL:-https://github.com/BennyKok/lfg.git}"
+LFG_REPO_URL="${LFG_REPO_URL:-https://github.com/BennyKok/omg.dev.git}"
 # Where prebuilt release tarballs live (GitHub "owner/repo"). Defaults align
 # with LFG_REPO_URL but can be pointed at a fork.
-LFG_REPO_SLUG="${LFG_REPO_SLUG:-BennyKok/lfg}"
+LFG_REPO_SLUG="${LFG_REPO_SLUG:-BennyKok/omg.dev}"
 LFG_DIR="${LFG_DIR:-$HOME/lfg}"
 LFG_REPOS_ROOT="${LFG_REPOS_ROOT:-$HOME/repos}"
 LFG_PORT="${LFG_PORT:-8766}"

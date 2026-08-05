@@ -13,7 +13,7 @@
 #
 # Env:
 #   SKIP_INSTALL=1        skip `bun install` + web build (use the tree as-is)
-#   LFG_REPO_SLUG         GitHub owner/repo to publish to (default: BennyKok/lfg)
+#   LFG_REPO_SLUG         GitHub owner/repo to publish to (default: BennyKok/omg.dev)
 #   LFG_VENDOR_PACKAGES   space/comma-separated package names to pack from
 #                         node_modules into vendor/*.tgz, and rewrite staged
 #                         package.json deps to file:vendor/<tarball>.
@@ -24,7 +24,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 OUT_DIR="$ROOT/dist"
-REPO_SLUG="${LFG_REPO_SLUG:-BennyKok/lfg}"
+REPO_SLUG="${LFG_REPO_SLUG:-BennyKok/omg.dev}"
 VERSION="${1:-}"
 ASSET="${LFG_RELEASE_ASSET:-lfg-bundle.tar.gz}"
 

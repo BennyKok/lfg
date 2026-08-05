@@ -32,7 +32,7 @@ For Claude or Codex, complete the normal CLI login inside the workspace, or set
 The OMG side owns the launch route and template lifecycle:
 
 - Route: `https://omg.dev/sandbox/templates/<template-id>`
-- LFG repo URL: `https://github.com/BennyKok/lfg`
+- LFG repo URL: `https://github.com/BennyKok/omg.dev`
 - Template: `lfg`
 - Port: `8766`
 - Start command: `lfg serve --host 0.0.0.0 --port 8766`

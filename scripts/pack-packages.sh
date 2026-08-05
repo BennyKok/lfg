@@ -11,7 +11,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 OUT_DIR="$ROOT/dist"
-REPO_SLUG="${LFG_REPO_SLUG:-BennyKok/lfg}"
+REPO_SLUG="${LFG_REPO_SLUG:-BennyKok/omg.dev}"
 VERSION="$(bun -e 'console.log(JSON.parse(require("node:fs").readFileSync("package.json","utf8")).version)')"
 PACKAGES=(protocol client react)
 

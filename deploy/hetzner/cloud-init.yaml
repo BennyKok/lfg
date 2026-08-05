@@ -27,7 +27,7 @@ runcmd:
       export LFG_DIR="$HOME/lfg"
       export LFG_REPOS_ROOT="$HOME/repos"
       export LFG_INSTALL_MODE=release
-      curl -fsSL https://raw.githubusercontent.com/BennyKok/lfg/main/scripts/setup.sh | TS_AUTHKEY=CHANGE_ME_TS_AUTHKEY bash
+      curl -fsSL https://raw.githubusercontent.com/BennyKok/omg.dev/main/scripts/setup.sh | TS_AUTHKEY=CHANGE_ME_TS_AUTHKEY bash
     '
 
 final_message: "lfg install finished. Check cloud-init output and the lfg user service logs."

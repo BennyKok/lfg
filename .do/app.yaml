@@ -4,7 +4,7 @@ services:
     dockerfile_path: Dockerfile
     source_dir: /
     github:
-      repo: BennyKok/lfg
+      repo: BennyKok/omg.dev
       branch: main
       deploy_on_push: true
     http_port: 8766
