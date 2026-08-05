@@ -12,7 +12,6 @@ Recent product updates and deployment notes.
 - A home-screen install that only showed solid black no longer falls back to an
   empty cached HTML document; the splash shows an "lfg" wordmark and recovery UI.
 
-- A home-screen LFG install that only showed a solid black screen no longer
   falls back to an empty cached HTML document. The service worker only reuses
   a real app shell, otherwise it shows retry / clear-cache controls.
 - The splash always paints the "lfg" wordmark (not only the icon), and if the
