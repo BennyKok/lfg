@@ -2,6 +2,13 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Finding sheet thinking matches the composer (v0.1.262)
+
+- Opening a finding to launch a fix still used a plain Thinking dropdown. It
+  now shares the same signal bars, level label, and hold-to-scrub control as
+  the new-session composer and fork dialog — including auto-agent launch
+  pickers that use the same row.
+
 ## August 5, 2026 - Found it: the black home-screen app (v0.1.261)
 
 - A stale service worker could hold an installed app hostage forever. Tapping
