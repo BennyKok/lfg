@@ -2592,7 +2592,7 @@ a{color:#60a5fa}
         const account = createClaudeAccount();
         // The new account gets its own Claude config dir, so it needs its own
         // copy of the LFG MCP registration — otherwise its first session starts
-        // with no lfg_output/lfg_input at all.
+        // with no LFG tools at all.
         await registerClaudeMcpForAccount(account.id);
         return json({ account });
       }

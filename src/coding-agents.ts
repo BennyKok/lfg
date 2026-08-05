@@ -412,8 +412,7 @@ function mcpHttpUrl(): string {
  * pointed at it (see claudeAccountEnv). The Claude CLI reads user-scope MCP
  * registrations out of `<config dir>/.claude.json`, so a registration written
  * only to the default dir leaves every non-default account's sessions with no
- * LFG tools at all — no lfg_output, no lfg_input, the whole agent<->human
- * channel missing — while setup still reports "registered".
+ * LFG tools at all while setup still reports "registered".
  */
 export function claudeConfigDirs(
   accounts: Pick<ClaudeAccount, "id">[] = listClaudeAccounts(),
