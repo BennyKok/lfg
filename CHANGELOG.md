@@ -2,6 +2,14 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Home-screen vs Safari are different (v0.1.257)
+
+- On iPhone, resetting lfg in Safari does not reset the home-screen app — they
+  keep separate website data. The reset page now detects which one you opened
+  and tells you to delete the black icon before re-adding.
+- A fresh Add to Home Screen uses a new install id so iOS does not revive the
+  stuck profile.
+
 ## August 5, 2026 - PWA actually updates (v0.1.256)
 
 - Home-screen LFG installs were keeping a cached service worker forever on iOS

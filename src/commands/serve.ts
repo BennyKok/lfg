@@ -2083,9 +2083,12 @@ export async function cmdServe() {
       if (path === "/" || path === "/index.html") {
         return webIndexResponse();
       }
-      // Escape hatch for a home-screen install that never picks up new sw.js.
-      // Open this URL in Safari (not the home-screen icon) while online — it
-      // unregisters every service worker, wipes lfg caches, and reloads home.
+      // Escape hatch for a stuck home-screen install.
+      //
+      // iOS keeps Safari website data and Home Screen web-app data SEPARATELY.
+      // Resetting in Safari only heals Safari — the black icon keeps its own
+      // service worker until the icon is deleted (or this page is opened from
+      // inside that standalone app). This page detects the mode and guides.
       if (path === "/__lfg_pwa_reset") {
         const html = `<!doctype html>
 <html lang="en"><head>
@@ -2095,37 +2098,119 @@ export async function cmdServe() {
 <title>lfg — reset install</title>
 <style>
 html,body{margin:0;min-height:100%;background:#000;color:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif}
-main{min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:2rem;text-align:center;gap:1rem}
-h1{font-size:1.2rem;margin:0}p{margin:0;max-width:22rem;color:#a1a1aa;line-height:1.45}
-#status{color:#71717a;font-size:.85rem;min-height:1.2em}
+main{min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:2rem;text-align:left;gap:.85rem;max-width:26rem;margin:0 auto;box-sizing:border-box}
+h1{font-size:1.2rem;margin:0;text-align:center}
+p,li{margin:0;color:#a1a1aa;line-height:1.45;font-size:.95rem}
+ol{margin:0;padding-left:1.2rem;color:#a1a1aa;line-height:1.5}
+#status{color:#71717a;font-size:.85rem;min-height:1.2em;text-align:center}
+.badge{display:inline-block;font-size:.7rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;padding:.2rem .5rem;border-radius:999px;background:#27272a;color:#f4f4f5}
+.badge.ok{background:#14532d;color:#bbf7d0}
+.badge.warn{background:#713f12;color:#fde68a}
+button{appearance:none;border:0;border-radius:999px;padding:.75rem 1.2rem;font:inherit;font-weight:600;background:#0a84ff;color:#fff;width:100%;max-width:18rem;align-self:center}
+button.secondary{background:#27272a}
+.row{display:flex;flex-direction:column;gap:.5rem;width:100%;align-items:center;margin-top:.25rem}
+a{color:#60a5fa}
 </style></head><body>
 <main>
-<h1>Resetting lfg install…</h1>
-<p>Clearing service workers and cached shells so the next launch loads the current build.</p>
-<p id="status">Working…</p>
+<p style="text-align:center;margin:0"><span class="badge" id="mode-badge">Detecting…</span></p>
+<h1 id="title">Reset lfg install</h1>
+<div id="body"></div>
+<p id="status"></p>
+<div class="row" id="actions"></div>
 </main>
 <script>
-(async function () {
-  var status = document.getElementById("status");
-  function say(t) { if (status) status.textContent = t; }
+(function () {
+  var standalone = false;
   try {
-    if ("serviceWorker" in navigator) {
-      var regs = await navigator.serviceWorker.getRegistrations();
-      say("Unregistering " + regs.length + " worker(s)…");
-      await Promise.all(regs.map(function (r) { return r.unregister(); }));
+    standalone = window.matchMedia("(display-mode: standalone)").matches
+      || window.matchMedia("(display-mode: minimal-ui)").matches
+      || navigator.standalone === true;
+  } catch (e) {}
+
+  var badge = document.getElementById("mode-badge");
+  var title = document.getElementById("title");
+  var body = document.getElementById("body");
+  var status = document.getElementById("status");
+  var actions = document.getElementById("actions");
+  function say(t) { if (status) status.textContent = t; }
+
+  async function wipeThisProfile() {
+    say("Working…");
+    try {
+      try { localStorage.clear(); } catch (e) {}
+      try { sessionStorage.clear(); } catch (e) {}
+      if ("serviceWorker" in navigator) {
+        var regs = await navigator.serviceWorker.getRegistrations();
+        say("Unregistering " + regs.length + " worker(s)…");
+        await Promise.all(regs.map(function (r) { return r.unregister(); }));
+      }
+      if ("caches" in window) {
+        var keys = await caches.keys();
+        say("Clearing " + keys.length + " cache(s)…");
+        await Promise.all(keys.map(function (k) { return caches.delete(k); }));
+      }
+      if (indexedDB && indexedDB.databases) {
+        var dbs = await indexedDB.databases();
+        await Promise.all((dbs || []).map(function (db) {
+          return db && db.name ? new Promise(function (res) {
+            var req = indexedDB.deleteDatabase(db.name);
+            req.onsuccess = req.onerror = req.onblocked = function () { res(); };
+          }) : Promise.resolve();
+        }));
+      }
+      say("This browser profile is clean.");
+      return true;
+    } catch (e) {
+      say("Finished with errors — continue with the steps below.");
+      return false;
     }
-    if ("caches" in window) {
-      var keys = await caches.keys();
-      say("Clearing " + keys.length + " cache(s)…");
-      await Promise.all(keys.map(function (k) { return caches.delete(k); }));
-    }
-    say("Done. Opening lfg…");
-  } catch (e) {
-    say("Finished with errors — opening lfg anyway.");
   }
-  setTimeout(function () {
-    location.replace("/?reset=" + Date.now());
-  }, 400);
+
+  if (standalone) {
+    badge.textContent = "Home screen app";
+    badge.className = "badge ok";
+    title.textContent = "Resetting this home-screen app";
+    body.innerHTML = "<p>You opened reset <strong>inside</strong> the home-screen install. That is the profile that was still black — Safari reset does not touch it on iOS.</p><p>Tap below to wipe workers/caches for <em>this</em> app, then re-open lfg.</p>";
+    var btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = "Wipe home-screen data";
+    btn.onclick = async function () {
+      btn.disabled = true;
+      await wipeThisProfile();
+      setTimeout(function () { location.replace("/?reset=" + Date.now()); }, 500);
+    };
+    actions.appendChild(btn);
+    // Auto-run once so a deep link from Notes just works.
+    btn.click();
+  } else {
+    badge.textContent = "Safari browser";
+    badge.className = "badge warn";
+    title.textContent = "Safari is not the home-screen icon";
+    body.innerHTML =
+      "<p>On iPhone, Safari and the home-screen app keep <strong>separate</strong> website data. Resetting here only fixes Safari — which is why Safari already works and the icon stays black.</p>" +
+      "<ol>" +
+      "<li><strong>Delete</strong> the black lfg icon from your Home Screen (long-press → Remove App → Delete App). That destroys the stuck home-screen profile.</li>" +
+      "<li>Tap <strong>Wipe Safari data</strong> below (optional but recommended).</li>" +
+      "<li>Confirm lfg loads in Safari: <a href='/'>open lfg</a>.</li>" +
+      "<li>Safari Share → <strong>Add to Home Screen</strong> (fresh icon).</li>" +
+      "</ol>" +
+      "<p>If you skip step 1, the old icon keeps its old service worker forever.</p>";
+    var wipe = document.createElement("button");
+    wipe.type = "button";
+    wipe.textContent = "Wipe Safari data";
+    wipe.onclick = async function () {
+      wipe.disabled = true;
+      await wipeThisProfile();
+      wipe.textContent = "Safari data wiped";
+    };
+    var open = document.createElement("button");
+    open.type = "button";
+    open.className = "secondary";
+    open.textContent = "Open lfg in Safari";
+    open.onclick = function () { location.replace("/?reset=" + Date.now()); };
+    actions.appendChild(wipe);
+    actions.appendChild(open);
+  }
 })();
 </script>
 </body></html>`;

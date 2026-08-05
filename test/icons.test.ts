@@ -90,6 +90,14 @@ describe("LFG icon assets", () => {
     const serve = await readFile("src/commands/serve.ts", "utf8");
     expect(serve).toContain("/__lfg_pwa_reset");
     expect(serve).toContain("no-store, max-age=0");
+    // iOS: Safari reset ≠ home-screen reset — the page must explain that.
+    expect(serve).toContain("Home Screen web-app data SEPARATELY");
+    expect(serve).toContain("Delete</strong> the black lfg icon");
+
+    const manifest = await readFile("web/public/manifest.webmanifest", "utf8");
+    // Bump id/start_url so a re-add is a new install identity, not a revive.
+    expect(manifest).toContain('"id":');
+    expect(manifest).toContain("hs=2026-08-05");
   });
 
   // A suspended PWA can run one shell across many deploys, so a waiting worker
