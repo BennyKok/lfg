@@ -17102,6 +17102,9 @@ const THINKING_HOLD_MS = 360;
 // the natural direction for the inline pill; vertical rescues corner-pinned
 // triggers like Start, where there is no room left to drag sideways.
 const THINKING_AXIS_LOCK_PX = 6;
+// Distance from the upright panel's right edge to the centre of its bar
+// (right padding + half the bar). Used to park the bar over the trigger.
+const THINKING_VERTICAL_BAR_INSET = 30;
 // Pixels of travel per thinking level while scrubbing. Higher = less
 // sensitive. Scales mildly with how many steps the agent exposes.
 function thinkingScrubStepWidth(levelCount: number): number {
@@ -17115,6 +17118,24 @@ function thinkingScrubStepWidth(levelCount: number): number {
 // selectstart/dragstart for the life of the press is what actually consumes it.
 function preventThinkingDragDefault(event: Event) {
   event.preventDefault();
+}
+
+// Level names are lowercase in the catalog ("xhigh"), and every surface wants
+// them title-cased. Done here rather than with `text-transform: capitalize`
+// because Chromium drops the transform on the absolutely-positioned stop
+// labels of the upright bar — same frame, same computed style, half the labels
+// rendered lowercase. Capitalising the string is deterministic everywhere.
+function thinkingLevelLabel(level: ThinkingLevel): string {
+  return level ? level.charAt(0).toUpperCase() + level.slice(1) : level;
+}
+
+// Where stop `index` sits along the bar, inset by half a thumb at each end so
+// the squircle never overhangs. Shared by the tick marks and the upright bar's
+// level names, which is what keeps a name aligned with its own tick.
+function thinkingStopOffset(index: number, count: number, vertical: boolean): CSSProperties {
+  const progress = count > 1 ? index / (count - 1) : 0;
+  const offset = `calc(var(--thinking-thumb-half) + ${progress} * (100% - var(--thinking-thumb)))`;
+  return vertical ? { bottom: offset } : { left: offset };
 }
 
 // Same blue → indigo → violet → fuchsia stops as the organic send wash /
@@ -17191,6 +17212,7 @@ function useThinkingScrub({
   enabled = true,
   caption = "Thinking",
   openOnDrag = false,
+  orientation = "horizontal",
 }: {
   value: ThinkingLevel;
   levels: ThinkingLevel[];
@@ -17201,6 +17223,12 @@ function useThinkingScrub({
   caption?: string;
   /** Pill only: sideways intent opens the scrubber before the hold elapses. */
   openOnDrag?: boolean;
+  /**
+   * "vertical" swaps the bar upright and drives it from up/down travel only.
+   * Corner-pinned triggers like Start have almost no room to swipe sideways,
+   * so there the axis has to be the one the thumb can actually reach.
+   */
+  orientation?: "horizontal" | "vertical";
 }) {
   const holdTimerRef = useRef<number | null>(null);
   const originRef = useRef({ x: 0, y: 0 });
@@ -17226,6 +17254,12 @@ function useThinkingScrub({
   const previewLevel = levels[safePreview] ?? value;
   const previewProgress = levels.length > 1 ? safePreview / (levels.length - 1) : 0;
   const previewAccent = thinkingAccentColor(previewProgress);
+  const vertical = orientation === "vertical";
+  // Size the upright bar to the gesture's own step width so one level of finger
+  // travel is one stop on screen — the thumb tracks the thumb, near enough 1:1.
+  const verticalTravelPx = Math.round(
+    Math.max(120, Math.min(260, (levels.length - 1) * thinkingScrubStepWidth(levels.length))),
+  );
 
   const clearHoldTimer = () => {
     if (holdTimerRef.current != null) {
@@ -17277,8 +17311,25 @@ function useThinkingScrub({
 
   const placePanel = (trigger: HTMLElement) => {
     const rect = trigger.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    if (vertical) {
+      // Always above: the gesture travels up, so the panel has to be where the
+      // thumb is heading. The bar itself is right-aligned inside the panel and
+      // parked directly over the trigger, so the finger slides along the bar
+      // rather than beside it; the level names hang off to its left.
+      const width = 168;
+      const left = Math.max(
+        12,
+        Math.min(window.innerWidth - width - 12, centerX + THINKING_VERTICAL_BAR_INSET - width),
+      );
+      const panelHeight = verticalTravelPx + 70;
+      const top = Math.max(12, rect.top - panelHeight - 12);
+      setPlacement("above");
+      setPanelStyle({ left, top, width, transformOrigin: `${centerX - left}px 100%` });
+      return;
+    }
     const width = Math.min(360, Math.max(248, window.innerWidth - 24));
-    const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + rect.width / 2 - width / 2));
+    const left = Math.max(12, Math.min(window.innerWidth - width - 12, centerX - width / 2));
     const panelHeight = 124;
     const above = rect.top - panelHeight - 12 >= 12;
     const top = above
@@ -17289,7 +17340,7 @@ function useThinkingScrub({
       left,
       top,
       width,
-      transformOrigin: `${rect.left + rect.width / 2 - left}px ${above ? "100%" : "0%"}`,
+      transformOrigin: `${centerX - left}px ${above ? "100%" : "0%"}`,
     });
   };
 
@@ -17342,11 +17393,20 @@ function useThinkingScrub({
   const applyScrub = (clientX: number, clientY: number) => {
     const dx = clientX - originRef.current.x;
     const dy = clientY - originRef.current.y;
+    // Upright bar: only up/down counts, so a drag that wanders sideways off a
+    // corner-pinned trigger still reads cleanly. Up is always "more effort".
+    if (vertical) {
+      applyScrubTravel(-dy);
+      return;
+    }
     if (!axisRef.current) {
       if (Math.abs(dx) < THINKING_AXIS_LOCK_PX && Math.abs(dy) < THINKING_AXIS_LOCK_PX) return;
       axisRef.current = Math.abs(dx) >= Math.abs(dy) ? "x" : "y";
     }
-    const travel = axisRef.current === "x" ? dx : -dy;
+    applyScrubTravel(axisRef.current === "x" ? dx : -dy);
+  };
+
+  const applyScrubTravel = (travel: number) => {
     const nextIndex = Math.max(
       0,
       Math.min(
@@ -17445,62 +17505,83 @@ function useThinkingScrub({
               : "origin-top slide-in-from-top-2",
           )}
         >
-          <div className="thinking-scrubber-panel">
+          <div className="thinking-scrubber-panel" data-orientation={orientation}>
             <div className="thinking-scrubber-caption">
               <span className="thinking-scrubber-caption-label">{caption}</span>
               <span
                 className="thinking-scrubber-caption-value transition-colors duration-150"
                 style={{ color: previewAccent }}
               >
-                {previewLevel}
+                {thinkingLevelLabel(previewLevel)}
               </span>
             </div>
-            <div
-              className="thinking-scrubber"
-              style={
-                {
-                  "--thinking-progress": previewProgress,
-                  "--thinking-accent": previewAccent,
-                } as CSSProperties
-              }
-            >
-              <span aria-hidden="true" className="thinking-scrubber-halo" />
-              <div className="thinking-scrubber-track">
-                <div aria-hidden="true" className="thinking-scrubber-matrix" />
-                <div className="thinking-scrubber-fill" />
+            <div className="thinking-scrubber-body">
+              <div
+                className="thinking-scrubber"
+                data-orientation={orientation}
+                style={
+                  {
+                    "--thinking-progress": previewProgress,
+                    "--thinking-accent": previewAccent,
+                    ...(vertical ? { "--thinking-travel": `${verticalTravelPx}px` } : {}),
+                  } as CSSProperties
+                }
+              >
+                <span aria-hidden="true" className="thinking-scrubber-halo" />
+                <div className="thinking-scrubber-track">
+                  <div aria-hidden="true" className="thinking-scrubber-matrix" />
+                  <div className="thinking-scrubber-fill" />
+                </div>
+                {/* One stop per level, so the number of steps and where you are
+                    in them is readable even when the names don't all fit. */}
+                <span aria-hidden="true" className="thinking-scrubber-ticks">
+                  {levels.map((level, index) => (
+                    <span
+                      key={level}
+                      data-passed={index <= safePreview ? "" : undefined}
+                      style={thinkingStopOffset(index, levels.length, vertical)}
+                    />
+                  ))}
+                </span>
+                <span aria-hidden="true" className="thinking-scrubber-thumb" />
               </div>
-              {/* One stop per level, so the number of steps and where you are
-                  in them is readable even when the names don't all fit. */}
-              <span aria-hidden="true" className="thinking-scrubber-ticks">
-                {levels.map((level, index) => (
-                  <span
-                    key={level}
-                    data-passed={index <= safePreview ? "" : undefined}
-                    style={{
-                      left: `calc(var(--thinking-thumb-half) + ${
-                        levels.length > 1 ? index / (levels.length - 1) : 0
-                      } * (100% - var(--thinking-thumb)))`,
-                    }}
-                  />
-                ))}
-              </span>
-              <span aria-hidden="true" className="thinking-scrubber-thumb" />
+              {/* Upright: every stop is named beside the bar, pinned to the
+                  exact height its tick sits at, so the label under your thumb
+                  is the one you are about to commit. */}
+              {vertical ? (
+                <div className="thinking-scrubber-stops">
+                  {levels.map((level, index) => (
+                    <span
+                      key={level}
+                      data-active={index === safePreview ? "" : undefined}
+                      style={{
+                        ...thinkingStopOffset(index, levels.length, true),
+                        ...(index === safePreview ? { color: previewAccent } : {}),
+                      }}
+                    >
+                      {thinkingLevelLabel(level)}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
             </div>
             {/* Every stop is named while they fit; past ~5 the row collapses to
                 the two endpoints so the labels never overlap. */}
-            <div className="thinking-scrubber-ends">
-              {(levels.length <= 5 ? levels : [levels[0]!, levels[levels.length - 1]!]).map(
-                (level) => (
-                  <span
-                    key={level}
-                    data-active={level === previewLevel ? "" : undefined}
-                    style={level === previewLevel ? { color: previewAccent } : undefined}
-                  >
-                    {level}
-                  </span>
-                ),
-              )}
-            </div>
+            {vertical ? null : (
+              <div className="thinking-scrubber-ends">
+                {(levels.length <= 5 ? levels : [levels[0]!, levels[levels.length - 1]!]).map(
+                  (level) => (
+                    <span
+                      key={level}
+                      data-active={level === previewLevel ? "" : undefined}
+                      style={level === previewLevel ? { color: previewAccent } : undefined}
+                    >
+                      {thinkingLevelLabel(level)}
+                    </span>
+                  ),
+                )}
+              </div>
+            )}
           </div>
         </div>,
         document.body,
@@ -17594,7 +17675,7 @@ function ComposerThinkingControl({
           )}
           style={scrub.scrubbing ? { color: scrub.previewAccent } : undefined}
         >
-          {shown}
+          {thinkingLevelLabel(shown)}
         </span>
       </button>
 
@@ -17624,6 +17705,9 @@ function ComposerStartButton({
     levels: thinkingLevels,
     enabled: !disabled,
     caption: "Start thinking",
+    // Start is pinned to the bottom-right corner with no room to swipe
+    // sideways, so its scrubber stands upright and reads up/down travel.
+    orientation: "vertical",
     onCommit: (next) => onLaunch(next),
   });
   const holdable = !disabled && thinkingLevels.length > 1;
@@ -17637,10 +17721,10 @@ function ComposerStartButton({
         disabled={disabled}
         aria-label={
           holdable
-            ? `Start session. Hold to set thinking effort, currently ${thinkingLevel}.`
+            ? `Start session. Hold and slide up to set thinking effort, currently ${thinkingLevel}.`
             : "Start session"
         }
-        title={holdable ? "Tap to start · hold to set thinking effort" : undefined}
+        title={holdable ? "Tap to start · hold and slide up for thinking effort" : undefined}
         {...scrub.pointerProps}
         onClick={(event) => {
           // A scrub release already launched with its own level; the click the
@@ -17676,7 +17760,7 @@ function ComposerStartButton({
         ) : (
           <Send className="size-4" />
         )}
-        <span className="capitalize">{scrub.scrubbing ? scrub.previewLevel : "Start"}</span>
+        <span>{scrub.scrubbing ? thinkingLevelLabel(scrub.previewLevel) : "Start"}</span>
       </Button>
 
       {scrub.panel}

@@ -1308,6 +1308,157 @@ html.lfg-keyboard-open {
       inset 0 1px 0 rgba(255, 255, 255, 0.9);
   }
 
+  /* ── Upright variant ──────────────────────────────────────────────────
+     Same pixel-matrix language stood on its end, for triggers pinned to a
+     corner where a sideways swipe has nowhere to go. The bar's travel comes
+     from JS (--thinking-travel) so it matches the gesture's step width, and
+     one level of finger movement lands on one stop. */
+  .thinking-scrubber-body {
+    display: flex;
+    gap: 0.65rem;
+    align-items: stretch;
+  }
+
+  /* Bar last in the row so it lands on the panel's right edge, which is what
+     parks it under a corner-pinned trigger; names read right-aligned into it. */
+  .thinking-scrubber-panel[data-orientation="vertical"] .thinking-scrubber-body {
+    flex-direction: row-reverse;
+  }
+
+  .thinking-scrubber[data-orientation="vertical"] {
+    flex: none;
+    width: 2rem;
+    height: calc(var(--thinking-travel, 200px) + var(--thinking-thumb));
+  }
+
+  .thinking-scrubber[data-orientation="vertical"] .thinking-scrubber-track {
+    inset-inline: auto;
+    inset-block: 0;
+    left: 50%;
+    width: var(--thinking-track-height, 1.7rem);
+    height: auto;
+    transform: translateX(-50%);
+  }
+
+  /* Density climbs toward the top, matching "up = deeper". */
+  .thinking-scrubber[data-orientation="vertical"] .thinking-scrubber-matrix {
+    background: linear-gradient(
+      0deg,
+      color-mix(in srgb, var(--foreground) 18%, transparent) 0%,
+      color-mix(in srgb, var(--foreground) 28%, transparent) 45%,
+      color-mix(in srgb, var(--foreground) 42%, transparent) 100%
+    );
+  }
+
+  .thinking-scrubber[data-orientation="vertical"] .thinking-scrubber-fill {
+    inset-block: auto 0;
+    inset-inline: 0;
+    width: auto;
+    height: max(var(--thinking-cell), calc(100% * var(--thinking-progress)));
+    background: linear-gradient(
+      0deg,
+      rgba(0, 122, 255, 0.88) 0%,
+      rgba(90, 110, 255, 0.94) 34%,
+      rgba(175, 82, 222, 0.97) 68%,
+      rgba(232, 121, 249, 1) 100%
+    );
+    background-size: 100% max(100%, calc(100% / max(0.08, var(--thinking-progress))));
+    background-position: bottom;
+    transition:
+      height 120ms var(--ease-out, ease-out),
+      box-shadow 160ms var(--ease-out, ease-out),
+      background 160ms var(--ease-out, ease-out);
+  }
+
+  .dark .thinking-scrubber[data-orientation="vertical"] .thinking-scrubber-fill {
+    background: linear-gradient(
+      0deg,
+      rgba(10, 132, 255, 0.92) 0%,
+      rgba(100, 120, 255, 0.95) 34%,
+      rgba(191, 90, 242, 0.98) 68%,
+      rgba(240, 140, 255, 1) 100%
+    );
+    background-size: 100% max(100%, calc(100% / max(0.08, var(--thinking-progress))));
+    background-position: bottom;
+  }
+
+  .thinking-scrubber[data-orientation="vertical"] .thinking-scrubber-fill::after {
+    background:
+      radial-gradient(ellipse 140% 42% at 50% 82%, rgba(0, 122, 255, 0.55), transparent 72%),
+      radial-gradient(ellipse 160% 48% at 50% 45%, rgba(175, 82, 222, 0.45), transparent 74%),
+      radial-gradient(ellipse 150% 40% at 50% 8%, rgba(232, 121, 249, 0.55), transparent 70%);
+  }
+
+  .thinking-scrubber[data-orientation="vertical"] .thinking-scrubber-thumb,
+  .thinking-scrubber[data-orientation="vertical"] .thinking-scrubber-halo {
+    top: auto;
+    left: 50%;
+    bottom: var(--thinking-thumb-left);
+  }
+
+  .thinking-scrubber[data-orientation="vertical"] .thinking-scrubber-thumb {
+    transform: translate(-50%, 50%);
+    transition:
+      bottom 120ms var(--ease-out, ease-out),
+      box-shadow 160ms var(--ease-out, ease-out),
+      background 160ms var(--ease-out, ease-out);
+  }
+
+  .thinking-scrubber[data-orientation="vertical"] .thinking-scrubber-halo {
+    width: calc(1.8rem + var(--thinking-progress) * 0.5rem);
+    height: calc(2.6rem + var(--thinking-progress) * 1.1rem);
+    transform: translate(-50%, 50%);
+  }
+
+  /* Ticks hug the bar's left edge; the level names sit on its right. */
+  .thinking-scrubber[data-orientation="vertical"] .thinking-scrubber-ticks {
+    inset-inline: auto;
+    inset-block: 0;
+    left: -0.3rem;
+    width: 3px;
+    height: auto;
+  }
+
+  .thinking-scrubber[data-orientation="vertical"] .thinking-scrubber-ticks > span {
+    top: auto;
+    transform: translateY(50%);
+  }
+
+  .thinking-scrubber-stops {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .thinking-scrubber-stops > span {
+    position: absolute;
+    right: 0;
+    text-align: right;
+    transform: translateY(50%);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1.1;
+    text-transform: capitalize;
+    color: var(--muted-foreground);
+    opacity: 0.7;
+    transition:
+      color 140ms var(--ease-out, ease-out),
+      opacity 140ms var(--ease-out, ease-out);
+  }
+
+  .thinking-scrubber-stops > span[data-active] {
+    font-weight: 700;
+    opacity: 1;
+  }
+
+  /* Upright panel is narrow — stack the caption instead of centring a row. */
+  .thinking-scrubber-panel[data-orientation="vertical"] .thinking-scrubber-caption {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.05rem;
+    margin-bottom: 0.5rem;
+  }
+
   .thinking-scrubber-halo {
     position: absolute;
     top: 50%;

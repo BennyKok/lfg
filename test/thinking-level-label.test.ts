@@ -62,7 +62,7 @@ describe("thinking level menu", () => {
     // pinned to the bottom-right corner is still reachable.
     expect(control).toContain("THINKING_AXIS_LOCK_PX");
     expect(control).toContain('axisRef.current = Math.abs(dx) >= Math.abs(dy) ? "x" : "y"');
-    expect(control).toContain('const travel = axisRef.current === "x" ? dx : -dy');
+    expect(control).toContain('applyScrubTravel(axisRef.current === "x" ? dx : -dy)');
     // Slider-only: no dropdown menu after scrub / on tap.
     expect(control).not.toContain("<DropdownMenu");
     expect(control).not.toContain("DropdownMenuContent");
@@ -82,7 +82,7 @@ describe("thinking level menu", () => {
     // The pill mirrors the level under the finger, so trigger and panel agree.
     expect(control).toContain("const shown = scrub.scrubbing ? scrub.previewLevel : value");
     expect(control).toContain("<ThinkingSignal value={shown} levels={levels} />");
-    expect(control).toContain("{shown}");
+    expect(control).toContain("{thinkingLevelLabel(shown)}");
     expect(control).toContain('WebkitTouchCallout: "none"');
     expect(control).toContain("document.getSelection()?.removeAllRanges()");
     expect(control).not.toContain("<BrainCircuit");
@@ -95,6 +95,69 @@ describe("thinking level menu", () => {
     // Escape aborts an open scrub without committing.
     expect(control).toContain('if (event.key !== "Escape") return');
     expect(control).toContain("finishScrub(false)");
+  });
+
+  test("Start scrubs on an upright bar driven by vertical travel only", async () => {
+    const source = await app();
+    const hookStart = source.indexOf("function useThinkingScrub(");
+    const hookEnd = source.indexOf("function ComposerThinkingControl(", hookStart);
+    const hook = source.slice(hookStart, hookEnd);
+    const buttonStart = source.indexOf("function ComposerStartButton(");
+    const button = source.slice(buttonStart, source.indexOf("function ModelPicker(", buttonStart));
+    const css = await readFile("web/src/index.css", "utf8");
+
+    // Start is corner-pinned, so sideways is not a direction it can offer.
+    expect(button).toContain('orientation: "vertical"');
+    expect(button).toContain("Hold and slide up to set thinking effort");
+    // The pill keeps the horizontal bar and its axis-lock.
+    const pill = source.slice(hookEnd, buttonStart);
+    expect(pill).not.toContain('orientation: "vertical"');
+
+    // Vertical mode ignores horizontal travel entirely rather than axis-locking,
+    // so a drag that wanders sideways off the button still reads cleanly.
+    expect(hook).toContain("if (vertical) {");
+    expect(hook).toContain("applyScrubTravel(-dy)");
+    expect(hook).toContain('const vertical = orientation === "vertical"');
+    // Bar travel is derived from the gesture's own step width => 1:1 on screen.
+    expect(hook).toContain(
+      "(levels.length - 1) * thinkingScrubStepWidth(levels.length)",
+    );
+    expect(hook).toContain('"--thinking-travel": `${verticalTravelPx}px`');
+    // Upright panel always opens above — that is where the thumb is heading.
+    expect(hook).toContain('setPlacement("above")');
+
+    // Ticks and stop names share one offset helper, which is what keeps a
+    // label aligned with its own tick.
+    expect(source).toContain("function thinkingStopOffset(");
+    expect(source).toContain("return vertical ? { bottom: offset } : { left: offset }");
+    expect(hook).toContain("thinkingStopOffset(index, levels.length, vertical)");
+    expect(hook).toContain("thinkingStopOffset(index, levels.length, true)");
+    expect(hook).toContain('className="thinking-scrubber-stops"');
+    expect(hook).toContain('data-orientation={orientation}');
+
+    expect(css).toContain('.thinking-scrubber[data-orientation="vertical"]');
+    expect(css).toContain(".thinking-scrubber-stops");
+    expect(css).toContain("--thinking-travel");
+    // Fill grows from the bottom and the thumb rides `bottom`, not `left`.
+    expect(css).toContain("inset-block: auto 0");
+    expect(css).toContain("bottom: var(--thinking-thumb-left)");
+  });
+
+  test("level names are capitalised in JS, not left to text-transform", async () => {
+    const source = await app();
+    // Chromium drops `text-transform: capitalize` on the upright bar's
+    // absolutely-positioned stop labels, so the strings are title-cased before
+    // they ever reach the DOM.
+    expect(source).toContain("function thinkingLevelLabel(");
+    expect(source).toContain("level.charAt(0).toUpperCase() + level.slice(1)");
+    const hookStart = source.indexOf("function useThinkingScrub(");
+    const end = source.indexOf("function ModelPicker(", hookStart);
+    const region = source.slice(hookStart, end);
+    // Panel caption, upright stops, horizontal endpoints, pill, Start button.
+    expect(region.match(/thinkingLevelLabel\(/g)?.length).toBe(5);
+    // No level name may be rendered raw inside the scrubber surfaces.
+    expect(region).not.toMatch(/>\s*\{level\}\s*</);
+    expect(region).not.toMatch(/>\s*\{previewLevel\}\s*</);
   });
 
   test("the scrub drag is consumed rather than smearing a text selection", async () => {
@@ -155,7 +218,7 @@ describe("thinking level menu", () => {
     expect(button).toContain("if (scrub.consumeSuppressedClick())");
     expect(button).toContain("event.preventDefault()");
     // Live level shown on the button itself while scrubbing.
-    expect(button).toContain("scrub.scrubbing ? scrub.previewLevel : \"Start\"");
+    expect(button).toContain('scrub.scrubbing ? thinkingLevelLabel(scrub.previewLevel) : "Start"');
     // Agents with no reasoning knob get a plain button (levels list is empty).
     expect(button).toContain("const holdable = !disabled && thinkingLevels.length > 1");
 
@@ -206,8 +269,9 @@ describe("thinking level menu", () => {
     // One tick per level, pinned to the thumb's travel range, so the number of
     // stops stays readable even when the names collapse to endpoints.
     expect(control).toContain('className="thinking-scrubber-ticks"');
-    expect(control).toContain(
-      "left: `calc(var(--thinking-thumb-half) + ${",
+    expect(control).toContain("thinkingStopOffset(index, levels.length, vertical)");
+    expect(source).toContain(
+      "`calc(var(--thinking-thumb-half) + ${progress} * (100% - var(--thinking-thumb)))`",
     );
     expect(css).toContain(".thinking-scrubber-ticks");
     // Caption names what the gesture will do — "Thinking" vs "Start thinking".
