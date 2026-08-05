@@ -99,6 +99,7 @@ describe("thinking level menu", () => {
     expect(css).toContain(".thinking-scrubber-thumb");
     expect(css).toContain("--thinking-matrix-mask");
     expect(css).toContain("border-radius: 0.52rem");
+    expect(css).toContain("border-radius: 0.32rem");
     expect(css).toContain("height: 1.45rem");
     expect(css).toContain("rgba(0, 122, 255");
     expect(css).toContain("rgba(175, 82, 222");

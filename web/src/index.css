@@ -1045,7 +1045,8 @@ html.lfg-keyboard-open {
     height: 1.45rem;
     transform: translateY(-50%);
     overflow: hidden;
-    border-radius: 0.85rem;
+    /* Soft rectangle, not a pill — keeps the density bar squared off. */
+    border-radius: 0.32rem;
     background: color-mix(in srgb, var(--foreground) 10%, transparent);
     box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.16);
   }
@@ -1060,7 +1061,7 @@ html.lfg-keyboard-open {
   .thinking-scrubber-matrix {
     position: absolute;
     inset: 0.3rem;
-    border-radius: 0.45rem;
+    border-radius: 0.18rem;
     background: linear-gradient(
       90deg,
       color-mix(in srgb, var(--foreground) 18%, transparent) 0%,
@@ -1086,7 +1087,7 @@ html.lfg-keyboard-open {
       var(--thinking-cell),
       calc((100% - 0.6rem) * var(--thinking-progress))
     );
-    border-radius: 0.45rem;
+    border-radius: 0.18rem;
     background: linear-gradient(
       90deg,
       rgba(0, 122, 255, 0.88) 0%,
