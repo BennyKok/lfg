@@ -118,10 +118,13 @@ test("the ring buffer stays bounded", () => {
 });
 
 describe("verdict", () => {
-  const at = (label: string, source: "request" | "beacon") => ({
+  const req = (label: string) => ({ t: Date.now(), source: "request" as const, label });
+  const bea = (label: string, bootId: string, mode = "browser") => ({
     t: Date.now(),
-    source,
+    source: "beacon" as const,
     label,
+    bootId,
+    mode,
   });
 
   test("silence means the phone never reached the server", () => {
@@ -134,32 +137,64 @@ describe("verdict", () => {
   });
 
   test("a document fetch with no page report is a delivery failure", () => {
-    expect(verdict([at("document", "request")]).headline).toBe("Page fetched, but never executed");
+    expect(verdict([req("document")]).headline).toBe("Page fetched, but never executed");
+  });
+
+  test("sub-resources without a page request point at the worker or start_url", () => {
+    expect(verdict([req("service-worker")]).headline).toBe("Sub-resources only — no page request");
   });
 
   test("html-parsed without a mount blames the bundle", () => {
-    expect(verdict([at("document", "request"), at("html-parsed", "beacon")]).headline).toBe(
-      "Page ran, then went quiet",
+    expect(verdict([req("document"), bea("html-parsed", "a")]).headline).toBe(
+      "Page ran, then went quiet (browser tab)",
     );
   });
 
   test("a mount means the fault is inside the UI, not the install", () => {
     expect(
-      verdict([at("document", "request"), at("html-parsed", "beacon"), at("app-mounted", "beacon")])
-        .headline,
-    ).toBe("The app mounted");
+      verdict([req("document"), bea("html-parsed", "a"), bea("app-mounted", "a")]).headline,
+    ).toBe("The app mounted (browser tab)");
   });
 
   test("a stuck report outranks html-parsed but not a mount", () => {
-    expect(
-      verdict([at("document", "request"), at("html-parsed", "beacon"), at("stuck", "beacon")])
-        .headline,
-    ).toBe("Loaded, but the app never mounted");
+    expect(verdict([req("document"), bea("html-parsed", "a"), bea("stuck", "a")]).headline).toBe(
+      "Loaded, but never mounted (browser tab)",
+    );
   });
 
-  test("sub-resources without a page request point at the worker or start_url", () => {
-    expect(verdict([at("service-worker", "request")]).headline).toBe(
-      "Sub-resources only — no page request",
-    );
+  test("a working browser tab never masks a failing home-screen launch", () => {
+    // The exact trap the first version fell into: a laptop tab reporting
+    // app-mounted made the whole log read as healthy.
+    const v = verdict([
+      req("document"),
+      bea("html-parsed", "laptop"),
+      bea("app-mounted", "laptop"),
+      bea("html-parsed", "phone", "standalone"),
+      bea("stuck", "phone", "standalone"),
+    ]);
+    expect(v.headline).toBe("Loaded, but never mounted (home-screen app)");
+    expect(v.note).toBeUndefined();
+  });
+
+  test("the missing home-screen launch is called out, not silently ignored", () => {
+    const v = verdict([req("document"), bea("html-parsed", "a"), bea("app-mounted", "a")]);
+    expect(v.note).toContain("No home-screen launch");
+  });
+
+  test("a home-screen launch that mounted reports as such", () => {
+    const v = verdict([
+      req("document"),
+      bea("html-parsed", "phone", "standalone"),
+      bea("app-mounted", "phone", "standalone"),
+    ]);
+    expect(v.headline).toBe("The app mounted (home-screen app)");
+    expect(v.note).toBeUndefined();
+  });
+
+  test("the newest launch wins when several are the same kind", () => {
+    const older = bea("stuck", "old");
+    older.t = Date.now() - 60_000;
+    const v = verdict([req("document"), older, bea("app-mounted", "new")]);
+    expect(v.headline).toBe("The app mounted (browser tab)");
   });
 });

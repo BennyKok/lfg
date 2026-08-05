@@ -1231,6 +1231,7 @@ h1{font-size:1.1rem;margin:0 0 .25rem}
 .verdict{border:1px solid #27272a;border-radius:.9rem;padding:1rem;margin:1rem 0;background:#09090b}
 .verdict h2{margin:0 0 .4rem;font-size:1.05rem;color:#fff}
 .verdict p{margin:0;color:#a1a1aa;font-size:.92rem}
+.verdict p.note{margin-top:.6rem;padding-top:.6rem;border-top:1px solid #27272a;color:#fde68a;font-size:.85rem}
 .how{color:#a1a1aa;font-size:.88rem;margin:.75rem 0 0;padding-left:1.1rem}
 .how li{margin:.3rem 0}
 .actions{display:flex;gap:.5rem;margin-top:1rem;flex-wrap:wrap}
@@ -1258,6 +1259,7 @@ li.ev{border-bottom:1px solid #18181b;padding:.6rem .1rem}
 <div class="verdict">
 <h2>${escapeHtml(v.headline)}</h2>
 <p>${escapeHtml(v.explanation)}</p>
+${v.note ? `<p class="note">${escapeHtml(v.note)}</p>` : ""}
 </div>
 
 <ol class="how">

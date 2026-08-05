@@ -181,18 +181,59 @@ export function parseBeacon(body: string, ua?: string): BootEntry | null {
 export type LaunchVerdict = {
   headline: string;
   explanation: string;
+  /** Surfaced separately when the log cannot answer the question being asked. */
+  note?: string;
+};
+
+/** Display modes that mean "launched from the Home Screen", not a browser tab. */
+const INSTALLED_MODES = new Set(["standalone", "minimal-ui", "fullscreen"]);
+
+type Launch = {
+  bootId: string;
+  mode?: string;
+  labels: Set<string>;
+  lastT: number;
 };
 
 /**
- * Turn the raw log into the one sentence the user actually needs. The ordering
- * matters: each check rules out everything below it, so the first match names
- * the furthest point the launch reached.
+ * Group beacons into individual launches.
+ *
+ * Judging the log as one undifferentiated pile is actively misleading: a laptop
+ * tab that works fine contributes an `app-mounted`, which would report success
+ * while the phone next to it is still black. A verdict is only meaningful about
+ * one launch at a time.
+ */
+export function launches(entries: BootEntry[]): Launch[] {
+  const byId = new Map<string, Launch>();
+  for (const e of entries) {
+    if (e.source !== "beacon" || !e.bootId) continue;
+    const existing = byId.get(e.bootId);
+    if (existing) {
+      existing.labels.add(e.label);
+      existing.lastT = Math.max(existing.lastT, e.t);
+      existing.mode ??= e.mode;
+    } else {
+      byId.set(e.bootId, {
+        bootId: e.bootId,
+        mode: e.mode,
+        labels: new Set([e.label]),
+        lastT: e.t,
+      });
+    }
+  }
+  return [...byId.values()].sort((a, b) => a.lastT - b.lastT);
+}
+
+/**
+ * Turn the raw log into the one sentence the user actually needs.
+ *
+ * Reports on a *single* launch — the newest home-screen one if any exists,
+ * otherwise the newest browser one — because those two can disagree completely,
+ * and the home-screen case is the one being debugged.
  */
 export function verdict(all: BootEntry[], windowMs = 15 * 60_000): LaunchVerdict {
   const cutoff = Date.now() - windowMs;
   const recent = all.filter((e) => e.t >= cutoff);
-  const has = (label: string, source?: BootEntry["source"]) =>
-    recent.some((e) => e.label === label && (!source || e.source === source));
 
   if (recent.length === 0) {
     return {
@@ -204,44 +245,63 @@ export function verdict(all: BootEntry[], windowMs = 15 * 60_000): LaunchVerdict
         "service-worker or cache fixing can change this.",
     };
   }
-  if (!has("document", "request")) {
+
+  const all_ = launches(recent);
+  const installed = all_.filter((l) => l.mode && INSTALLED_MODES.has(l.mode));
+  const target = installed.at(-1) ?? all_.at(-1);
+
+  const note = installed.length
+    ? undefined
+    : "No home-screen launch has reported in yet — every report below came from a " +
+      "browser tab. Open the Home Screen icon (not Safari) to test the install itself.";
+
+  if (!target) {
+    const sawDocument = recent.some((e) => e.source === "request" && e.label === "document");
+    if (!sawDocument) {
+      return {
+        headline: "Sub-resources only — no page request",
+        explanation:
+          "Something talked to the server, but nothing requested the page itself. " +
+          "Usually a stuck service worker answering the navigation, or a start_url " +
+          "pointing somewhere else.",
+        note,
+      };
+    }
     return {
-      headline: "Sub-resources only — no page request",
+      headline: "Page fetched, but never executed",
       explanation:
-        "Something talked to the server, but the home-screen app never requested the " +
-        "page itself. Usually a stuck service worker answering the navigation, or a " +
-        "start_url pointing somewhere else.",
+        "The server sent the document, yet the page never reported in. The response is " +
+        "not reaching the renderer intact — a truncated or blocked response, or a " +
+        "cancelled launch (an iOS cold start racing the VPN does exactly this).",
+      note,
     };
   }
-  if (has("app-mounted")) {
+
+  const where = target.mode && INSTALLED_MODES.has(target.mode) ? "home-screen app" : "browser tab";
+  if (target.labels.has("app-mounted")) {
     return {
-      headline: "The app mounted",
+      headline: `The app mounted (${where})`,
       explanation:
         "The page loaded and React mounted, so a black screen here is a rendering or " +
         "layout problem inside the app — not the install, the worker, or the network.",
+      note,
     };
   }
-  if (has("stuck")) {
+  if (target.labels.has("stuck")) {
     return {
-      headline: "Loaded, but the app never mounted",
+      headline: `Loaded, but never mounted (${where})`,
       explanation:
-        "The document ran and reported itself stuck on the splash. The bundle is not " +
-        "evaluating — check the asset-error entries below.",
-    };
-  }
-  if (has("html-parsed")) {
-    return {
-      headline: "Page ran, then went quiet",
-      explanation:
-        "The document parsed and reported in, but never mounted and never reported " +
-        "stuck. The app bundle most likely failed to download or evaluate.",
+        "The document ran and reported itself stuck on the splash after 4 seconds, and " +
+        "never mounted. The app bundle is not arriving or not evaluating — check for " +
+        "asset-error entries, and whether an entry-chunk request was even made.",
+      note,
     };
   }
   return {
-    headline: "Page fetched, but never executed",
+    headline: `Page ran, then went quiet (${where})`,
     explanation:
-      "The server sent the document, yet the page never reported in. The response is " +
-      "not reaching the renderer intact — a truncated or blocked response, or a " +
-      "cancelled launch (an iOS cold start racing the VPN does exactly this).",
+      "The document parsed and reported in, but never mounted and never reported stuck. " +
+      "The app bundle most likely failed to download or evaluate.",
+    note,
   };
 }
