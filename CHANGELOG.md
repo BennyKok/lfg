@@ -2,6 +2,12 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - One lfg on the splash (v0.1.265)
+
+- Cold-load splash no longer stacks the app icon and a separate "lfg" wordmark.
+  The logo already says the name, so the splash is just the mark and the
+  progress bar.
+
 ## August 5, 2026 - Silent failures removed (v0.1.264)
 
 - After the black home-screen fix, the recovery stack was a pile of one-shot
