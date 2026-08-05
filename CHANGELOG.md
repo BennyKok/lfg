@@ -2,6 +2,20 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Found it: the black home-screen app (v0.1.261)
+
+- A stale service worker could hold an installed app hostage forever. Tapping
+  the icon fetched `/sw.js` two dozen times and never once requested the page:
+  the old worker answered navigations from its own cache, so the app never
+  loaded and nothing on the page could recover it.
+- The replacement worker was failing to install. It did all its cache
+  housekeeping *before* handing over control, so a single Cache API error (iOS
+  storage pressure, an evicted bucket) aborted the install and left the old
+  worker in charge. Takeover now happens first and unconditionally; cache work
+  is best-effort and can never block it.
+- The launch diagnostics now judge one launch at a time instead of pooling
+  every device together — a healthy laptop tab was masking a failing phone.
+
 ## August 5, 2026 - A black PWA can finally say what went wrong (v0.1.260)
 
 - New **/__lfg_pwa_diag** page reports how far a home-screen launch actually
