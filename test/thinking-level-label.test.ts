@@ -63,4 +63,34 @@ describe("thinking level menu", () => {
     expect(control).toContain("document.getSelection()?.removeAllRanges()");
     expect(control).not.toContain("<BrainCircuit");
   });
+
+  test("hold-to-scrub panel uses a thick track and rounded-square thumb with morphing accent", async () => {
+    const source = await app();
+    const start = source.indexOf("function ComposerThinkingControl(");
+    const end = source.indexOf("function ModelPicker(", start);
+    const control = source.slice(start, end);
+    const css = await readFile("web/src/index.css", "utf8");
+
+    expect(control).toContain('className="thinking-scrubber"');
+    expect(control).toContain("thinking-scrubber-track");
+    expect(control).toContain("thinking-scrubber-fill");
+    expect(control).toContain("thinking-scrubber-thumb");
+    expect(control).toContain("thinking-scrubber-halo");
+    expect(control).toContain("thinkingAccentColor(previewProgress)");
+    expect(control).toContain('"--thinking-progress": previewProgress');
+    expect(control).toContain('"--thinking-accent": previewAccent');
+    // Dot markers replaced by the continuous thick-track + squircle thumb.
+    expect(control).not.toContain("rounded-full bg-popover ring-2");
+    expect(control).not.toContain("from-sky-400/35 via-violet-400/55");
+    expect(source).toContain("THINKING_ACCENT_STOPS");
+    expect(source).toContain("function thinkingAccentColor(");
+
+    expect(css).toContain(".thinking-scrubber-track");
+    expect(css).toContain(".thinking-scrubber-thumb");
+    expect(css).toContain("border-radius: 0.42rem");
+    expect(css).toContain("height: 0.7rem");
+    expect(css).toContain("rgba(0, 122, 255");
+    expect(css).toContain("rgba(175, 82, 222");
+    expect(css).toContain("rgba(232, 121, 249");
+  });
 });

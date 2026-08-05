@@ -1014,6 +1014,196 @@ html.lfg-keyboard-open {
     }
   }
 
+  /* Hold-to-scrub thinking control: thick track + rounded-square thumb, using
+     the same blue→indigo→violet→fuchsia language as the in-flight send wash.
+     --thinking-progress (0–1) drives fill width, accent morph, and glow.
+     --thinking-thumb is the thumb edge length; travel is inset by half-thumb
+     so the squircle never clips under the panel's overflow:hidden. */
+  .thinking-scrubber {
+    --thinking-progress: 0;
+    --thinking-accent: rgb(0, 122, 255);
+    --thinking-glow: color-mix(in srgb, var(--thinking-accent) 55%, transparent);
+    --thinking-thumb: 1.35rem;
+    --thinking-thumb-half: calc(var(--thinking-thumb) / 2);
+    --thinking-thumb-left: calc(
+      var(--thinking-thumb-half) + var(--thinking-progress) * (100% - var(--thinking-thumb))
+    );
+    position: relative;
+    height: 2.25rem;
+  }
+
+  .thinking-scrubber-track {
+    position: absolute;
+    inset-inline: var(--thinking-thumb-half);
+    top: 50%;
+    height: 0.7rem;
+    transform: translateY(-50%);
+    overflow: hidden;
+    border-radius: 999px;
+    background:
+      linear-gradient(
+        90deg,
+        rgba(0, 122, 255, 0.14),
+        rgba(90, 110, 255, 0.16) 40%,
+        rgba(175, 82, 222, 0.18) 72%,
+        rgba(232, 121, 249, 0.2)
+      ),
+      color-mix(in srgb, var(--foreground) 9%, transparent);
+    box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.14);
+  }
+
+  .dark .thinking-scrubber-track {
+    background:
+      linear-gradient(
+        90deg,
+        rgba(10, 132, 255, 0.18),
+        rgba(100, 120, 255, 0.2) 40%,
+        rgba(191, 90, 242, 0.22) 72%,
+        rgba(232, 121, 249, 0.24)
+      ),
+      color-mix(in srgb, var(--foreground) 12%, transparent);
+    box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.35);
+  }
+
+  .thinking-scrubber-fill {
+    position: relative;
+    height: 100%;
+    width: calc(var(--thinking-progress) * 100%);
+    min-width: 0.7rem;
+    overflow: hidden;
+    border-radius: inherit;
+    background: linear-gradient(
+      90deg,
+      rgba(0, 122, 255, 0.88) 0%,
+      rgba(90, 110, 255, 0.92) 34%,
+      rgba(175, 82, 222, 0.96) 68%,
+      rgba(232, 121, 249, 1) 100%
+    );
+    background-size: max(100%, calc(100% / max(0.08, var(--thinking-progress)))) 100%;
+    box-shadow:
+      0 0 calc(0.25rem + var(--thinking-progress) * 0.85rem) var(--thinking-glow),
+      inset 0 1px 0 rgba(255, 255, 255, 0.38);
+    transition:
+      width 120ms var(--ease-out, ease-out),
+      box-shadow 160ms var(--ease-out, ease-out),
+      background 160ms var(--ease-out, ease-out);
+  }
+
+  .dark .thinking-scrubber-fill {
+    background: linear-gradient(
+      90deg,
+      rgba(10, 132, 255, 0.92) 0%,
+      rgba(100, 120, 255, 0.94) 34%,
+      rgba(191, 90, 242, 0.97) 68%,
+      rgba(240, 140, 255, 1) 100%
+    );
+    background-size: max(100%, calc(100% / max(0.08, var(--thinking-progress)))) 100%;
+    box-shadow:
+      0 0 calc(0.35rem + var(--thinking-progress) * 1.1rem) var(--thinking-glow),
+      inset 0 1px 0 rgba(255, 255, 255, 0.22);
+  }
+
+  /* Soft multi-blob wash borrowed from .lfg-organic-activity-wash — intensifies
+     with progress so deeper levels feel hotter/more saturated. */
+  .thinking-scrubber-fill::after {
+    position: absolute;
+    inset: 0;
+    content: "";
+    background:
+      radial-gradient(ellipse 42% 140% at 18% 50%, rgba(0, 122, 255, 0.55), transparent 72%),
+      radial-gradient(ellipse 48% 160% at 55% 50%, rgba(175, 82, 222, 0.45), transparent 74%),
+      radial-gradient(ellipse 40% 150% at 92% 50%, rgba(232, 121, 249, 0.55), transparent 70%);
+    opacity: calc(0.28 + var(--thinking-progress) * 0.72);
+    mix-blend-mode: screen;
+    animation: thinking-scrubber-wash 2.6s var(--ease-in-out, ease-in-out) infinite;
+  }
+
+  .thinking-scrubber-thumb {
+    position: absolute;
+    top: 50%;
+    left: var(--thinking-thumb-left);
+    z-index: 1;
+    width: var(--thinking-thumb);
+    height: var(--thinking-thumb);
+    border-radius: 0.42rem;
+    background:
+      linear-gradient(
+        155deg,
+        color-mix(in srgb, white 92%, var(--thinking-accent)) 0%,
+        color-mix(in srgb, white 70%, var(--thinking-accent)) 100%
+      );
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--thinking-accent) calc(28% + var(--thinking-progress) * 42%), transparent),
+      0 0 calc(0.45rem + var(--thinking-progress) * 1.1rem) var(--thinking-glow),
+      0 1px 2px rgba(0, 0, 0, 0.22),
+      inset 0 1px 0 rgba(255, 255, 255, 0.85);
+    transform: translate(-50%, -50%);
+    transition:
+      left 120ms var(--ease-out, ease-out),
+      box-shadow 160ms var(--ease-out, ease-out),
+      background 160ms var(--ease-out, ease-out);
+  }
+
+  .dark .thinking-scrubber-thumb {
+    background:
+      linear-gradient(
+        155deg,
+        color-mix(in srgb, white 78%, var(--thinking-accent)) 0%,
+        color-mix(in srgb, white 48%, var(--thinking-accent)) 100%
+      );
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--thinking-accent) calc(36% + var(--thinking-progress) * 48%), transparent),
+      0 0 calc(0.55rem + var(--thinking-progress) * 1.35rem) var(--thinking-glow),
+      0 1px 3px rgba(0, 0, 0, 0.45),
+      inset 0 1px 0 rgba(255, 255, 255, 0.55);
+  }
+
+  .thinking-scrubber-halo {
+    position: absolute;
+    top: 50%;
+    left: var(--thinking-thumb-left);
+    width: calc(2.4rem + var(--thinking-progress) * 1.2rem);
+    height: calc(1.6rem + var(--thinking-progress) * 0.6rem);
+    border-radius: 999px;
+    background: radial-gradient(
+      ellipse at center,
+      color-mix(in srgb, var(--thinking-accent) calc(22% + var(--thinking-progress) * 28%), transparent),
+      transparent 72%
+    );
+    filter: blur(8px);
+    opacity: calc(0.45 + var(--thinking-progress) * 0.55);
+    transform: translate(-50%, -50%);
+    transition:
+      left 120ms var(--ease-out, ease-out),
+      width 160ms var(--ease-out, ease-out),
+      height 160ms var(--ease-out, ease-out),
+      opacity 160ms var(--ease-out, ease-out);
+  }
+
+  @keyframes thinking-scrubber-wash {
+    0%,
+    100% {
+      transform: translateX(-6%);
+      filter: hue-rotate(0deg);
+    }
+    50% {
+      transform: translateX(6%);
+      filter: hue-rotate(12deg);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .thinking-scrubber-fill,
+    .thinking-scrubber-thumb,
+    .thinking-scrubber-halo {
+      transition: none;
+    }
+
+    .thinking-scrubber-fill::after {
+      animation: none;
+    }
+  }
+
   .user-bubble.markdown code,
   .user-bubble.markdown pre {
     border: 0;

@@ -17091,6 +17091,29 @@ function ThinkingLevelPill({
 
 const THINKING_HOLD_MS = 360;
 
+// Same blue → indigo → violet → fuchsia stops as the organic send wash /
+// thinking scrubber fill, so the pill signal and hold-to-scrub control morph
+// together as effort intensifies.
+const THINKING_ACCENT_STOPS: ReadonlyArray<readonly [number, number, number]> = [
+  [0, 122, 255],
+  [90, 110, 255],
+  [175, 82, 222],
+  [232, 121, 249],
+];
+
+function thinkingAccentColor(progress: number): string {
+  const clamped = Math.max(0, Math.min(1, progress));
+  const scaled = clamped * (THINKING_ACCENT_STOPS.length - 1);
+  const i = Math.floor(scaled);
+  const t = scaled - i;
+  const a = THINKING_ACCENT_STOPS[i]!;
+  const b = THINKING_ACCENT_STOPS[Math.min(i + 1, THINKING_ACCENT_STOPS.length - 1)]!;
+  const r = Math.round(a[0] + (b[0] - a[0]) * t);
+  const g = Math.round(a[1] + (b[1] - a[1]) * t);
+  const bl = Math.round(a[2] + (b[2] - a[2]) * t);
+  return `rgb(${r}, ${g}, ${bl})`;
+}
+
 function ThinkingSignal({
   value,
   levels,
@@ -17103,21 +17126,21 @@ function ThinkingSignal({
   const strength = /^(none|off)$/i.test(value)
     ? 0
     : Math.max(1, Math.ceil(((index + 1) / Math.max(1, levels.length)) * 4));
-  const color = `hsl(${200 + progress * 120} 90% 62%)`;
+  const color = thinkingAccentColor(progress);
 
   return (
     <span
       aria-hidden="true"
       className="flex h-4 w-4 shrink-0 select-none items-end justify-center gap-px"
     >
-      {[4, 7, 10, 13].map((height, index) => {
-        const active = index < strength;
+      {[4, 7, 10, 13].map((height, barIndex) => {
+        const active = barIndex < strength;
         return (
           <span
             key={height}
             className={cn(
               "w-0.5 rounded-full bg-foreground/20 transition-[height,background-color,box-shadow] duration-200",
-              active && index === strength - 1 && "shadow-[0_0_8px_currentColor]",
+              active && barIndex === strength - 1 && "shadow-[0_0_8px_currentColor]",
             )}
             style={{
               height,
@@ -17160,6 +17183,7 @@ function ComposerThinkingControl({
 
   const currentIndex = Math.max(0, levels.indexOf(value));
   const previewProgress = levels.length > 1 ? previewIndex / (levels.length - 1) : 0;
+  const previewAccent = thinkingAccentColor(previewProgress);
 
   const clearHoldTimer = () => {
     if (holdTimerRef.current != null) {
@@ -17174,7 +17198,7 @@ function ComposerThinkingControl({
     const rect = trigger.getBoundingClientRect();
     const width = Math.min(360, Math.max(248, window.innerWidth - 24));
     const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + rect.width / 2 - width / 2));
-    const panelHeight = 112;
+    const panelHeight = 120;
     const top = rect.top - panelHeight - 12 >= 12
       ? rect.top - panelHeight - 12
       : Math.min(window.innerHeight - panelHeight - 12, rect.bottom + 12);
@@ -17350,35 +17374,29 @@ function ComposerThinkingControl({
               <div className="overflow-hidden rounded-[1.6rem] bg-popover/95 px-5 py-4 text-popover-foreground shadow-2xl ring-1 ring-foreground/10 backdrop-blur-2xl">
                 <div className="mb-3 flex items-center justify-between gap-4">
                   <span className="text-xs font-medium text-muted-foreground">Thinking</span>
-                  <span className="text-sm font-semibold capitalize">
+                  <span
+                    className="text-sm font-semibold capitalize transition-colors duration-150"
+                    style={{ color: previewAccent }}
+                  >
                     {levels[previewIndex] ?? value}
                   </span>
                 </div>
-                <div className="relative h-7">
-                  <div className="absolute inset-x-1 top-3 h-1 rounded-full bg-gradient-to-r from-sky-400/35 via-violet-400/55 to-fuchsia-400/80" />
-                  {levels.map((level, index) => {
-                    const progress = levels.length > 1 ? index / (levels.length - 1) : 0;
-                    const active = index === previewIndex;
-                    return (
-                      <span
-                        key={level}
-                        aria-hidden="true"
-                        className={cn(
-                          "absolute top-3 size-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-popover ring-2 ring-foreground/25 transition-all duration-150",
-                          index <= previewIndex && "ring-violet-400/80",
-                          active && "size-4 bg-foreground ring-4 ring-violet-400/30 shadow-[0_0_20px_rgba(167,139,250,0.65)]",
-                        )}
-                        style={{ left: `${progress * 100}%` }}
-                      />
-                    );
-                  })}
-                  <span
-                    aria-hidden="true"
-                    className="absolute top-3 h-8 w-12 -translate-x-1/2 -translate-y-1/2 rounded-full bg-violet-400/10 blur-md transition-[left] duration-100"
-                    style={{ left: `${previewProgress * 100}%` }}
-                  />
+                <div
+                  className="thinking-scrubber"
+                  style={
+                    {
+                      "--thinking-progress": previewProgress,
+                      "--thinking-accent": previewAccent,
+                    } as CSSProperties
+                  }
+                >
+                  <span aria-hidden="true" className="thinking-scrubber-halo" />
+                  <div className="thinking-scrubber-track">
+                    <div className="thinking-scrubber-fill" />
+                  </div>
+                  <span aria-hidden="true" className="thinking-scrubber-thumb" />
                 </div>
-                <div className="mt-1 flex items-center justify-between text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
+                <div className="mt-0.5 flex items-center justify-between text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
                   <span>Faster</span>
                   <span>Deeper</span>
                 </div>
