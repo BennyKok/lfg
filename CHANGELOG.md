@@ -2,6 +2,16 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Horizontal effort bar restored, upright one tracks your thumb (v0.1.282)
+
+- **Fixed the Thinking pill's horizontal bar rendering as an empty strip.** The
+  upright bar added for Start in v0.1.281 collapsed the horizontal one to zero
+  width — the level names showed but the bar itself was gone.
+- Holding **Start** now tracks your thumb **absolutely**: the level next to your
+  finger on the bar is the level you get, rather than counting steps from wherever
+  you pressed. Until your finger actually reaches the bar the level stays put, so
+  a press and release with no real drag can never launch at the wrong effort.
+
 ## August 5, 2026 - Start's effort picker stands upright (v0.1.281)
 
 - Holding **Start** now raises an **upright** effort bar you scrub by sliding
