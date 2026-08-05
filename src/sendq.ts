@@ -155,11 +155,35 @@ const norm = (s: string) => s.replace(/\s+/g, " ").trim();
 // wraps long input across lines, so a full-string compare against the capture
 // would never match.
 const NEEDLE_LEN = 48;
+// Below this length, a head-only match is enough — short messages can't lose a
+// trailing "answer" body the way long multi-line asks can.
+const LONG_MSG_CHARS = NEEDLE_LEN * 3;
+
+/** Head (+ optional tail) needles for long-message delivery confirmation. */
+export function messageNeedles(fullNorm: string): { head: string; tail: string | null } {
+  const head = fullNorm.slice(0, NEEDLE_LEN);
+  if (fullNorm.length <= LONG_MSG_CHARS) return { head, tail: null };
+  return { head, tail: fullNorm.slice(-NEEDLE_LEN) };
+}
+
+/** True when a user transcript/box string contains our delivery markers. */
+export function textHasMessageNeedles(
+  text: string,
+  head: string,
+  tail: string | null,
+): boolean {
+  const n = norm(text);
+  if (!n.includes(head)) return false;
+  return !tail || n.includes(tail);
+}
 
 // Does the composer currently show our message? Two probes, in order:
 //
 // 1. Needle: our normalized prefix is visible in the box. Definitive for short
-//    drafts and unscrolled viewports.
+//    drafts and unscrolled viewports. For LONG drafts the head alone is not
+//    enough — a partial type-in (Grok multi-line truncations were the live
+//    incident) also shows the first 48 chars, so we also require the tail, a
+//    near-complete prefix, or fall through to the inverted scrolled check.
 // 2. Inverted (the codex long-draft case): the codex composer viewport scrolls
 //    for long drafts, so NEITHER the head nor the tail of the draft is
 //    guaranteed on screen — the needle probe false-negatives, and the queue
@@ -172,16 +196,42 @@ const NEEDLE_LEN = 48;
 //    wrap has no space at the seam — joining visible lines with a space would
 //    fabricate one and break the substring match.
 //
+// Partial PREFIX drafts are rejected: if the visible box is a short prefix of
+// the intended message, typing is incomplete and we must not Enter yet.
+//
 // Exported for tests: pure logic over a captured box string.
 export function boxTextMatches(box: string, fullNorm: string, needle: string): boolean {
   const normBox = norm(box);
   if (!normBox) return false;
-  if (normBox.includes(needle)) return true;
+
+  const { tail } = messageNeedles(fullNorm);
+  if (normBox.includes(needle)) {
+    // Short messages: head is decisive.
+    if (!tail) return true;
+    // Long messages: head + tail both on screen (unscrolled, fully typed).
+    if (normBox.includes(tail)) return true;
+    // Fully typed and still showing the start (cursor may have jumped home):
+    // accept a near-complete prefix so we don't retype a finished draft.
+    if (fullNorm.startsWith(normBox) && normBox.length >= Math.floor(fullNorm.length * 0.85)) {
+      return true;
+    }
+    // Head only on a long draft → either partial type-in or scrolled mid-body.
+    // Fall through to the inverted check.
+  }
+
   const lines = box
     .split("\n")
     .map(norm)
     .filter(Boolean);
-  return lines.length > 0 && lines.every((l) => fullNorm.includes(l));
+  if (!lines.length || !lines.every((l) => fullNorm.includes(l))) return false;
+
+  // Reject incomplete type-in: every visible line is ours, but the whole box is
+  // still just a short PREFIX of the intended message. A true mid-scroll of a
+  // complete draft is NOT a prefix (it starts somewhere in the middle).
+  if (fullNorm.startsWith(normBox) && normBox.length < Math.floor(fullNorm.length * 0.85)) {
+    return false;
+  }
+  return true;
 }
 
 function boxShowsMessage(target: string, fullNorm: string, needle: string): boolean | null {
@@ -193,14 +243,18 @@ function boxShowsMessage(target: string, fullNorm: string, needle: string): bool
 async function transcriptUserMatchCount(
   sessionId: string,
   transcriptPath: string | null,
-  needle: string,
+  head: string,
+  tail: string | null,
 ): Promise<number> {
   if (!transcriptPath) return 0;
   try {
     enqueueTranscriptIndex(transcriptPath, sessionId);
     const msgs = await indexedRecentMessages(transcriptPath, sessionId, 120);
     return msgs.filter(
-      (m) => m.role === "user" && m.kind === "text" && norm(m.text).includes(needle),
+      (m) =>
+        m.role === "user" &&
+        m.kind === "text" &&
+        textHasMessageNeedles(m.text, head, tail),
     ).length;
   } catch {
     return 0;
@@ -229,9 +283,12 @@ export async function reconcileQueued(sessionId: string): Promise<boolean> {
   }
   let changed = false;
   for (const m of pending) {
-    const needle = norm(m.text).slice(0, NEEDLE_LEN);
+    const { head, tail } = messageNeedles(norm(m.text));
     const found = recent.some(
-      (r) => r.role === "user" && r.kind === "text" && norm(r.text).includes(needle),
+      (r) =>
+        r.role === "user" &&
+        r.kind === "text" &&
+        textHasMessageNeedles(r.text, head, tail),
     );
     if (found) {
       m.status = "delivered";
@@ -269,8 +326,13 @@ async function deliver(sessionId: string, msg: QueuedMsg): Promise<void> {
   }
   const transcriptPath = await resolveTranscript(sessionId);
   const fullNorm = norm(msg.text);
-  const needle = fullNorm.slice(0, NEEDLE_LEN);
-  const transcriptMatchesBefore = await transcriptUserMatchCount(sessionId, transcriptPath, needle);
+  const { head: needle, tail: tailNeedle } = messageNeedles(fullNorm);
+  const transcriptMatchesBefore = await transcriptUserMatchCount(
+    sessionId,
+    transcriptPath,
+    needle,
+    tailNeedle,
+  );
   traceLog("sendq_deliver_start", {
     sessionId,
     messageId: msg.id,
@@ -368,7 +430,12 @@ async function deliver(sessionId: string, msg: QueuedMsg): Promise<void> {
     for (let i = 0; i < 24; i++) {
       await sleep(150);
       const inBox = boxShowsMessage(target, fullNorm, needle);
-      const transcriptMatchesNow = await transcriptUserMatchCount(sessionId, transcriptPath, needle);
+      const transcriptMatchesNow = await transcriptUserMatchCount(
+        sessionId,
+        transcriptPath,
+        needle,
+        tailNeedle,
+      );
       if (transcriptMatchesNow > transcriptMatchesBefore) {
         msg.status = "delivered";
         msg.error = undefined;

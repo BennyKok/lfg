@@ -170,6 +170,34 @@ export async function addQuestion(input: {
   return q;
 }
 
+/**
+ * Envelope injected into the asking session when a pushback ask is answered.
+ *
+ * The reply MUST come first (same line as the tag): multi-line sends through
+ * the tmux composer have dropped trailing lines on Grok before, and sendq used
+ * to confirm delivery on a 48-char *prefix* alone — so a truncated message that
+ * only kept the "Question:" block was treated as delivered while the agent saw
+ * an empty answer body. Putting `Their reply:` up front keeps the decision in
+ * the head needle even if the rest is clipped.
+ */
+export function formatPushbackAnswerText(q: {
+  id: string;
+  question: string;
+  answer?: string | null;
+}): string {
+  const clip = (t: string, n: number) => {
+    const c = t.replace(/\s+/g, " ").trim();
+    return c.length > n ? c.slice(0, n - 1).trimEnd() + "…" : c;
+  };
+  const reply = (q.answer ?? "").replace(/\s+/g, " ").trim();
+  return (
+    `[ask-user answer ${q.id}] Their reply: ${reply}\n` +
+    `Question: ${clip(q.question, 200)}\n` +
+    `If it answers the question, act on it now — it is the user's decision, and do not ask again. ` +
+    `If it does not (they changed the subject), treat it as a NEW instruction; re-ask only if you still need the original answered.`
+  );
+}
+
 export async function answerQuestion(
   id: string,
   input: { answer: string; via?: "voice" | "web" },

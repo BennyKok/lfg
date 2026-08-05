@@ -87,6 +87,7 @@ import {
   markHandled,
   waitForAnswer,
   sweepExpiredQuestions,
+  formatPushbackAnswerText,
 } from "../ask/store.ts";
 import {
   listSessions,
@@ -3295,29 +3296,12 @@ a{color:#60a5fa}
             // polling, so this injection is the only way the answer reaches it.
             // Always deliver verbatim — no interpretation, a plain "no" is a
             // real answer here. Steer mode wakes an idle session.
-            const clip = (t: string, n: number) => {
-              const c = t.replace(/\s+/g, " ").trim();
-              return c.length > n ? c.slice(0, n - 1).trimEnd() + "…" : c;
-            };
-            // The text is delivered verbatim, but it is NOT guaranteed to be an
-            // answer. Channels that answer on the user's behalf can bind an
-            // unrelated message to an open ask (the omg imsg brain used to hand
-            // the next inbound message to whatever question was parked), and a
-            // user typing in the web composer can simply change the subject. So
-            // the envelope states what we actually know — the user replied while
-            // this question was open — and gives the agent an explicit branch
-            // for a reply that doesn't answer it. Asserting "act on this answer
-            // now" unconditionally is what turned a pivot into a forced merge
-            // decision in a live incident (2026-07-25).
-            const text =
-              `[ask-user answer ${q.id}] The user replied while this question was open.\n` +
-              `Question: ${clip(q.question, 300)}\n` +
-              `Their reply: ${q.answer ?? ""}\n` +
-              `If it answers the question, act on it now — it is the user's decision, ` +
-              `and do not ask again. If it does not answer the question (they raised ` +
-              `something else, or changed the subject), treat it as a NEW instruction ` +
-              `and take it up instead; say in one line that you are parking the ` +
-              `original question, and re-ask it only if you still need it answered.`;
+            //
+            // formatPushbackAnswerText puts Their reply first: a live Grok
+            // incident (2026-08-05) dropped trailing lines of the multi-line
+            // envelope while sendq still confirmed on a head-only needle, so
+            // the agent saw "answer body empty" despite a stored choice.
+            const text = formatPushbackAnswerText(q);
             try {
               const r = await fetch(
                 `http://127.0.0.1:${PORT}/api/sessions/${q.sessionId}/send`,

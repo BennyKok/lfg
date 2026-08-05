@@ -19,6 +19,7 @@ import {
   listQuestions,
   sweepExpiredQuestions,
   waitForAnswer,
+  formatPushbackAnswerText,
   ASK_TTL_MS,
 } from "../src/ask/store.ts";
 
@@ -163,5 +164,33 @@ describe("sweepExpiredQuestions", () => {
 
     expect(expired.map((r) => r.id)).toEqual([stale.id]);
     expect((await listQuestions("open")).map((r) => r.id)).toEqual([fresh.id]);
+  });
+});
+
+describe("formatPushbackAnswerText", () => {
+  test("puts Their reply on the first line so a head-only delivery still carries the choice", () => {
+    const text = formatPushbackAnswerText({
+      id: "45bd680b6a2b",
+      question:
+        "Which path for benny@omg.dev Gmail? A=switch. B=keep both. C=steps only.",
+      answer: "B: keep both (second MCP)",
+    });
+    const firstLine = text.split("\n")[0]!;
+    expect(firstLine).toContain("[ask-user answer 45bd680b6a2b]");
+    expect(firstLine).toContain("Their reply: B: keep both (second MCP)");
+    // Head needle (48 chars) must include the start of the reply label.
+    expect(firstLine.slice(0, 48)).toContain("Their reply");
+    expect(text).toContain("Question:");
+  });
+
+  test("empty answer still emits the label (never silently omits the field)", () => {
+    const text = formatPushbackAnswerText({
+      id: "deadbeefcafe",
+      question: "Ship it?",
+      answer: "",
+    });
+    expect(text.split("\n")[0]).toBe(
+      "[ask-user answer deadbeefcafe] Their reply: ",
+    );
   });
 });
