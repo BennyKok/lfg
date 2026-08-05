@@ -160,7 +160,14 @@ import {
   tmuxHasSession,
   isBusy,
 } from "../tmux.ts";
-import { addManaged, listManaged, patchManaged, removeManaged, type ManagedSession } from "../managed.ts";
+import {
+  addManaged,
+  getManagedSessionCreation,
+  listManaged,
+  patchManaged,
+  removeManaged,
+  type ManagedSession,
+} from "../managed.ts";
 import { reconcileCommandFileSessions } from "../session-recovery.ts";
 import { resolveResumeModel } from "../resume-model.ts";
 import { PtyBridge, termSessionName } from "../pty.ts";
@@ -1293,6 +1300,28 @@ function json(obj: unknown, init?: ResponseInit) {
 
 function err(status: number, message: string) {
   return json({ error: message }, { status });
+}
+
+/** The one response path for a previously committed session-creation key. */
+async function replaySessionCreation(record: ManagedSession): Promise<Response> {
+  const active = listManaged().find((row) => row.tmuxName === record.tmuxName);
+  let session = null;
+  try {
+    if (active)
+      session = managedLaunchRow(active, await readTitleOverrides(), userAssignments());
+  } catch {}
+  return json({
+    ok: true,
+    tmuxName: record.tmuxName,
+    cwd: record.cwd,
+    sessionId: record.sessionId,
+    agent: record.agent,
+    session,
+    parentSessionId: record.parentSessionId ?? null,
+    worktree: record.worktreeBranch ? record.cwd : null,
+    sessionUrl: record.sessionId ? publicSessionUrl(record.sessionId) : null,
+    replayed: true,
+  });
 }
 
 type CloseOutcome = { ok: true; mode: string } | { ok: false; status: number; reason: string };
@@ -4291,6 +4320,12 @@ a{color:#60a5fa}
       }
 
       if (path === "/api/sessions/new" && req.method === "POST") {
+        const rawIdempotencyKey = req.headers.get("Idempotency-Key")?.trim();
+        if (rawIdempotencyKey && rawIdempotencyKey.length > 256)
+          return err(400, "Idempotency-Key too long (max 256 characters)");
+        const idempotencyKey = rawIdempotencyKey || undefined;
+        const replay = idempotencyKey ? getManagedSessionCreation(idempotencyKey) : null;
+        if (replay?.sessionId) return replaySessionCreation(replay);
         const body = (await req.json().catch(() => null)) as {
           cwd?: string;
           prompt?: string;
@@ -4541,7 +4576,7 @@ a{color:#60a5fa}
                         ? resolvedModel ?? PI_DEFAULT_MODEL
                         : resolvedModel;
         const requestedTitle = body?.title?.trim().slice(0, 200);
-        addManaged({
+        const claim = addManaged({
           tmuxName,
           cwd,
           createdAt,
@@ -4563,7 +4598,8 @@ a{color:#60a5fa}
           spawnedBy,
           repoRoot: worktree?.repoRoot,
           worktreeBranch: worktree?.branch,
-        });
+        }, idempotencyKey);
+        if (!claim.created) return replaySessionCreation(claim.session);
         if (claudeAccountId) bindClaudeSessionAccount(launchId, claudeAccountId);
         invalidateListSessionsCache();
         // Tag the new session before spawn so a concurrent /api/sessions refresh
@@ -4653,7 +4689,9 @@ a{color:#60a5fa}
                       })
                     : spawnManagedSession({ name: tmuxName, cwd, prompt, model: resolvedModel, thinkingLevel, lfgSessionId: launchId, lfgUser: assignedUser, containInAgentSlice: isSubagent, claudeAccountId });
         if (!r.ok) {
-          removeManaged(tmuxName);
+          // The caller received no committed session. Release the claim so a
+          // corrected retry can create one; normal closes retain their claim.
+          removeManaged(tmuxName, { forgetCreation: true });
           assignUser(tmuxName, null);
           return err(502, r.error || "failed to start session");
         }

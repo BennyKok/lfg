@@ -60,9 +60,46 @@ export type ManagedSession = {
   recoveredFromBootId?: string;
 };
 
-let memory: Record<string, ManagedSession> | null = null;
+type ManagedRegistry = {
+  version: 2;
+  sessions: Record<string, ManagedSession>;
+  /** Claims outlive live rows so delayed retries cannot replace closed sessions. */
+  creationClaims: Record<string, ManagedSession>;
+};
+
+export type AddManagedResult =
+  | { created: true; session: ManagedSession }
+  | { created: false; session: ManagedSession };
+
+let memory: ManagedRegistry | null = null;
 let memoryPath: string | null = null;
 let memoryFingerprint = "";
+
+function emptyRegistry(): ManagedRegistry {
+  return { version: 2, sessions: {}, creationClaims: {} };
+}
+
+function creationClaimKey(idempotencyKey: string): string {
+  return `claim:${idempotencyKey}`;
+}
+
+function parseRegistry(value: unknown): ManagedRegistry {
+  if (value && typeof value === "object" && (value as { version?: unknown }).version === 2) {
+    const v2 = value as Partial<ManagedRegistry>;
+    return {
+      version: 2,
+      sessions: v2.sessions && typeof v2.sessions === "object" ? v2.sessions : {},
+      creationClaims:
+        v2.creationClaims && typeof v2.creationClaims === "object" ? v2.creationClaims : {},
+    };
+  }
+  // Version 1 was the session map itself. Upgrade without dropping live rows.
+  return {
+    version: 2,
+    sessions: value && typeof value === "object" ? value as Record<string, ManagedSession> : {},
+    creationClaims: {},
+  };
+}
 
 function fingerprint(path: string): string {
   try {
@@ -73,14 +110,14 @@ function fingerprint(path: string): string {
   }
 }
 
-function readAll(force = false): Record<string, ManagedSession> {
+function readAll(force = false): ManagedRegistry {
   const path = registryPath();
   const currentFingerprint = fingerprint(path);
   if (!force && memory && memoryPath === path && memoryFingerprint === currentFingerprint) {
     return memory;
   }
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, ManagedSession>;
+    const parsed = parseRegistry(JSON.parse(readFileSync(path, "utf8")));
     memory = parsed;
     memoryPath = path;
     memoryFingerprint = currentFingerprint;
@@ -90,14 +127,14 @@ function readAll(force = false): Record<string, ManagedSession> {
     // durable writes. Atomic rename makes this exceptional, but preserving the
     // last good view is safer than flashing an empty session list.
     if (memory && memoryPath === path) return memory;
-    memory = {};
+    memory = emptyRegistry();
     memoryPath = path;
     memoryFingerprint = currentFingerprint;
     return memory;
   }
 }
 
-function writeAll(all: Record<string, ManagedSession>): void {
+function writeAll(all: ManagedRegistry): void {
   const path = registryPath();
   const dir = dirname(path);
   mkdirSync(dir, { recursive: true });
@@ -194,12 +231,31 @@ function withRegistryLock<T>(fn: () => T): T {
 }
 
 export function listManaged(): ManagedSession[] {
-  return Object.values(readAll()).map((row) => ({ ...row }));
+  return Object.values(readAll().sessions).map((row) => ({ ...row }));
 }
 
-export function addManaged(rec: ManagedSession): void {
-  withRegistryLock(() => {
-    const all = { ...readAll(true) };
+/** Return the session first committed for a caller-supplied creation key. */
+export function getManagedSessionCreation(idempotencyKey: string): ManagedSession | null {
+  const claim = readAll().creationClaims[creationClaimKey(idempotencyKey)];
+  return claim ? { ...claim } : null;
+}
+
+/**
+ * Atomically claim an idempotency key and add its managed session. The claim
+ * and row share one fsynced rename, so a crash exposes both or neither.
+ */
+export function addManaged(rec: ManagedSession, idempotencyKey?: string): AddManagedResult {
+  return withRegistryLock(() => {
+    const current = readAll(true);
+    const all: ManagedRegistry = {
+      version: 2,
+      sessions: { ...current.sessions },
+      creationClaims: { ...current.creationClaims },
+    };
+    const claimKey = idempotencyKey ? creationClaimKey(idempotencyKey) : null;
+    const priorClaim = claimKey ? all.creationClaims[claimKey] : null;
+    if (priorClaim) return { created: false, session: { ...priorClaim } };
+
     const identities = new Set(
       [rec.sessionId, rec.nativeSessionId].filter((id): id is string => !!id),
     );
@@ -207,36 +263,54 @@ export function addManaged(rec: ManagedSession): void {
     // conversation. Keep one owner row so later boot reconciliation cannot
     // launch both the stale and current records.
     if (identities.size) {
-      for (const [name, existing] of Object.entries(all)) {
+      for (const [name, existing] of Object.entries(all.sessions)) {
         if (name === rec.tmuxName) continue;
         if ([existing.sessionId, existing.nativeSessionId].some((id) => id && identities.has(id))) {
-          delete all[name];
+          delete all.sessions[name];
         }
       }
     }
-    all[rec.tmuxName] = {
+    const stored = {
       ...rec,
       capabilityVersion: rec.capabilityVersion ?? LFG_CAPABILITY_VERSION,
     };
+    all.sessions[rec.tmuxName] = stored;
+    if (claimKey) all.creationClaims[claimKey] = stored;
     writeAll(all);
+    return { created: true, session: { ...stored } };
   });
 }
 
 export function patchManaged(tmuxName: string, patch: Partial<ManagedSession>): void {
   withRegistryLock(() => {
-    const all = { ...readAll(true) };
-    const cur = all[tmuxName];
+    const current = readAll(true);
+    const all: ManagedRegistry = {
+      version: 2,
+      sessions: { ...current.sessions },
+      creationClaims: { ...current.creationClaims },
+    };
+    const cur = all.sessions[tmuxName];
     if (!cur) return;
-    all[tmuxName] = { ...cur, ...patch };
+    all.sessions[tmuxName] = { ...cur, ...patch };
     writeAll(all);
   });
 }
 
-export function removeManaged(tmuxName: string): void {
+export function removeManaged(tmuxName: string, opts?: { forgetCreation?: boolean }): void {
   withRegistryLock(() => {
-    const all = { ...readAll(true) };
-    if (tmuxName in all) {
-      delete all[tmuxName];
+    const current = readAll(true);
+    const all: ManagedRegistry = {
+      version: 2,
+      sessions: { ...current.sessions },
+      creationClaims: { ...current.creationClaims },
+    };
+    if (tmuxName in all.sessions) {
+      if (opts?.forgetCreation) {
+        for (const [key, claim] of Object.entries(all.creationClaims)) {
+          if (claim.tmuxName === tmuxName) delete all.creationClaims[key];
+        }
+      }
+      delete all.sessions[tmuxName];
       writeAll(all);
     }
   });
@@ -247,7 +321,7 @@ export function removeManaged(tmuxName: string): void {
 export function isManagedName(target: string | null): boolean {
   if (!target) return false;
   const name = target.split(":")[0];
-  return name in readAll();
+  return name in readAll().sessions;
 }
 
 export function resetManagedRegistryForTests(): void {
