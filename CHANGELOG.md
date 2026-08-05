@@ -2,6 +2,21 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Ask-user replies no longer arrive empty (v0.1.276)
+
+- Answering an agent question (tap an option or type a reply) now delivers the
+  choice to the agent reliably. Multi-line answer envelopes could lose the
+  trailing "Their reply" line on Grok while still counting as delivered, so the
+  agent saw an empty body even though your pick was stored. The reply is now
+  first in the envelope, and long messages confirm delivery with a head+tail
+  check so a truncated send is retried instead of silently accepted.
+
+## August 5, 2026 - Thinking scrub polish
+
+- iOS haptics on the thinking scrubber work without the old `display:none`
+  switch that blocked vibration on some devices.
+- Stronger scrub haptics and a taller, borderless thinking matrix bar.
+
 ## August 5, 2026 - Repository renamed to BennyKok/omg.dev
 
 - The public GitHub repository moved from `BennyKok/lfg` to
