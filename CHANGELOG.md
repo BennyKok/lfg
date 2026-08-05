@@ -2,6 +2,14 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Completely black PWA shows a way out (v0.1.256)
+
+- A home-screen LFG install that only showed a solid black screen no longer
+  falls back to an empty cached HTML document. The service worker only reuses
+  a real app shell, otherwise it shows retry / clear-cache controls.
+- The splash always paints the "lfg" wordmark (not only the icon), and if the
+  app has not mounted after four seconds the recovery UI appears.
+
 ## August 4, 2026 - Black LFG PWA actually recovers (v0.1.255)
 
 - A home-screen LFG app stuck on a black screen after a deploy now recovers

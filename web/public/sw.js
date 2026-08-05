@@ -29,18 +29,20 @@ const ASSET_CACHE = `lfg-assets-${VERSION}`;
 // flow (toast → Reload) instead of yanking the app out from under a session.
 //
 //   • crisp-icon-v1 — v0.1.138 small icon (already rolled out).
-//   • black-shell-v1 — first attempt; purge only (no forced client navigate).
-//   • black-shell-v2 — installed PWAs still black: purge + claim + navigate so
-//     a shell whose entry chunk never ran (so main.tsx never reloaded) still
-//     recovers without the user wiping site data by hand.
+//   • black-shell-v1/v2 — earlier purge attempts (markers kept so they stay done).
+//   • black-shell-v3 — never serve a cached HTML shell that is missing the real
+//     app entry (blank black documents with no scripts). Validate shell HTML
+//     before caching or falling back; otherwise show the offline recovery page.
 const CRISP_ICON_CACHE_RESET = "lfg-cache-reset-crisp-icon-v1";
 const BLACK_SHELL_CACHE_RESET_V1 = "lfg-cache-reset-black-shell-v1";
-const BLACK_SHELL_CACHE_RESET = "lfg-cache-reset-black-shell-v2";
+const BLACK_SHELL_CACHE_RESET_V2 = "lfg-cache-reset-black-shell-v2";
+const BLACK_SHELL_CACHE_RESET = "lfg-cache-reset-black-shell-v3";
 const KEEP = new Set([
   SHELL_CACHE,
   ASSET_CACHE,
   CRISP_ICON_CACHE_RESET,
   BLACK_SHELL_CACHE_RESET_V1,
+  BLACK_SHELL_CACHE_RESET_V2,
   BLACK_SHELL_CACHE_RESET,
 ]);
 
@@ -193,6 +195,38 @@ document.getElementById("reset").onclick=async function(){
   });
 }
 
+// A usable app shell must be the real index (splash + entry script), not an
+// empty black document someone accidentally cached. Serving the latter as an
+// offline fallback is exactly "completely black, no chrome".
+async function isUsableAppShell(response) {
+  if (!response || !response.ok) return false;
+  const type = response.headers.get("content-type") || "";
+  if (type && !type.includes("text/html") && !type.includes("application/xhtml")) {
+    return false;
+  }
+  try {
+    const text = await response.clone().text();
+    if (text.length < 200) return false;
+    const hasSplash = text.includes("app-splash") || text.includes("id=\"root\"");
+    const hasEntry =
+      text.includes("/assets/index-") ||
+      text.includes("/src/main.tsx") ||
+      text.includes("did not finish loading");
+    return hasSplash && hasEntry;
+  } catch {
+    return false;
+  }
+}
+
+async function matchUsableShell(request) {
+  const candidates = [request, "/", "/index.html"];
+  for (const key of candidates) {
+    const cached = await caches.match(key);
+    if (cached && (await isUsableAppShell(cached))) return cached;
+  }
+  return null;
+}
+
 async function cacheFirst(request) {
   const cached = await caches.match(request);
   if (cached) return cached;
@@ -205,23 +239,31 @@ async function cacheFirst(request) {
 }
 
 async function networkFirst(request) {
+  const isDocument =
+    request.mode === "navigate" || request.destination === "document";
   try {
     // Bypass the HTTP cache so a stuck installed PWA cannot keep a dead
     // index.html that names deleted /assets/* chunks.
     const response = await fetch(request, { cache: "no-store" });
     if (response && response.ok) {
-      const copy = response.clone();
-      caches.open(SHELL_CACHE).then((c) => c.put(request, copy)).catch(() => {});
+      if (!isDocument || (await isUsableAppShell(response))) {
+        const copy = response.clone();
+        caches.open(SHELL_CACHE).then((c) => c.put(request, copy)).catch(() => {});
+      }
+    }
+    // Online but the origin returned a useless document — do not paint black.
+    if (isDocument && response && response.ok && !(await isUsableAppShell(response))) {
+      return offlineShellResponse();
     }
     return response;
   } catch {
-    const cached = await caches.match(request);
-    if (cached) return cached;
-    if (request.mode === "navigate" || request.destination === "document") {
-      const shell = await caches.match("/");
+    if (isDocument) {
+      const shell = await matchUsableShell(request);
       if (shell) return shell;
       return offlineShellResponse();
     }
+    const cached = await caches.match(request);
+    if (cached) return cached;
     throw new Error("offline");
   }
 }

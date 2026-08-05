@@ -56,11 +56,14 @@ describe("LFG icon assets", () => {
     expect(worker).toContain("lfg-cache-reset-crisp-icon-v1");
     // Black standalone launches (stale shell + missing hashed chunks) get a
     // one-time purge that also navigates open clients — purge alone left
-    // shells whose entry chunk never ran still black.
-    expect(worker).toContain("lfg-cache-reset-black-shell-v2");
+    // shells whose entry chunk never ran still black. v3 also refuses to
+    // cache/serve empty black HTML as a shell fallback.
+    expect(worker).toContain("lfg-cache-reset-black-shell-v3");
     expect(worker).toContain("forceTakeoverAndPurgeShellCaches");
     expect(worker).toContain("reloadControlledClients");
     expect(worker).toContain("offlineShellResponse");
+    expect(worker).toContain("isUsableAppShell");
+    expect(worker).toContain("matchUsableShell");
     expect(worker).toContain('cache: "no-store"');
     expect(worker).toContain('key.startsWith("lfg-shell-")');
     expect(worker).toContain('key.startsWith("lfg-assets-")');
