@@ -50,9 +50,13 @@ describe("thinking level menu", () => {
     expect(forkDialog).toContain("immersive");
     expect(autoPicker).toContain("immersive");
     expect(control).toContain("THINKING_HOLD_MS");
+    expect(control).toContain("thinkingScrubStepWidth");
+    expect(control).toContain("applyScrubDelta");
     expect(control).toContain("onPointerMove={handlePointerMove}");
-    expect(control).toContain("event.clientX - lastPointerXRef.current");
     expect(control).toContain("startIndexRef.current + relativeStepOffsetRef.current");
+    // Drag should enter scrub immediately instead of cancelling the hold.
+    expect(control).toContain("beginScrub(event.currentTarget)");
+    expect(control).not.toContain("if (Math.abs(delta) > 10) clearHoldTimer()");
     expect(control).toContain("Tap to choose · hold and slide to adjust");
     expect(control).toContain("Hold the control and slide for a faster adjustment.");
     expect(control).toContain("createPortal(");

@@ -17089,7 +17089,12 @@ function ThinkingLevelPill({
   );
 }
 
-const THINKING_HOLD_MS = 360;
+const THINKING_HOLD_MS = 280;
+// Pixels of horizontal travel per thinking level while scrubbing. Lower =
+// more sensitive. Scales mildly with how many steps the agent exposes.
+function thinkingScrubStepWidth(levelCount: number): number {
+  return Math.max(14, Math.min(22, 96 / Math.max(1, levelCount - 1)));
+}
 
 // Same blue → indigo → violet → fuchsia stops as the organic send wash /
 // thinking scrubber fill, so the pill signal and hold-to-scrub control morph
@@ -17243,17 +17248,10 @@ function ComposerThinkingControl({
     holdTimerRef.current = window.setTimeout(() => beginScrub(trigger), THINKING_HOLD_MS);
   };
 
-  const handlePointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
-    if (!scrubbingRef.current) {
-      const delta = event.clientX - startXRef.current;
-      lastPointerXRef.current = event.clientX;
-      if (Math.abs(delta) > 10) clearHoldTimer();
-      return;
-    }
-    event.preventDefault();
-    const stepWidth = Math.max(34, Math.min(52, 240 / Math.max(1, levels.length - 1)));
-    const delta = event.clientX - lastPointerXRef.current;
-    lastPointerXRef.current = event.clientX;
+  const applyScrubDelta = (clientX: number) => {
+    const stepWidth = thinkingScrubStepWidth(levels.length);
+    const delta = clientX - lastPointerXRef.current;
+    lastPointerXRef.current = clientX;
     relativeStepOffsetRef.current += delta / stepWidth;
     const nextIndex = Math.max(
       0,
@@ -17266,6 +17264,26 @@ function ComposerThinkingControl({
     previewIndexRef.current = nextIndex;
     setPreviewIndex(nextIndex);
     haptic("selection");
+  };
+
+  const handlePointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (!scrubbingRef.current) {
+      const delta = event.clientX - startXRef.current;
+      // Horizontal intent starts the scrub immediately — don't wait out the
+      // hold timer or cancel on a small drag (that felt sticky / insensitive).
+      if (Math.abs(delta) > 8 && holdTimerRef.current != null) {
+        clearHoldTimer();
+        beginScrub(event.currentTarget);
+        lastPointerXRef.current = startXRef.current;
+        applyScrubDelta(event.clientX);
+        event.preventDefault();
+        return;
+      }
+      lastPointerXRef.current = event.clientX;
+      return;
+    }
+    event.preventDefault();
+    applyScrubDelta(event.clientX);
   };
 
   const handlePointerUp = (event: React.PointerEvent<HTMLButtonElement>) => {
