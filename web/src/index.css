@@ -1014,6 +1014,28 @@ html.lfg-keyboard-open {
     }
   }
 
+  /* Solid card behind the hold-to-scrub control. Explicit fills (not only a
+     Tailwind utility) so the panel never goes transparent over the composer. */
+  .thinking-scrubber-panel {
+    overflow: hidden;
+    border: 1px solid var(--border);
+    border-radius: 1.6rem;
+    padding: 1rem 1.25rem;
+    background: var(--popover);
+    color: var(--popover-foreground);
+    box-shadow:
+      0 24px 48px -16px rgba(0, 0, 0, 0.55),
+      0 0 0 1px color-mix(in srgb, var(--foreground) 10%, transparent);
+  }
+
+  .dark .thinking-scrubber-panel {
+    background: #1c1c1e;
+    border-color: rgba(255, 255, 255, 0.12);
+    box-shadow:
+      0 28px 56px -12px rgba(0, 0, 0, 0.72),
+      0 0 0 1px rgba(255, 255, 255, 0.1);
+  }
+
   /* Hold-to-scrub thinking control — Codex-style pixel-matrix track + chunky
      rounded-square thumb, tinted with the send-organic blue→indigo→violet→
      fuchsia wash. --thinking-progress (0–1) drives the lit fill width, matrix

@@ -2,6 +2,11 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Thinking scrub card really solid (v0.1.272)
+
+- Scrub overlay uses a dedicated opaque panel class (dark `#1c1c1e` fill +
+  border + shadow) so it no longer floats as bare labels over the composer.
+
 ## August 5, 2026 - Solid thinking scrub card (v0.1.271)
 
 - Thinking scrubber panel uses a solid popover background and border again so

@@ -17381,7 +17381,7 @@ function ComposerThinkingControl({
               style={scrubberStyle}
               className="pointer-events-none fixed z-[220] origin-bottom select-none animate-in fade-in-0 zoom-in-90 slide-in-from-bottom-2 duration-200"
             >
-              <div className="overflow-hidden rounded-[1.6rem] border border-border bg-popover px-5 py-4 text-popover-foreground shadow-2xl ring-1 ring-foreground/10 backdrop-blur-2xl">
+              <div className="thinking-scrubber-panel">
                 <div className="mb-3 flex items-center justify-between gap-4">
                   <span className="text-xs font-medium text-muted-foreground">Thinking</span>
                   <span

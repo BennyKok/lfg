@@ -84,11 +84,10 @@ describe("thinking level menu", () => {
     expect(control).toContain("thinkingAccentColor(previewProgress)");
     expect(control).toContain('"--thinking-progress": previewProgress');
     expect(control).toContain('"--thinking-accent": previewAccent');
-    // Solid card chrome so the floating control stays readable over transcript.
-    expect(control).toContain("bg-popover");
-    expect(control).toContain("border border-border");
-    expect(control).toContain("ring-1 ring-foreground/10");
-    expect(control).toContain("shadow-2xl");
+    // Dedicated solid panel class — not a faint utility bg over the composer.
+    expect(control).toContain('className="thinking-scrubber-panel"');
+    expect(css).toContain(".thinking-scrubber-panel");
+    expect(css).toContain("background: #1c1c1e");
     // Dot markers replaced by the pixel-matrix track + chunky squircle thumb.
     expect(control).not.toContain("rounded-full bg-popover ring-2");
     expect(control).not.toContain("from-sky-400/35 via-violet-400/55");
