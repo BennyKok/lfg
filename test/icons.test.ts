@@ -122,4 +122,16 @@ describe("LFG icon assets", () => {
     const metadata = await sharp("web/public/icon-maskable-512.png").metadata();
     expect(metadata.hasAlpha).toBe(false);
   });
+
+  test("keeps the iOS touch icon opaque and cache-busted", async () => {
+    const metadata = await sharp("web/public/apple-touch-icon.png").metadata();
+    expect(metadata.hasAlpha).toBe(false);
+
+    // iOS caches home-screen artwork separately and does not reliably
+    // revalidate a stable URL, even when ordinary HTTP cache headers change.
+    const index = await readFile("web/index.html", "utf8");
+    expect(index).toContain(
+      'href="/apple-touch-icon.png?v=20260805-opaque"',
+    );
+  });
 });

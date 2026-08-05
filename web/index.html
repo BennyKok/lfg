@@ -9,7 +9,9 @@
     <meta name="theme-color" content="#f2f2f7" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
-    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+    <!-- Bump the URL when the pixels change: iOS keeps touch icons outside the
+         normal HTTP/service-worker cache and can otherwise reuse them. -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=20260805-opaque" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />

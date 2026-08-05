@@ -9,12 +9,26 @@ async function render(
   source: string,
   output: string,
   size: number,
-  opaque = false,
+  options: { fullBleed?: boolean; opaqueBackground?: string } = {},
 ): Promise<void> {
-  let image = sharp(resolve(webPublic, source), { density: 384 })
+  const sourcePath = resolve(webPublic, source);
+  let input: string | Buffer = sourcePath;
+  if (options.fullBleed) {
+    const svg = await readFile(sourcePath, "utf8");
+    const fullBleedSvg = svg.replace(
+      "</defs>",
+      '</defs>\n  <rect width="512" height="512" fill="url(#bg)"/>',
+    );
+    if (fullBleedSvg === svg) {
+      throw new Error(`Could not add a full-bleed background to ${source}`);
+    }
+    input = Buffer.from(fullBleedSvg);
+  }
+
+  let image = sharp(input, { density: 384 })
     .resize(size, size, { fit: "fill" });
-  if (opaque) {
-    image = image.flatten({ background: "#3b5bf6" });
+  if (options.opaqueBackground) {
+    image = image.flatten({ background: options.opaqueBackground });
   }
   await image.png().toFile(resolve(root, output));
 }
@@ -59,7 +73,17 @@ await generateSmallIcon();
 await Promise.all([
   render("icon.svg", "web/public/icon-192.png", 192),
   render("icon.svg", "web/public/icon-512.png", 512),
-  render("icon.svg", "web/public/apple-touch-icon.png", 180),
+  // Apple applies its own icon mask. Extend the gradient across the complete
+  // canvas so iOS never composites transparent edge pixels against black, and
+  // so mismatches between our rounded tile and Apple's mask cannot form a halo.
+  render("icon.svg", "web/public/apple-touch-icon.png", 180, {
+    fullBleed: true,
+    // Flatten after adding the gradient so the PNG is RGB, not merely an RGBA
+    // image whose current alpha samples happen to be opaque.
+    opaqueBackground: "#3b5bf6",
+  }),
   render("icon.svg", "docs/images/lfg-icon.png", 192),
-  render("icon-maskable.svg", "web/public/icon-maskable-512.png", 512, true),
+  render("icon-maskable.svg", "web/public/icon-maskable-512.png", 512, {
+    opaqueBackground: "#3b5bf6",
+  }),
 ]);
