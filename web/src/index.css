@@ -1041,20 +1041,86 @@ html.lfg-keyboard-open {
       0 0 0 1px rgba(255, 255, 255, 0.1);
   }
 
-  /* Min/max effort names flush to the bar’s left/right edges (full content
-     width — same bounds as the track). */
+  /* "Thinking · high" header. The caption names what the gesture is about to
+     do (adjust vs. launch), the value is tinted with the live effort accent. */
+  .thinking-scrubber-caption {
+    display: flex;
+    align-items: baseline;
+    justify-content: center;
+    gap: 0.4rem;
+    margin-bottom: 0.35rem;
+    line-height: 1.2;
+  }
+
+  .thinking-scrubber-caption-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted-foreground);
+  }
+
+  .thinking-scrubber-caption-value {
+    font-size: 14px;
+    font-weight: 600;
+    text-transform: capitalize;
+  }
+
+  /* One stop marker per level, aligned to the thumb's travel range so a tick
+     sits exactly where the thumb lands. Reads the step count at a glance. */
+  .thinking-scrubber-ticks {
+    position: absolute;
+    inset-inline: 0;
+    /* Just under the track, clear of the pixel matrix. */
+    bottom: -0.32rem;
+    height: 3px;
+  }
+
+  .thinking-scrubber-ticks > span {
+    position: absolute;
+    top: 0;
+    width: 3px;
+    height: 3px;
+    border-radius: 1px;
+    background: color-mix(in srgb, var(--foreground) 22%, transparent);
+    transform: translateX(-50%);
+    transition:
+      background-color 140ms var(--ease-out, ease-out),
+      opacity 140ms var(--ease-out, ease-out);
+  }
+
+  .thinking-scrubber-ticks > span[data-passed] {
+    background: var(--thinking-accent);
+    opacity: 0.85;
+  }
+
+  /* Effort names under the bar — every stop while they fit, otherwise just the
+     two endpoints. Flush to the bar's left/right edges (same bounds as the
+     track), with the live one lit. */
   .thinking-scrubber-ends {
     display: flex;
     align-items: center;
     justify-content: space-between;
     width: 100%;
-    margin-top: 0.2rem;
+    margin-top: 0.5rem;
     padding-inline: 0;
     font-size: 11px;
     font-weight: 500;
     line-height: 1.2;
     text-transform: capitalize;
     color: var(--muted-foreground);
+  }
+
+  .thinking-scrubber-ends > span {
+    transition:
+      color 140ms var(--ease-out, ease-out),
+      opacity 140ms var(--ease-out, ease-out);
+    opacity: 0.75;
+  }
+
+  .thinking-scrubber-ends > span[data-active] {
+    font-weight: 700;
+    opacity: 1;
   }
 
   .thinking-scrubber-ends > :first-child {

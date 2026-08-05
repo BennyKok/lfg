@@ -21,7 +21,7 @@ describe("composer focus after send", () => {
     const app = await readFile("web/src/App.tsx", "utf8");
     const dialogStart = app.indexOf("function NewSessionDialog");
     const submitStart = app.indexOf(
-      "function submit(e?: FormEvent, overrideText?: string)",
+      "function submit(e?: FormEvent, overrideText?: string, overrideThinking?: ThinkingLevel)",
       dialogStart,
     );
     const submit = app.slice(

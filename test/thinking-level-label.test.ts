@@ -52,9 +52,17 @@ describe("thinking level menu", () => {
     expect(autoPicker).toContain("immersive");
     expect(control).toContain("THINKING_HOLD_MS");
     expect(control).toContain("thinkingScrubStepWidth");
-    expect(control).toContain("applyScrubDelta");
-    expect(control).toContain("onPointerMove={handlePointerMove}");
-    expect(control).toContain("startIndexRef.current + relativeStepOffsetRef.current");
+    expect(control).toContain("applyScrub");
+    // Both triggers spread the one gesture engine's pointer props.
+    expect(control.match(/\{\.\.\.scrub\.pointerProps\}/g)?.length).toBe(2);
+    expect(control).toContain(
+      "Math.round(startIndexRef.current + travel / thinkingScrubStepWidth(levels.length))",
+    );
+    // Axis lock: sideways OR upward travel drives the scrub, so a trigger
+    // pinned to the bottom-right corner is still reachable.
+    expect(control).toContain("THINKING_AXIS_LOCK_PX");
+    expect(control).toContain('axisRef.current = Math.abs(dx) >= Math.abs(dy) ? "x" : "y"');
+    expect(control).toContain('const travel = axisRef.current === "x" ? dx : -dy');
     // Slider-only: no dropdown menu after scrub / on tap.
     expect(control).not.toContain("<DropdownMenu");
     expect(control).not.toContain("DropdownMenuContent");
@@ -71,18 +79,66 @@ describe("thinking level menu", () => {
     expect(control).toContain("feedback.success()");
     expect(control).toContain("Hold and slide to adjust");
     expect(control).toContain("createPortal(");
-    expect(control).toContain("<ThinkingSignal value={value} levels={levels} />");
-    expect(control).toContain("{value}");
-    expect(control).toContain("capitalize text-muted-foreground");
+    // The pill mirrors the level under the finger, so trigger and panel agree.
+    expect(control).toContain("const shown = scrub.scrubbing ? scrub.previewLevel : value");
+    expect(control).toContain("<ThinkingSignal value={shown} levels={levels} />");
+    expect(control).toContain("{shown}");
     expect(control).toContain('WebkitTouchCallout: "none"');
     expect(control).toContain("document.getSelection()?.removeAllRanges()");
     expect(control).not.toContain("<BrainCircuit");
+
+    // Reachable without a pointer: the pill is a real slider with arrow keys.
+    expect(control).toContain('role="slider"');
+    expect(control).toContain("aria-valuenow={currentIndex}");
+    expect(control).toContain("aria-valuetext={value}");
+    expect(control).toContain("scrub.nudge(step)");
+    // Escape aborts an open scrub without committing.
+    expect(control).toContain('if (event.key !== "Escape") return');
+    expect(control).toContain("finishScrub(false)");
+  });
+
+  test("holding Start opens the scrubber and releasing sets the level and launches", async () => {
+    const source = await app();
+    const start = source.indexOf("function ComposerStartButton(");
+    const end = source.indexOf("function ModelPicker(", start);
+    const button = source.slice(start, end);
+
+    // Start still submits the form on a plain tap.
+    expect(button).toContain('type="submit"');
+    // Hold raises the same scrubber the pill uses, captioned for launching.
+    expect(button).toContain("useThinkingScrub(");
+    expect(button).toContain('caption: "Start thinking"');
+    expect(button).toContain("{...scrub.pointerProps}");
+    expect(button).toContain("{scrub.panel}");
+    // Release commits the scrubbed level AND launches, in one gesture.
+    expect(button).toContain("onCommit: (next) => onLaunch(next)");
+    // ...and the browser's trailing click must not submit a second time.
+    expect(button).toContain("if (scrub.consumeSuppressedClick())");
+    expect(button).toContain("event.preventDefault()");
+    // Live level shown on the button itself while scrubbing.
+    expect(button).toContain("scrub.scrubbing ? scrub.previewLevel : \"Start\"");
+    // Agents with no reasoning knob get a plain button (levels list is empty).
+    expect(button).toContain("const holdable = !disabled && thinkingLevels.length > 1");
+
+    // The composer wires the gesture's level straight into the launch payload
+    // rather than reading state that has not re-rendered yet.
+    expect(source).toContain(
+      "function submit(e?: FormEvent, overrideText?: string, overrideThinking?: ThinkingLevel)",
+    );
+    expect(source).toContain("const launchThinkingLevel = overrideThinking ?? thinkingLevel");
+    expect(source).toContain("thinkingLevels={agentSupportsThinking(agent) ? thinkingLevels : []}");
+    expect(source).toContain("submit(undefined, undefined, next)");
+    // A press that opened the scrubber owns its trailing click even when the
+    // scrub was abandoned — cancelling must not fall through to "start anyway".
+    expect(source).toContain("if (!gestureOpenedRef.current) return");
   });
 
   test("hold-to-scrub panel uses a thick track and rounded-square thumb with morphing accent", async () => {
     const source = await app();
-    const start = source.indexOf("function ComposerThinkingControl(");
-    const end = source.indexOf("function ModelPicker(", start);
+    // The panel is owned by the shared gesture engine, so the pill and Start
+    // raise the exact same surface.
+    const start = source.indexOf("function useThinkingScrub(");
+    const end = source.indexOf("function ComposerThinkingControl(", start);
     const control = source.slice(start, end);
     const css = await readFile("web/src/index.css", "utf8");
 
@@ -99,13 +155,29 @@ describe("thinking level menu", () => {
     expect(control).toContain('className="thinking-scrubber-panel"');
     expect(css).toContain(".thinking-scrubber-panel");
     expect(css).toContain("background: #1c1c1e");
-    // Compact: current level centered, agent min/max endpoints (not Faster/Deeper).
-    expect(control).toContain("const minLevel = levels[0]");
-    expect(control).toContain("const maxLevel = levels[levels.length - 1]");
-    expect(control).toContain("{minLevel}");
-    expect(control).toContain("{maxLevel}");
+    // Every stop is named while the labels fit; past 5 levels the row falls
+    // back to the two endpoints (not Faster/Deeper) so they never overlap.
+    expect(control).toContain(
+      "levels.length <= 5 ? levels : [levels[0]!, levels[levels.length - 1]!]",
+    );
+    expect(control).toContain('data-active={level === previewLevel ? "" : undefined}');
     expect(control).toContain('className="thinking-scrubber-ends"');
     expect(css).toContain(".thinking-scrubber-ends");
+    expect(css).toContain(".thinking-scrubber-ends > span[data-active]");
+    // One tick per level, pinned to the thumb's travel range, so the number of
+    // stops stays readable even when the names collapse to endpoints.
+    expect(control).toContain('className="thinking-scrubber-ticks"');
+    expect(control).toContain(
+      "left: `calc(var(--thinking-thumb-half) + ${",
+    );
+    expect(css).toContain(".thinking-scrubber-ticks");
+    // Caption names what the gesture will do — "Thinking" vs "Start thinking".
+    expect(control).toContain('className="thinking-scrubber-caption-label"');
+    expect(css).toContain(".thinking-scrubber-caption");
+    // Panel flips above/below the trigger and animates from the right edge.
+    expect(control).toContain('placement === "above"');
+    expect(control).toContain('"origin-bottom slide-in-from-bottom-2"');
+    expect(control).toContain('"origin-top slide-in-from-top-2"');
     expect(css).toContain("padding-inline: 0");
     expect(css).toContain("inset-inline: 0");
     expect(control).not.toContain(">Faster</span>");

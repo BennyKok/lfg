@@ -16435,7 +16435,10 @@ function NewSessionDialog({
   // trap sit above the full-screen picker and dismissing the dialog unmounts it.
   if (!open && !resumeOpen) return null;
 
-  function submit(e?: FormEvent, overrideText?: string) {
+  // overrideThinking comes from a hold-to-scrub release on Start: the level was
+  // chosen and launched in the same gesture, so it can't be read back off state
+  // yet (setThinkingLevel hasn't re-rendered).
+  function submit(e?: FormEvent, overrideText?: string, overrideThinking?: ThinkingLevel) {
     e?.preventDefault();
     if (launching) return;
     const taskPrompt = (overrideText ?? prompt).trim();
@@ -16450,7 +16453,7 @@ function NewSessionDialog({
     const launchUser = resolveRosterUser(user, users) || null;
     const launchAgent = agent;
     const launchModel = model;
-    const launchThinkingLevel = thinkingLevel;
+    const launchThinkingLevel = overrideThinking ?? thinkingLevel;
     const launchClaudeAccountId = launchAgent === "aisdk" ? claudeAccountId || undefined : undefined;
     const stashed = stagePromptSend({
       contextKey: "new-session",
@@ -16895,10 +16898,15 @@ function NewSessionDialog({
           >
             <Paperclip className="size-4" />
           </Button>
-          <Button type="submit" size="sm" variant="secondary" disabled={!canSubmit}>
-            <Send className="size-4" />
-            Start
-          </Button>
+          <ComposerStartButton
+            disabled={!canSubmit}
+            thinkingLevel={thinkingLevel}
+            thinkingLevels={agentSupportsThinking(agent) ? thinkingLevels : []}
+            onLaunch={(next) => {
+              setThinkingLevel(next);
+              submit(undefined, undefined, next);
+            }}
+          />
         </div>
       </div>
 
@@ -17090,8 +17098,12 @@ function ThinkingLevelPill({
 }
 
 const THINKING_HOLD_MS = 360;
-// Pixels of horizontal travel per thinking level while scrubbing. Higher =
-// less sensitive. Scales mildly with how many steps the agent exposes.
+// Travel on either axis past this locks the scrub to that axis. Horizontal is
+// the natural direction for the inline pill; vertical rescues corner-pinned
+// triggers like Start, where there is no room left to drag sideways.
+const THINKING_AXIS_LOCK_PX = 6;
+// Pixels of travel per thinking level while scrubbing. Higher = less
+// sensitive. Scales mildly with how many steps the agent exposes.
 function thinkingScrubStepWidth(levelCount: number): number {
   return Math.max(34, Math.min(52, 240 / Math.max(1, levelCount - 1)));
 }
@@ -17159,35 +17171,52 @@ function ThinkingSignal({
   );
 }
 
-// Session composers: hold (or slide) to open the effort scrubber only — no
-// dropdown menu. Levels are chosen exclusively through the floating slider.
-function ComposerThinkingControl({
+// One hold-to-scrub engine shared by the composer's Thinking pill and the
+// Start button: press and hold, slide either axis to pick an effort, release to
+// commit. Returns the trigger's pointer props plus the floating scrubber panel,
+// so a caller only has to spread the props and render the node.
+function useThinkingScrub({
   value,
   levels,
-  onChange,
-  flat,
+  onCommit,
+  enabled = true,
+  caption = "Thinking",
+  openOnDrag = false,
 }: {
   value: ThinkingLevel;
   levels: ThinkingLevel[];
-  onChange: (value: ThinkingLevel) => void;
-  flat: boolean;
+  onCommit: (next: ThinkingLevel) => void;
+  /** False disables the gesture entirely (agent has no reasoning knob, etc.). */
+  enabled?: boolean;
+  /** Small label above the level name in the floating panel. */
+  caption?: string;
+  /** Pill only: sideways intent opens the scrubber before the hold elapses. */
+  openOnDrag?: boolean;
 }) {
   const holdTimerRef = useRef<number | null>(null);
-  const startXRef = useRef(0);
-  const lastPointerXRef = useRef(0);
-  const relativeStepOffsetRef = useRef(0);
+  const originRef = useRef({ x: 0, y: 0 });
+  const axisRef = useRef<"x" | "y" | null>(null);
   const startIndexRef = useRef(0);
   const previewIndexRef = useRef(0);
   const scrubbingRef = useRef(false);
+  // Whether the press currently in flight ever opened the scrubber. Any such
+  // press ends in a click the browser attributes to the trigger, and that click
+  // belongs to the gesture rather than to the trigger's own action — including
+  // when the scrub was abandoned with Escape, where "start anyway" would be a
+  // surprising thing for a cancel to do.
+  const gestureOpenedRef = useRef(false);
+  const suppressClickRef = useRef(false);
   const [scrubbing, setScrubbing] = useState(false);
   const [previewIndex, setPreviewIndex] = useState(() => Math.max(0, levels.indexOf(value)));
-  const [scrubberStyle, setScrubberStyle] = useState<CSSProperties>({});
+  const [panelStyle, setPanelStyle] = useState<CSSProperties>({});
+  const [placement, setPlacement] = useState<"above" | "below">("above");
 
   const currentIndex = Math.max(0, levels.indexOf(value));
-  const previewProgress = levels.length > 1 ? previewIndex / (levels.length - 1) : 0;
+  const canScrub = enabled && levels.length > 1;
+  const safePreview = Math.max(0, Math.min(levels.length - 1, previewIndex));
+  const previewLevel = levels[safePreview] ?? value;
+  const previewProgress = levels.length > 1 ? safePreview / (levels.length - 1) : 0;
   const previewAccent = thinkingAccentColor(previewProgress);
-  const minLevel = levels[0] ?? value;
-  const maxLevel = levels[levels.length - 1] ?? value;
 
   const clearHoldTimer = () => {
     if (holdTimerRef.current != null) {
@@ -17198,26 +17227,43 @@ function ComposerThinkingControl({
 
   useEffect(() => clearHoldTimer, []);
 
-  const placeScrubber = (trigger: HTMLButtonElement) => {
+  // Resync the resting preview when the level changes from elsewhere (session
+  // submenu, agent-switch clamp) so the next hold opens on the truth.
+  useEffect(() => {
+    if (!scrubbingRef.current) {
+      previewIndexRef.current = currentIndex;
+      setPreviewIndex(currentIndex);
+    }
+  }, [currentIndex]);
+
+  const placePanel = (trigger: HTMLElement) => {
     const rect = trigger.getBoundingClientRect();
     const width = Math.min(360, Math.max(248, window.innerWidth - 24));
     const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + rect.width / 2 - width / 2));
-    const panelHeight = 96;
-    const top = rect.top - panelHeight - 12 >= 12
+    const panelHeight = 124;
+    const above = rect.top - panelHeight - 12 >= 12;
+    const top = above
       ? rect.top - panelHeight - 12
       : Math.min(window.innerHeight - panelHeight - 12, rect.bottom + 12);
-    setScrubberStyle({ left, top, width, transformOrigin: `${rect.left + rect.width / 2 - left}px 100%` });
+    setPlacement(above ? "above" : "below");
+    setPanelStyle({
+      left,
+      top,
+      width,
+      transformOrigin: `${rect.left + rect.width / 2 - left}px ${above ? "100%" : "0%"}`,
+    });
   };
 
-  const beginScrub = (trigger: HTMLButtonElement) => {
+  const beginScrub = (trigger: HTMLElement) => {
     if (scrubbingRef.current) return;
     const index = Math.max(0, levels.indexOf(value));
     document.getSelection()?.removeAllRanges();
     previewIndexRef.current = index;
-    relativeStepOffsetRef.current = 0;
+    axisRef.current = null;
     scrubbingRef.current = true;
+    gestureOpenedRef.current = true;
     setPreviewIndex(index);
-    placeScrubber(trigger);
+    placePanel(trigger);
     setScrubbing(true);
     // Engage the scrub surface — heavy so the hold-to-slide is unmistakable.
     haptic("heavy");
@@ -17230,37 +17276,43 @@ function ComposerThinkingControl({
     setScrubbing(false);
     if (commit) {
       const next = levels[previewIndexRef.current];
-      if (next && next !== value) onChange(next);
       // Commit always ticks success so releasing the finger is felt even when
       // the level didn't change.
       feedback.success();
+      if (next) onCommit(next);
     }
   };
 
-  const handlePointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
-    if (event.button !== 0 || !levels.length) return;
-    clearHoldTimer();
-    startXRef.current = event.clientX;
-    lastPointerXRef.current = event.clientX;
-    startIndexRef.current = currentIndex;
-    event.currentTarget.setPointerCapture(event.pointerId);
-    // Immediate light tick inside the user-gesture window (iOS often blocks
-    // vibrate/switch haptics that fire only after the hold timeout).
-    haptic("light");
-    const trigger = event.currentTarget;
-    holdTimerRef.current = window.setTimeout(() => beginScrub(trigger), THINKING_HOLD_MS);
-  };
+  // Escape aborts an open scrub without committing — the only bail-out once the
+  // panel is up, since the pointer is captured by the trigger.
+  useEffect(() => {
+    if (!scrubbing) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      finishScrub(false);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrubbing]);
 
-  const applyScrubDelta = (clientX: number) => {
-    const stepWidth = thinkingScrubStepWidth(levels.length);
-    const delta = clientX - lastPointerXRef.current;
-    lastPointerXRef.current = clientX;
-    relativeStepOffsetRef.current += delta / stepWidth;
+  // Absolute travel from the press origin, projected onto whichever axis the
+  // gesture locked to. Right and up both mean "more effort".
+  const applyScrub = (clientX: number, clientY: number) => {
+    const dx = clientX - originRef.current.x;
+    const dy = clientY - originRef.current.y;
+    if (!axisRef.current) {
+      if (Math.abs(dx) < THINKING_AXIS_LOCK_PX && Math.abs(dy) < THINKING_AXIS_LOCK_PX) return;
+      axisRef.current = Math.abs(dx) >= Math.abs(dy) ? "x" : "y";
+    }
+    const travel = axisRef.current === "x" ? dx : -dy;
     const nextIndex = Math.max(
       0,
       Math.min(
         levels.length - 1,
-        Math.round(startIndexRef.current + relativeStepOffsetRef.current),
+        Math.round(startIndexRef.current + travel / thinkingScrubStepWidth(levels.length)),
       ),
     );
     if (nextIndex === previewIndexRef.current) return;
@@ -17271,108 +17323,313 @@ function ComposerThinkingControl({
     haptic("medium");
   };
 
-  const handlePointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
-    if (!scrubbingRef.current) {
-      const delta = event.clientX - startXRef.current;
-      // Horizontal intent opens the slider immediately (no menu to protect).
-      if (Math.abs(delta) > 8 && holdTimerRef.current != null) {
+  const pointerProps = {
+    onPointerDown: (event: React.PointerEvent<HTMLElement>) => {
+      if (!canScrub || event.button !== 0) return;
+      clearHoldTimer();
+      originRef.current = { x: event.clientX, y: event.clientY };
+      axisRef.current = null;
+      // A fresh press: nothing to suppress until this one opens a scrubber.
+      gestureOpenedRef.current = false;
+      suppressClickRef.current = false;
+      startIndexRef.current = currentIndex;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      // Immediate light tick inside the user-gesture window (iOS often blocks
+      // vibrate/switch haptics that fire only after the hold timeout).
+      haptic("light");
+      const trigger = event.currentTarget;
+      holdTimerRef.current = window.setTimeout(() => beginScrub(trigger), THINKING_HOLD_MS);
+    },
+    onPointerMove: (event: React.PointerEvent<HTMLElement>) => {
+      if (!scrubbingRef.current) {
+        if (!openOnDrag || holdTimerRef.current == null) return;
+        // Horizontal intent opens the slider immediately (no menu to protect).
+        if (Math.abs(event.clientX - originRef.current.x) <= 8) return;
         clearHoldTimer();
         beginScrub(event.currentTarget);
-        lastPointerXRef.current = startXRef.current;
-        applyScrubDelta(event.clientX);
+        applyScrub(event.clientX, event.clientY);
         event.preventDefault();
         return;
       }
-      lastPointerXRef.current = event.clientX;
-      return;
-    }
-    event.preventDefault();
-    applyScrubDelta(event.clientX);
-  };
-
-  const handlePointerUp = (event: React.PointerEvent<HTMLButtonElement>) => {
-    clearHoldTimer();
-    if (scrubbingRef.current) {
       event.preventDefault();
+      applyScrub(event.clientX, event.clientY);
+    },
+    onPointerUp: (event: React.PointerEvent<HTMLElement>) => {
+      clearHoldTimer();
+      // Set even when Escape already closed the panel, so an aborted scrub
+      // swallows its trailing click instead of falling through to the trigger.
+      if (!gestureOpenedRef.current) return;
+      event.preventDefault();
+      suppressClickRef.current = true;
       finishScrub(true);
-    }
+    },
+    // A cancelled pointer (scroll takeover, palm rejection) fires no click.
+    onPointerCancel: () => {
+      clearHoldTimer();
+      finishScrub(false);
+    },
+    onContextMenu: (event: React.MouseEvent) => {
+      if (canScrub) event.preventDefault();
+    },
   };
 
-  const handlePointerCancel = () => {
-    finishScrub(false);
+  /** True once per gesture-release, so callers can swallow the trailing click. */
+  const consumeSuppressedClick = () => {
+    if (!suppressClickRef.current) return false;
+    suppressClickRef.current = false;
+    return true;
   };
+
+  /** Keyboard equivalent of one scrub step. */
+  const nudge = (delta: number) => {
+    if (!canScrub) return;
+    const next = levels[Math.max(0, Math.min(levels.length - 1, currentIndex + delta))];
+    if (!next || next === value) return;
+    feedback.select();
+    onCommit(next);
+  };
+
+  const panel = scrubbing
+    ? createPortal(
+        <div
+          role="status"
+          aria-live="polite"
+          aria-label={`${caption} ${previewLevel}`}
+          style={panelStyle}
+          className={cn(
+            "pointer-events-none fixed z-[220] select-none animate-in fade-in-0 zoom-in-90 duration-200",
+            placement === "above"
+              ? "origin-bottom slide-in-from-bottom-2"
+              : "origin-top slide-in-from-top-2",
+          )}
+        >
+          <div className="thinking-scrubber-panel">
+            <div className="thinking-scrubber-caption">
+              <span className="thinking-scrubber-caption-label">{caption}</span>
+              <span
+                className="thinking-scrubber-caption-value transition-colors duration-150"
+                style={{ color: previewAccent }}
+              >
+                {previewLevel}
+              </span>
+            </div>
+            <div
+              className="thinking-scrubber"
+              style={
+                {
+                  "--thinking-progress": previewProgress,
+                  "--thinking-accent": previewAccent,
+                } as CSSProperties
+              }
+            >
+              <span aria-hidden="true" className="thinking-scrubber-halo" />
+              <div className="thinking-scrubber-track">
+                <div aria-hidden="true" className="thinking-scrubber-matrix" />
+                <div className="thinking-scrubber-fill" />
+              </div>
+              {/* One stop per level, so the number of steps and where you are
+                  in them is readable even when the names don't all fit. */}
+              <span aria-hidden="true" className="thinking-scrubber-ticks">
+                {levels.map((level, index) => (
+                  <span
+                    key={level}
+                    data-passed={index <= safePreview ? "" : undefined}
+                    style={{
+                      left: `calc(var(--thinking-thumb-half) + ${
+                        levels.length > 1 ? index / (levels.length - 1) : 0
+                      } * (100% - var(--thinking-thumb)))`,
+                    }}
+                  />
+                ))}
+              </span>
+              <span aria-hidden="true" className="thinking-scrubber-thumb" />
+            </div>
+            {/* Every stop is named while they fit; past ~5 the row collapses to
+                the two endpoints so the labels never overlap. */}
+            <div className="thinking-scrubber-ends">
+              {(levels.length <= 5 ? levels : [levels[0]!, levels[levels.length - 1]!]).map(
+                (level) => (
+                  <span
+                    key={level}
+                    data-active={level === previewLevel ? "" : undefined}
+                    style={level === previewLevel ? { color: previewAccent } : undefined}
+                  >
+                    {level}
+                  </span>
+                ),
+              )}
+            </div>
+          </div>
+        </div>,
+        document.body,
+      )
+    : null;
+
+  return {
+    scrubbing,
+    previewLevel,
+    previewAccent,
+    pointerProps,
+    consumeSuppressedClick,
+    nudge,
+    panel,
+  };
+}
+
+// Session composers: hold (or slide) to open the effort scrubber only — no
+// dropdown menu. Levels are chosen exclusively through the floating slider,
+// or with arrow keys once the pill has focus.
+function ComposerThinkingControl({
+  value,
+  levels,
+  onChange,
+  flat,
+}: {
+  value: ThinkingLevel;
+  levels: ThinkingLevel[];
+  onChange: (value: ThinkingLevel) => void;
+  flat: boolean;
+}) {
+  const scrub = useThinkingScrub({
+    value,
+    levels,
+    onCommit: onChange,
+    openOnDrag: true,
+  });
+  const currentIndex = Math.max(0, levels.indexOf(value));
+  // The pill reads out the level under the finger while a scrub is open, so
+  // the trigger and the floating panel never disagree.
+  const shown = scrub.scrubbing ? scrub.previewLevel : value;
 
   return (
     <>
       <button
         type="button"
-        aria-label={`Thinking: ${value}. Hold and slide to adjust.`}
-        title="Hold and slide to adjust"
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onPointerCancel={handlePointerCancel}
-        onContextMenu={(event) => event.preventDefault()}
+        role="slider"
+        aria-label="Thinking effort"
+        aria-valuemin={0}
+        aria-valuemax={Math.max(0, levels.length - 1)}
+        aria-valuenow={currentIndex}
+        aria-valuetext={value}
+        title="Hold and slide to adjust — or use the arrow keys"
+        {...scrub.pointerProps}
+        onKeyDown={(event) => {
+          // Standard slider keys, so the control is reachable without a
+          // pointer at all (the gesture used to be the only way in).
+          const step =
+            event.key === "ArrowRight" || event.key === "ArrowUp"
+              ? 1
+              : event.key === "ArrowLeft" || event.key === "ArrowDown"
+                ? -1
+                : event.key === "Home"
+                  ? -levels.length
+                  : event.key === "End"
+                    ? levels.length
+                    : 0;
+          if (!step) return;
+          event.preventDefault();
+          scrub.nudge(step);
+        }}
         style={{
           touchAction: "none",
           WebkitUserSelect: "none",
           WebkitTouchCallout: "none",
         } as CSSProperties}
         className={cn(
-          "relative inline-flex h-8 cursor-pointer select-none items-center gap-1.5 rounded-full text-foreground transition-all duration-200 active:scale-[0.98]",
+          "relative inline-flex h-8 cursor-pointer select-none items-center gap-1.5 rounded-full text-foreground outline-none transition-all duration-200 focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98]",
           flat ? "px-1" : "bg-muted px-3",
-          scrubbing && "scale-[1.02] bg-foreground/10",
+          scrub.scrubbing && "scale-[1.02] bg-foreground/10",
         )}
       >
-        <ThinkingSignal value={value} levels={levels} />
+        <ThinkingSignal value={shown} levels={levels} />
         <span className="text-xs font-medium">Thinking</span>
         <span aria-hidden="true" className="text-[11px] text-muted-foreground/60">·</span>
-        <span className="max-w-14 truncate text-[11px] font-medium capitalize text-muted-foreground">
-          {value}
+        <span
+          className={cn(
+            "max-w-14 truncate text-[11px] font-medium capitalize transition-colors duration-150",
+            scrub.scrubbing ? "text-foreground" : "text-muted-foreground",
+          )}
+          style={scrub.scrubbing ? { color: scrub.previewAccent } : undefined}
+        >
+          {shown}
         </span>
       </button>
 
-      {scrubbing
-        ? createPortal(
-            <div
-              role="status"
-              aria-live="polite"
-              aria-label={`Thinking level ${levels[previewIndex] ?? value}`}
-              style={scrubberStyle}
-              className="pointer-events-none fixed z-[220] origin-bottom select-none animate-in fade-in-0 zoom-in-90 slide-in-from-bottom-2 duration-200"
-            >
-              <div className="thinking-scrubber-panel">
-                <div
-                  className="mb-1.5 text-center text-sm font-semibold capitalize transition-colors duration-150"
-                  style={{ color: previewAccent }}
-                >
-                  {levels[previewIndex] ?? value}
-                </div>
-                <div
-                  className="thinking-scrubber"
-                  style={
-                    {
-                      "--thinking-progress": previewProgress,
-                      "--thinking-accent": previewAccent,
-                    } as CSSProperties
-                  }
-                >
-                  <span aria-hidden="true" className="thinking-scrubber-halo" />
-                  <div className="thinking-scrubber-track">
-                    <div aria-hidden="true" className="thinking-scrubber-matrix" />
-                    <div className="thinking-scrubber-fill" />
-                  </div>
-                  <span aria-hidden="true" className="thinking-scrubber-thumb" />
-                </div>
-                <div className="thinking-scrubber-ends">
-                  <span>{minLevel}</span>
-                  <span>{maxLevel}</span>
-                </div>
-              </div>
-            </div>,
-            document.body,
-          )
-        : null}
+      {scrub.panel}
+    </>
+  );
+}
+
+// The composer's Start button. A tap submits at the current effort; holding it
+// raises the same thinking scrubber the pill uses, and releasing sets the level
+// and launches in one motion — so picking a deeper effort never costs a second
+// trip to the controls row.
+function ComposerStartButton({
+  disabled,
+  thinkingLevel,
+  thinkingLevels,
+  onLaunch,
+}: {
+  disabled: boolean;
+  thinkingLevel: ThinkingLevel;
+  /** Empty when the selected agent has no reasoning knob — hold does nothing. */
+  thinkingLevels: ThinkingLevel[];
+  onLaunch: (thinking: ThinkingLevel) => void;
+}) {
+  const scrub = useThinkingScrub({
+    value: thinkingLevel,
+    levels: thinkingLevels,
+    enabled: !disabled,
+    caption: "Start thinking",
+    onCommit: (next) => onLaunch(next),
+  });
+  const holdable = !disabled && thinkingLevels.length > 1;
+
+  return (
+    <>
+      <Button
+        type="submit"
+        size="sm"
+        variant="secondary"
+        disabled={disabled}
+        aria-label={
+          holdable
+            ? `Start session. Hold to set thinking effort, currently ${thinkingLevel}.`
+            : "Start session"
+        }
+        title={holdable ? "Tap to start · hold to set thinking effort" : undefined}
+        {...scrub.pointerProps}
+        onClick={(event) => {
+          // A scrub release already launched with its own level; the click the
+          // browser fires afterwards would submit a second time.
+          if (scrub.consumeSuppressedClick()) {
+            event.preventDefault();
+            event.stopPropagation();
+          }
+        }}
+        style={
+          {
+            ...(holdable ? { touchAction: "none", WebkitTouchCallout: "none" } : {}),
+            // Ring the button in the live effort colour so the button and the
+            // floating panel read as one control during the gesture.
+            ...(scrub.scrubbing
+              ? {
+                  boxShadow: `0 0 0 2px ${scrub.previewAccent}, 0 0 14px -2px ${scrub.previewAccent}`,
+                }
+              : {}),
+          } as CSSProperties
+        }
+        className={cn("transition-all duration-200", scrub.scrubbing && "scale-[1.03]")}
+      >
+        {scrub.scrubbing ? (
+          <ThinkingSignal value={scrub.previewLevel} levels={thinkingLevels} />
+        ) : (
+          <Send className="size-4" />
+        )}
+        <span className="capitalize">{scrub.scrubbing ? scrub.previewLevel : "Start"}</span>
+      </Button>
+
+      {scrub.panel}
     </>
   );
 }
