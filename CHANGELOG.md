@@ -2,6 +2,11 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Solid thinking scrub card (v0.1.271)
+
+- Thinking scrubber panel uses a solid popover background and border again so
+  it reads clearly over the transcript (not a near-transparent frosted wash).
+
 ## August 5, 2026 - Thinking scrub dial-back (v0.1.270)
 
 - Restored the frosted card behind the Thinking scrubber, and dialed scrub
