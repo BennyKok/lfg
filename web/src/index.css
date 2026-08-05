@@ -1018,9 +1018,10 @@ html.lfg-keyboard-open {
      Tailwind utility) so the panel never goes transparent over the composer. */
   .thinking-scrubber-panel {
     /* Shared with track + endpoint labels so min/max sit under the bar ends
-       with equal inset on both sides. */
-    --thinking-thumb: 1.45rem;
+       with equal inset on both sides. Bar is slightly taller than the thumb. */
+    --thinking-thumb: 1.3rem;
     --thinking-thumb-half: calc(var(--thinking-thumb) / 2);
+    --thinking-track-height: 1.7rem;
     overflow: hidden;
     border: 1px solid var(--border);
     border-radius: 1.25rem;
@@ -1076,41 +1077,41 @@ html.lfg-keyboard-open {
     --thinking-thumb-left: calc(
       var(--thinking-thumb-half) + var(--thinking-progress) * (100% - var(--thinking-thumb))
     );
-    /* 4×4 cell grid with a 1.5px gutter — soft rounded squares like the Codex
-       density track, not continuous fill or circular dots. */
+    /* ~4 rows of soft square cells (was ~2) — taller bar fits two more lines. */
     --thinking-cell: 4px;
     --thinking-gap: 1.5px;
     --thinking-tile: calc(var(--thinking-cell) + var(--thinking-gap));
     --thinking-matrix-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='5.5' height='5.5' viewBox='0 0 5.5 5.5'%3E%3Crect x='0.25' y='0.25' width='4' height='4' rx='0.85' fill='white'/%3E%3C/svg%3E");
     position: relative;
-    height: 2.25rem;
+    height: 2rem;
   }
 
   .thinking-scrubber-track {
     position: absolute;
-    /* Full content width so min/max labels can sit flush on the bar ends. */
+    /* Full content width so min/max labels can sit flush on the bar ends.
+       No shell border/fill — only the pixel grid reads as the bar. */
     inset-inline: 0;
     top: 50%;
-    height: 1.2rem;
+    height: var(--thinking-track-height, 1.7rem);
     transform: translateY(-50%);
     overflow: hidden;
-    /* Soft rectangle, not a pill — keeps the density bar squared off. */
-    border-radius: 0.32rem;
-    background: color-mix(in srgb, var(--foreground) 10%, transparent);
-    box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.16);
+    border: 0;
+    border-radius: 0.2rem;
+    background: transparent;
+    box-shadow: none;
   }
 
   .dark .thinking-scrubber-track {
-    background: color-mix(in srgb, var(--foreground) 14%, transparent);
-    box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.4);
+    background: transparent;
+    box-shadow: none;
   }
 
   /* Idle matrix: full-width grey cells, denser (brighter) toward the deep end
      so the track always reads as a density gradient even before a fill. */
   .thinking-scrubber-matrix {
     position: absolute;
-    inset: 0.3rem;
-    border-radius: 0.18rem;
+    inset: 0;
+    border-radius: 0.15rem;
     background: linear-gradient(
       90deg,
       color-mix(in srgb, var(--foreground) 18%, transparent) 0%,
@@ -1130,13 +1131,13 @@ html.lfg-keyboard-open {
      progress so deeper levels light more of the matrix and push hotter hues. */
   .thinking-scrubber-fill {
     position: absolute;
-    inset-block: 0.3rem;
-    inset-inline-start: 0.3rem;
+    inset-block: 0;
+    inset-inline-start: 0;
     width: max(
       var(--thinking-cell),
-      calc((100% - 0.6rem) * var(--thinking-progress))
+      calc(100% * var(--thinking-progress))
     );
-    border-radius: 0.18rem;
+    border-radius: 0.15rem;
     background: linear-gradient(
       90deg,
       rgba(0, 122, 255, 0.88) 0%,
@@ -1192,7 +1193,7 @@ html.lfg-keyboard-open {
     z-index: 1;
     width: var(--thinking-thumb);
     height: var(--thinking-thumb);
-    border-radius: 0.52rem;
+    border-radius: 0.4rem;
     background:
       linear-gradient(
         160deg,
