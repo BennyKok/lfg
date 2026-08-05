@@ -17089,11 +17089,11 @@ function ThinkingLevelPill({
   );
 }
 
-const THINKING_HOLD_MS = 280;
-// Pixels of horizontal travel per thinking level while scrubbing. Lower =
-// more sensitive. Scales mildly with how many steps the agent exposes.
+const THINKING_HOLD_MS = 360;
+// Pixels of horizontal travel per thinking level while scrubbing. Higher =
+// less sensitive. Scales mildly with how many steps the agent exposes.
 function thinkingScrubStepWidth(levelCount: number): number {
-  return Math.max(14, Math.min(22, 96 / Math.max(1, levelCount - 1)));
+  return Math.max(34, Math.min(52, 240 / Math.max(1, levelCount - 1)));
 }
 
 // Same blue → indigo → violet → fuchsia stops as the organic send wash /
@@ -17203,7 +17203,7 @@ function ComposerThinkingControl({
     const rect = trigger.getBoundingClientRect();
     const width = Math.min(360, Math.max(248, window.innerWidth - 24));
     const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + rect.width / 2 - width / 2));
-    const panelHeight = 108;
+    const panelHeight = 128;
     const top = rect.top - panelHeight - 12 >= 12
       ? rect.top - panelHeight - 12
       : Math.min(window.innerHeight - panelHeight - 12, rect.bottom + 12);
@@ -17269,17 +17269,9 @@ function ComposerThinkingControl({
   const handlePointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
     if (!scrubbingRef.current) {
       const delta = event.clientX - startXRef.current;
-      // Horizontal intent starts the scrub immediately — don't wait out the
-      // hold timer or cancel on a small drag (that felt sticky / insensitive).
-      if (Math.abs(delta) > 8 && holdTimerRef.current != null) {
-        clearHoldTimer();
-        beginScrub(event.currentTarget);
-        lastPointerXRef.current = startXRef.current;
-        applyScrubDelta(event.clientX);
-        event.preventDefault();
-        return;
-      }
       lastPointerXRef.current = event.clientX;
+      // Moving before the hold completes cancels scrub entry (tap-to-menu stays).
+      if (Math.abs(delta) > 10) clearHoldTimer();
       return;
     }
     event.preventDefault();
@@ -17389,13 +17381,11 @@ function ComposerThinkingControl({
               style={scrubberStyle}
               className="pointer-events-none fixed z-[220] origin-bottom select-none animate-in fade-in-0 zoom-in-90 slide-in-from-bottom-2 duration-200"
             >
-              <div className="px-1 py-1 text-foreground">
-                <div className="mb-2 flex items-center justify-between gap-4">
-                  <span className="text-xs font-medium text-muted-foreground drop-shadow-sm">
-                    Thinking
-                  </span>
+              <div className="overflow-hidden rounded-[1.6rem] bg-popover/95 px-5 py-4 text-popover-foreground shadow-2xl ring-1 ring-foreground/10 backdrop-blur-2xl">
+                <div className="mb-3 flex items-center justify-between gap-4">
+                  <span className="text-xs font-medium text-muted-foreground">Thinking</span>
                   <span
-                    className="text-sm font-semibold capitalize drop-shadow-sm transition-colors duration-150"
+                    className="text-sm font-semibold capitalize transition-colors duration-150"
                     style={{ color: previewAccent }}
                   >
                     {levels[previewIndex] ?? value}
@@ -17417,7 +17407,7 @@ function ComposerThinkingControl({
                   </div>
                   <span aria-hidden="true" className="thinking-scrubber-thumb" />
                 </div>
-                <div className="mt-0.5 flex items-center justify-between text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground drop-shadow-sm">
+                <div className="mt-0.5 flex items-center justify-between text-[10px] font-medium uppercase tracking-[0.16em] text-muted-foreground">
                   <span>Faster</span>
                   <span>Deeper</span>
                 </div>

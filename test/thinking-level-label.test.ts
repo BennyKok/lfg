@@ -54,9 +54,9 @@ describe("thinking level menu", () => {
     expect(control).toContain("applyScrubDelta");
     expect(control).toContain("onPointerMove={handlePointerMove}");
     expect(control).toContain("startIndexRef.current + relativeStepOffsetRef.current");
-    // Drag should enter scrub immediately instead of cancelling the hold.
-    expect(control).toContain("beginScrub(event.currentTarget)");
-    expect(control).not.toContain("if (Math.abs(delta) > 10) clearHoldTimer()");
+    // Moving before hold completes cancels scrub (keeps tap-to-menu clean).
+    expect(control).toContain("if (Math.abs(delta) > 10) clearHoldTimer()");
+    expect(source).toContain("Math.max(34, Math.min(52, 240 / Math.max(1, levelCount - 1)))");
     expect(control).toContain("Tap to choose · hold and slide to adjust");
     expect(control).toContain("Hold the control and slide for a faster adjustment.");
     expect(control).toContain("createPortal(");
@@ -84,10 +84,10 @@ describe("thinking level menu", () => {
     expect(control).toContain("thinkingAccentColor(previewProgress)");
     expect(control).toContain('"--thinking-progress": previewProgress');
     expect(control).toContain('"--thinking-accent": previewAccent');
-    // Float the control without a card chrome so only the matrix + thumb read.
-    expect(control).not.toContain("bg-popover/95");
-    expect(control).not.toContain("ring-1 ring-foreground/10");
-    expect(control).not.toContain("shadow-2xl ring-1");
+    // Card chrome back so the floating control stays readable over transcript.
+    expect(control).toContain("bg-popover/95");
+    expect(control).toContain("ring-1 ring-foreground/10");
+    expect(control).toContain("shadow-2xl");
     // Dot markers replaced by the pixel-matrix track + chunky squircle thumb.
     expect(control).not.toContain("rounded-full bg-popover ring-2");
     expect(control).not.toContain("from-sky-400/35 via-violet-400/55");

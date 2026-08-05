@@ -2,6 +2,11 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Thinking scrub dial-back (v0.1.270)
+
+- Restored the frosted card behind the Thinking scrubber, and dialed scrub
+  sensitivity back to the original hold-then-slide feel (more travel per level).
+
 ## August 5, 2026 - Lighter, snappier thinking scrub (v0.1.269)
 
 - Thinking scrub overlay no longer sits in a bordered card — just the matrix,
