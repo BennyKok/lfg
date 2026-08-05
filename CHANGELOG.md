@@ -2,6 +2,13 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Thinking scrubber glow-up (v0.1.266)
+
+- Hold-to-scrub Thinking control now uses a thicker track and a rounded-square
+  thumb instead of the thin dotted line. The fill borrows the send-message
+  organic blue → indigo → violet → fuchsia wash, and the accent, glow, and
+  level label morph hotter as effort intensifies.
+
 ## August 5, 2026 - One lfg on the splash (v0.1.265)
 
 - Cold-load splash no longer stacks the app icon and a separate "lfg" wordmark.
