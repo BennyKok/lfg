@@ -1313,16 +1313,16 @@ html.lfg-keyboard-open {
      corner where a sideways swipe has nowhere to go. The bar's travel comes
      from JS (--thinking-travel) so it matches the gesture's step width, and
      one level of finger movement lands on one stop. */
-  .thinking-scrubber-body {
+  /* Horizontal keeps this a plain block: the bar's children are all absolutely
+     positioned, so as a flex item it would have zero content width and collapse
+     to nothing. Only the upright layout opts into the two-column row — bar last
+     so it lands on the panel's right edge, which is what parks it under a
+     corner-pinned trigger, with the names right-aligned into it. */
+  .thinking-scrubber-panel[data-orientation="vertical"] .thinking-scrubber-body {
     display: flex;
+    flex-direction: row-reverse;
     gap: 0.65rem;
     align-items: stretch;
-  }
-
-  /* Bar last in the row so it lands on the panel's right edge, which is what
-     parks it under a corner-pinned trigger; names read right-aligned into it. */
-  .thinking-scrubber-panel[data-orientation="vertical"] .thinking-scrubber-body {
-    flex-direction: row-reverse;
   }
 
   .thinking-scrubber[data-orientation="vertical"] {

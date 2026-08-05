@@ -113,10 +113,11 @@ describe("thinking level menu", () => {
     const pill = source.slice(hookEnd, buttonStart);
     expect(pill).not.toContain('orientation: "vertical"');
 
-    // Vertical mode ignores horizontal travel entirely rather than axis-locking,
-    // so a drag that wanders sideways off the button still reads cleanly.
+    // Vertical mode ignores horizontal travel entirely rather than axis-locking
+    // — it only ever consumes clientY — so a drag that wanders sideways off the
+    // button still reads cleanly.
     expect(hook).toContain("if (vertical) {");
-    expect(hook).toContain("applyScrubTravel(-dy)");
+    expect(hook).toContain("applyAbsoluteScrub(clientY)");
     expect(hook).toContain('const vertical = orientation === "vertical"');
     // Bar travel is derived from the gesture's own step width => 1:1 on screen.
     expect(hook).toContain(
@@ -141,6 +142,47 @@ describe("thinking level menu", () => {
     // Fill grows from the bottom and the thumb rides `bottom`, not `left`.
     expect(css).toContain("inset-block: auto 0");
     expect(css).toContain("bottom: var(--thinking-thumb-left)");
+  });
+
+  test("the horizontal bar is never laid out as a flex item", async () => {
+    const css = await readFile("web/src/index.css", "utf8");
+    // The bar's children are all absolutely positioned, so it has zero content
+    // width. Making its wrapper a flex container collapsed the horizontal bar
+    // to 0px while the labels below kept full width. The row layout therefore
+    // belongs only to the upright panel.
+    expect(css).toContain(
+      '.thinking-scrubber-panel[data-orientation="vertical"] .thinking-scrubber-body',
+    );
+    // No unscoped `.thinking-scrubber-body { ... }` rule may exist.
+    expect(css).not.toMatch(/^\s*\.thinking-scrubber-body\s*\{/m);
+  });
+
+  test("the upright gesture tracks the finger absolutely on the bar", async () => {
+    const source = await app();
+    const hookStart = source.indexOf("function useThinkingScrub(");
+    const hook = source.slice(hookStart, source.indexOf("function ComposerThinkingControl(", hookStart));
+
+    // Absolute: the pointer is mapped onto the bar's measured stop positions,
+    // not accumulated from where the press landed.
+    expect(hook).toContain("applyAbsoluteScrub(clientY)");
+    expect(hook).toContain("const bar = barRef.current");
+    expect(hook).toContain("bar.getBoundingClientRect()");
+    expect(hook).toContain("const lowStop = rect.bottom - thumbPx / 2");
+    expect(hook).toContain("const highStop = rect.top + thumbPx / 2");
+    expect(hook).toContain("commitPreviewIndex(Math.round(ratio * (levels.length - 1)))");
+    expect(hook).toContain("ref={barRef}");
+    // Thumb size is derived from the bar's real height minus the travel we set.
+    expect(hook).toContain("const thumbPx = Math.max(0, rect.height - verticalTravelPx)");
+
+    // The panel opens above the press, so the finger starts off the bar. Until
+    // it arrives the level must not move — otherwise a press-and-release with
+    // no real drag would silently launch at the lowest effort.
+    expect(hook).toContain("if (!absoluteEngagedRef.current)");
+    expect(hook).toContain("if (clientY > lowStop) return");
+    expect(hook).toContain("absoluteEngagedRef.current = false");
+
+    // The horizontal pill keeps relative travel.
+    expect(hook).toContain('applyScrubTravel(axisRef.current === "x" ? dx : -dy)');
   });
 
   test("level names are capitalised in JS, not left to text-transform", async () => {

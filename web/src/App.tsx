@@ -17243,6 +17243,10 @@ function useThinkingScrub({
   // surprising thing for a cancel to do.
   const gestureOpenedRef = useRef(false);
   const suppressClickRef = useRef(false);
+  // Upright bar only: measured to map the pointer onto real stop positions,
+  // and a latch for "the finger has reached the bar, start tracking it".
+  const barRef = useRef<HTMLDivElement | null>(null);
+  const absoluteEngagedRef = useRef(false);
   const [scrubbing, setScrubbing] = useState(false);
   const [previewIndex, setPreviewIndex] = useState(() => Math.max(0, levels.indexOf(value)));
   const [panelStyle, setPanelStyle] = useState<CSSProperties>({});
@@ -17350,6 +17354,7 @@ function useThinkingScrub({
     document.getSelection()?.removeAllRanges();
     previewIndexRef.current = index;
     axisRef.current = null;
+    absoluteEngagedRef.current = false;
     scrubbingRef.current = true;
     gestureOpenedRef.current = true;
     setPreviewIndex(index);
@@ -17388,17 +17393,19 @@ function useThinkingScrub({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrubbing]);
 
-  // Absolute travel from the press origin, projected onto whichever axis the
-  // gesture locked to. Right and up both mean "more effort".
   const applyScrub = (clientX: number, clientY: number) => {
-    const dx = clientX - originRef.current.x;
-    const dy = clientY - originRef.current.y;
-    // Upright bar: only up/down counts, so a drag that wanders sideways off a
-    // corner-pinned trigger still reads cleanly. Up is always "more effort".
+    // Upright bar: the bar is parked directly over the trigger, so the finger
+    // is on it. Map the pointer straight onto the bar's own stop positions —
+    // the level beside your thumb is the level you get, not an accumulated
+    // offset from where the press happened.
     if (vertical) {
-      applyScrubTravel(-dy);
+      applyAbsoluteScrub(clientY);
       return;
     }
+    // Horizontal: relative travel from the press origin, projected onto
+    // whichever axis the gesture locked to. Right and up both mean "more".
+    const dx = clientX - originRef.current.x;
+    const dy = clientY - originRef.current.y;
     if (!axisRef.current) {
       if (Math.abs(dx) < THINKING_AXIS_LOCK_PX && Math.abs(dy) < THINKING_AXIS_LOCK_PX) return;
       axisRef.current = Math.abs(dx) >= Math.abs(dy) ? "x" : "y";
@@ -17406,14 +17413,35 @@ function useThinkingScrub({
     applyScrubTravel(axisRef.current === "x" ? dx : -dy);
   };
 
+  // The panel opens above the press, so at first the finger is below the bar
+  // entirely. Hold the starting level until it actually reaches the bar, then
+  // track absolutely — that way a press with no real movement never changes
+  // the level, and once you are on the bar the thumb sits under your finger.
+  const applyAbsoluteScrub = (clientY: number) => {
+    const bar = barRef.current;
+    if (!bar) return;
+    const rect = bar.getBoundingClientRect();
+    if (rect.height <= 0) return;
+    const thumbPx = Math.max(0, rect.height - verticalTravelPx);
+    const lowStop = rect.bottom - thumbPx / 2;
+    const highStop = rect.top + thumbPx / 2;
+    if (!absoluteEngagedRef.current) {
+      if (clientY > lowStop) return;
+      absoluteEngagedRef.current = true;
+    }
+    const span = Math.max(1, lowStop - highStop);
+    const ratio = Math.max(0, Math.min(1, (lowStop - clientY) / span));
+    commitPreviewIndex(Math.round(ratio * (levels.length - 1)));
+  };
+
   const applyScrubTravel = (travel: number) => {
-    const nextIndex = Math.max(
-      0,
-      Math.min(
-        levels.length - 1,
-        Math.round(startIndexRef.current + travel / thinkingScrubStepWidth(levels.length)),
-      ),
+    commitPreviewIndex(
+      Math.round(startIndexRef.current + travel / thinkingScrubStepWidth(levels.length)),
     );
+  };
+
+  const commitPreviewIndex = (index: number) => {
+    const nextIndex = Math.max(0, Math.min(levels.length - 1, index));
     if (nextIndex === previewIndexRef.current) return;
     previewIndexRef.current = nextIndex;
     setPreviewIndex(nextIndex);
@@ -17517,6 +17545,7 @@ function useThinkingScrub({
             </div>
             <div className="thinking-scrubber-body">
               <div
+                ref={barRef}
                 className="thinking-scrubber"
                 data-orientation={orientation}
                 style={
