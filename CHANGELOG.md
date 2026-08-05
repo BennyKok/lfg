@@ -2,7 +2,7 @@
 
 Recent product updates and deployment notes.
 
-## August 5, 2026 - PWA recovery, consolidated (v0.1.264)
+## August 5, 2026 - Silent failures removed (v0.1.264)
 
 - After the black home-screen fix, the recovery stack was a pile of one-shot
   cache markers, dual reload paths, and dead message handlers. Collapsed to one
@@ -15,6 +15,11 @@ Recent product updates and deployment notes.
   put `skipWaiting` after cache work, so a Cache API error blocked the only
   escape forever. The real fix was remove the fetch handler + take over first;
   the rest of the stack was scaffolding.
+- LFG-managed agents now communicate through their normal assistant replies
+  instead of being forced to route every update through `lfg_output`, which
+  caused some models to complete work without ever showing a response.
+- The redundant `lfg_output` tool has been removed. Agents can still display
+  local screenshots and recordings with the dedicated image and video tools.
 
 ## August 5, 2026 - Both resets in the campfire (v0.1.263)
 
