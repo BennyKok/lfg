@@ -78,16 +78,8 @@
         /* nudge up so it sits optically centered above the home indicator */
         margin-bottom: env(safe-area-inset-bottom, 0px);
       }
-      /* Always-visible wordmark so a failed icon fetch is never pure black. */
-      #app-splash .splash-wordmark {
-        margin: 0;
-        font: 600 1.35rem/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        letter-spacing: -0.03em;
-        color: #f4f4f5;
-      }
-      html:not(.dark) #app-splash .splash-wordmark {
-        color: #1c1c1e;
-      }
+      /* Logo only — the icon already spells "lfg", so a separate wordmark
+         reads as a duplicate under the mark. */
       #app-splash .splash-logo {
         width: 76px;
         height: 76px;
@@ -147,7 +139,6 @@
       <div id="app-splash" aria-hidden="true">
         <div class="splash-inner">
           <img class="splash-logo" src="/icon.svg" alt="" width="76" height="76" />
-          <p class="splash-wordmark">lfg</p>
           <div class="splash-bar"><div class="splash-bar-fill"></div></div>
         </div>
       </div>
