@@ -2,6 +2,26 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Hold Start to pick thinking effort (v0.1.279)
+
+- **Press and hold Start** on the new-session composer to raise the thinking
+  scrubber, slide to the effort you want, and release — the level is set and
+  the session launches in one motion. A plain tap still starts immediately at
+  the current effort. Picking a deeper effort no longer means a detour into the
+  agent popover first.
+- The scrubber now follows a drag **up as well as sideways**, whichever you
+  move first. Start sits in the bottom-right corner where there is no room left
+  to drag sideways, so a horizontal-only scrub couldn't reach the top levels.
+- **Every effort level is now named under the bar** while the labels fit, with
+  the live one lit, plus tick marks for each stop. The panel header says which
+  gesture is running, and the trigger shows the level under your finger instead
+  of the old one — the Start button even takes on the effort colour as you go.
+- **Escape cancels** an open scrubber, and cancelling no longer starts the
+  session anyway on release.
+- The Thinking pill is now a proper slider for keyboard and screen-reader
+  users: arrow keys, Home, and End adjust it. The hold gesture used to be the
+  only way to change effort.
+
 ## August 5, 2026 - Agents reason without hidden advisors (v0.1.278)
 
 - LFG agents now handle technical reasoning directly instead of spawning a
