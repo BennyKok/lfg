@@ -95,7 +95,8 @@ describe("thinking level menu", () => {
     expect(control).toContain("{maxLevel}");
     expect(control).toContain('className="thinking-scrubber-ends"');
     expect(css).toContain(".thinking-scrubber-ends");
-    expect(css).toContain("padding-inline: var(--thinking-thumb-half)");
+    expect(css).toContain("padding-inline: 0");
+    expect(css).toContain("inset-inline: 0");
     expect(control).not.toContain(">Faster</span>");
     expect(control).not.toContain(">Deeper</span>");
     // Scrub panel no longer titles itself "Thinking" — only the composer pill does.
