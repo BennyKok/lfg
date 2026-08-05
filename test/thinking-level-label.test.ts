@@ -57,6 +57,12 @@ describe("thinking level menu", () => {
     // Moving before hold completes cancels scrub (keeps tap-to-menu clean).
     expect(control).toContain("if (Math.abs(delta) > 10) clearHoldTimer()");
     expect(source).toContain("Math.max(34, Math.min(52, 240 / Math.max(1, levelCount - 1)))");
+    // Haptics: arm on pointer down, engage on hold, tick each level, success on release.
+    expect(control).toContain('haptic("light")');
+    expect(control).toContain('haptic("heavy")');
+    expect(control).toContain('haptic("medium")');
+    expect(control).toContain("feedback.success()");
+    expect(control).toContain("feedback.select()");
     expect(control).toContain("Tap to choose · hold and slide to adjust");
     expect(control).toContain("Hold the control and slide for a faster adjustment.");
     expect(control).toContain("createPortal(");

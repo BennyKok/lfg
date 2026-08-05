@@ -17223,6 +17223,7 @@ function ComposerThinkingControl({
     setMenuOpen(false);
     placeScrubber(trigger);
     setScrubbing(true);
+    // Engage the scrub surface — heavy so the hold-to-slide is unmistakable.
     haptic("heavy");
   };
 
@@ -17234,7 +17235,9 @@ function ComposerThinkingControl({
     if (commit) {
       const next = levels[previewIndexRef.current];
       if (next && next !== value) onChange(next);
-      haptic("success");
+      // Commit always ticks success so releasing the finger is felt even when
+      // the level didn't change.
+      feedback.success();
     }
   };
 
@@ -17246,6 +17249,9 @@ function ComposerThinkingControl({
     lastPointerXRef.current = event.clientX;
     startIndexRef.current = currentIndex;
     event.currentTarget.setPointerCapture(event.pointerId);
+    // Immediate light tick inside the user-gesture window (iOS often blocks
+    // vibrate/switch haptics that fire only after the hold timeout).
+    haptic("light");
     const trigger = event.currentTarget;
     holdTimerRef.current = window.setTimeout(() => beginScrub(trigger), THINKING_HOLD_MS);
   };
@@ -17265,7 +17271,9 @@ function ComposerThinkingControl({
     if (nextIndex === previewIndexRef.current) return;
     previewIndexRef.current = nextIndex;
     setPreviewIndex(nextIndex);
-    haptic("selection");
+    // Step tick — medium (not ultra-light selection) so each level stop is felt
+    // on-device while scrubbing.
+    haptic("medium");
   };
 
   const handlePointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
@@ -17297,7 +17305,7 @@ function ComposerThinkingControl({
     if (!levels.includes(next)) return;
     onChange(next);
     setMenuOpen(false);
-    haptic("selection");
+    feedback.select();
   };
 
   return (
