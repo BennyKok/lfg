@@ -2,6 +2,12 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Both resets in the campfire (v0.1.263)
+
+- Focusing an agent in the Usage Campfire now keeps its nearest restore as the
+  main countdown and shows every other reported window underneath. Session,
+  5-hour, weekly, and 7-day resets are all visible together when available.
+
 ## August 5, 2026 - Finding sheet thinking matches the composer (v0.1.262)
 
 - Opening a finding to launch a fix still used a plain Thinking dropdown. It
