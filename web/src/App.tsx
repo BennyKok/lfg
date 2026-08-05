@@ -4508,13 +4508,16 @@ function useResourceWarnings(): void {
     let stopped = false;
 
     const check = async () => {
-      let s: ServerStats;
+      let s: ServerStats | undefined;
       try {
-        s = (await api<{ stats: ServerStats }>("/api/server/stats")).stats;
+        s = (await api<{ stats?: ServerStats }>("/api/server/stats")).stats;
       } catch {
         return; // transient — say nothing
       }
-      if (stopped) return;
+      // A 200 that isn't the snapshot (SPA shell from a stale service worker,
+      // an intermediary's empty body) parses to {} — no snapshot, nothing to
+      // warn about. Reading through it threw an unhandled rejection here.
+      if (stopped || !s) return;
       const now = Date.now();
 
       const fire = (key: string, level: number, title: string, description: string) => {
@@ -18682,8 +18685,10 @@ function useServerStats(active: boolean, intervalMs = 3000): ServerStats | null 
     let stopped = false;
     const tick = async () => {
       try {
-        const payload = await api<{ stats: ServerStats }>("/api/server/stats");
-        if (!stopped) setStats(payload.stats);
+        const payload = await api<{ stats?: ServerStats }>("/api/server/stats");
+        // Same guard as the warning poller: a response that isn't the snapshot
+        // must not land in state as an undefined "ServerStats".
+        if (!stopped) setStats(payload.stats ?? null);
       } catch {
         /* transient — keep the last snapshot */
       }
