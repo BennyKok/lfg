@@ -13,6 +13,12 @@ web UI, and lets you answer prompts or steer work from your phone or laptop.
 
 [Website](https://omg.dev) · [Quick start](#quick-start) · [Security](#security) · [Contributing](./CONTRIBUTING.md)
 
+> **Repository renamed (2026-08-05).** This project now lives at
+> [`github.com/BennyKok/omg.dev`](https://github.com/BennyKok/omg.dev)
+> (formerly `BennyKok/lfg`). GitHub redirects the old web and git URLs; update
+> bookmarks and `git remote` when convenient. The CLI is still `lfg`.
+
+
 <p>
   <img src="https://raw.githubusercontent.com/BennyKok/omg.dev/main/docs/images/lfg-screenshot-1.jpg" alt="lfg web UI screenshot" width="31%" />
   <img src="https://raw.githubusercontent.com/BennyKok/omg.dev/main/docs/images/lfg-screenshot-2.jpg" alt="lfg scheduled agents screenshot" width="31%" />

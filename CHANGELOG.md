@@ -2,6 +2,13 @@
 
 Recent product updates and deployment notes.
 
+## August 5, 2026 - Repository renamed to BennyKok/omg.dev
+
+- The public GitHub repository moved from `BennyKok/lfg` to
+  [`BennyKok/omg.dev`](https://github.com/BennyKok/omg.dev).
+- Old web and git URLs redirect automatically. Install/release defaults and docs
+  now point at the new path. The product CLI remains `lfg`.
+
 ## August 5, 2026 - No false "did not finish loading" (v0.1.275)
 
 - Cold loads that take a few seconds (phone + Tailscale, or a hard reload after
