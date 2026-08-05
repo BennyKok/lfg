@@ -33,7 +33,7 @@ describe("thinking level menu", () => {
     expect(submenu).toContain("<DropdownMenuLabel>Thinking level</DropdownMenuLabel>");
   });
 
-  test("shares the immersive hold-and-slide control with fork and continue", async () => {
+  test("shares the immersive hold-and-slide control across launch surfaces", async () => {
     const source = await app();
     const start = source.indexOf("function ThinkingSignal(");
     const end = source.indexOf("function ModelPicker(", start);
@@ -41,9 +41,14 @@ describe("thinking level menu", () => {
     const forkStart = source.indexOf("function ForkSessionDialog(");
     const forkEnd = source.indexOf("function useOrganicActivityPresence(", forkStart);
     const forkDialog = source.slice(forkStart, forkEnd);
+    const autoPickerStart = source.indexOf("function AutoAgentModelPicker(");
+    const autoPickerEnd = source.indexOf("function BottomSheet(", autoPickerStart);
+    const autoPicker = source.slice(autoPickerStart, autoPickerEnd);
 
-    expect(source.match(/\simmersive\s*\/>/g)?.length).toBe(2);
+    // New-session composer, fork dialog, and finding/auto-agent picker.
+    expect(source.match(/\simmersive\s*\/>/g)?.length).toBe(3);
     expect(forkDialog).toContain("immersive");
+    expect(autoPicker).toContain("immersive");
     expect(control).toContain("THINKING_HOLD_MS");
     expect(control).toContain("onPointerMove={handlePointerMove}");
     expect(control).toContain("event.clientX - lastPointerXRef.current");

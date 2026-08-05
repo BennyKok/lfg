@@ -17039,9 +17039,10 @@ function FieldPill({ icon, children, flat = false }: { icon?: ReactNode; childre
   );
 }
 
-// The thinking/reasoning-effort select shared by the new-session composer and
-// the auto-agent + finding sheets. Renders nothing when the agent has no
-// reasoning knob, so callers can drop it in unconditionally.
+// The thinking/reasoning-effort select shared by the new-session composer,
+// fork dialog, and auto-agent + finding sheets. Prefer `immersive` so launch
+// surfaces share ComposerThinkingControl (signal + hold-to-scrub). Renders
+// nothing when the agent has no reasoning knob.
 function ThinkingLevelPill({
   agent,
   value,
@@ -17656,6 +17657,7 @@ function AutoAgentModelPicker({
         value={thinkingLevel}
         levels={thinkingLevels}
         onChange={setThinkingLevel}
+        immersive
       />
     </div>
   );
