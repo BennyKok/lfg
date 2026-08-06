@@ -7390,9 +7390,16 @@ function LiveHeaderContext({
   // roster. omg Computers have no roster by design, so deriving this welcome
   // from session ownership would either say "Unassigned" or reintroduce the
   // rejected-user bug that roster-less hosted instances were built to avoid.
-  const rawName = viewerName?.trim() || user?.name?.trim() || shortUser(identity);
-  const firstNamePart = rawName.split(/\s+/)[0] || "there";
-  const firstName = `${firstNamePart.charAt(0).toUpperCase()}${firstNamePart.slice(1)}`;
+  // When nothing identifies the viewer at all — a roster-less host that passes
+  // no viewer, or omg's signed-out preview — there is no name to greet, so the
+  // greeting drops the name entirely. It must NOT fall through to shortUser()'s
+  // "unassigned": that is a roster FILTER label ("show unowned sessions"),
+  // never a person, and it rendered as "Welcome, Unassigned" in the preview.
+  const rawName = viewerName?.trim() || user?.name?.trim() || (identity ? shortUser(identity) : "");
+  const firstNamePart = rawName.split(/\s+/)[0] ?? "";
+  const firstName = firstNamePart
+    ? `${firstNamePart.charAt(0).toUpperCase()}${firstNamePart.slice(1)}`
+    : "";
   const questionCount = questions.length;
   const showCard = intro;
   const actionInMotion = busyCount > 0;
@@ -7401,11 +7408,15 @@ function LiveHeaderContext({
   const ambientTextRef = useRef<HTMLSpanElement>(null);
   const ambientSwapTimerRef = useRef<number | null>(null);
   const ambientContext = `${busyCount} agent${busyCount === 1 ? "" : "s"} building`;
-  const welcomeMessage = `Welcome, ${firstName}`;
+  const welcomeMessage = firstName ? `Welcome, ${firstName}` : "Welcome";
   const headline = questionCount
     ? questionCount === 1
-      ? `${firstName}, an agent needs you`
-      : `${firstName}, ${questionCount} agents need you`
+      ? firstName
+        ? `${firstName}, an agent needs you`
+        : "An agent needs you"
+      : firstName
+        ? `${firstName}, ${questionCount} agents need you`
+        : `${questionCount} agents need you`
     : actionInMotion && showAmbientStatus
       ? ambientContext
       : welcomeMessage;
