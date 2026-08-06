@@ -2,6 +2,23 @@
 
 Recent product updates and deployment notes.
 
+## August 6, 2026 - Shipped notifications open, and live worktrees stop vanishing (v0.1.286)
+
+- Tapping a **Shipped** notification now opens the finished session for review
+  instead of failing. The notification says "tap to review the finished
+  session", but posting to Shipped can also close that session — so by the time
+  you tapped, the link had nothing live to point at and gave up with "That
+  session is no longer running". It now falls back to the same read-only review
+  the in-app Shipped row has always opened, and you can reply there to pick the
+  conversation back up.
+- **Sessions no longer lose their working folder while they're running.** The
+  cleanup that reclaims finished sessions' folders judged "still alive" by tmux,
+  which agents on the default backend don't use — so after a restart it could
+  delete the folder out from under a working agent, uncommitted changes and all.
+  It now checks whether anything is actually running in the folder first. Two
+  sessions were lost to this earlier today; the sweep immediately after the fix
+  reclaimed nothing while every live session stayed intact.
+
 ## August 6, 2026 - Readable session titles in Resume (v0.1.285)
 
 - The **Resume** sheet, and session cards generally, now show what you actually
