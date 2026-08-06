@@ -3233,7 +3233,10 @@ a{color:#60a5fa}
         const m = path.match(/^\/api\/auto\/findings\/([0-9a-f]+)$/);
         if (m && req.method === "POST") {
           const b = (await req.json().catch(() => null)) as {
-            status?: "open" | "dismissed" | "session" | "read";
+            // "resolved" is the only status that means the problem is gone
+            // (store.ts). Omitting it here left it unreachable from the UI, so
+            // findings could only ever pile up in unresolved states.
+            status?: "open" | "dismissed" | "session" | "read" | "resolved";
             sessionId?: string;
           } | null;
           const patch: { status?: NonNullable<typeof b>["status"]; sessionId?: string } = {};

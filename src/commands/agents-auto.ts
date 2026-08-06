@@ -54,6 +54,7 @@ Findings:
   lfg agents auto findings [--status open]  List findings (--agent, --limit, --json)
   lfg agents auto dismiss <findingId>       Dismiss (feeds back: stops resurfacing)
   lfg agents auto read <findingId>          Mark read
+  lfg agents auto resolve <findingId>       Mark the underlying problem FIXED (terminal)
 
 Common flags:
   --cwd PATH            Base repo the agent runs in (default: cwd, --no-repo to skip)
@@ -291,6 +292,8 @@ export async function cmdAutoAgents(args: string[]): Promise<void> {
       return autoSetFindingStatus(rest, "dismissed");
     case "read":
       return autoSetFindingStatus(rest, "read");
+    case "resolve":
+      return autoSetFindingStatus(rest, "resolved");
     case undefined:
     case "help":
     case "-h":
@@ -671,10 +674,24 @@ async function autoFindings(args: string[]): Promise<void> {
 
 // Dismissing is part of the anti-noise loop, not just bookkeeping: the runner
 // feeds dismissed titles back into the next prompt so the agent stops
-// resurfacing them. Same store call the UI's dismiss button makes.
+// resurfacing them (except high severity — see runner.ts). Same store call the
+// UI's dismiss button makes.
+//
+// `resolve` exists because "resolved" is documented in store.ts as the ONLY
+// status meaning the underlying problem is actually gone, and until now
+// nothing could set it: the CLI offered dismiss/read and the HTTP route's body
+// type excluded it. Everything therefore accumulated in the unresolved
+// statuses — the same reason 302 of 396 findings once sat in "session" and
+// recurrence never matched.
+const STATUS_COMMAND: Partial<Record<FindingStatus, string>> = {
+  dismissed: "dismiss",
+  read: "read",
+  resolved: "resolve",
+};
+
 async function autoSetFindingStatus(args: string[], status: FindingStatus): Promise<void> {
   const id = positional(args);
-  if (!id) fail(`Usage: lfg agents auto ${status === "dismissed" ? "dismiss" : "read"} <findingId>`);
+  if (!id) fail(`Usage: lfg agents auto ${STATUS_COMMAND[status] ?? status} <findingId>`);
   let updated = await updateFinding(id!, { status });
   if (!updated) {
     const matches = (await listFindings()).filter((f) => f.id.startsWith(id!));
