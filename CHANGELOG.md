@@ -2,6 +2,16 @@
 
 Recent product updates and deployment notes.
 
+## August 6, 2026 - One-click auto finding triage (v0.1.283)
+
+- Open auto-agent findings now have a **Triage & execute** shortcut. It starts
+  one visible parent session that verifies the findings, groups related work,
+  dismisses confirmed noise, and launches linked LFG agents for actionable
+  groups.
+- Triage runs preserve the human decision boundary: product, pricing,
+  destructive, and genuinely ambiguous calls stay open for review, while
+  scoped project runs do not pull in unrelated findings.
+
 ## August 5, 2026 - Horizontal effort bar restored, upright one tracks your thumb (v0.1.282)
 
 - **Fixed the Thinking pill's horizontal bar rendering as an empty strip.** The
