@@ -102,6 +102,69 @@ function userTextMessage(text: string): SessionMsg {
   return { id: crypto.randomUUID(), role: "user", kind: "text", text, ts: Date.now() };
 }
 
+/**
+ * Human-readable detail for a non-success Agent SDK `result` message.
+ *
+ * This used to be `String(msg.result ?? msg.subtype)`, which reported nothing
+ * but `"error_during_execution"` — three sessions died that way on 2026-08-06
+ * with no recoverable reason. The cause is that `result` exists only on
+ * SDKResultSuccess; the ERROR variant (SDKResultError) has no such field, so
+ * the `??` always fell through to the bare subtype. Everything that explains
+ * the failure lives in fields the old line never read:
+ *
+ *   errors[]           the actual messages
+ *   terminal_reason    prompt_too_long / api_error / model_error / blocking_limit / …
+ *   stop_reason        why the turn stopped
+ *   permission_denials a turn can end simply because a tool was refused
+ *
+ * Defensive about shapes on purpose: this runs on the failure path, where a
+ * throw would destroy the very diagnostic we're trying to emit.
+ */
+export function describeAisdkFailure(msg: Record<string, unknown>): string {
+  const parts: string[] = [typeof msg.subtype === "string" ? msg.subtype : "unknown"];
+  const str = (v: unknown): string | null =>
+    typeof v === "string" && v.trim() ? v.trim() : null;
+
+  const terminal = str(msg.terminal_reason);
+  if (terminal) parts.push(`terminal_reason=${terminal}`);
+  const stop = str(msg.stop_reason);
+  if (stop) parts.push(`stop_reason=${stop}`);
+
+  const errors = (Array.isArray(msg.errors) ? msg.errors : [])
+    .map((e) => str(e) ?? (e == null ? null : safeJson(e)))
+    .filter((e): e is string => !!e);
+  if (errors.length) parts.push(`errors=[${errors.join("; ")}]`);
+
+  const denials = Array.isArray(msg.permission_denials) ? msg.permission_denials : [];
+  if (denials.length) {
+    const tools = [
+      ...new Set(
+        denials
+          .map((d) => (d && typeof d === "object" ? str((d as Record<string, unknown>).tool_name) : null))
+          .filter((t): t is string => !!t),
+      ),
+    ];
+    parts.push(`permission_denials=${denials.length}${tools.length ? ` (${tools.join(", ")})` : ""}`);
+  }
+
+  // Only the success variant carries `result` today, but read it anyway: the
+  // SDK has moved this field before, and an unexpected one is still a clue.
+  const legacy = str(msg.result) ?? (msg.result && typeof msg.result === "object" ? safeJson(msg.result) : null);
+  if (legacy) parts.push(`result=${legacy}`);
+
+  if (typeof msg.num_turns === "number") parts.push(`num_turns=${msg.num_turns}`);
+  if (typeof msg.duration_ms === "number") parts.push(`duration_ms=${msg.duration_ms}`);
+  return parts.join(" ");
+}
+
+function safeJson(value: unknown): string | null {
+  try {
+    return JSON.stringify(value) ?? null;
+  } catch {
+    return null; // circular / non-serializable — better a missing field than a throw
+  }
+}
+
 // Minimal push-driven AsyncIterable — the Agent SDK's streaming-input mode
 // consumes this; serve-side sends are pushed in as they arrive on the cmd file.
 type UserMsg = {
@@ -382,11 +445,14 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
         persistUsage();
         refreshUsageSnapshot();
       }
-      const errText =
-        (msg as { subtype?: string }).subtype !== "success"
-          ? String((msg as { result?: unknown }).result ?? (msg as { subtype?: string }).subtype)
-          : null;
-      if (errText) console.error(`aisdk-session turn ended with error: ${errText.slice(0, 800)}`);
+      if ((msg as { subtype?: string }).subtype !== "success") {
+        // Every harness logs into the one serve journal, so a line identifying
+        // the turn only by pid meant cross-referencing timestamps by hand to
+        // find out WHICH session had died. Name it.
+        console.error(
+          `aisdk-session ${sessionId} turn ended with error: ${describeAisdkFailure(msg).slice(0, 2000)}`,
+        );
+      }
       draft = "";
       publishDraft("", true);
       setBusy(false);
