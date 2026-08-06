@@ -2,7 +2,7 @@
 // never collide on a shared checkout (see docs/repo-hygiene.md). Voice-only
 // orchestrator sessions are the lone automatic exception.
 
-import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readlinkSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import { MAIN_REF } from "./agents/collectors/git-fresh.ts";
@@ -235,9 +235,49 @@ export type WorktreeSweepResult = {
   failed: string[];
 };
 
+/**
+ * Worktree directory names that a live process is currently sitting in.
+ *
+ * tmux and the managed registry are both only *proxies* for "this session is
+ * alive", and both lie for harness backends (aisdk / codex-aisdk / opencode):
+ * those run as bare processes with no tmux session, so `tmuxHasSession` is
+ * always false and the registry is the single point of failure. When serve
+ * restarts and session-recovery doesn't re-adopt one, the worktree of a
+ * still-running agent looks stale and gets deleted underneath it — taking
+ * uncommitted work with it.
+ *
+ * /proc/<pid>/cwd is the ground truth. Agent subprocesses (builds, tests) count
+ * too, which is what we want. This can only ever KEEP a worktree, never remove
+ * one, so a bad read degrades to the old behaviour rather than deleting more.
+ */
+function worktreesInUse(): Set<string> {
+  const inUse = new Set<string>();
+  const prefix = `${WORKTREE_ROOT}/`;
+  let pids: string[];
+  try {
+    pids = readdirSync("/proc");
+  } catch {
+    return inUse; // not Linux — fall back to the tmux/registry checks alone
+  }
+  for (const pid of pids) {
+    if (!/^\d+$/.test(pid)) continue;
+    let cwd: string;
+    try {
+      cwd = readlinkSync(`/proc/${pid}/cwd`);
+    } catch {
+      continue; // exited between readdir and readlink, or not ours to inspect
+    }
+    if (!cwd.startsWith(prefix)) continue;
+    const name = cwd.slice(prefix.length).split("/")[0];
+    if (name) inUse.add(name);
+  }
+  return inUse;
+}
+
 // Drop worktrees whose tmux session is gone. Skips entries still registered as
-// managed (startup race) and anything younger than minAgeMs (worktree is
-// created a moment before tmux new-session returns).
+// managed (startup race), anything a live process is still working in, and
+// anything younger than minAgeMs (worktree is created a moment before tmux
+// new-session returns).
 export async function sweepStaleWorktrees(opts?: {
   minAgeMs?: number;
   now?: number;
@@ -249,6 +289,7 @@ export async function sweepStaleWorktrees(opts?: {
     managed.add(m.tmuxName);
     managed.add(basename(m.cwd));
   }
+  const inUse = worktreesInUse();
   const result: WorktreeSweepResult = {
     scanned: 0,
     removed: [],
@@ -268,7 +309,7 @@ export async function sweepStaleWorktrees(opts?: {
     }
     result.scanned++;
 
-    if (tmuxHasSession(name) || managed.has(name)) {
+    if (tmuxHasSession(name) || managed.has(name) || inUse.has(name)) {
       result.kept++;
       continue;
     }
