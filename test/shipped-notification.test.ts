@@ -10,6 +10,25 @@ describe("shipped notifications", () => {
     expect(server).toContain("user: notificationUser");
   });
 
+  // A ship with closeSession:true schedules the session's teardown ~1.5s after
+  // the push is queued, so by the time anyone taps the notification the id is
+  // legitimately gone from the live fleet. The deep-link resolver only searched
+  // live sessions and then gave up with "That session is no longer running" —
+  // firing on the single most common shipped tap, while the notification body
+  // said "Tap to review the finished session."
+  test("opens a shipped deep link as a finished session instead of erroring", async () => {
+    const app = await readFile("web/src/App.tsx", "utf8");
+    expect(app).not.toContain("That session is no longer running");
+    // Falls back to the same historical review the in-app Shipped row opens.
+    expect(app).toContain("reviewLabel: post ? \"Shipped\" : \"Finished\"");
+    expect(app).toContain("openHistoricalSession({");
+    // Dual-id backends post under whichever id the ship carried; every sibling
+    // lookup already matched both, so the deep link must too.
+    expect(app).toContain(
+      "(session) => session.sessionId === sid || session.nativeSessionId === sid,",
+    );
+  });
+
   test("renders the exact queued notice and navigates an open PWA window", async () => {
     const worker = await readFile("web/public/sw.js", "utf8");
     expect(worker).toContain("const notification = asked?.notification || null");

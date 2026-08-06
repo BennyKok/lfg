@@ -5634,37 +5634,6 @@ export function App() {
     if (tab !== "live") setTab("live");
   }, [prioritizeSession, tab, setTab]);
 
-  useEffect(() => {
-    const sid = sessionDeepLinkRef.current;
-    if (!sid || loading || identityGateOpen) return;
-    const target = allLiveSessions.find((session) => session.sessionId === sid);
-    if (!target) return; // not in the list yet — the giving-up timer below handles it
-    sessionDeepLinkRef.current = null;
-    if (
-      userFilter !== "__all" &&
-      !(userFilter === "__unassigned" ? !target.assignedUser : target.assignedUser === userFilter)
-    ) {
-      setUserFilter("__all");
-    }
-    if (projectFilter !== "__all" && target.project !== projectFilter) {
-      setProjectFilter("__all");
-    }
-    setTab("live");
-    setLiveFocus({ sid, n: Date.now() });
-  }, [allLiveSessions, loading, userFilter, projectFilter, identityGateOpen, setTab]);
-
-  // ...and stop waiting if it never shows up (ended, removed, or another box's
-  // id), so the link reports itself instead of hanging silently forever.
-  useEffect(() => {
-    if (!sessionDeepLinkRef.current || loading || identityGateOpen) return;
-    const timer = window.setTimeout(() => {
-      if (!sessionDeepLinkRef.current) return;
-      sessionDeepLinkRef.current = null;
-      toast.error("That session is no longer running");
-    }, 10000);
-    return () => window.clearTimeout(timer);
-  }, [loading, identityGateOpen]);
-
   const projectScopedAutoAgents = useMemo(() => {
     if (projectFilter === "__all") return autoAgents;
     return autoAgents.filter((agent) => autoAgentProject(agent, repos) === projectFilter);
@@ -5724,6 +5693,63 @@ export function App() {
     },
     [allLiveSessions, identity, setTab],
   );
+
+  // A `?session=` deep-link (a Shipped push, an artifact link) resolves against
+  // the live fleet first. Match the native id too: dual-id backends post under
+  // whichever id the ship carried, and the in-app row lookups already match
+  // both — only this one didn't.
+  useEffect(() => {
+    const sid = sessionDeepLinkRef.current;
+    if (!sid || loading || identityGateOpen) return;
+    const target = allLiveSessions.find(
+      (session) => session.sessionId === sid || session.nativeSessionId === sid,
+    );
+    if (!target) return; // not in the list yet — the giving-up timer below handles it
+    sessionDeepLinkRef.current = null;
+    if (
+      userFilter !== "__all" &&
+      !(userFilter === "__unassigned" ? !target.assignedUser : target.assignedUser === userFilter)
+    ) {
+      setUserFilter("__all");
+    }
+    if (projectFilter !== "__all" && target.project !== projectFilter) {
+      setProjectFilter("__all");
+    }
+    setTab("live");
+    setLiveFocus({ sid: target.sessionId ?? sid, n: Date.now() });
+  }, [allLiveSessions, loading, userFilter, projectFilter, identityGateOpen, setTab]);
+
+  // ...and if it never shows up, open it as a FINISHED session instead of
+  // reporting the link dead. A ship with closeSession:true tears the session
+  // down ~1.5s after the push goes out, so by the time anyone taps the
+  // notification the id is legitimately gone from the live fleet — the old
+  // "no longer running" toast fired on the single most common shipped tap.
+  // This is the same historical review the in-app Shipped row opens.
+  useEffect(() => {
+    if (!sessionDeepLinkRef.current || loading || identityGateOpen) return;
+    const timer = window.setTimeout(() => {
+      const sid = sessionDeepLinkRef.current;
+      if (!sid) return;
+      sessionDeepLinkRef.current = null;
+      // Cache-only: a cold open from a push has no feed yet, and a bare review
+      // card still beats an error. Metadata just makes the header honest.
+      const post = readFeedCache<ShipPost>(SHIPPED_FEED_KEY)?.items.find(
+        (item) => item.sessionId === sid,
+      );
+      openHistoricalSession({
+        sessionId: sid,
+        agent: post?.agent,
+        project: post?.project,
+        title: post?.title,
+        sessionTitle: post?.sessionTitle,
+        startedAt: post?.firstTs,
+        lastActivityAt: post?.ts,
+        reviewLabel: post ? "Shipped" : "Finished",
+      });
+    }, 10000);
+    return () => window.clearTimeout(timer);
+  }, [loading, identityGateOpen, openHistoricalSession]);
+
   const openShippedSession = useCallback(
     (post: ShipPost) =>
       openHistoricalSession({
