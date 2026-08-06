@@ -2,6 +2,19 @@
 
 Recent product updates and deployment notes.
 
+## August 6, 2026 - Newly started sessions can post images without being told who they are (v0.1.288)
+
+- **Finishes the image fix from v0.1.287.** That release taught the server to
+  recognize which session was calling, but the matching change on the agent
+  side landed in the backend that writes reports rather than the one that runs
+  your sessions — so a freshly started session still couldn't identify itself,
+  and an agent had to name its own session id by hand to show you a screenshot.
+  Sessions now register themselves at launch, verified end to end on a real
+  session that displayed an image without naming itself.
+- Both agent launchers share one registration path now, guarded by a check that
+  fails if a future launcher is added without it — which is exactly how the
+  first attempt slipped through.
+
 ## August 6, 2026 - Screenshots show up in transcripts again (v0.1.287)
 
 - **Agents can post images and videos to a session again.** Since August 1,
