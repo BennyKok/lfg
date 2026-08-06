@@ -66,11 +66,51 @@ export function lfgRuntimeContract(): string {
   ].join("\n");
 }
 
+const CONTRACT_HEADER = "=== LFG RUNTIME CONTRACT";
+const CONTRACT_END = "=== END LFG RUNTIME CONTRACT ===";
+const USER_TASK = "=== USER TASK ===";
+
 export function withLfgRuntimeContract(prompt: string | undefined): string | undefined {
   const text = prompt?.trim();
   if (!text) return prompt;
-  if (text.includes("=== LFG RUNTIME CONTRACT")) return text;
-  return `${lfgRuntimeContract()}\n\n=== USER TASK ===\n${text}`;
+  if (text.includes(CONTRACT_HEADER)) return text;
+  return `${lfgRuntimeContract()}\n\n${USER_TASK}\n${text}`;
+}
+
+/**
+ * Inverse of withLfgRuntimeContract, for display surfaces only.
+ *
+ * The envelope stays in the transcript and is still what the agent reads; this
+ * recovers the human's actual prompt so cards, titles and previews aren't all
+ * labelled with LFG's own boilerplate. Anything between the contract and the
+ * task marker (MCP instructions, skill listings) is preamble too, so the task
+ * marker wins when present. Returns the input unchanged when no envelope is
+ * found, and never returns empty — a contract with no task behind it keeps the
+ * original text rather than blanking the card.
+ */
+export function stripLfgRuntimeContract(text: string): string {
+  const start = text.indexOf(CONTRACT_HEADER);
+  if (start < 0) return text;
+  const end = text.indexOf(CONTRACT_END, start + CONTRACT_HEADER.length);
+  if (end < 0) return text;
+  const after = text.slice(end + CONTRACT_END.length);
+  const taskAt = after.indexOf(USER_TASK);
+  const body = taskAt < 0 ? after : after.slice(taskAt + USER_TASK.length);
+  return `${text.slice(0, start)}${body}`.trim() || text;
+}
+
+/**
+ * Card title for a session launched with `prompt`.
+ *
+ * Harness backends recover their initial prompt from argv, where it still
+ * carries the launch envelope, so they must strip it before titling — an
+ * unstripped title reads "=== LFG RUNTIME CONTRACT (capability ve…" on every
+ * managed session instead of the human's ask.
+ */
+export function sessionTitleFromPrompt(prompt: string | null | undefined, max = 72): string | null {
+  if (!prompt) return null;
+  const text = stripLfgRuntimeContract(prompt).replace(/\s+/g, " ").trim();
+  return text ? text.slice(0, max) : null;
 }
 
 export function lfgCapabilityAccess(agent: CodingAgentKind): "mcp" | "contract-only" {

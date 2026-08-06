@@ -19,7 +19,7 @@ import { homedir } from "node:os";
 import { projectName } from "./projects";
 import { isCommandFileAgent } from "./coding-agent-adapters";
 import type { CodingAgentKind } from "./coding-agents";
-import { LFG_CAPABILITY_VERSION } from "./lfg-capabilities.ts";
+import { LFG_CAPABILITY_VERSION, stripLfgRuntimeContract } from "./lfg-capabilities.ts";
 import {
   cachedFingerprints,
   getCachedTranscriptPath,
@@ -784,7 +784,7 @@ async function firstPromptTitle(path: string): Promise<string | null> {
         (msg) => msg.role === "user" && msg.kind === "text",
       );
       if (normalized) {
-        const t = stripConversationPrefix(normalized.text).trim().replace(/\s+/g, " ");
+        const t = promptDisplayText(normalized.text);
         if (t && !t.startsWith("<"))
           return t.length > TITLE_MAX ? t.slice(0, TITLE_MAX - 1) + "…" : t;
       }
@@ -799,7 +799,7 @@ async function firstPromptTitle(path: string): Promise<string | null> {
         t = p?.text ?? null;
       }
       if (!t) continue;
-      t = stripHumanPrefix(t.trim().replace(/\s+/g, " "));
+      t = promptDisplayText(t);
       if (!t || t.startsWith("<")) continue;
       return t.length > TITLE_MAX ? t.slice(0, TITLE_MAX - 1) + "…" : t;
     }
@@ -1347,6 +1347,15 @@ function stripConversationPrefix(text: string): string {
   return text.replace(/^(?:Human|User):[ \t]+/i, "");
 }
 
+// One-line projection of a user prompt for titles, cards and previews. LFG
+// wraps the first prompt of a managed session in its runtime contract, so
+// without this every managed session is titled "=== LFG RUNTIME CONTRACT…"
+// instead of what the human actually asked for. Transcript rendering keeps the
+// full text — the web client collapses the envelope there itself.
+function promptDisplayText(text: string): string {
+  return stripConversationPrefix(stripLfgRuntimeContract(text)).trim().replace(/\s+/g, " ");
+}
+
 function extractText(content: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
@@ -1757,13 +1766,13 @@ async function lastUserText(path: string): Promise<string | null> {
         (msg) => msg.role === "user" && msg.kind === "text",
       );
       if (normalized) {
-        const t = stripConversationPrefix(normalized.text).trim().replace(/\s+/g, " ");
+        const t = promptDisplayText(normalized.text);
         if (t && !t.startsWith("<")) return t.length > 140 ? t.slice(0, 139) + "…" : t;
       }
       if (x.type !== "user" || x.isMeta) continue;
       let t = extractText(x.message?.content);
       if (!t) continue;
-      t = stripHumanPrefix(t.trim().replace(/\s+/g, " "));
+      t = promptDisplayText(t);
       if (!t || t.startsWith("<")) continue;
       return t.length > 140 ? t.slice(0, 139) + "…" : t;
     }
@@ -2455,7 +2464,7 @@ export async function listSessions(): Promise<Session[]> {
       for (let i = recent.length - 1; i >= 0; i--) {
         const msg = recent[i];
         if (msg.role === "user" && msg.kind === "text" && msg.text.trim()) {
-          const t = stripConversationPrefix(msg.text).trim().replace(/\s+/g, " ");
+          const t = promptDisplayText(msg.text);
           if (t && !t.startsWith("<")) {
             lastUser = t.length > 140 ? t.slice(0, 139) + "…" : t;
             break;
@@ -2880,16 +2889,20 @@ async function refreshResumableCacheOnce(focusSessionId?: string): Promise<void>
     const prev = fingerprints.get(t.id);
     if (prev && prev.mtimeMs === mtime) continue;
     const managedRec = managedById.get(t.id) ?? (t.cwd ? managedByCwd.get(t.cwd) : undefined);
+    // firstUserText stays raw on the thread — it is matched against the launch
+    // cmd (which carries the same envelope) to bind a rollout to its managed
+    // session — so the envelope comes off here, at the display boundary.
+    const codexPrompt = t.firstUserText ? promptDisplayText(t.firstUserText) || null : null;
     changed.push({
       sessionId: t.id,
       cwd: t.cwd,
       project: managedRec?.project || projectName(t.cwd, { repoRoot: managedRec?.repoRoot }),
       title:
         managedHistoricalTitle(managedRec, t.id, overrides) ||
-        t.firstUserText ||
+        codexPrompt ||
         (t.cwd ? basename(t.cwd) : "—"),
       lastActivityAt: t.updatedAt ?? t.createdAt,
-      lastUserText: t.firstUserText,
+      lastUserText: codexPrompt,
       agent: "codex",
       path: t.path,
       mtimeMs: mtime,

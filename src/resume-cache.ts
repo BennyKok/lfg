@@ -171,6 +171,13 @@ function init(): Database {
     );
     d.exec(migration);
   }
+  if (version < 6) {
+    const migration = readFileSync(
+      new URL("./migrations/resume-cache/006_strip_runtime_contract_titles.sql", import.meta.url),
+      "utf8",
+    );
+    d.exec(migration);
+  }
   initialized = true;
   return d;
 }

@@ -75,6 +75,21 @@ describe("resume cache migration", () => {
       "utf8",
     );
     db.exec(historicalTitleSql);
+    db.exec(`
+      UPDATE resumable_sessions SET mtime_ms = 42;
+      UPDATE resumable_sessions
+      SET title = '=== LFG RUNTIME CONTRACT (capability version 2026-08-05.2) ==='
+      WHERE session_id = 'other-session';
+      UPDATE resumable_sessions
+      SET title = 'Fix the resume sheet',
+          last_user_text = '=== LFG RUNTIME CONTRACT (capability version 2026-08-05.2) ==='
+      WHERE session_id = 'cursor-session';
+    `);
+    const contractTitleSql = readFileSync(
+      new URL("./migrations/resume-cache/006_strip_runtime_contract_titles.sql", import.meta.url),
+      "utf8",
+    );
+    db.exec(contractTitleSql);
 
     const columns = db.query<{ name: string }, []>("PRAGMA table_info(resumable_sessions)").all();
     expect(columns.map((column) => column.name)).toEqual(expect.arrayContaining([
@@ -95,13 +110,18 @@ describe("resume cache migration", () => {
     expect(db.query<{ backend: string | null }, []>(
       "SELECT backend FROM resumable_sessions WHERE session_id = 'grok-session'",
     ).get()?.backend).toBeNull();
+    // Contract-titled rows (title or preview) are re-enriched; clean rows keep
+    // their fingerprint so the upgrade doesn't rescan the whole history.
     expect(db.query<{ mtime_ms: number }, []>(
       "SELECT mtime_ms FROM resumable_sessions WHERE session_id = 'other-session'",
     ).get()?.mtime_ms).toBe(-1);
     expect(db.query<{ mtime_ms: number }, []>(
+      "SELECT mtime_ms FROM resumable_sessions WHERE session_id = 'cursor-session'",
+    ).get()?.mtime_ms).toBe(-1);
+    expect(db.query<{ mtime_ms: number }, []>(
       "SELECT mtime_ms FROM resumable_sessions WHERE session_id = 'managed-session'",
     ).get()?.mtime_ms).toBe(42);
-    expect(db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(5);
+    expect(db.query<{ user_version: number }, []>("PRAGMA user_version").get()?.user_version).toBe(6);
     db.close();
   });
 });

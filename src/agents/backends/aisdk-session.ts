@@ -31,6 +31,7 @@ import {
   currentBootId,
 } from "../../aisdk-registry.ts";
 import { normalizeLineMessages, type SessionMsg } from "../../sessions.ts";
+import { sessionTitleFromPrompt } from "../../lfg-capabilities.ts";
 import {
   indexSessionMessagesDirect,
   reindexFileHistoryUnderSessionKey,
@@ -202,7 +203,7 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
     cwd,
     model,
     busy: false,
-    title: initialPrompt ? initialPrompt.slice(0, 72) : null,
+    title: sessionTitleFromPrompt(initialPrompt),
     createdAt: Date.now(),
   });
 

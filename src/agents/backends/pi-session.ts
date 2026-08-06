@@ -32,6 +32,7 @@ import {
   currentBootId,
 } from "../../aisdk-registry.ts";
 import { agentProfileCliArgs, loadAgentProfileFromEnv } from "../../agent-profile.ts";
+import { sessionTitleFromPrompt } from "../../lfg-capabilities.ts";
 import type { SessionMsg } from "../../sessions.ts";
 import { indexSessionMessagesDirect } from "../../transcript-index.ts";
 import { makeDraftPublisher } from "./draft.ts";
@@ -227,7 +228,7 @@ export async function cmdPiSession(argv: string[]): Promise<void> {
     cwd,
     model,
     busy: false,
-    title: initialPrompt ? initialPrompt.slice(0, 72) : null,
+    title: sessionTitleFromPrompt(initialPrompt),
     // Display-name override from the custom agent profile, if any — lets the UI
     // show a branded label instead of the raw "pi" agent kind. Null when no
     // profile / no name is configured, which keeps behavior unchanged.

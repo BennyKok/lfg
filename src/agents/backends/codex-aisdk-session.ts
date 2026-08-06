@@ -30,6 +30,7 @@ import {
   currentBootId,
 } from "../../aisdk-registry.ts";
 import type { SessionMsg } from "../../sessions.ts";
+import { sessionTitleFromPrompt } from "../../lfg-capabilities.ts";
 import { indexSessionMessagesDirect, reindexFileHistoryUnderSessionKey } from "../../transcript-index.ts";
 import { makeDraftPublisher } from "./draft.ts";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
@@ -245,7 +246,7 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
     cwd,
     model,
     busy: false,
-    title: initialPrompt ? initialPrompt.slice(0, 72) : null,
+    title: sessionTitleFromPrompt(initialPrompt),
     createdAt: Date.now(),
   });
 
