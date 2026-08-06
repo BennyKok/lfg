@@ -2,6 +2,18 @@
 
 Recent product updates and deployment notes.
 
+## August 6, 2026 - Readable session titles in Resume (v0.1.285)
+
+- The **Resume** sheet, and session cards generally, now show what you actually
+  asked for. Sessions started through LFG had been titled and previewed with
+  the runtime instructions LFG prepends to the first message, so the list read
+  as page after page of identical `=== LFG RUNTIME CONTRACT (capability ve…`
+  rows with no way to tell them apart. Rebuilding the list from real history
+  went from 32 of 200 sessions unreadable to none.
+- Applies across Claude, Codex, Grok and Cursor sessions, and to the titles
+  shown on a brand-new session before its transcript exists. Existing sessions
+  with a stored boilerplate title are repaired automatically on upgrade.
+
 ## August 6, 2026 - Triage starts in the right folder (v0.1.284)
 
 - **Triage & execute** now starts its session in the same project folder the
