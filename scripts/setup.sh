@@ -479,6 +479,9 @@ EnvironmentFile=$LFG_DIR/.env
 Environment=PATH=$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 # Hard-bind to loopback so a stale .env can never expose the UI publicly.
 Environment=LFG_HOST=127.0.0.1
+# agent-browser defaults idle off; without this, headless Chrome orphans pile up
+# when agents forget `close`. Inherited by every managed agent spawn.
+Environment=AGENT_BROWSER_IDLE_TIMEOUT_MS=300000
 ExecStart=$BUN_BIN run $LFG_DIR/src/cli.ts serve
 Restart=on-failure
 RestartSec=3

@@ -142,6 +142,7 @@ import {
   tmuxInterrupt,
   tmuxKillPane,
   tmuxKillSession,
+  closeAgentBrowserSession,
   spawnManagedSession,
   relaunchSessionWithModel,
   spawnManagedCodexSession,
@@ -1335,6 +1336,10 @@ async function closeLiveSession(
   closeLog: Record<string, unknown>,
 ): Promise<CloseOutcome> {
   persistManagedResume(sess);
+  // Reap headless Chrome for this managed name before killing the agent.
+  // agent-browser daemons reparent under user systemd and outlive tmux/harness
+  // exit; idle timeout is the backstop, this is the explicit teardown path.
+  closeAgentBrowserSession(sess.tmuxName);
   if (isCommandFileAgent(sess.agent)) {
     // Ask the harness to shut down, then tear down its supervisor pane and
     // control-plane files. markClosed tombstones the harness pid so the

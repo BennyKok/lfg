@@ -25,6 +25,8 @@ import {
   managedGrokSessionArgv,
   cursorChatIdFromOutput,
   containedAgentCommand,
+  agentBrowserEnv,
+  AGENT_BROWSER_IDLE_TIMEOUT_MS,
   parsePrompt,
 } from "./tmux.ts";
 
@@ -181,8 +183,25 @@ describe("coding agent adapter contract", () => {
     expect(argv).toContain("--property=OOMScoreAdjust=200");
     expect(argv).toContain("--setenv=LFG_SESSION_ID=session-id");
     expect(argv).toContain("--setenv=AGENT_BROWSER_SESSION=lfg-test");
+    expect(argv).toContain(`--setenv=AGENT_BROWSER_IDLE_TIMEOUT_MS=${AGENT_BROWSER_IDLE_TIMEOUT_MS}`);
     expect(argv.some((part) => part.startsWith("--setenv=DBUS_SESSION_BUS_ADDRESS="))).toBe(true);
     expect(argv.slice(-3)).toEqual(["/usr/bin/example-agent", "--task", "hello"]);
+  });
+
+  test("parent (non-slice) managed sessions still get agent-browser session + idle timeout", () => {
+    const argv = managedGrokSessionArgv({
+      name: "lfg-parent",
+      cwd: "/tmp/lfg-test",
+      prompt: "hello",
+      lfgSessionId: "session-id",
+    });
+    // tmux -e pairs — present even when containInAgentSlice is false/omitted
+    expect(argv).toContain("AGENT_BROWSER_SESSION=lfg-parent");
+    expect(argv).toContain(`AGENT_BROWSER_IDLE_TIMEOUT_MS=${AGENT_BROWSER_IDLE_TIMEOUT_MS}`);
+    expect(agentBrowserEnv("lfg-parent")).toEqual({
+      AGENT_BROWSER_SESSION: "lfg-parent",
+      AGENT_BROWSER_IDLE_TIMEOUT_MS: String(AGENT_BROWSER_IDLE_TIMEOUT_MS),
+    });
   });
 
   test("copilot managed sessions launch interactively and auto-execute the initial prompt", () => {

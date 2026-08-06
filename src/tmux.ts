@@ -69,7 +69,48 @@ function ensureCursorFolderTrusted(cwd: string): void {
   }
 }
 
-function addSessionEnv(argv: string[], sessionId?: string | null, user?: string | null): void {
+// agent-browser defaults IDLE off. Without a host-wide idle, headless Chrome
+// daemons reparent under user systemd and can sit for days after an agent
+// forgets `close`. 5 minutes is long enough for multi-step browser checks and
+// short enough to stop the multi-Chrome thrash that pegs this box.
+export const AGENT_BROWSER_IDLE_TIMEOUT_MS = 300_000;
+
+/** Env every managed agent process must inherit so browser daemons are named + idle-reaped. */
+export function agentBrowserEnv(managedName: string): Record<string, string> {
+  return {
+    AGENT_BROWSER_SESSION: managedName,
+    AGENT_BROWSER_IDLE_TIMEOUT_MS: String(AGENT_BROWSER_IDLE_TIMEOUT_MS),
+  };
+}
+
+/**
+ * Best-effort close of the named agent-browser daemon for a managed session.
+ * Safe when no daemon exists (CLI exits non-zero; we ignore). Call on session
+ * teardown so Chrome cannot outlive the agent as a user-systemd orphan.
+ */
+export function closeAgentBrowserSession(managedName: string | null | undefined): void {
+  const name = managedName?.trim();
+  if (!name) return;
+  try {
+    const bin = Bun.which("agent-browser") ?? "agent-browser";
+    Bun.spawnSync({
+      cmd: [bin, "--session", name, "close"],
+      stdout: "ignore",
+      stderr: "ignore",
+      // Don't block teardown if the CLI hangs under host load.
+      timeout: 5_000,
+    });
+  } catch {
+    // best-effort — session kill still proceeds
+  }
+}
+
+function addSessionEnv(
+  argv: string[],
+  sessionId?: string | null,
+  user?: string | null,
+  managedName?: string | null,
+): void {
   const i = argv.indexOf("new-session");
   if (i < 0) return;
   const env: string[] = [];
@@ -79,6 +120,16 @@ function addSessionEnv(argv: string[], sessionId?: string | null, user?: string 
   // `lfg subagent`) can tag ITS children to the same user even when the parent
   // chain isn't resolvable at create time (headless/cron callers).
   if (user) env.push("-e", `LFG_USER=${user}`);
+  // Parent and subagent managed sessions both need a named browser session +
+  // idle timeout. systemd containment (containInAgentSlice) is still subagent-
+  // only for cgroup/OOM reasons; these env vars are universal.
+  if (managedName) {
+    const browser = agentBrowserEnv(managedName);
+    env.push("-e", `AGENT_BROWSER_SESSION=${browser.AGENT_BROWSER_SESSION}`);
+    env.push("-e", `AGENT_BROWSER_IDLE_TIMEOUT_MS=${browser.AGENT_BROWSER_IDLE_TIMEOUT_MS}`);
+  } else {
+    env.push("-e", `AGENT_BROWSER_IDLE_TIMEOUT_MS=${AGENT_BROWSER_IDLE_TIMEOUT_MS}`);
+  }
   if (env.length) argv.splice(i + 1, 0, ...env);
 }
 
@@ -118,8 +169,7 @@ export function containedAgentCommand(
     "--property=KillMode=control-group",
     "--property=OOMScoreAdjust=200",
     `--setenv=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${uid}/lfg-agent-no-session-bus`,
-    `--setenv=AGENT_BROWSER_SESSION=${opts.name}`,
-    "--setenv=AGENT_BROWSER_IDLE_TIMEOUT_MS=300000",
+    ...Object.entries(agentBrowserEnv(opts.name)).flatMap(([k, v]) => [`--setenv=${k}=${v}`]),
   ];
   if (process.env.PATH) argv.push(`--setenv=PATH=${process.env.PATH}`);
   if (opts.lfgSessionId) argv.push(`--setenv=LFG_SESSION_ID=${opts.lfgSessionId}`);
@@ -157,6 +207,9 @@ function spawnManagedHarness(
   env.LFG_CAPABILITY_VERSION = LFG_CAPABILITY_VERSION;
   if (opts.lfgUser) env.LFG_USER = opts.lfgUser;
   else delete env.LFG_USER;
+  // Always name + idle-timeout the browser, including parent (non-slice) harness
+  // spawns. containInAgentSlice still only wraps subagents in systemd-run.
+  Object.assign(env, agentBrowserEnv(opts.name));
   const cmd = opts.containInAgentSlice
     ? containedAgentCommand(command, opts, { pty: false })
     : command;
@@ -169,6 +222,8 @@ function spawnManagedHarness(
       LFG_SESSION_ID: env.LFG_SESSION_ID,
       LFG_CAPABILITY_VERSION: env.LFG_CAPABILITY_VERSION,
       LFG_USER: env.LFG_USER,
+      AGENT_BROWSER_SESSION: env.AGENT_BROWSER_SESSION,
+      AGENT_BROWSER_IDLE_TIMEOUT_MS: env.AGENT_BROWSER_IDLE_TIMEOUT_MS,
     } }));
     return { ok: true, pid: 424242 };
   }
@@ -568,7 +623,7 @@ export function spawnManagedSession(opts: {
     opts.cwd,
     ...claudeLaunchCommandForAccount(claudeArgv, opts.claudeAccountId),
   ];
-  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
+  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser, opts.name);
   containTmuxCommand(argv, claudeBin(), opts.containInAgentSlice, opts);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
@@ -640,7 +695,7 @@ export function spawnManagedCodexSession(opts: {
   if (opts.thinkingLevel) argv.push("-c", `reasoning_effort=${JSON.stringify(opts.thinkingLevel)}`);
   const prompt = withLfgRuntimeContract(opts.prompt);
   if (prompt?.trim()) argv.push("--", prompt);
-  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
+  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser, opts.name);
   containTmuxCommand(argv, codexBin(), opts.containInAgentSlice, opts);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
@@ -684,7 +739,7 @@ export function managedGrokSessionArgv(opts: ManagedGrokSessionOptions): string[
   if (effort) argv.push("--effort", effort);
   const prompt = withLfgRuntimeContract(opts.prompt);
   if (prompt?.trim()) argv.push("--", prompt);
-  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
+  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser, opts.name);
   return argv;
 }
 
@@ -732,7 +787,7 @@ export function managedCopilotSessionArgv(opts: ManagedCopilotSessionOptions): s
   if (opts.model) argv.push("--model", opts.model);
   const prompt = withLfgRuntimeContract(opts.prompt);
   if (prompt?.trim()) argv.push("-i", prompt);
-  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
+  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser, opts.name);
   return argv;
 }
 
@@ -775,7 +830,7 @@ export function managedCursorSessionArgv(opts: ManagedCursorSessionOptions): str
   if (opts.model && opts.model !== "auto") argv.push("--model", opts.model);
   const prompt = withLfgRuntimeContract(opts.prompt);
   if (prompt?.trim()) argv.push(prompt);
-  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
+  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser, opts.name);
   return argv;
 }
 
@@ -877,7 +932,7 @@ export function spawnManagedHermesSession(opts: {
   ];
   if (opts.model) argv.push("--model", opts.model);
   if (opts.provider) argv.push("--provider", opts.provider);
-  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser);
+  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser, opts.name);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
