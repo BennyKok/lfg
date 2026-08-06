@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { AsyncLocalStorage } from "node:async_hooks";
 import * as z from "zod/v4";
 import {
   MODEL_OPTIONS,
@@ -217,8 +218,37 @@ function sessionParent(session: SessionRow): string | undefined {
   return session.parentSessionId ?? session.parentNativeSessionId ?? undefined;
 }
 
+// Which LFG session is on the other end of this tool call.
+//
+// Under stdio, that is ambient: the agent CLI spawns `lfg mcp` as its own child,
+// so LFG_SESSION_ID in the environment *is* the caller. The shared HTTP endpoint
+// (src/mcp-http.ts) has no such luxury — one `lfg serve` process answers every
+// session, and its own environment names none of them. Identity therefore has to
+// ride the request and be carried, per call, to whatever handler needs it.
+//
+// This is the piece that made "serve MCP from the server" a regression rather
+// than a pure win: the MCP server holds no state *except* who is calling.
+const callerSession = new AsyncLocalStorage<string>();
+
+/** Run `fn` with `sessionId` as the calling session for any tool it invokes. */
+export function withCallerSession<T>(sessionId: string | undefined, fn: () => T): T {
+  const sid = sessionId?.trim();
+  return sid ? callerSession.run(sid, fn) : fn();
+}
+
+/**
+ * The calling session, request-scoped first and ambient second.
+ *
+ * Every session-scoped tool resolves identity through here, so the stdio and
+ * HTTP transports behave identically instead of the HTTP one silently degrading
+ * to "no caller".
+ */
+function callerSessionId(): string | undefined {
+  return callerSession.getStore()?.trim() || process.env.LFG_SESSION_ID?.trim() || undefined;
+}
+
 async function activeSessionId(input?: string): Promise<string> {
-  const sessionId = input?.trim() || process.env.LFG_SESSION_ID?.trim();
+  const sessionId = input?.trim() || callerSessionId();
   if (!sessionId) {
     throw new Error("sessionId required; pass it explicitly or run inside an LFG-managed session");
   }
@@ -229,7 +259,7 @@ export async function closeLfgSession(sessionIdInput: string) {
   if (!sessionIdInput.trim()) throw new Error("sessionId required");
   // Resolve before the self-close check so a short id can't slip past it.
   const sessionId = await resolveSid(sessionIdInput);
-  const caller = process.env.LFG_SESSION_ID?.trim();
+  const caller = callerSessionId();
   if (caller && caller === sessionId) {
     throw new Error("lfg_close_session cannot close the calling session");
   }
@@ -265,7 +295,7 @@ export async function findLfgSessions(input: FindLfgSessionsInput) {
 
 async function ownedSessionId(input?: string): Promise<string> {
   const sessionId = await activeSessionId(input);
-  const caller = process.env.LFG_SESSION_ID?.trim();
+  const caller = callerSessionId();
   if (caller && caller !== sessionId) {
     throw new Error("session-owned actions can only target their owning LFG session");
   }
@@ -390,7 +420,7 @@ async function createSubagent({
     }
   }
   const model = rawModel?.trim() || MODEL_OPTIONS[agent as keyof typeof MODEL_OPTIONS].defaultModel;
-  const parentInput = parentSessionId?.trim() || process.env.LFG_SESSION_ID?.trim() || undefined;
+  const parentInput = parentSessionId?.trim() || callerSessionId();
   const parent = parentInput ? await resolveSid(parentInput) : undefined;
   // Tag the child to the same user as the calling session. LFG_USER is injected
   // at spawn (see tmux.ts addSessionEnv); without this, subagents created from
@@ -622,7 +652,7 @@ export function buildLfgMcpServer(): McpServer {
         body: JSON.stringify({
           text,
           mode,
-          fromSessionId: process.env.LFG_SESSION_ID?.trim() || undefined,
+          fromSessionId: callerSessionId(),
         }),
       });
       return result(data);

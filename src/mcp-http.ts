@@ -11,7 +11,23 @@
 // itself. Agents whose CLI can register an HTTP MCP server are pointed here
 // instead, and the per-session processes disappear.
 import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
-import { buildLfgMcpServer } from "./commands/mcp.ts";
+import { buildLfgMcpServer, withCallerSession } from "./commands/mcp.ts";
+
+/**
+ * Which LFG session this request speaks for.
+ *
+ * A stdio MCP child inherits LFG_SESSION_ID from the agent that spawned it. This
+ * process is shared by every session, so the caller has to say who it is: agents
+ * are registered against `/mcp?session=<id>`, and a header is accepted for
+ * clients that cannot carry a query string. Anonymous requests stay anonymous —
+ * session-scoped tools then require an explicit sessionId argument, exactly as
+ * they do outside a managed session.
+ */
+function callerSessionFromRequest(req: Request): string | undefined {
+  const fromQuery = new URL(req.url).searchParams.get("session")?.trim();
+  if (fromQuery) return fromQuery;
+  return req.headers.get("x-lfg-session-id")?.trim() || undefined;
+}
 
 /**
  * Answer one MCP request over Streamable HTTP.
@@ -24,6 +40,12 @@ import { buildLfgMcpServer } from "./commands/mcp.ts";
  * which is what this removes.
  */
 export async function serveLfgMcpRequest(req: Request): Promise<Response> {
+  // Bind the caller for the whole request, so every tool handler it reaches
+  // resolves the same session the agent is running as.
+  return await withCallerSession(callerSessionFromRequest(req), () => answerOne(req));
+}
+
+async function answerOne(req: Request): Promise<Response> {
   const server = buildLfgMcpServer();
   const transport = new WebStandardStreamableHTTPServerTransport({
     // Omitting sessionIdGenerator selects stateless mode.

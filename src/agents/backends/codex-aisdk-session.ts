@@ -56,6 +56,30 @@ function resolveCodexPathOverride(): string | undefined {
   }
 }
 
+/**
+ * Codex CLI overrides that tell the LFG MCP server which session it serves.
+ *
+ * Codex sanitizes the environment of the MCP servers it spawns: this process
+ * has LFG_SESSION_ID, the `lfg mcp` child it launches does not, so every
+ * session-scoped tool fell back to "no caller" and failed. `~/.codex/config.toml`
+ * can't carry the id — one config serves every session — so it rides the
+ * per-launch `--config` overrides instead.
+ */
+// Mirrors the codex-sdk's own config value type; the SDK is imported
+// dynamically, so its types aren't in scope here.
+type CodexConfigValue =
+  | string
+  | number
+  | boolean
+  | CodexConfigValue[]
+  | { [key: string]: CodexConfigValue };
+
+function lfgMcpConfig(): { config?: { [key: string]: CodexConfigValue } } {
+  const sessionId = process.env.LFG_SESSION_ID?.trim();
+  if (!sessionId) return {};
+  return { config: { mcp_servers: { lfg: { env: { LFG_SESSION_ID: sessionId } } } } };
+}
+
 // Shared thread options for both the interactive harness and the one-shot
 // runner: full access + never-approve mirrors the tmux codex session's
 // `--sandbox danger-full-access --ask-for-approval never`.
@@ -149,7 +173,10 @@ export async function pipeToCodexAiSdk(
   const cwd = opts.cwd ?? process.cwd();
   const { Codex } = await import("@openai/codex-sdk");
   const codexPathOverride = resolveCodexPathOverride();
-  const codex = new Codex(codexPathOverride ? { codexPathOverride } : {});
+  const codex = new Codex({
+    ...(codexPathOverride ? { codexPathOverride } : {}),
+    ...lfgMcpConfig(),
+  });
 
   log(`[runner] piping ${prompt.length} chars to codex via codex-sdk (${model})`);
   const thread = codex.startThread(threadOptions(model, cwd, opts.thinkingLevel));
@@ -221,7 +248,10 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
   const { Codex } = await import("@openai/codex-sdk");
   const codexPathOverride = resolveCodexPathOverride();
   // Omitting `env` inherits process.env (HOME → ~/.codex auth, LFG_* for MCP).
-  const codex = new Codex(codexPathOverride ? { codexPathOverride } : {});
+  const codex = new Codex({
+    ...(codexPathOverride ? { codexPathOverride } : {}),
+    ...lfgMcpConfig(),
+  });
   let threadThinkingLevel = thinkingLevel;
   let thread = resumeThreadId
     ? codex.resumeThread(resumeThreadId, threadOptions(model, cwd, thinkingLevel ?? undefined))

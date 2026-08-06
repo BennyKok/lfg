@@ -5,6 +5,8 @@
 // legacy CLI path, but uses the official Agent SDK `query()` surface so report
 // generation no longer depends on the Vercel AI SDK Claude Code provider.
 
+import { localServeBaseUrl } from "../../config.ts";
+
 export type AiSdkOptions = {
   /** Model id: "opus" | "sonnet" | "haiku" or a full id like "claude-opus-4-8". */
   model?: string;
@@ -15,6 +17,21 @@ export type AiSdkOptions = {
 };
 
 type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+
+/**
+ * The LFG MCP registration for *this* session.
+ *
+ * The shared endpoint (src/mcp-http.ts) reads `?session=` to learn who is
+ * calling; a registration written to user-scope config can't carry that, since
+ * one config file serves every session on the box. Returns nothing outside a
+ * managed session, leaving the user-scope registration in charge.
+ */
+function lfgMcpServers(): { mcpServers?: Record<string, { type: "http"; url: string }> } {
+  const sessionId = process.env.LFG_SESSION_ID?.trim();
+  if (!sessionId) return {};
+  const url = `${localServeBaseUrl()}/mcp?session=${encodeURIComponent(sessionId)}`;
+  return { mcpServers: { lfg: { type: "http", url } } };
+}
 
 /** Resolve the installed `claude` binary so the SDK drives it directly. */
 function resolveClaudePath(): string | undefined {
@@ -93,6 +110,11 @@ export async function pipeToClaudeAiSdk(
         ? { allowedTools: opts.allowedTools, tools: opts.allowedTools }
         : { disallowedTools: ["AskUserQuestion"] }),
       settingSources: ["user", "project"],
+      // Re-register the shared MCP endpoint under this session's own URL. The
+      // user-scope registration is session-agnostic — it has to be, one config
+      // serves every session — so without this the serve process cannot tell
+      // who is calling and every session-scoped tool fails "sessionId required".
+      ...lfgMcpServers(),
       includePartialMessages: true,
       ...(effort ? { effort } : {}),
       // env is intentionally omitted: Agent SDK then inherits process.env,
