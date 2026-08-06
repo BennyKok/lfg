@@ -2,6 +2,16 @@
 
 Recent product updates and deployment notes.
 
+## August 6, 2026 - No more "Welcome, Unassigned" (v0.1.289)
+
+- **The mobile Live header stops greeting people by a filter label.** When
+  nothing identifies the viewer — a hosted surface that passes no viewer, or
+  omg.dev's signed-out preview — the welcome fell through to the roster's
+  "unassigned" label, so visitors were greeted with "Welcome, Unassigned".
+- No identity now simply means no name: "Welcome", and the agent-needs-you
+  headlines drop their name prefix the same way. Signed-in and hosted-viewer
+  greetings are unchanged.
+
 ## August 6, 2026 - Newly started sessions can post images without being told who they are (v0.1.288)
 
 - **Finishes the image fix from v0.1.287.** That release taught the server to
