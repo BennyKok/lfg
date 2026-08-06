@@ -189,12 +189,29 @@ export async function runAutoAgent(
   }
 }
 
-async function runAutoAgentInner(
-  agent: AutoAgent,
-  onLog: (s: string) => void = () => {},
-): Promise<Finding | null> {
-  const mine = (await listFindings()).filter((f) => f.agentId === agent.id);
-  const dismissed = mine.filter((f) => f.status === "dismissed").slice(0, 20);
+/**
+ * Prior-findings context appended to an agent's prompt.
+ *
+ * Dismissal silences an OPINION, not a broken system. Feeding every dismissed
+ * title back as "do NOT resurface" also muted recurring health checks: a daily
+ * e2e went red, the finding was dismissed, and the agent then stayed silent
+ * through every later red run — the test stayed broken for a day with nothing
+ * alerting. It also contradicted store.ts, which deliberately counts
+ * `dismissed` as UNRESOLVED so repeats escalate. The two mechanisms were
+ * fighting and the prompt won.
+ *
+ * So HIGH severity is never suppressed. If one recurs the agent reports it,
+ * recordRecurrence matches the still-unresolved title, and the occurrence
+ * count escalates it back into a notification. Low/med dismissals still stick,
+ * which is where the anti-noise value actually was.
+ *
+ * Exported for test — this rule is the difference between a muted outage and
+ * an alert, so it is worth pinning directly.
+ */
+export function buildFindingFeedback(mine: Finding[]): string {
+  const dismissed = mine
+    .filter((f) => f.status === "dismissed" && f.severity !== "high")
+    .slice(0, 20);
   const open = mine.filter((f) => f.status === "open").slice(0, 20);
 
   let feedback = "";
@@ -208,6 +225,15 @@ async function runAutoAgentInner(
       "\n\n## Already open (don't repeat):\n" +
       open.map((f) => `- ${f.title}`).join("\n");
   }
+  return feedback;
+}
+
+async function runAutoAgentInner(
+  agent: AutoAgent,
+  onLog: (s: string) => void = () => {},
+): Promise<Finding | null> {
+  const mine = (await listFindings()).filter((f) => f.agentId === agent.id);
+  const feedback = buildFindingFeedback(mine);
 
   const prompt = `${SYSTEM}\n\n## Instruction\n${agent.prompt}${feedback}`;
   // The agent's base repo (chosen from the repo list in the UI) is where it runs
