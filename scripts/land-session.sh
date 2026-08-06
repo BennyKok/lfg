@@ -125,6 +125,21 @@ git -C "$MAIN_ROOT" merge --ff-only origin/main
 [ "$(git -C "$MAIN_ROOT" rev-parse HEAD)" = "$(git -C "$MAIN_ROOT" rev-parse origin/main)" ] \
   || die "local main contains unpushed commits; land or preserve them before this session"
 
+# The web build runs `tsc --noEmit` as part of `bun run build`, so a type error
+# under web/ has always blocked a landing. Nothing ran the equivalent for the
+# BACKEND: `bun run typecheck` existed in package.json but no gate — not CI
+# (only audit + release workflows), not this script — ever invoked it. src/ was
+# therefore free to drift red indefinitely, and did: two errors in serve.ts sat
+# on main undetected because a deploy only ever exercises the web bundle.
+#
+# Gate before the push, not after, so a type error is something you fix in your
+# own worktree instead of something the next person inherits from main.
+if [ "${LFG_LAND_SKIP_TYPECHECK:-0}" != "1" ]; then
+  say "Typechecking the backend"
+  (cd "$SESSION_ROOT" && bun run typecheck) \
+    || die "backend typecheck failed; fix it before landing (LFG_LAND_SKIP_TYPECHECK=1 to override)"
+fi
+
 landed=0
 for attempt in 1 2 3; do
   git -C "$SESSION_ROOT" fetch --quiet origin main

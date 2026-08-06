@@ -26,6 +26,7 @@ import {
   getCachedResumableSession,
   updateResumableUser,
   upsertResumableRows,
+  type ResumableCacheRow,
 } from "../resume-cache.ts";
 import {
   AGENTS_DIR,
@@ -826,7 +827,12 @@ function persistManagedResume(session: Session): void {
               : "claude";
   const path = backend ? sessionIndexKey(session.sessionId) : session.transcriptPath;
   const mtimeMs = session.lastActivityAt ?? Date.now();
-  const base = {
+  // Annotated, not inferred: `agent` and `backend` are narrow unions on the
+  // row type, but a bare object literal widens both to `string`, so the two
+  // spreads below failed to typecheck against upsertResumableRows. Pinning the
+  // contract here also means a future field drift is reported at the one place
+  // it's constructed rather than at every use site.
+  const base: Omit<ResumableCacheRow, "sessionId" | "resumeHandle" | "managed"> = {
     cwd: session.cwd,
     project: session.project,
     title: session.title,
@@ -838,7 +844,7 @@ function persistManagedResume(session: Session): void {
     backend: backend ?? undefined,
     model: session.model,
     assignedUser: session.assignedUser,
-    resumable: true as const,
+    resumable: true,
   };
   const rows: Parameters<typeof upsertResumableRows>[0] = [{
     ...base,

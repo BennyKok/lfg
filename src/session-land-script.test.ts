@@ -94,8 +94,13 @@ describe("serialized session landing script", () => {
       `${git(main, "rev-parse", "origin/main")}\n`,
     );
     const buildCwds = (await Bun.file(bunLog).text()).trim().split("\n");
-    expect(buildCwds).toHaveLength(12);
+    expect(buildCwds).toHaveLength(14);
     expect(buildCwds.filter((cwd) => cwd === main)).toHaveLength(8);
     expect(buildCwds.filter((cwd) => cwd === join(main, "web"))).toHaveLength(4);
+    // The backend typecheck runs in each SESSION worktree, before that
+    // session's push — so a type error is caught where its author can fix it
+    // rather than after it has already landed on main. One per landing.
+    expect(buildCwds.filter((cwd) => cwd === first)).toHaveLength(1);
+    expect(buildCwds.filter((cwd) => cwd === second)).toHaveLength(1);
   });
 });
