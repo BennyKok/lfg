@@ -405,8 +405,13 @@ export function resetTranscriptIndexConnectionForTests(): void {
 }
 
 function init(busyTimeoutMs = TRANSCRIPT_BUSY_TIMEOUT_MS) {
-  if (initialized) return;
+  // Bind the connection BEFORE consulting `initialized`. database() clears that
+  // flag when dbPath() has moved under us, so checking it first would return
+  // early on a stale `true`, and the caller would then go on to query a
+  // freshly-opened, EMPTY database -- "no such table: transcript_messages".
+  // Cheap when already bound: database() returns immediately in that case.
   const d = database(busyTimeoutMs);
+  if (initialized) return;
   d.exec(`
     CREATE TABLE IF NOT EXISTS transcript_index_cursors (
       path TEXT PRIMARY KEY,

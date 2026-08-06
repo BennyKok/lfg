@@ -10,6 +10,7 @@ import {
   upsertResumableRows,
 } from "./resume-cache.ts";
 import { resolveTranscript } from "./sessions.ts";
+import { resetTranscriptIndexConnectionForTests } from "./transcript-index.ts";
 
 const originalData = PATHS.data;
 let root = "";
@@ -18,10 +19,15 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "lfg-grok-transcript-"));
   PATHS.data = root;
   resetResumeCacheConnectionForTests();
+  // resolveTranscript also reaches the transcript index, which keeps its own
+  // connection. Without this the suite passed alone and failed in a full run,
+  // inheriting whatever PATHS.data an earlier file had bound.
+  resetTranscriptIndexConnectionForTests();
 });
 
 afterEach(() => {
   resetResumeCacheConnectionForTests();
+  resetTranscriptIndexConnectionForTests();
   PATHS.data = originalData;
   rmSync(root, { recursive: true, force: true });
 });
