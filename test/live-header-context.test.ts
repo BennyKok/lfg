@@ -21,9 +21,11 @@ describe("contextual mobile Live header", () => {
       /isMobile && tab === "live"[\s\S]*?<LiveHeaderContext[\s\S]*?embedded \? null : \([\s\S]*?<UserFilterMenu[\s\S]*?<PagesMenu/,
     );
     expect(source).not.toContain('isMobile && tab === "live" && !embedded');
-    expect(source).toContain("const welcomeMessage = `Welcome, ${firstName}`");
     expect(source).toContain(
-      "viewerName?.trim() || user?.name?.trim() || shortUser(identity)",
+      'const welcomeMessage = firstName ? `Welcome, ${firstName}` : "Welcome"',
+    );
+    expect(source).toContain(
+      'viewerName?.trim() || user?.name?.trim() || (identity ? shortUser(identity) : "")',
     );
     expect(source).toContain('`${busyCount} agent${busyCount === 1 ? "" : "s"} building`');
     expect(source).toContain("const actionInMotion = busyCount > 0;");
@@ -54,6 +56,19 @@ describe("contextual mobile Live header", () => {
     expect(styleSource).toContain("--text-swap-dur: 150ms");
     expect(styleSource).toContain(".lfg-shimmer-text::before");
     expect(styleSource).toContain("animation: none !important");
+  });
+
+  test("never greets an unidentified viewer as the roster's Unassigned label", async () => {
+    const source = await app();
+    // shortUser() answers "unassigned" for a missing email — a roster filter
+    // label, not a person. The signed-out omg preview passes no viewer, no
+    // user and no identity, so it used to render "Welcome, Unassigned".
+    expect(source).not.toContain("shortUser(identity)`");
+    expect(source).toContain('(identity ? shortUser(identity) : "")');
+    expect(source).toContain('const firstNamePart = rawName.split(/\\s+/)[0] ?? "";');
+    expect(source).toContain(': "Welcome"');
+    expect(source).toContain(': "An agent needs you"');
+    expect(source).toContain(": `${questionCount} agents need you`");
   });
 
   test("keeps urgent questions accessible without restoring a badge", async () => {
