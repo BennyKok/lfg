@@ -120,6 +120,7 @@ import {
   subscribeShippedHead,
 } from "./lib/shipped-feed";
 import { findingReference } from "./lib/finding-reference";
+import { buildAutoTriagePrompt } from "./lib/auto-triage";
 import { setThemePreference, THEME_CHANGE_EVENT } from "./lib/theme";
 import { startsInBottomSystemGestureZone } from "./lib/touch-gestures";
 import {
@@ -4951,6 +4952,7 @@ export function App() {
   });
   const [schedTz, setSchedTz] = useState<string>(DEFAULT_SCHED_TZ);
   const [findings, setFindings] = useState<AutoFinding[]>([]);
+  const [autoTriageBusy, setAutoTriageBusy] = useState(false);
   const [toastedFindingIds, setToastedFindingIds] = useState<Set<string>>(() => new Set());
   const [openFinding, setOpenFinding] = useState<AutoFinding | null>(null);
   const [editingAgent, setEditingAgent] = useState<AutoAgent | "new" | null>(null);
@@ -6072,6 +6074,62 @@ export function App() {
     }
   }
 
+  async function launchAutoTriage(scopeFindings: AutoFinding[]) {
+    if (!scopeFindings.length || autoTriageBusy) return;
+    setAutoTriageBusy(true);
+
+    const sourceCwds = Array.from(
+      new Set(
+        scopeFindings
+          .map((finding) => autoAgents.find((agent) => agent.id === finding.agentId)?.cwd)
+          .filter((cwd): cwd is string => !!cwd),
+      ),
+    );
+    const cwd =
+      (sourceCwds.length === 1 ? sourceCwds[0] : undefined) ||
+      localStorage.getItem("lfg_v2_repo") ||
+      repos[0]?.cwd;
+    const launchAgent = (localStorage.getItem("lfg_v2_agent") as AgentKind | null) || "aisdk";
+    const launchModel =
+      localStorage.getItem(`lfg_model_${launchAgent}`) ||
+      localStorage.getItem("lfg_model") ||
+      modelCatalog.defaults[launchAgent] ||
+      AGENT_DEFAULT_MODEL[launchAgent];
+    const owner =
+      userFilter === "__unassigned"
+        ? ""
+        : resolveRosterUser(
+            userFilter !== "__all" ? userFilter : localStorage.getItem("lfg_user"),
+            users,
+          );
+
+    try {
+      const res = await api<{ sessionId?: string }>("/api/sessions/new", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          cwd,
+          prompt: buildAutoTriagePrompt(scopeFindings, autoAgents),
+          title: `Triage ${scopeFindings.length} auto finding${scopeFindings.length === 1 ? "" : "s"}`,
+          user: owner || undefined,
+          agent: launchAgent,
+          model: launchModel,
+          thinkingLevel: agentSupportsThinking(launchAgent) ? savedThinkingLevel() : undefined,
+        }),
+      });
+      if (res.sessionId) markCreatedSid(res.sessionId);
+      setTab("live");
+      await refreshSessions();
+      toast.success(
+        `Started triage & execute for ${scopeFindings.length} finding${scopeFindings.length === 1 ? "" : "s"}`,
+      );
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not start auto triage");
+    } finally {
+      setAutoTriageBusy(false);
+    }
+  }
+
   // Direct bulk clear: archives every idle in-scope session in one request. The
   // Manage Sessions templates below spawn an agent to exercise judgement; this
   // is the plumbing version for "just clear them" — no LLM involved.
@@ -6886,6 +6944,8 @@ export function App() {
               autoAgents={projectScopedAutoAgents}
               onOpenFinding={setOpenFinding}
               onDismissFinding={(finding) => void dismissFinding(finding)}
+              onTriageFindings={() => void launchAutoTriage(projectScopedFindings)}
+              autoTriageBusy={autoTriageBusy}
               focus={liveFocus}
             />
           </div>
@@ -6897,6 +6957,8 @@ export function App() {
             tz={schedTz}
             onEdit={setEditingAgent}
             onRunNow={runAutoNow}
+            onTriageFindings={() => void launchAutoTriage(findings)}
+            autoTriageBusy={autoTriageBusy}
             settings={settings}
             onSettingsChange={updateSettings}
           />
@@ -9011,6 +9073,8 @@ function LiveView({
   autoAgents = [],
   onOpenFinding,
   onDismissFinding,
+  onTriageFindings,
+  autoTriageBusy = false,
   projectOptions = [],
   onProjectChange,
   onUserChange,
@@ -9058,6 +9122,8 @@ function LiveView({
   autoAgents: AutoAgent[];
   onOpenFinding: (f: AutoFinding) => void;
   onDismissFinding: (f: AutoFinding) => void;
+  onTriageFindings: () => void;
+  autoTriageBusy?: boolean;
   // External "jump to session" request (e.g. tapping a Shipped post).
   focus?: { sid: string; n: number } | null;
 }) {
@@ -9306,6 +9372,8 @@ function LiveView({
         findings={findings}
         nameFor={nameFor}
         onOpenFinding={onOpenFinding}
+        onTriageFindings={onTriageFindings}
+        autoTriageBusy={autoTriageBusy}
         onNew={onNew}
         userFilter={userFilter}
         projectOptions={projectOptions}
@@ -9363,7 +9431,18 @@ function LiveView({
       ) : null}
       {findings.length ? (
         <section>
-          <CategoryHeader label="Auto" count={findings.length} dotClass="bg-primary" />
+          <CategoryHeader
+            label="Auto"
+            count={findings.length}
+            dotClass="bg-primary"
+            action={
+              <AutoTriageButton
+                count={findings.length}
+                busy={autoTriageBusy}
+                onClick={onTriageFindings}
+              />
+            }
+          />
           <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 xl:grid-cols-2">
             {findings.map((f) => (
               <AutoFindingCard
@@ -9472,6 +9551,8 @@ function RailStage({
   findings = [],
   nameFor,
   onOpenFinding,
+  onTriageFindings,
+  autoTriageBusy = false,
   onNew,
   userFilter = "__all",
   projectOptions = [],
@@ -9523,6 +9604,8 @@ function RailStage({
   findings: AutoFinding[];
   nameFor: (id: string) => string;
   onOpenFinding: (f: AutoFinding) => void;
+  onTriageFindings: () => void;
+  autoTriageBusy?: boolean;
   onNew: () => void;
 }) {
   const appDialog = useAppDialog();
@@ -10407,7 +10490,19 @@ function RailStage({
 
   const autoRailGroup =
     findings.length && !railCollapsed ? (
-      <RailGroup label="Auto" count={findings.length} collapsed={railCollapsed}>
+      <RailGroup
+        label="Auto"
+        count={findings.length}
+        collapsed={railCollapsed}
+        action={
+          <AutoTriageButton
+            count={findings.length}
+            busy={autoTriageBusy}
+            onClick={onTriageFindings}
+            compact
+          />
+        }
+      >
         {findings.map((f) => (
           <button
             key={f.id}
@@ -10768,18 +10863,21 @@ function RailGroup({
   label,
   count,
   collapsed,
+  action,
   children,
 }: {
   label: string;
   count: number;
   collapsed: boolean;
+  action?: ReactNode;
   children: ReactNode;
 }) {
   return (
     <div className="mb-2">
       {!collapsed ? (
-        <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
-          {label} · {count}
+        <div className="flex items-center px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+          <span>{label} · {count}</span>
+          {action ? <span className="ml-auto normal-case tracking-normal">{action}</span> : null}
         </div>
       ) : null}
       <div className="flex flex-col gap-0.5">{children}</div>
@@ -11178,6 +11276,39 @@ function CategoryHeader({
       </span>
       {action ? <div className="ml-auto flex items-center">{action}</div> : null}
     </div>
+  );
+}
+
+function AutoTriageButton({
+  count,
+  busy,
+  onClick,
+  compact = false,
+  prominent = false,
+}: {
+  count: number;
+  busy: boolean;
+  onClick: () => void;
+  compact?: boolean;
+  prominent?: boolean;
+}) {
+  return (
+    <Button
+      type="button"
+      size={prominent ? "sm" : "icon-sm"}
+      variant={prominent ? "brand" : "tint"}
+      disabled={busy || count === 0}
+      onClick={onClick}
+      aria-label={`Triage and execute ${count} auto finding${count === 1 ? "" : "s"}`}
+      className={cn(
+        prominent && "gap-1.5",
+        compact && "size-5 rounded-md [&_svg]:size-3",
+      )}
+      title="Group related findings and launch linked agents to execute them"
+    >
+      {busy ? <Loader2 className="animate-spin" /> : <Sparkles />}
+      {prominent ? (busy ? "Starting…" : "Triage & execute") : null}
+    </Button>
   );
 }
 
@@ -20490,6 +20621,8 @@ function AutoManageView({
   tz,
   onEdit,
   onRunNow,
+  onTriageFindings,
+  autoTriageBusy = false,
   settings,
   onSettingsChange,
 }: {
@@ -20498,6 +20631,8 @@ function AutoManageView({
   tz: string;
   onEdit: (agent: AutoAgent | "new") => void;
   onRunNow: (id: string) => void;
+  onTriageFindings: () => void;
+  autoTriageBusy?: boolean;
   settings?: GlobalSettings;
   onSettingsChange?: (patch: Partial<GlobalSettings>) => Promise<void>;
 }) {
@@ -20510,6 +20645,27 @@ function AutoManageView({
           Prompts that run on a timer on this computer
         </p>
       </div>
+      {findings.length ? (
+        <div className="mb-2 flex items-center gap-3 rounded-xl border border-primary/25 bg-primary/5 px-3 py-3">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-primary/12 text-primary">
+            <Sparkles className="size-4" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-sm font-semibold">
+              {findings.length} open finding{findings.length === 1 ? "" : "s"}
+            </span>
+            <span className="block text-xs text-muted-foreground">
+              Group related work, dismiss verified noise, and launch linked agents.
+            </span>
+          </span>
+          <AutoTriageButton
+            count={findings.length}
+            busy={autoTriageBusy}
+            onClick={onTriageFindings}
+            prominent
+          />
+        </div>
+      ) : null}
       {autoAgents.length === 0 ? (
         <div className="rounded-xl border border-border bg-card p-8 text-center text-sm text-muted-foreground">
           No schedules yet.
