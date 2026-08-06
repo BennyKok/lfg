@@ -120,7 +120,7 @@ import {
   subscribeShippedHead,
 } from "./lib/shipped-feed";
 import { findingReference } from "./lib/finding-reference";
-import { buildAutoTriagePrompt } from "./lib/auto-triage";
+import { buildAutoTriagePrompt, resolveAutoTriageCwd } from "./lib/auto-triage";
 import { setThemePreference, THEME_CHANGE_EVENT } from "./lib/theme";
 import { startsInBottomSystemGestureZone } from "./lib/touch-gestures";
 import {
@@ -6078,17 +6078,21 @@ export function App() {
     if (!scopeFindings.length || autoTriageBusy) return;
     setAutoTriageBusy(true);
 
-    const sourceCwds = Array.from(
-      new Set(
-        scopeFindings
-          .map((finding) => autoAgents.find((agent) => agent.id === finding.agentId)?.cwd)
-          .filter((cwd): cwd is string => !!cwd),
-      ),
-    );
-    const cwd =
-      (sourceCwds.length === 1 ? sourceCwds[0] : undefined) ||
-      localStorage.getItem("lfg_v2_repo") ||
-      repos[0]?.cwd;
+    // Resolve each finding to the same project the list groups it under, so the
+    // triage session lands in that folder instead of the last-used repo.
+    const sources = scopeFindings.map((finding) => {
+      const source = autoAgents.find((agent) => agent.id === finding.agentId);
+      return {
+        cwd: source?.cwd,
+        project: source ? autoAgentProject(source, repos) : undefined,
+      };
+    });
+    const cwd = resolveAutoTriageCwd({
+      sources,
+      projectFilter,
+      repos: repos.map((repo) => ({ cwd: repo.cwd, project: repoProject(repo) })),
+      fallbackCwd: localStorage.getItem("lfg_v2_repo"),
+    });
     const launchAgent = (localStorage.getItem("lfg_v2_agent") as AgentKind | null) || "aisdk";
     const launchModel =
       localStorage.getItem(`lfg_model_${launchAgent}`) ||

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildAutoTriagePrompt } from "../web/src/lib/auto-triage.ts";
+import { buildAutoTriagePrompt, resolveAutoTriageCwd } from "../web/src/lib/auto-triage.ts";
 
 describe("auto finding triage prompt", () => {
   test("carries every finding and explicitly authorizes grouped execution", () => {
@@ -59,5 +59,86 @@ describe("auto finding triage prompt", () => {
 
     expect(prompt.startsWith("Triage and execute 1 open LFG auto-agent finding.\n")).toBe(true);
     expect(prompt).toContain("Agent: watcher");
+  });
+});
+
+describe("auto triage launch folder", () => {
+  const repos = [
+    { cwd: "/home/dev/repos/store", project: "store" },
+    { cwd: "/home/dev/repos/lfg", project: "lfg" },
+  ];
+
+  test("keeps the session in the project the findings are listed under", () => {
+    expect(
+      resolveAutoTriageCwd({
+        sources: [
+          { cwd: "/home/dev/repos/store", project: "store" },
+          { cwd: "/home/dev/repos/store/web", project: "store" },
+        ],
+        projectFilter: "store",
+        repos,
+        fallbackCwd: "/home/dev/repos/lfg",
+      }),
+    ).toBe("/home/dev/repos/store");
+  });
+
+  test("uses the single shared agent cwd, including a worktree of that project", () => {
+    expect(
+      resolveAutoTriageCwd({
+        sources: [
+          { cwd: "/home/dev/lfg-worktrees/lfg-98d0e9", project: "lfg" },
+          { cwd: "/home/dev/lfg-worktrees/lfg-98d0e9", project: "lfg" },
+        ],
+        projectFilter: "__all",
+        repos,
+        fallbackCwd: "/home/dev/repos/store",
+      }),
+    ).toBe("/home/dev/lfg-worktrees/lfg-98d0e9");
+  });
+
+  test("ignores the last-used repo when a project filter is selected", () => {
+    expect(
+      resolveAutoTriageCwd({
+        sources: [
+          { cwd: "/home/dev/repos/store", project: "store" },
+          { project: "store" },
+          { cwd: "/home/dev/lfg-worktrees/store-4f2a1b", project: "store" },
+        ],
+        projectFilter: "store",
+        repos,
+        fallbackCwd: "/home/dev/repos/lfg",
+      }),
+    ).toBe("/home/dev/repos/store");
+  });
+
+  test("falls back to the last-used repo only for a genuinely cross-project batch", () => {
+    expect(
+      resolveAutoTriageCwd({
+        sources: [
+          { cwd: "/home/dev/repos/store", project: "store" },
+          { cwd: "/home/dev/repos/lfg", project: "lfg" },
+        ],
+        projectFilter: "__all",
+        repos,
+        fallbackCwd: "/home/dev/repos/lfg",
+      }),
+    ).toBe("/home/dev/repos/lfg");
+  });
+
+  test("still resolves the project when no agent reports a cwd", () => {
+    expect(
+      resolveAutoTriageCwd({
+        sources: [{ project: "lfg" }, { project: "lfg" }],
+        projectFilter: "__all",
+        repos,
+        fallbackCwd: "/home/dev/repos/store",
+      }),
+    ).toBe("/home/dev/repos/lfg");
+  });
+
+  test("falls back to the first repo with nothing else to go on", () => {
+    expect(
+      resolveAutoTriageCwd({ sources: [{}], projectFilter: "__all", repos, fallbackCwd: null }),
+    ).toBe("/home/dev/repos/store");
   });
 });

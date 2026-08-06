@@ -12,6 +12,58 @@ export type AutoTriageFinding = FindingReferenceInput & {
   severity: "high" | "med" | "low";
 };
 
+export type AutoTriageRepo = { cwd: string; project: string };
+
+// One entry per finding in scope: where its auto agent ran, and the project the
+// UI already groups that finding under (server-computed and worktree-aware).
+export type AutoTriageSource = { cwd?: string; project?: string };
+
+// Pick the cwd for the triage session so it lands in the SAME project folder the
+// findings are listed under. The rail/Live list groups sessions by project, so a
+// triage run launched into the last-used repo simply disappears from the view
+// the human pressed the button in.
+export function resolveAutoTriageCwd(input: {
+  sources: AutoTriageSource[];
+  projectFilter: string;
+  repos: AutoTriageRepo[];
+  fallbackCwd?: string | null;
+}): string | undefined {
+  const { sources, projectFilter, repos, fallbackCwd } = input;
+  const projects = Array.from(
+    new Set(sources.map((source) => source.project).filter((p): p is string => !!p)),
+  );
+  // A single shared project wins over the filter: the Auto tab triages every
+  // finding regardless of the selected filter. Otherwise an explicitly selected
+  // project keeps a mixed batch inside the folder being looked at.
+  const target =
+    projects.length === 1 ? projects[0] : projectFilter !== "__all" ? projectFilter : undefined;
+
+  const cwdsFor = (match?: string) =>
+    Array.from(
+      new Set(
+        sources
+          .filter((source) => (match ? source.project === match : true))
+          .map((source) => source.cwd)
+          .filter((cwd): cwd is string => !!cwd),
+      ),
+    );
+
+  if (target) {
+    // Prefer the exact agent cwd when the whole group ran in one place (it may be
+    // a worktree of the target project, which still groups under that project).
+    const scoped = cwdsFor(target);
+    if (scoped.length === 1) return scoped[0];
+    const repo = repos.find((r) => r.project === target);
+    if (repo) return repo.cwd;
+    if (scoped.length) return scoped[0];
+  } else {
+    const all = cwdsFor();
+    if (all.length === 1) return all[0];
+  }
+
+  return fallbackCwd || repos[0]?.cwd;
+}
+
 export function buildAutoTriagePrompt(
   findings: AutoTriageFinding[],
   agents: AutoTriageAgent[],
