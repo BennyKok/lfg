@@ -2,6 +2,16 @@
 
 Recent product updates and deployment notes.
 
+## August 6, 2026 - Triage starts in the right folder (v0.1.284)
+
+- **Triage & execute** now starts its session in the same project folder the
+  findings are listed under, so it shows up in the Live list and rail group you
+  pressed the button in. Previously a batch spanning more than one agent folder
+  — or any agent without a folder — fell back to the last repo you happened to
+  open, and the run appeared under an unrelated project.
+- Headless Chrome no longer leaks between agent sessions: every managed session
+  gets a browser idle timeout and closes its browser on teardown.
+
 ## August 6, 2026 - One-click auto finding triage (v0.1.283)
 
 - Open auto-agent findings now have a **Triage & execute** shortcut. It starts
