@@ -2,6 +2,28 @@
 
 Recent product updates and deployment notes.
 
+## August 6, 2026 - Screenshots show up in transcripts again (v0.1.287)
+
+- **Agents can post images and videos to a session again.** Since August 1,
+  every `lfg_display_image` and `lfg_display_video` call had been failing with
+  "sessionId required" and creating nothing, so screenshots an agent captured
+  to prove a change worked silently never reached the transcript — you just
+  saw the work described, never shown. Publishing HTML artifacts, asking a
+  question, and sending media back to the originating channel were failing the
+  same way.
+- The cause was a performance change that moved MCP out of one process per
+  session and into the server. That collapsed 14 near-identical processes into
+  one and saved real memory, but a per-session process also carried the one
+  thing the shared one couldn't: which session was calling. Sessions now
+  identify themselves on each request, so the memory win stays and the tools
+  work.
+- **A session can no longer act on another session's behalf.** The same missing
+  caller identity had quietly turned the ownership checks into no-ops, letting
+  session-owned actions target any session at all. They're enforced again.
+- **Sessions report why a turn failed** instead of just naming the failure
+  type, and transcript indexing no longer errors when its database connection
+  is rebound.
+
 ## August 6, 2026 - Shipped notifications open, and live worktrees stop vanishing (v0.1.286)
 
 - Tapping a **Shipped** notification now opens the finished session for review
