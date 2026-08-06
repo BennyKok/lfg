@@ -41,6 +41,7 @@ import { makeDraftPublisher } from "./draft.ts";
 import { readFileSync, statSync } from "node:fs";
 import { initialCmdOffset, readNewCmdLines, writeCursor } from "./cmd-tail.ts";
 import { claudeAccountEnv } from "../../claude-creds.ts";
+import { lfgMcpServers } from "../../config.ts";
 import {
   claudeAccountConfigDir,
   resolveClaudeAccount,
@@ -377,6 +378,12 @@ export async function cmdAisdkSession(argv: string[]): Promise<void> {
       // these from the dashboard instead.)
       disallowedTools: ["AskUserQuestion"],
       settingSources: ["user", "project"],
+      // Re-register the LFG MCP endpoint under this session's own URL. The
+      // user-scope registration settingSources loads is session-agnostic — one
+      // config serves every session — so without this the shared serve process
+      // cannot tell who is calling, and every session-scoped tool
+      // (lfg_display_image, lfg_input, lfg_publish_artifact, …) fails.
+      ...lfgMcpServers(sessionId),
       // stream_event partial messages drive the live draft in the web UI.
       includePartialMessages: true,
       ...(effort ? { effort } : {}),

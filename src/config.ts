@@ -39,6 +39,29 @@ export function localServeBaseUrl(): string {
   return `http://${localServeHost()}:${port}`;
 }
 
+/**
+ * The LFG MCP registration for one specific session, for the Claude Agent SDK's
+ * `mcpServers` option.
+ *
+ * MCP is served by the shared `lfg serve` process rather than a child of each
+ * agent (see src/mcp-http.ts), so the endpoint cannot read the caller's identity
+ * out of its own environment the way a stdio child could — the caller has to
+ * name itself in the URL. A user-scope registration can't: one config file
+ * serves every session on the box. So each session re-registers the same
+ * endpoint under its own `?session=` URL at launch.
+ *
+ * Returns nothing outside a managed session, leaving the user-scope
+ * registration in charge.
+ */
+export function lfgMcpServers(
+  sessionId?: string,
+): { mcpServers?: Record<string, { type: "http"; url: string }> } {
+  const sid = (sessionId ?? process.env.LFG_SESSION_ID)?.trim();
+  if (!sid) return {};
+  const url = `${localServeBaseUrl()}/mcp?session=${encodeURIComponent(sid)}`;
+  return { mcpServers: { lfg: { type: "http", url } } };
+}
+
 export function appVersion(): string {
   try {
     const parsed = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as {
