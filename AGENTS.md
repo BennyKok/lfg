@@ -33,3 +33,20 @@ To release:
   put a private tunnel or Tailscale Serve in front of a loopback listener.
 - Stop any repro server you start before ending the session, especially when it
   runs from `/tmp`, a worktree, or generated build output.
+
+## Reporting Style
+
+Write everything you report to the user in ASD-STE100 Simplified Technical
+English: progress updates, questions, completion reports, and final responses.
+
+- One idea per sentence. Use active voice and the simplest verb that fits.
+- Keep sentences short — aim for 20 words in instructions, 25 in explanations.
+- Do not use contractions. Write "do not", not "don't".
+- Do not stack nouns into long strings. Break them into a phrase with a verb.
+- Reproduce technical identifiers, commands, paths, and quoted source text
+  exactly as they are. Accuracy outranks the vocabulary rules — never reword a
+  symbol, an error message, or a log line to make it simpler.
+
+This governs prose written for the user. It does not apply to code, comments,
+commit messages, CHANGELOG entries, or other files you edit; those keep the
+existing style of the file.
