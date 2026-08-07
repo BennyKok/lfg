@@ -17971,23 +17971,13 @@ function ComposerStartButton({
                   WebkitTouchCallout: "none",
                 }
               : {}),
-            // Ring the button in the live effort colour so the button and the
-            // floating panel read as one control during the gesture.
-            ...(scrub.scrubbing
-              ? {
-                  boxShadow: `0 0 0 2px ${scrub.previewAccent}, 0 0 14px -2px ${scrub.previewAccent}`,
-                }
-              : {}),
           } as CSSProperties
         }
-        className={cn("transition-all duration-200", scrub.scrubbing && "scale-[1.03]")}
       >
-        {scrub.scrubbing ? (
-          <ThinkingSignal value={scrub.previewLevel} levels={thinkingLevels} />
-        ) : (
-          <Send className="size-4" />
-        )}
-        <span>{scrub.scrubbing ? thinkingLevelLabel(scrub.previewLevel) : "Start"}</span>
+        {/* The button stays exactly as it is during a scrub — no ring, scale,
+            icon or label swap. The floating panel carries the live level. */}
+        <Send className="size-4" />
+        <span>Start</span>
       </Button>
 
       {scrub.panel}
