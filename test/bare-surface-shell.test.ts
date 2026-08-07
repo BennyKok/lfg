@@ -20,6 +20,9 @@ describe("bare surface shell", () => {
     expect(bareShell).not.toContain("h-dvh");
     expect(bareShell).not.toContain("h-full");
     expect(bareShell).not.toContain("overflow-hidden");
+    // Not a flex column either: the page is the only flow child, and as a flex
+    // item its `min-h-0` is permission to shrink below its own content.
+    expect(bareShell).not.toContain("flex");
   });
 
   test("the shell selects it on bare", () => {

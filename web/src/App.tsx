@@ -3702,8 +3702,16 @@ const APP_SHELL_CLASS = "relative flex h-dvh flex-col overflow-hidden bg-backgro
  * the host's scroller has already hit its end, and our own overflow is hidden.
  * Same reasoning as `main` below: a bare mount must have INTRINSIC height and
  * let the host scroll it.
+ *
+ * Block, not `flex flex-col`. The page is the only flow child here, and as a
+ * flex ITEM it carries `min-h-0` — which is exactly the permission to shrink
+ * below its content. Inside a host scroller Blink resolved the auto-height
+ * column against the viewport and did shrink it: the page still painted in
+ * full (overflow is visible now) but the shell's BOX stopped a screen short,
+ * which ate the host's bottom padding and left the last row flush against the
+ * bottom edge. Nothing here needs flex.
  */
-const BARE_SHELL_CLASS = "relative flex flex-col bg-background text-foreground";
+const BARE_SHELL_CLASS = "relative bg-background text-foreground";
 
 function AppStartupStatus() {
   return (
