@@ -3144,6 +3144,115 @@ const MIC_LONG_PRESS_MS = 300;
 // on a small touch target, well short of needing to leave the composer.
 const MIC_CANCEL_DRAG_PX = 48;
 
+// Gap (px) between the mic and the cancel button that slides out of it, and the
+// cancel button's own diameter — needed up front to decide whether there's room
+// to place it above the mic or whether it has to flip below.
+const MIC_CANCEL_GAP_PX = 10;
+const MIC_CANCEL_SIZE_PX = 32;
+
+/**
+ * The visible "throw this take away" affordance for a live dictation.
+ *
+ * Tapping the mic sends, which leaves no way to back out of a take with a
+ * pointer alone: drag-away only works mid-hold (the pointer is already captured)
+ * and Esc only exists on a keyboard. So while a recording is live, a small X
+ * slides up out of the mic — one tap, transcript discarded, composer restored.
+ *
+ * Rendered into a portal at fixed coordinates measured off the mic rather than
+ * as an absolutely-positioned sibling: every call site styles MicButton's own
+ * className with its layout (`absolute bottom-1 right-1`, `size-9 shrink-0`, …),
+ * so wrapping it in a positioned parent would break those. Anchoring in viewport
+ * space also escapes the composer's overflow clipping, which would otherwise cut
+ * the button off exactly when it sits above the mic.
+ */
+function DictationCancelButton({
+  anchorRef,
+  visible,
+  onCancel,
+}: {
+  anchorRef: React.RefObject<HTMLButtonElement | null>;
+  visible: boolean;
+  onCancel: () => void;
+}) {
+  const [pos, setPos] = useState<{ x: number; y: number; below: boolean } | null>(null);
+  // Drives the slide-out transition: the button mounts sitting on top of the mic
+  // and animates to its resting offset one frame later.
+  const [slid, setSlid] = useState(false);
+
+  useLayoutEffect(() => {
+    if (!visible) {
+      setSlid(false);
+      setPos(null);
+      return;
+    }
+    const measure = () => {
+      const el = anchorRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      // Prefer sliding up out of the mic (the composer normally sits at the
+      // bottom of the screen); flip below only if the mic is too close to the
+      // top edge for the button to clear it.
+      const below = r.top - MIC_CANCEL_GAP_PX - MIC_CANCEL_SIZE_PX < 8;
+      const next = {
+        x: Math.round(r.left + r.width / 2),
+        y: Math.round(below ? r.bottom + MIC_CANCEL_GAP_PX : r.top - MIC_CANCEL_GAP_PX),
+        below,
+      };
+      setPos((prev) => (prev && prev.x === next.x && prev.y === next.y && prev.below === next.below ? prev : next));
+    };
+    measure();
+    const raf = requestAnimationFrame(() => setSlid(true));
+    // The mic moves under us: the composer grows as the interim transcript
+    // streams in, the mobile keyboard resizes the viewport, the list scrolls.
+    // A cheap poll (state only updates when the rect actually changed) covers
+    // all of those without wiring an observer to every call site's layout.
+    const poll = window.setInterval(measure, 200);
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.clearInterval(poll);
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+    };
+  }, [visible, anchorRef]);
+
+  if (!visible || !pos) return null;
+  return createPortal(
+    <button
+      type="button"
+      // Keep the composer focused — a blur here would drop the caret the
+      // restored text is about to land back in.
+      onPointerDown={(e) => e.preventDefault()}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        haptic("warning");
+        onCancel();
+      }}
+      aria-label="Discard recording"
+      title="Discard recording"
+      style={{
+        left: pos.x,
+        top: pos.y,
+        width: MIC_CANCEL_SIZE_PX,
+        height: MIC_CANCEL_SIZE_PX,
+        // Slides out of the mic: starts collapsed on top of it, settles at the
+        // measured offset. translate(-50%, …) centers it on the mic's axis.
+        transform: `translate(-50%, ${pos.below ? "0" : "-100%"}) translateY(${
+          slid ? "0px" : pos.below ? "-14px" : "14px"
+        }) scale(${slid ? 1 : 0.6})`,
+        opacity: slid ? 1 : 0,
+        transition: "transform 180ms cubic-bezier(0.2, 0.9, 0.3, 1.2), opacity 140ms ease-out",
+      }}
+      className="fixed z-50 flex touch-none select-none items-center justify-center rounded-full border border-border bg-background text-muted-foreground shadow-lg active:scale-95 hover:bg-muted hover:text-foreground"
+    >
+      <X className="size-4" />
+    </button>,
+    document.body,
+  );
+}
+
 const MicButton = forwardRef<
   MicHandle,
   {
@@ -3226,6 +3335,8 @@ const MicButton = forwardRef<
   // Mirrors cancelDragArmed into render so the button can preview the cancel
   // (icon/color swap) while the drag is still live, before release.
   const [cancelArmed, setCancelArmed] = useState(false);
+  // The mic's own DOM node — the slide-out cancel button measures off it.
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
 
   const clearHoldTimer = useCallback(() => {
     if (holdTimer.current !== null) {
@@ -3372,45 +3483,56 @@ const MicButton = forwardRef<
   // ~150ms and make it feel sluggish).
   const reactiveStyle = recording ? recordingButtonStyle(level) : undefined;
   return (
-    <button
-      type="button"
-      onPointerDown={onPointerDown}
-      onPointerMove={onPointerMove}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerCancel}
-      onClick={onClick}
-      onContextMenu={(e) => e.preventDefault()}
-      aria-label={
-        recording
-          ? cancelArmed
-            ? "Release to cancel dictation"
-            : "Stop dictation — hold and drag away, or press Esc, to cancel"
-          : "Dictate"
-      }
-      title={recording ? "Tap to send · hold + drag away to cancel · Esc to cancel" : "Tap to dictate · hold to talk"}
-      style={reactiveStyle}
-      className={cn(
-        "flex shrink-0 touch-none select-none items-center justify-center rounded-full transition",
-        recording
-          ? cancelArmed
-            ? "z-10 bg-muted-foreground text-background"
-            : "z-10 bg-destructive text-destructive-foreground"
-          : minimal
-            ? "relative z-10 bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground"
-            : "text-muted-foreground hover:bg-muted",
-        className,
-      )}
-    >
-      {cancelArmed ? (
-        <X className="size-4" />
-      ) : state === "transcribing" || state === "starting" ? (
-        // "starting" spins too, so the tap visibly registers while the browser
-        // is prompting for / opening the mic instead of looking like a dead tap.
-        <Loader2 className="size-4 animate-spin" />
-      ) : (
-        <Mic className="size-4" />
-      )}
-    </button>
+    <>
+      {/* Visible escape hatch while a take is live — see DictationCancelButton.
+          Shown while "starting" too, so a mic that's slow to open (unanswered
+          permission prompt, device held by another app) can be backed out of. */}
+      <DictationCancelButton
+        anchorRef={buttonRef}
+        visible={recording || state === "starting"}
+        onCancel={cancel}
+      />
+      <button
+        ref={buttonRef}
+        type="button"
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
+        onClick={onClick}
+        onContextMenu={(e) => e.preventDefault()}
+        aria-label={
+          recording
+            ? cancelArmed
+              ? "Release to cancel dictation"
+              : "Stop dictation — tap the X above, or press Esc, to cancel"
+            : "Dictate"
+        }
+        title={recording ? "Tap to send · X or Esc to cancel" : "Tap to dictate · hold to talk"}
+        style={reactiveStyle}
+        className={cn(
+          "flex shrink-0 touch-none select-none items-center justify-center rounded-full transition",
+          recording
+            ? cancelArmed
+              ? "z-10 bg-muted-foreground text-background"
+              : "z-10 bg-destructive text-destructive-foreground"
+            : minimal
+              ? "relative z-10 bg-transparent text-muted-foreground hover:bg-transparent hover:text-foreground"
+              : "text-muted-foreground hover:bg-muted",
+          className,
+        )}
+      >
+        {cancelArmed ? (
+          <X className="size-4" />
+        ) : state === "transcribing" || state === "starting" ? (
+          // "starting" spins too, so the tap visibly registers while the browser
+          // is prompting for / opening the mic instead of looking like a dead tap.
+          <Loader2 className="size-4 animate-spin" />
+        ) : (
+          <Mic className="size-4" />
+        )}
+      </button>
+    </>
   );
 });
 
