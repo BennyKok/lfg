@@ -35,6 +35,12 @@ describe("bare surface shell", () => {
     expect(appShell).toContain("overflow-hidden");
   });
 
+  test("the visual-viewport pin never sizes a bare mount", () => {
+    // Same clamp as the shell class, written in JS: pinning the root to
+    // visualViewport.height caps a host-mounted page at one screen.
+    expect(app).toContain("if (el && !bare) {");
+  });
+
   test("the host bottom inset is composer chrome, not bare-page padding", () => {
     expect(app).toContain('embedded && !bare && "pb-[var(--lfg-host-bottom-inset)]"');
   });

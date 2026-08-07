@@ -10,6 +10,14 @@ Recent product updates and deployment notes.
   now looks exactly as it does at rest; the floating scrubber still shows the
   live level.
 
+## August 7, 2026 - Mounted settings pages really do end where the page ends (v0.1.292)
+
+- **Third and last piece of the mounted-page scroll fix.** The mobile
+  viewport-sizing pass — the one that keeps the standalone app pinned to the
+  visible band on iOS — was still stretching a host-mounted page to exactly one
+  screen, which is the same clamp in JavaScript. It now leaves host-mounted
+  pages alone; only the app that owns the viewport gets pinned.
+
 ## August 7, 2026 - Mounted settings pages keep their bottom margin (v0.1.291)
 
 - **Follow-up to v0.1.290.** The mounted pages scrolled to the end, but the

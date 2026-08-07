@@ -5137,7 +5137,13 @@ export function App() {
       if (!open && rawVisualTopPx > 0) {
         requestAnimationFrame(() => window.scrollTo(0, 0));
       }
-      if (el) {
+      // A bare mount is a block in the HOST's document, not a viewport-owning
+      // shell: pinning it to the visual viewport is the same 100dvh clamp the
+      // shell class no longer applies, just written in JS — the page is cut
+      // off (or, once overflow is visible, its box stops short and eats the
+      // host's bottom padding). The <html> vars above still publish, because
+      // portaled chrome reads them wherever it renders.
+      if (el && !bare) {
         // Outside Terminal, leave keyboard-open layout to the browser/Vaul. When
         // the keyboard is closed, always override `h-dvh` with the measured
         // visual viewport so foreground-return stale `dvh` cannot leave a white
@@ -5204,7 +5210,7 @@ export function App() {
       document.removeEventListener("visibilitychange", onVisible);
       clear();
     };
-  }, [isMobile, loading, tab, terminalSurface]);
+  }, [bare, isMobile, loading, tab, terminalSurface]);
 
   const loadCore = useCallback(async () => {
     const payload = await fetchBootstrap<BootstrapPayload>();
