@@ -10,7 +10,7 @@ Recent product updates and deployment notes.
   now looks exactly as it does at rest; the floating scrubber still shows the
   live level.
 
-## August 7, 2026 - Mounted settings pages really do end where the page ends (v0.1.292)
+## August 7, 2026 - Mounted settings pages really do end where the page ends (v0.1.293)
 
 - **Third and last piece of the mounted-page scroll fix.** The mobile
   viewport-sizing pass — the one that keeps the standalone app pinned to the
