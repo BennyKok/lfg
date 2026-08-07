@@ -215,7 +215,7 @@ if ! command -v claude >/dev/null 2>&1; then
     say "Installing the Claude CLI..."
     curl -fsSL https://claude.ai/install.sh | bash
   else
-    warn "Claude CLI not found. lfg will start, but Claude sessions will be unavailable until you install/authenticate claude. Re-run with LFG_INSTALL_CLAUDE=1 only if you want setup to run Anthropic's installer."
+    warn "Claude CLI not found. LFG will start, but Claude sessions will be unavailable until you install/authenticate claude. Re-run with LFG_INSTALL_CLAUDE=1 only if you want setup to run Anthropic's installer."
   fi
 fi
 export PATH="$HOME/.local/bin:$PATH"
@@ -305,10 +305,10 @@ fi
 
 if [ "$LFG_INSTALL_MODE" = "source" ]; then
   if [ -d "$LFG_DIR/.git" ]; then
-    say "Updating lfg at ${LFG_DIR} (git)..."
+    say "Updating LFG at ${LFG_DIR} (git)..."
     git -C "$LFG_DIR" pull --ff-only || warn "git pull skipped (local changes?)"
   else
-    say "Cloning lfg into ${LFG_DIR} (git)..."
+    say "Cloning LFG into ${LFG_DIR} (git)..."
     git clone "$LFG_REPO_URL" "$LFG_DIR"
   fi
   # The web UI ships prebuilt in web/dist, so no web build is needed here.
@@ -599,7 +599,7 @@ elif command -v tailscale >/dev/null 2>&1 && tailscale status >/dev/null 2>&1; t
     fi
   fi
 else
-  warn "Tailscale is not connected; lfg will be available on this machine at http://127.0.0.1:$LFG_PORT."
+  warn "Tailscale is not connected; LFG will be available on this machine at http://127.0.0.1:$LFG_PORT."
 fi
 
 # ---- done ----
@@ -609,12 +609,16 @@ if command -v tailscale >/dev/null 2>&1; then
 fi
 echo
 if [ "$OS_NAME" = "Linux" ]; then
-  say "Done. lfg is running as a systemd user service."
+  say "Done. LFG is running as a systemd user service."
 else
-  say "Done. lfg is running as a launchd user service."
+  say "Done. LFG is running as a launchd user service."
 fi
 [ "$TAILSCALE_SERVE_CONFIGURED" = "1" ] && [ -n "${URL:-}" ] && echo "    Web UI (tailnet only):  https://$URL"
 echo "    Local Web UI:         http://127.0.0.1:$LFG_PORT"
+# The service is pinned to LFG_HOST=127.0.0.1, so localhost is the only named
+# host that resolves to it. A LAN name (<host>.local) would not reach a
+# loopback listener - use Tailscale Serve for off-box access instead.
+echo "    Local Web UI (named): http://localhost:$LFG_PORT"
 if [ "$TAILSCALE_SERVE_CONFIGURED" = "1" ]; then
   echo "    Tailscale cleanup:    sudo tailscale serve --https=$LFG_TAILSCALE_HTTPS_PORT off"
 else
