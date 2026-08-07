@@ -1,5 +1,9 @@
 # Agent Instructions
 
+## User Reports
+
+Only use ASD-STE100 Simplified Technical English in reports to the user. This rule applies to progress updates, questions, completion reports, and final responses. Keep code, commands, file paths, technical identifiers, and exact quotations unchanged when required for accuracy.
+
 ## Versioning & Releases
 
 After landing changes on `main`, evaluate whether to cut a release — don't
