@@ -317,6 +317,28 @@ if [ "$LFG_INSTALL_MODE" = "source" ]; then
 else
   # Release mode: download source + prebuilt web UI + optional vendor tarballs,
   # extract them over $LFG_DIR, then install public deps on this target platform.
+  # Strip the leading lfg/ dir; leaves $LFG_DIR/.env and data/ (not in the tarball) intact.
+  # Explicitly replace application files and skip archive metadata. Some hosted
+  # sandboxes inject TAR_OPTIONS=--keep-old-files and/or reject chmod/chown/utime
+  # even though the workspace itself is writable.
+  #
+  # The replace/metadata flags differ per tar flavour. `--overwrite` and `--touch`
+  # are GNU-only, and macOS's bsdtar treats an unknown long option as a hard usage
+  # error ("Option --overwrite is not supported"), which aborted setup on every Mac.
+  # bsdtar needs neither: it overwrites by default, ignores TAR_OPTIONS (a GNU env
+  # var), and spells --touch as -m. Keep this in sync with extractReleaseArchive()
+  # in src/self-update.ts, which solves the same problem for in-place updates.
+  extract_release_archive() {
+    local archive="$1" dest="$2"
+    local flavour_flags="-m"
+    if tar --version 2>/dev/null | grep -q 'GNU tar'; then
+      flavour_flags="--overwrite --touch"
+    fi
+    # shellcheck disable=SC2086
+    TAR_OPTIONS= tar -xzf "$archive" -C "$dest" --strip-components=1 \
+      $flavour_flags --no-same-owner --no-same-permissions
+  }
+
   release_url() {
     local asset="$1"
     if [ "$LFG_RELEASE" = "latest" ]; then
@@ -352,13 +374,8 @@ else
     say "Checksum verified."
   fi
   mkdir -p "$LFG_DIR"
-  # Strip the leading lfg/ dir; leaves $LFG_DIR/.env and data/ (not in the tarball) intact.
-  # Explicitly replace application files and skip archive metadata. Some hosted
-  # sandboxes inject TAR_OPTIONS=--keep-old-files and/or reject chmod/chown/utime
-  # even though the workspace itself is writable.
   say "Extracting into ${LFG_DIR}..."
-  TAR_OPTIONS= tar -xzf "$TMP_TGZ" -C "$LFG_DIR" --strip-components=1 \
-    --overwrite --no-same-owner --no-same-permissions --touch
+  extract_release_archive "$TMP_TGZ" "$LFG_DIR"
   rm -f "$TMP_TGZ" "$TMP_TGZ.sha256"
 
   if [ "${LFG_SKIP_BUN_INSTALL:-0}" != "1" ]; then
