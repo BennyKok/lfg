@@ -2,6 +2,14 @@
 
 Recent product updates and deployment notes.
 
+## August 7, 2026 - The Start button holds still while you pick effort (v0.1.292)
+
+- **Holding Start to slide the thinking level no longer restyles the button.**
+  It kept its ring, grew slightly, swapped its icon and replaced "Start" with
+  the level name, which nudged the buttons beside it on every step. The button
+  now looks exactly as it does at rest; the floating scrubber still shows the
+  live level.
+
 ## August 7, 2026 - Mounted settings pages keep their bottom margin (v0.1.291)
 
 - **Follow-up to v0.1.290.** The mounted pages scrolled to the end, but the
