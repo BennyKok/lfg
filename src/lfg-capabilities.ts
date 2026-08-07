@@ -3,9 +3,15 @@ import type { CodingAgentKind } from "./coding-agents.ts";
 // Bump whenever an agent-facing LFG capability or its operating guidance
 // changes. Managed sessions persist the value they launched with, which lets
 // the UI identify long-lived sessions whose MCP/tool catalog predates a ship.
-export const LFG_CAPABILITY_VERSION = "2026-08-05.2";
+export const LFG_CAPABILITY_VERSION = "2026-08-07.1";
 
 export const LFG_CAPABILITIES = [
+  {
+    tool: "lfg_ship",
+    useWhen: "The assigned task is finished and its result has been verified.",
+    guidance:
+      "This is how finished work reaches the human — a session that never ships is invisible. Post a headline, a tweet-length result and the strongest evidence, then decide closeSession explicitly. Never ship planning, partial, or blocked work.",
+  },
   {
     tool: "lfg_display_image / lfg_display_video",
     useWhen: "A local screenshot or recording would provide useful visual evidence in the LFG transcript.",
@@ -48,6 +54,7 @@ export function shortSessionId(id: string): string {
 export const LFG_MCP_INSTRUCTIONS = [
   `This is LFG's agent capability server (capability version ${LFG_CAPABILITY_VERSION}).`,
   "Communicate with the human through normal assistant messages. Use lfg_display_image or lfg_display_video when local visual evidence is useful.",
+  "Publish every verified result with lfg_ship, choosing closeSession explicitly; work that is never shipped never reaches the human.",
   "Decide autonomously; use lfg_input only for a genuinely irreversible, risky, or ambiguous decision. Use LFG-managed delegation only when delegation is explicitly requested.",
   `Session ids are returned in short form (${SHORT_SESSION_ID_LENGTH}-char prefix, like a git short sha). Pass them back exactly as given — any unambiguous prefix resolves to the full id.`,
 ].join(" ");
@@ -57,7 +64,8 @@ export function lfgRuntimeContract(): string {
     `=== LFG RUNTIME CONTRACT (capability version ${LFG_CAPABILITY_VERSION}) ===`,
     "- You are an LFG-managed coding agent. Communicate with the human through normal assistant messages; LFG tool calls do not replace those replies.",
     "- Use `lfg_display_image` or `lfg_display_video` when a local screenshot or recording provides useful evidence in the LFG transcript.",
-    "- If deployment was requested, verify it before claiming it. For LFG source changes, commit and run `scripts/land-session.sh` before reporting completion.",
+    "- Finish verified work with `lfg_ship`: a short headline, a tweet-length result, and your strongest evidence. Set `closeSession:true` only when the task and conversation are genuinely finished, and make that call your final action; otherwise `closeSession:false` and keep working. Never ship planning, partial, or blocked work.",
+    "- Shipped is not deployed. If deployment was requested, verify it before claiming it or closing the session. For LFG source changes, commit and run `scripts/land-session.sh` before shipping; shipping is rejected while changes are uncommitted, unmerged, or not deployed at the current main revision.",
     "- Decide and continue when safe. Use `lfg_input` only for an irreversible, risky, or ambiguous decision; it is fire-and-forget, so do not poll.",
     "- Never request channel identity or credentials. Use `lfg_find_sessions` for history and `lfg_list_sessions` for live sessions. Before using `lfg_close_session`, resolve the target and never close your own session.",
     "- Delegate only when explicitly requested, using `lfg_create_subagent` or `lfg_delegate_*` so children remain linked and visible.",

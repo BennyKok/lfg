@@ -18,14 +18,26 @@ describe("LFG runtime capabilities", () => {
     expect(prompt).toContain("normal assistant messages");
     expect(prompt).toContain("lfg_display_image");
     expect(prompt).toContain("lfg_display_video");
+    // Regression guard: 83ea6d3 split lfg_output into native replies plus
+    // lfg_ship and dropped the shipping bullet entirely, so agents stopped
+    // shipping for two days while CI stayed green. Shipping is how finished
+    // work reaches the human — it must never fall out of the contract again.
+    expect(prompt).toContain("lfg_ship");
+    expect(prompt).toContain("closeSession:true");
+    expect(prompt).toContain("closeSession:false");
+    expect(prompt).toContain("Shipped is not deployed");
     expect(prompt).toContain("scripts/land-session.sh");
+    expect(prompt).toContain("uncommitted, unmerged, or not deployed");
     expect(prompt).toContain("lfg_find_sessions");
     expect(prompt).toContain("lfg_close_session");
     expect(prompt).toEndWith("=== USER TASK ===\nFix the mobile navigation");
   });
 
   test("keeps the runtime contract compact", () => {
-    expect(lfgRuntimeContract().split("\n").length).toBeLessThanOrEqual(10);
+    // Headroom is deliberate: a line budget the contract already sits flush
+    // against turns every future edit into a choice about which bullet to
+    // delete, which is how shipping was lost in the first place.
+    expect(lfgRuntimeContract().split("\n").length).toBeLessThanOrEqual(12);
     expect(lfgRuntimeContract().length).toBeLessThan(2_400);
   });
 
@@ -41,6 +53,7 @@ describe("LFG runtime capabilities", () => {
 
   test("publishes a bootstrap entry for every promoted workflow", () => {
     expect(LFG_CAPABILITIES.map((item) => item.tool)).toEqual([
+      "lfg_ship",
       "lfg_display_image / lfg_display_video",
       "lfg_input",
       "lfg_find_sessions",
@@ -55,6 +68,7 @@ describe("LFG runtime capabilities", () => {
     expect(mcpSource).not.toContain('registerTool(\n    "lfg_output"');
     expect(mcpSource).toContain('registerTool(\n    "lfg_display_image"');
     expect(mcpSource).toContain('registerTool(\n    "lfg_display_video"');
+    expect(mcpSource).toContain('registerTool(\n    "lfg_ship"');
     expect(mcpSource).not.toContain('registerTool(\n    "lfg_ask_question"');
     expect(mcpSource).not.toContain('"advisor"');
     expect(serveSource).not.toContain('/api/voice/consult');
