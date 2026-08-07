@@ -221,6 +221,7 @@ import {
   saveVoiceProviderKey,
   listProviders,
   voiceSetupInfo,
+  sttStreamingAvailable,
   openSttStream,
   type VoiceSettings,
   type SttStreamBridge,
@@ -2379,6 +2380,10 @@ a{color:#60a5fa}
         return json({
           settings: await getVoiceSettings(),
           providers: listProviders(),
+          // Whether dictation will show words as they are spoken. False means the
+          // browser will still transcribe, but only after the take ends — the UI
+          // says so rather than leaving it looking broken.
+          streaming: sttStreamingAvailable(),
           setup: voiceSetupInfo(),
         });
       }
