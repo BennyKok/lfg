@@ -11,6 +11,11 @@ Recent product updates and deployment notes.
 - The finished-install summary prints `http://localhost:8766` beside the
   loopback address, so there is a named URL to click.
 - Setup's own messages now use one consistent spelling of the product name.
+- **The dependency audit is green again after three new high-severity
+  advisories landed.** Patched transitive versions of `ip-address`, `js-yaml`,
+  and `undici` now cover an SSRF parsing mismatch, a YAML CPU-exhaustion path,
+  and a cache disclosure/crash issue. Root overrides keep future installs from
+  silently resolving back to vulnerable releases.
 
 ## August 7, 2026 - Sessions ship again (v0.1.295)
 
