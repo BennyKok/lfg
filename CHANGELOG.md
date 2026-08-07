@@ -2,6 +2,20 @@
 
 Recent product updates and deployment notes.
 
+## August 7, 2026 - Sessions ship again (v0.1.295)
+
+- **Finished sessions post to Shipped again.** The Shipped feed had gone silent
+  since August 5 — not because posting was broken, but because the instructions
+  telling agents to post had been deleted. A prompt cleanup that split the old
+  `lfg_output` tool into ordinary replies plus `lfg_ship` dropped both shipping
+  bullets from the agent contract on its way through, so agents simply never
+  learned that shipping was part of finishing a job.
+- Shipping guidance is now stated three ways — in the runtime contract, in the
+  MCP server instructions, and as a promoted capability — along with the
+  "Shipped is not deployed" rule that went missing with it.
+- Setup notes for macOS: `scripts/setup.sh` no longer passes GNU-only flags to
+  bsdtar.
+
 ## August 7, 2026 - Click the thinking pill to get the slider (v0.1.294)
 
 - **The thinking control now opens on a plain click.** Tapping or clicking the
