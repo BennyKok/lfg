@@ -1,5 +1,14 @@
 # Agent Instructions
 
+## Reporting Style
+
+Report to the user in ASD-STE100 Simplified Technical English. This covers
+progress updates, questions, completion reports, and final responses.
+
+- Prefer short sentences, active voice, and one idea per sentence.
+- STE governs the prose only. Keep technical identifiers, file paths, commands,
+  log lines, and quoted source text verbatim whenever accuracy depends on it.
+
 ## Versioning & Releases
 
 After landing changes on `main`, evaluate whether to cut a release — don't
