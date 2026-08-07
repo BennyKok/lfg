@@ -2,6 +2,18 @@
 
 Recent product updates and deployment notes.
 
+## August 7, 2026 - Click the thinking pill to get the slider (v0.1.294)
+
+- **The thinking control now opens on a plain click.** Tapping or clicking the
+  "Thinking" pill parks the effort slider open as an ordinary popover: point at
+  the bar or click a level name and it applies straight away. Previously the
+  pill only answered to hold-and-slide, so a click did nothing — and letting go
+  of a half-finished drag left the level unchanged.
+- Escape, a click anywhere outside, or a second click on the pill puts the
+  slider away without changing anything.
+- Hold-and-slide is unchanged, so the one-motion gesture on mobile still works
+  exactly as before.
+
 ## August 7, 2026 - The Start button holds still while you pick effort (v0.1.292)
 
 - **Holding Start to slide the thinking level no longer restyles the button.**
