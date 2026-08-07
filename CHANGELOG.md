@@ -2,6 +2,13 @@
 
 Recent product updates and deployment notes.
 
+## August 7, 2026 - Mounted settings pages keep their bottom margin (v0.1.291)
+
+- **Follow-up to v0.1.290.** The mounted pages scrolled to the end, but the
+  last row sat flush against the bottom edge on the tallest of them because
+  the page's box still measured one screen tall. Fixed — the host's page
+  padding is back under the last card.
+
 ## August 7, 2026 - Mounted settings pages scroll all the way down (v0.1.290)
 
 - **A settings page mounted inside another product no longer cuts off at one
