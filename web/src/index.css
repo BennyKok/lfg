@@ -1430,7 +1430,8 @@ html.lfg-keyboard-open {
     min-width: 0;
   }
 
-  .thinking-scrubber-stops > span {
+  .thinking-scrubber-stops > span,
+  .thinking-scrubber-stops > button {
     position: absolute;
     right: 0;
     text-align: right;
@@ -1446,9 +1447,61 @@ html.lfg-keyboard-open {
       opacity 140ms var(--ease-out, ease-out);
   }
 
-  .thinking-scrubber-stops > span[data-active] {
+  .thinking-scrubber-stops > span[data-active],
+  .thinking-scrubber-stops > button[data-active] {
     font-weight: 700;
     opacity: 1;
+  }
+
+  /* Clicked-open panel only: the stop names become real targets. Generous hit
+     area (the label itself is 11px) without moving where the text sits. */
+  .thinking-scrubber-stops > button {
+    padding: 0.15rem 0.25rem;
+    background: none;
+    border: 0;
+    cursor: pointer;
+  }
+
+  .thinking-scrubber-stops > button:hover,
+  .thinking-scrubber-picks > button:hover {
+    opacity: 1;
+  }
+
+  /* Horizontal clicked-open row: every level named, each one a button. */
+  .thinking-scrubber-picks {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.15rem;
+    width: 100%;
+    margin-top: 0.5rem;
+    font-size: 11px;
+    line-height: 1.2;
+  }
+
+  .thinking-scrubber-picks > button {
+    flex: 1;
+    min-width: 0;
+    padding: 0.2rem 0.1rem;
+    border: 0;
+    border-radius: 0.5rem;
+    background: none;
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: capitalize;
+    color: var(--muted-foreground);
+    opacity: 0.75;
+    cursor: pointer;
+    transition:
+      color 140ms var(--ease-out, ease-out),
+      opacity 140ms var(--ease-out, ease-out),
+      background-color 140ms var(--ease-out, ease-out);
+  }
+
+  .thinking-scrubber-picks > button[data-active] {
+    font-weight: 700;
+    opacity: 1;
+    background: color-mix(in srgb, var(--foreground) 8%, transparent);
   }
 
   /* Upright panel is narrow — stack the caption instead of centring a row. */

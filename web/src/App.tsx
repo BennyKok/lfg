@@ -17309,6 +17309,9 @@ const THINKING_AXIS_LOCK_PX = 6;
 // Distance from the upright panel's right edge to the centre of its bar
 // (right padding + half the bar). Used to park the bar over the trigger.
 const THINKING_VERTICAL_BAR_INSET = 30;
+// The thumb's on-screen edge (--thinking-thumb: 1.3rem). Half of it is the
+// track's travel inset at each end, which the click mapping has to match.
+const THINKING_THUMB_PX = 21;
 // Pixels of travel per thinking level while scrubbing. Higher = less
 // sensitive. Scales mildly with how many steps the agent exposes.
 function thinkingScrubStepWidth(levelCount: number): number {
@@ -17452,6 +17455,17 @@ function useThinkingScrub({
   const barRef = useRef<HTMLDivElement | null>(null);
   const absoluteEngagedRef = useRef(false);
   const [scrubbing, setScrubbing] = useState(false);
+  // The click path: a plain tap/click parks the same panel open as a normal
+  // popover you can point at, so the gesture is a shortcut rather than the only
+  // way in. Mirrored in a ref because pointer handlers read it synchronously.
+  const [sticky, setSticky] = useState(false);
+  const stickyRef = useRef(false);
+  const stickyDraggingRef = useRef(false);
+  // Set when a press on the trigger dismissed an open panel, so the press that
+  // follows knows its click is already spent.
+  const stickyDismissRef = useRef(false);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLElement | null>(null);
   const [previewIndex, setPreviewIndex] = useState(() => Math.max(0, levels.indexOf(value)));
   const [panelStyle, setPanelStyle] = useState<CSSProperties>({});
   const [placement, setPlacement] = useState<"above" | "below">("above");
@@ -17511,7 +17525,7 @@ function useThinkingScrub({
   // Resync the resting preview when the level changes from elsewhere (session
   // submenu, agent-switch clamp) so the next hold opens on the truth.
   useEffect(() => {
-    if (!scrubbingRef.current) {
+    if (!scrubbingRef.current && !stickyDraggingRef.current) {
       previewIndexRef.current = currentIndex;
       setPreviewIndex(currentIndex);
     }
@@ -17582,20 +17596,83 @@ function useThinkingScrub({
     }
   };
 
+  const closeSticky = () => {
+    if (!stickyRef.current) return;
+    stickyRef.current = false;
+    stickyDraggingRef.current = false;
+    setSticky(false);
+    previewIndexRef.current = currentIndex;
+    setPreviewIndex(currentIndex);
+  };
+
+  /** Park the panel open as a plain popover, anchored to the trigger. */
+  const openSticky = (trigger: HTMLElement) => {
+    if (!canScrub || scrubbingRef.current) return;
+    triggerRef.current = trigger;
+    const index = Math.max(0, levels.indexOf(value));
+    previewIndexRef.current = index;
+    setPreviewIndex(index);
+    placePanel(trigger);
+    stickyRef.current = true;
+    setSticky(true);
+    haptic("light");
+  };
+
+  /** Click toggles: a second click on the trigger puts the panel away. */
+  const toggleSticky = (trigger: HTMLElement) => {
+    if (stickyRef.current) closeSticky();
+    else openSticky(trigger);
+  };
+
+  /** Pick a level from the open popover — commits and closes. */
+  const pickLevel = (level: ThinkingLevel) => {
+    closeSticky();
+    feedback.success();
+    onCommit(level);
+  };
+
   // Escape aborts an open scrub without committing — the only bail-out once the
-  // panel is up, since the pointer is captured by the trigger.
+  // panel is up, since the pointer is captured by the trigger. The same key puts
+  // a clicked-open panel away.
   useEffect(() => {
-    if (!scrubbing) return;
+    if (!scrubbing && !sticky) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
       finishScrub(false);
+      closeSticky();
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scrubbing]);
+  }, [scrubbing, sticky]);
+
+  // Clicked-open panel: anything outside it dismisses. A press on the trigger
+  // itself dismisses too, and marks the trailing click spent so the toggle
+  // doesn't immediately reopen what this just closed.
+  useEffect(() => {
+    if (!sticky) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (target && panelRef.current?.contains(target)) return;
+      if (target && triggerRef.current?.contains(target)) {
+        suppressClickRef.current = true;
+        stickyDismissRef.current = true;
+      }
+      closeSticky();
+    };
+    const onDismiss = () => closeSticky();
+    document.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("resize", onDismiss);
+    window.addEventListener("scroll", onDismiss, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("resize", onDismiss);
+      window.removeEventListener("scroll", onDismiss, true);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sticky]);
 
   const applyScrub = (clientX: number, clientY: number) => {
     // Upright bar: the bar is parked directly over the trigger, so the finger
@@ -17654,15 +17731,69 @@ function useThinkingScrub({
     haptic("medium");
   };
 
+  // Clicked-open panel: the bar is a real slider you can point at. Absolute in
+  // both orientations — the pointer starts on the bar, so the stop beside it is
+  // the stop it gets, with no engage latch to wait for.
+  const stickyIndexFromPoint = (clientX: number, clientY: number) => {
+    const bar = barRef.current;
+    if (!bar) return null;
+    const rect = bar.getBoundingClientRect();
+    const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
+    if (vertical) {
+      if (rect.height <= 0) return null;
+      const thumbPx = Math.max(0, rect.height - verticalTravelPx);
+      const lowStop = rect.bottom - thumbPx / 2;
+      const highStop = rect.top + thumbPx / 2;
+      const span = Math.max(1, lowStop - highStop);
+      return Math.round(clamp01((lowStop - clientY) / span) * (levels.length - 1));
+    }
+    if (rect.width <= 0) return null;
+    const inset = Math.min(rect.width / 2, THINKING_THUMB_PX / 2);
+    const span = Math.max(1, rect.width - inset * 2);
+    return Math.round(clamp01((clientX - rect.left - inset) / span) * (levels.length - 1));
+  };
+
+  const trackStickyPointer = (event: React.PointerEvent<HTMLElement>) => {
+    const index = stickyIndexFromPoint(event.clientX, event.clientY);
+    if (index != null) commitPreviewIndex(index);
+  };
+
+  const stickyBarProps = {
+    onPointerDown: (event: React.PointerEvent<HTMLElement>) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      stickyDraggingRef.current = true;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      trackStickyPointer(event);
+    },
+    onPointerMove: (event: React.PointerEvent<HTMLElement>) => {
+      if (!stickyDraggingRef.current) return;
+      trackStickyPointer(event);
+    },
+    onPointerUp: (event: React.PointerEvent<HTMLElement>) => {
+      if (!stickyDraggingRef.current) return;
+      stickyDraggingRef.current = false;
+      trackStickyPointer(event);
+      const next = levels[previewIndexRef.current];
+      if (next) pickLevel(next);
+    },
+    onPointerCancel: () => {
+      stickyDraggingRef.current = false;
+    },
+  };
+
   const pointerProps = {
     onPointerDown: (event: React.PointerEvent<HTMLElement>) => {
       if (!canScrub || event.button !== 0) return;
       clearHoldTimer();
       originRef.current = { x: event.clientX, y: event.clientY };
       axisRef.current = null;
-      // A fresh press: nothing to suppress until this one opens a scrubber.
+      // A fresh press: nothing to suppress until this one opens a scrubber —
+      // unless this very press just dismissed an open panel, in which case its
+      // click is already spent and must not toggle the panel back open.
       gestureOpenedRef.current = false;
-      suppressClickRef.current = false;
+      suppressClickRef.current = stickyDismissRef.current;
+      stickyDismissRef.current = false;
       startIndexRef.current = currentIndex;
       guardSelection();
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -17723,15 +17854,19 @@ function useThinkingScrub({
     onCommit(next);
   };
 
-  const panel = scrubbing
+  const panel = scrubbing || sticky
     ? createPortal(
         <div
+          ref={panelRef}
           role="status"
           aria-live="polite"
           aria-label={`${caption} ${previewLevel}`}
           style={panelStyle}
           className={cn(
-            "pointer-events-none fixed z-[220] select-none animate-in fade-in-0 zoom-in-90 duration-200",
+            "fixed z-[220] select-none animate-in fade-in-0 zoom-in-90 duration-200",
+            // A gesture panel is pure readout under a captured pointer; a
+            // clicked-open one is the control itself, so it takes the pointer.
+            sticky ? "pointer-events-auto" : "pointer-events-none",
             placement === "above"
               ? "origin-bottom slide-in-from-bottom-2"
               : "origin-top slide-in-from-top-2",
@@ -17752,11 +17887,14 @@ function useThinkingScrub({
                 ref={barRef}
                 className="thinking-scrubber"
                 data-orientation={orientation}
+                data-interactive={sticky ? "" : undefined}
+                {...(sticky ? stickyBarProps : {})}
                 style={
                   {
                     "--thinking-progress": previewProgress,
                     "--thinking-accent": previewAccent,
                     ...(vertical ? { "--thinking-travel": `${verticalTravelPx}px` } : {}),
+                    ...(sticky ? { touchAction: "none", cursor: "pointer" } : {}),
                   } as CSSProperties
                 }
               >
@@ -17783,24 +17921,56 @@ function useThinkingScrub({
                   is the one you are about to commit. */}
               {vertical ? (
                 <div className="thinking-scrubber-stops">
-                  {levels.map((level, index) => (
-                    <span
-                      key={level}
-                      data-active={index === safePreview ? "" : undefined}
-                      style={{
-                        ...thinkingStopOffset(index, levels.length, true),
-                        ...(index === safePreview ? { color: previewAccent } : {}),
-                      }}
-                    >
-                      {thinkingLevelLabel(level)}
-                    </span>
-                  ))}
+                  {levels.map((level, index) => {
+                    const stopStyle = {
+                      ...thinkingStopOffset(index, levels.length, true),
+                      ...(index === safePreview ? { color: previewAccent } : {}),
+                    };
+                    // Clicked open, every named stop is a target you can just
+                    // hit — no travel, no release timing.
+                    return sticky ? (
+                      <button
+                        key={level}
+                        type="button"
+                        data-active={index === safePreview ? "" : undefined}
+                        style={stopStyle}
+                        onPointerEnter={() => commitPreviewIndex(index)}
+                        onClick={() => pickLevel(level)}
+                      >
+                        {thinkingLevelLabel(level)}
+                      </button>
+                    ) : (
+                      <span
+                        key={level}
+                        data-active={index === safePreview ? "" : undefined}
+                        style={stopStyle}
+                      >
+                        {thinkingLevelLabel(level)}
+                      </span>
+                    );
+                  })}
                 </div>
               ) : null}
             </div>
-            {/* Every stop is named while they fit; past ~5 the row collapses to
-                the two endpoints so the labels never overlap. */}
-            {vertical ? null : (
+            {/* Clicked open, the row names every level and each one is a button.
+                During a gesture it is a readout: every stop while they fit, and
+                past ~5 just the two endpoints so the labels never overlap. */}
+            {vertical ? null : sticky ? (
+              <div className="thinking-scrubber-picks">
+                {levels.map((level, index) => (
+                  <button
+                    key={level}
+                    type="button"
+                    data-active={index === safePreview ? "" : undefined}
+                    style={index === safePreview ? { color: previewAccent } : undefined}
+                    onPointerEnter={() => commitPreviewIndex(index)}
+                    onClick={() => pickLevel(level)}
+                  >
+                    {thinkingLevelLabel(level)}
+                  </button>
+                ))}
+              </div>
+            ) : (
               <div className="thinking-scrubber-ends">
                 {(levels.length <= 5 ? levels : [levels[0]!, levels[levels.length - 1]!]).map(
                   (level) => (
@@ -17823,18 +17993,21 @@ function useThinkingScrub({
 
   return {
     scrubbing,
+    sticky,
     previewLevel,
     previewAccent,
     pointerProps,
     consumeSuppressedClick,
+    toggleSticky,
     nudge,
     panel,
   };
 }
 
-// Session composers: hold (or slide) to open the effort scrubber only — no
-// dropdown menu. Levels are chosen exclusively through the floating slider,
-// or with arrow keys once the pill has focus.
+// Session composers: click (or hold, or slide) to open the effort scrubber —
+// no dropdown menu. A plain click parks the slider open as a popover you point
+// at and click; hold-and-slide is the one-motion shortcut; arrow keys work once
+// the pill has focus.
 function ComposerThinkingControl({
   value,
   levels,
@@ -17855,7 +18028,7 @@ function ComposerThinkingControl({
   const currentIndex = Math.max(0, levels.indexOf(value));
   // The pill reads out the level under the finger while a scrub is open, so
   // the trigger and the floating panel never disagree.
-  const shown = scrub.scrubbing ? scrub.previewLevel : value;
+  const shown = scrub.scrubbing || scrub.sticky ? scrub.previewLevel : value;
 
   return (
     <>
@@ -17867,9 +18040,17 @@ function ComposerThinkingControl({
         aria-valuemax={Math.max(0, levels.length - 1)}
         aria-valuenow={currentIndex}
         aria-valuetext={value}
-        title="Hold and slide to adjust — or use the arrow keys"
+        aria-expanded={scrub.sticky}
+        title="Click for the slider — or hold and slide, or use the arrow keys"
         {...scrub.pointerProps}
+        onClick={(event) => {
+          // A press that opened the scrubber ends in a click of its own; that
+          // click belongs to the gesture, not to the trigger.
+          if (scrub.consumeSuppressedClick()) return;
+          scrub.toggleSticky(event.currentTarget);
+        }}
         onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") return;
           // Standard slider keys, so the control is reachable without a
           // pointer at all (the gesture used to be the only way in).
           const step =
@@ -17895,7 +18076,7 @@ function ComposerThinkingControl({
         className={cn(
           "relative inline-flex h-8 cursor-pointer select-none items-center gap-1.5 rounded-full text-foreground outline-none transition-all duration-200 focus-visible:ring-2 focus-visible:ring-ring active:scale-[0.98]",
           flat ? "px-1" : "bg-muted px-3",
-          scrub.scrubbing && "scale-[1.02] bg-foreground/10",
+          (scrub.scrubbing || scrub.sticky) && "scale-[1.02] bg-foreground/10",
         )}
       >
         <ThinkingSignal value={shown} levels={levels} />
