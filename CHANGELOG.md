@@ -2,6 +2,22 @@
 
 Recent product updates and deployment notes.
 
+## August 7, 2026 - Mounted settings pages scroll all the way down (v0.1.290)
+
+- **A settings page mounted inside another product no longer cuts off at one
+  screen.** The mounted page reused the standalone app's full-viewport shell,
+  which clips anything taller than the window — so on omg's Storage page the
+  scroll stopped dead partway through and the last cards (resource pressure,
+  and everything under it) were unreachable. Mounted pages now size to their
+  content and scroll with the host page.
+- The blank band that used to sit under the last card on those pages is gone
+  too: it reserved room for a floating composer the mounted page doesn't have.
+- **A recurring high-severity finding can no longer be muted.** Dismissing a
+  HIGH finding used to tell the next automated run not to raise it again, so a
+  daily check that stayed red went unnoticed for a day. High severity always
+  resurfaces and escalates on repeat now; low/medium dismissals still stick.
+  Findings can also finally be marked resolved — `lfg agents auto resolve <id>`.
+
 ## August 6, 2026 - No more "Welcome, Unassigned" (v0.1.289)
 
 - **The mobile Live header stops greeting people by a filter label.** When
