@@ -2,6 +2,16 @@
 
 Recent product updates and deployment notes.
 
+## August 7, 2026 - Settings move to the OMG_ prefix (v0.1.296)
+
+- **Configuration variables are now named `OMG_*`.** New installs are seeded
+  with `OMG_HOST`, `OMG_PORT` and the rest. Every older `LFG_` name is still
+  read, so an existing `.env` keeps working exactly as before and needs no
+  migration — if a name is set both ways, `OMG_` wins.
+- The finished-install summary prints `http://localhost:8766` beside the
+  loopback address, so there is a named URL to click.
+- Setup's own messages now use one consistent spelling of the product name.
+
 ## August 7, 2026 - Sessions ship again (v0.1.295)
 
 - **A voice recording can be thrown away with one tap.** While you're dictating,
