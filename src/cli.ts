@@ -16,6 +16,12 @@ Env (read from process env / .env, see .env.example):
 `;
 
 async function main() {
+  // Must run before the first `await import` below: commands read their
+  // configuration at module scope, so aliasing after the import would be too
+  // late for anything already captured into a module-level const.
+  const { applyEnvAliases } = await import("./env-compat.ts");
+  applyEnvAliases();
+
   const [cmd, ...rest] = process.argv.slice(2);
   switch (cmd) {
     case "serve": {

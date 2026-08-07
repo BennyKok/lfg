@@ -278,24 +278,30 @@ updates and one terminal `[subagent complete]` / `[subagent blocked]` /
 ## Configuration
 
 Configuration lives in `.env`. **[`.env.example`](./.env.example) documents every
-variable inline** — these are the ones most people touch:
+variable inline.**
+
+Variables use the `OMG_` prefix. The older `LFG_` spelling of every name is still
+read, so an existing `.env` keeps working and does not need to be migrated; when
+a name is set both ways, `OMG_` wins. New installs are seeded with `OMG_`.
+
+These are the ones most people touch:
 
 | Variable | Purpose |
 | --- | --- |
-| `LFG_HOST` | Bind address. Keep `127.0.0.1` unless you know the risk. |
-| `LFG_PORT` | Web UI and API port. Defaults to `8766`. |
-| `LFG_REPOS_ROOT` | Directory scanned for git repos. |
+| `OMG_HOST` | Bind address. Keep `127.0.0.1` unless you know the risk. |
+| `OMG_PORT` | Web UI and API port. Defaults to `8766`. |
+| `OMG_REPOS_ROOT` | Directory scanned for git repos. |
 | `ANTHROPIC_API_KEY` | Optional API key for Claude / Pi flows. |
-| `LFG_<AGENT>_PATH` | Override a CLI's binary path (`LFG_CLAUDE_PATH`, `LFG_CODEX_PATH`, `LFG_OPENCODE_PATH`, `LFG_CURSOR_PATH`, `LFG_HERMES_PATH`, `LFG_PI_PATH`, `LFG_COPILOT_PATH`). |
-| `LFG_RELAY_URL` | Relay WebSocket URL for `lfg connect`. See [docs/remote-access.md](./docs/remote-access.md). |
-| `LFG_INSTALL_CHANNEL` | Install channel: `source`, `release`, or `container`. Usually set by setup/deploy. |
+| `OMG_<AGENT>_PATH` | Override a CLI's binary path (`OMG_CLAUDE_PATH`, `OMG_CODEX_PATH`, `OMG_OPENCODE_PATH`, `OMG_CURSOR_PATH`, `OMG_HERMES_PATH`, `OMG_PI_PATH`, `OMG_COPILOT_PATH`). |
+| `OMG_RELAY_URL` | Relay WebSocket URL for `lfg connect`. See [docs/remote-access.md](./docs/remote-access.md). |
+| `OMG_INSTALL_CHANNEL` | Install channel: `source`, `release`, or `container`. Usually set by setup/deploy. |
 
-Other groups: agent-specific behaviour (`LFG_COPILOT_ALLOW_ALL_TOOLS`,
-`LFG_HERMES_PROVIDER`, `LFG_PI_PROFILE_DIR` — see
+Other groups: agent-specific behaviour (`OMG_COPILOT_ALLOW_ALL_TOOLS`,
+`OMG_HERMES_PROVIDER`, `OMG_PI_PROFILE_DIR` — see
 [custom agent profiles](./docs/custom-agent-profiles.md)), relay event
-forwarding (`LFG_CONNECT_EVENTS*`), backend tracing
-(`LFG_TRACE_RETENTION_DAYS`, `LFG_TRACE_TRANSCRIPT_*`), and the optional
-WhatsApp bridge (`LFG_WHATSAPP_*`).
+forwarding (`OMG_CONNECT_EVENTS*`), backend tracing
+(`OMG_TRACE_RETENTION_DAYS`, `OMG_TRACE_TRANSCRIPT_*`), and the optional
+WhatsApp bridge (`OMG_WHATSAPP_*`).
 
 Backend diagnostics append to `data/logs/trace-YYYY-MM-DD.jsonl` (API timings,
 transcript indexing, live stream stalls, send queue state).

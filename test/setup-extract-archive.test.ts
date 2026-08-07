@@ -2,23 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
-const SETUP = join(import.meta.dir, "..", "scripts", "setup.sh");
-
-// setup.sh is a single top-to-bottom installer, so the only way to exercise one
-// of its helpers is to slice the function definition out and source it. The
-// slice is by name, so a rename shows up as a failing test rather than a test
-// that silently stops covering anything.
-function extractFunctionSource(name: string): string {
-  const script = readFileSync(SETUP, "utf8");
-  const lines = script.split("\n");
-  const start = lines.findIndex((l) => l.trim().startsWith(`${name}() {`));
-  expect(start, `${name}() not found in scripts/setup.sh`).toBeGreaterThanOrEqual(0);
-  const indent = lines[start].length - lines[start].trimStart().length;
-  const end = lines.findIndex((l, i) => i > start && l === `${" ".repeat(indent)}}`);
-  expect(end, `end of ${name}() not found in scripts/setup.sh`).toBeGreaterThan(start);
-  return lines.slice(start, end + 1).join("\n");
-}
+import { extractFunctionSource } from "./setup-script-helpers.ts";
 
 /** A tar that behaves like macOS bsdtar: no GNU banner, hard-fails GNU-only long options. */
 const FAKE_BSDTAR = `#!/usr/bin/env bash

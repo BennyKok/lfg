@@ -426,10 +426,13 @@ if [ ! -f "$LFG_DIR/.env" ]; then
   say "Creating .env from .env.example..."
   cp "$LFG_DIR/.env.example" "$LFG_DIR/.env"
 fi
-seed_env() { grep -q "^$1=" "$LFG_DIR/.env" || echo "$1=$2" >> "$LFG_DIR/.env"; }
-seed_env LFG_HOST 127.0.0.1
-seed_env LFG_PORT "$LFG_PORT"
-seed_env LFG_REPOS_ROOT "$LFG_REPOS_ROOT"
+# New installs are seeded with the OMG_ prefix. Existing installs keep whatever
+# LFG_ names they already have - appending an OMG_ twin would silently out-rank
+# a customised legacy value, since OMG_ wins in src/env-compat.ts.
+seed_env() { grep -qE "^(OMG_|LFG_)$1=" "$LFG_DIR/.env" || echo "OMG_$1=$2" >> "$LFG_DIR/.env"; }
+seed_env HOST 127.0.0.1
+seed_env PORT "$LFG_PORT"
+seed_env REPOS_ROOT "$LFG_REPOS_ROOT"
 chmod 600 "$LFG_DIR/.env"
 mkdir -p "$LFG_REPOS_ROOT"
 mkdir -p "$LFG_DIR/data"
@@ -495,7 +498,10 @@ EnvironmentFile=$LFG_DIR/.env
 # claude/codex must resolve when spawned into tmux panes (see src/tmux.ts).
 Environment=PATH=$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin
 # Hard-bind to loopback so a stale .env can never expose the UI publicly.
+# Both spellings are pinned: src/env-compat.ts lets OMG_HOST out-rank LFG_HOST,
+# so pinning only the legacy name would let a stale .env defeat this.
 Environment=LFG_HOST=127.0.0.1
+Environment=OMG_HOST=127.0.0.1
 # agent-browser defaults idle off; without this, headless Chrome orphans pile up
 # when agents forget `close`. Inherited by every managed agent spawn.
 Environment=AGENT_BROWSER_IDLE_TIMEOUT_MS=300000
@@ -533,7 +539,7 @@ install_macos_service() {
   PLIST="$UNIT_DIR/$SERVICE_LABEL.plist"
   mkdir -p "$UNIT_DIR" "$LOG_DIR"
 
-  START_CMD="cd \"$LFG_DIR\" && set -a && [ -f \"$LFG_DIR/.env\" ] && . \"$LFG_DIR/.env\"; set +a; export PATH=\"$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin\" LFG_HOST=127.0.0.1; exec \"$BUN_BIN\" run \"$LFG_DIR/src/cli.ts\" serve"
+  START_CMD="cd \"$LFG_DIR\" && set -a && [ -f \"$LFG_DIR/.env\" ] && . \"$LFG_DIR/.env\"; set +a; export PATH=\"$HOME/.local/bin:$HOME/.bun/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin\" LFG_HOST=127.0.0.1 OMG_HOST=127.0.0.1; exec \"$BUN_BIN\" run \"$LFG_DIR/src/cli.ts\" serve"
   XML_START_CMD="$(printf '%s' "$START_CMD" | xml_escape)"
   XML_LFG_DIR="$(printf '%s' "$LFG_DIR" | xml_escape)"
   XML_LOG_DIR="$(printf '%s' "$LOG_DIR" | xml_escape)"
