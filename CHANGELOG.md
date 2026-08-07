@@ -4,6 +4,12 @@ Recent product updates and deployment notes.
 
 ## August 7, 2026 - Sessions ship again (v0.1.295)
 
+- **A voice recording can be thrown away with one tap.** While you're dictating,
+  a small ✕ slides up out of the mic button — tap it and the take is discarded
+  and the composer goes back to whatever it said before you started talking.
+  Tapping the mic still sends, so until now backing out of a bad take meant
+  either holding and dragging away or reaching for the Esc key; on a phone there
+  was no way at all once a tap-to-record take was underway.
 - **Finished sessions post to Shipped again.** The Shipped feed had gone silent
   since August 5 — not because posting was broken, but because the instructions
   telling agents to post had been deleted. A prompt cleanup that split the old
