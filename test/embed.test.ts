@@ -121,7 +121,9 @@ describe("host bottom inset contract", () => {
     // Standalone: original home-indicator via --lfg-device-safe-bottom.
     // Embed: that token is cancelled to 0; shell host-inset clears the pill.
     expect(app).toContain("pb-[max(var(--lfg-device-safe-bottom),0.5rem)]");
-    expect(app).toContain('embedded && "pb-[var(--lfg-host-bottom-inset)]"');
+    // Not on a bare page — it has no composer for the pill to cover, so the
+    // inset was only a dead band under the host's last card.
+    expect(app).toContain('embedded && !bare && "pb-[var(--lfg-host-bottom-inset)]"');
   });
 
   test("host can reserve top-right space in the embedded mobile header", () => {

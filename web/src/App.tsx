@@ -3690,6 +3690,21 @@ function ComposerSendButton({
 
 const APP_SHELL_CLASS = "relative flex h-dvh flex-col overflow-hidden bg-background text-foreground";
 
+/**
+ * The same shell, mounted as one page inside a host's own scroll container.
+ *
+ * `h-dvh overflow-hidden` is right for the standalone app and for a host that
+ * gives the full-app surface a sized box: the shell owns the viewport and
+ * scrolls internally. It is wrong for a bare page. There the shell is just a
+ * block in the host's document, so a viewport-tall clipped box means any page
+ * taller than one screen — Storage, once it grew its performance and resource
+ * pressure sections — is cut off at exactly 100dvh with the rest unreachable:
+ * the host's scroller has already hit its end, and our own overflow is hidden.
+ * Same reasoning as `main` below: a bare mount must have INTRINSIC height and
+ * let the host scroll it.
+ */
+const BARE_SHELL_CLASS = "relative flex flex-col bg-background text-foreground";
+
 function AppStartupStatus() {
   return (
     <div
@@ -6684,13 +6699,16 @@ export function App() {
       aria-describedby={loading ? "lfg-startup-status" : undefined}
       data-startup-state={loading ? "connecting" : "ready"}
       className={cn(
-        APP_SHELL_CLASS,
+        bare ? BARE_SHELL_CLASS : APP_SHELL_CLASS,
         loading &&
           "[&_button]:cursor-wait [&_button]:opacity-60 [&_input]:cursor-wait [&_input]:opacity-60 [&_select]:cursor-wait [&_select]:opacity-60 [&_textarea]:cursor-wait [&_textarea]:opacity-60",
         // Embed: leave a blank band of our own background under the host
         // compact pill so list/inline composer sit above it. Full-bleed
         // portals (session sheet) use --lfg-safe-bottom on their own chrome.
-        embedded && "pb-[var(--lfg-host-bottom-inset)]",
+        // Not on a bare page: it has no composer and nothing floats over it —
+        // the host's own page padding ends the page, so this only added a dead
+        // band under the last card.
+        embedded && !bare && "pb-[var(--lfg-host-bottom-inset)]",
       )}
     >
       {viewerArtifact ? (
