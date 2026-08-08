@@ -2,6 +2,25 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - Browsing files works on a phone (v0.1.307)
+
+- **The file tree gets the whole screen, and so does the file.** Files opened
+  on a phone as a 208px tree strip stacked over a file view with about five
+  lines in it. Below the tablet breakpoint it is now two screens: the tree
+  fills the sheet, tapping a file pushes it full-screen with its own back bar,
+  and Back returns to the tree exactly where you left it — same selection,
+  same unsent edit. Desktop keeps the two-pane layout unchanged.
+- **The sheet stops fighting the keyboard and the safe areas.** It follows the
+  visible viewport, so opening the keyboard to write a note shrinks it instead
+  of pushing "Send to agent" underneath. Headers clear the status bar, the
+  bottom of the sheet clears the home indicator, and the path breadcrumb
+  scrolls sideways on one line instead of wrapping the header down the screen.
+- **Tapping the search box or the editor no longer zooms the page.** Both are
+  drawn inside a shadow root that the app's 16px-on-touch rule could not
+  reach, so iOS zoomed in on focus and left no way back out.
+- Bigger hit targets on the header controls, a full-width send button, and the
+  Files and Review pills wrap instead of clipping on a narrow screen.
+
 ## August 8, 2026 - The embeddable packages move to npm as @omg-dev (v0.1.306)
 
 - **`@omg-dev/protocol`, `@omg-dev/client`, `@omg-dev/react` and `@omg-dev/app`
