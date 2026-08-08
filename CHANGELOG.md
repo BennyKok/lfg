@@ -2,6 +2,19 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - A steered turn stops repeating itself (v0.1.311)
+
+- **Steering a running turn no longer duplicates it down the chat.** Sending a
+  second message while the agent was still working — a follow-up, a correction,
+  an interrupt — made the rest of that turn repeat itself in the pane: the same
+  reasoning block, the same tool calls and the same paragraph, over and over,
+  growing with every chunk until the turn ended.
+- The transcript itself was always correct — one copy of everything — so
+  reopening the session cleaned it up. Only the live view was affected, which is
+  why the repeat came and went and was so hard to catch in the act.
+- A steering send now rides the stream that is already open instead of starting
+  a second one. Both messages still reach the agent, and the turn renders once.
+
 ## August 8, 2026 - A quiet install and an update that stops doing the work twice (v0.1.310)
 
 - **Updating no longer re-downloads the dependencies it just downloaded.** The
