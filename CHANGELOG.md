@@ -2,6 +2,24 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - Every open dependency advisory is closed (v0.1.299)
+
+- **The three open Dependabot alerts are fixed.** All of them sat in the mobile
+  app's Expo toolchain: `js-yaml` (a YAML document could burn CPU quadratically
+  on `!!omap`), `brace-expansion` (a glob pattern could exhaust memory), and
+  `uuid` (a missing bounds check when a caller supplies its own buffer). The
+  first two only needed a lockfile bump. `uuid` needed an override — the one
+  package that pulls it in still pins a 7.x range with no backported fix, and
+  npm's own suggestion was to downgrade Expo by four majors. An iOS prebuild
+  was run end to end against the patched tree to confirm the native project
+  still generates correctly.
+- **Two more advisories that Dependabot cannot see are fixed too.** It cannot
+  read `bun.lock`, so it never reported the root `nanoid` (a custom generator
+  could loop forever) — now patched. The `brace-expansion` override was also
+  pinned *at* the vulnerable version; installs happened to resolve above it, so
+  the audit stayed green while the floor invited the bug straight back. Both
+  floors now sit on patched releases.
+
 ## August 8, 2026 - A new account sees the whole free model tier (v0.1.298)
 
 - **The model picker no longer hides most of the free tier on a fresh
