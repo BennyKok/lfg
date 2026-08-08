@@ -4950,6 +4950,7 @@ export function App() {
   }, [isMobile, mobileChromeEl]);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   const [codingAgents, setCodingAgents] = useState<CodingAgentInfo[]>([]);
+  const [localUrl, setLocalUrl] = useState<LocalUrlCapability | null>(null);
   const [codingAgentAuth, setCodingAgentAuth] = useState<CodingAgentAuthSession | null>(null);
   // Auth started from a blocked session stays inside that session's transcript
   // instead of opening the global settings dialog. completedSid lets the
@@ -5380,6 +5381,9 @@ export function App() {
     }
     setCodingAgents(payload.codingAgents ?? []);
     setModelCatalog(buildAgentModelCatalog(payload.models));
+    // Capability, not preference: a machine with no dns-sd cannot advertise a
+    // .local name, and the toggle says so rather than pretending to work.
+    setLocalUrl((payload as { localUrl?: LocalUrlCapability | null }).localUrl ?? null);
     setSettings(payload.settings ?? {
       timeZone: payload.auto?.tz ?? DEFAULT_SCHED_TZ,
       maxLiveAgents: 16,
@@ -7278,6 +7282,7 @@ export function App() {
             onOpenStorage={() => setTab("storage")}
             onOpenMore={() => setTab("more")}
             settings={settings}
+            localUrl={localUrl}
             onSettingsChange={updateSettings}
             connection={useWsLive ? wsLiveStream.connection : null}
           />
@@ -19670,6 +19675,73 @@ function useServerStats(active: boolean, intervalMs = 3000): ServerStats | null 
 
 const LIVE_AGENT_LIMIT_OPTIONS = [0, 4, 8, 10, 12, 16, 24, 32];
 
+function LocalUrlSettingsSection({
+  settings,
+  capability,
+  onChange,
+}: {
+  settings: GlobalSettings;
+  capability: LocalUrlCapability | null;
+  onChange: (patch: Partial<GlobalSettings>) => Promise<void>;
+}) {
+  const [saving, setSaving] = useState(false);
+  // A machine that cannot advertise is told so, rather than shown a switch
+  // that appears to work and changes nothing. Only macOS ships dns-sd.
+  const supported = capability?.supported === true;
+  const hostname = capability?.hostname ?? "omg.local";
+  const enabled = settings.localUrlEnabled;
+  const live = supported && enabled && capability?.active === true;
+
+  async function toggle(next: boolean) {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await onChange({ localUrlEnabled: next });
+      toast.success(next ? `Now serving at ${hostname}` : "Named local URL turned off");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not update the local URL");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="mt-6">
+      <div className="overflow-hidden rounded-xl border border-border/60 bg-card/40">
+        <div className="flex w-full items-center justify-between gap-3 px-4 py-2.5 text-left">
+          <div className="flex min-w-0 items-center gap-3">
+            <span className={cn(
+              "flex size-7 shrink-0 items-center justify-center rounded-[7px] text-white transition-colors duration-200 ease-apple",
+              live ? "bg-foreground/70" : "bg-muted-foreground/40",
+            )}>
+              <Globe className="size-4" />
+            </span>
+            <div className="min-w-0">
+              <div className="text-sm font-medium">Named local URL</div>
+              <div className="text-xs text-muted-foreground">
+                {!supported
+                  ? "Only available on macOS — this machine has no mDNS responder"
+                  : live
+                    ? `Serving at http://${hostname}`
+                    : `Advertise http://${hostname} on this machine`}
+              </div>
+            </div>
+          </div>
+          <Switch
+            checked={supported && enabled}
+            onCheckedChange={(next) => void toggle(next)}
+            disabled={saving || !supported}
+            aria-label="Named local URL"
+          />
+        </div>
+      </div>
+      <p className="px-4 pt-2 text-xs text-muted-foreground">
+        Advertised over mDNS while the server runs — nothing is written to disk, and the server stays bound to loopback. Install the PWA from <span className="font-medium">localhost</span>: browsers only treat localhost and loopback IPs as secure origins, so a .local address cannot register a service worker.
+      </p>
+    </section>
+  );
+}
+
 function AgentConcurrencySettingsSection({
   settings,
   onChange,
@@ -20646,6 +20718,7 @@ function OmgUpdateSection() {
 function SettingsView({
   user,
   settings,
+  localUrl,
   onSettingsChange,
   onOpenCodingAgents,
   onOpenAuto,
@@ -20655,6 +20728,7 @@ function SettingsView({
 }: {
   user: string | null;
   settings: GlobalSettings;
+  localUrl: LocalUrlCapability | null;
   onSettingsChange: (patch: Partial<GlobalSettings>) => Promise<void>;
   onOpenCodingAgents: () => void;
   onOpenAuto: () => void;
@@ -20794,6 +20868,12 @@ function SettingsView({
 
       <AgentConcurrencySettingsSection
         settings={settings}
+        onChange={onSettingsChange}
+      />
+
+      <LocalUrlSettingsSection
+        settings={settings}
+        capability={localUrl}
         onChange={onSettingsChange}
       />
 
