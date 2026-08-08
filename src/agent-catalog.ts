@@ -55,8 +55,21 @@ export const HERMES_MODELS: string[] = [
 // minPlan) — pi-session.ts merges it into pi's Anthropic provider config as a
 // custom model id so it resolves like the aliases above instead of erroring.
 export const PI_MODELS: string[] = ["fable", "opus", "sonnet", "haiku", "deepseek/deepseek-v4-flash"];
+// Live `opencode models` discovery is authoritative and owns this list once the
+// catalog cache exists. Until then — a first boot, an offline box, or a failed
+// discovery run — the picker renders this fallback verbatim, and an anonymous
+// account is filtered down to the `-free` entries. A single-entry fallback
+// therefore looked like "OpenCode only offers one free model" to every brand
+// new user who opened the picker inside the first refresh window, so seed it
+// with the full credential-free Zen set instead of one representative id.
 export const OPENCODE_MODELS: string[] = [
   "opencode/deepseek-v4-flash-free",
+  "opencode/laguna-s-2.1-free",
+  "opencode/ling-3.0-tiny-free",
+  "opencode/longcat-2.0-free",
+  "opencode/mimo-v2.5-free",
+  "opencode/nemotron-3-ultra-free",
+  "opencode/north-mini-code-free",
 ];
 export const COPILOT_MODELS: string[] = [
   "claude-sonnet-4.5",
