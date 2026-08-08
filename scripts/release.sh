@@ -7,7 +7,7 @@
 # machine so native/optional packages resolve for that OS.
 #
 # Usage:
-#   scripts/release.sh                 # build dist/lfg-bundle.tar.gz only
+#   scripts/release.sh                 # build dist/omg-bundle.tar.gz only
 #   scripts/release.sh v0.1.0          # build AND publish a GitHub release (gh)
 #   SKIP_INSTALL=1 scripts/release.sh  # reuse the current node_modules / web/dist
 #
@@ -26,7 +26,12 @@ cd "$ROOT"
 OUT_DIR="$ROOT/dist"
 REPO_SLUG="${LFG_REPO_SLUG:-BennyKok/omg.dev}"
 VERSION="${1:-}"
-ASSET="${LFG_RELEASE_ASSET:-lfg-bundle.tar.gz}"
+ASSET="${LFG_RELEASE_ASSET:-omg-bundle.tar.gz}"
+# The pre-rename asset name, published alongside the new one. Every setup.sh
+# already downloaded onto a machine asks for lfg-bundle.tar.gz by name, so the
+# day this stops being published is the day every existing installer breaks on
+# `latest`. Same bytes, same checksum, two names.
+LEGACY_ASSET="lfg-bundle.tar.gz"
 
 say() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m[x]\033[0m %s\n' "$*" >&2; exit 1; }
@@ -131,6 +136,11 @@ say "Packing ${ASSET}..."
 tar -C "$STAGE" -czf "$OUT_DIR/$ASSET" lfg
 ( cd "$OUT_DIR" && printf '%s  %s\n' "$(sha256_file "$ASSET")" "$ASSET" > "$ASSET.sha256" )
 
+if [ "$ASSET" != "$LEGACY_ASSET" ]; then
+  cp "$OUT_DIR/$ASSET" "$OUT_DIR/$LEGACY_ASSET"
+  ( cd "$OUT_DIR" && printf '%s  %s\n' "$(sha256_file "$LEGACY_ASSET")" "$LEGACY_ASSET" > "$LEGACY_ASSET.sha256" )
+fi
+
 SIZE="$(du -h "$OUT_DIR/$ASSET" | cut -f1)"
 say "Built $OUT_DIR/$ASSET ($SIZE)"
 cat "$OUT_DIR/$ASSET.sha256"
@@ -147,11 +157,13 @@ say "Publishing ${VERSION} to ${REPO_SLUG}..."
 if gh release view "$VERSION" --repo "$REPO_SLUG" >/dev/null 2>&1; then
   gh release upload "$VERSION" \
     "$OUT_DIR/$ASSET" "$OUT_DIR/$ASSET.sha256" \
+    "$OUT_DIR/$LEGACY_ASSET" "$OUT_DIR/$LEGACY_ASSET.sha256" \
     "$OUT_DIR"/lfg-dev-*.tgz \
     --repo "$REPO_SLUG" --clobber
 else
   gh release create "$VERSION" \
-    "$OUT_DIR/$ASSET" "$OUT_DIR/$ASSET.sha256" "$OUT_DIR"/lfg-dev-*.tgz \
+    "$OUT_DIR/$ASSET" "$OUT_DIR/$ASSET.sha256" \
+    "$OUT_DIR/$LEGACY_ASSET" "$OUT_DIR/$LEGACY_ASSET.sha256" "$OUT_DIR"/lfg-dev-*.tgz \
     --repo "$REPO_SLUG" --title "$VERSION" --generate-notes
 fi
 say "Done. Latest-release install URL:"

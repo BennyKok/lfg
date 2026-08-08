@@ -44,7 +44,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map(root => rm(root, { recursive: true, force: true })));
 });
 
-describe("lfg uninstall", () => {
+describe("omg uninstall", () => {
   test("removes the runtime but preserves sessions and config", async () => {
     const f = fixture();
     roots.push(f.home);
@@ -58,9 +58,36 @@ describe("lfg uninstall", () => {
     expect(f.commands).toEqual([
       ["systemctl", "--user", "disable", "--now", "lfg.service"],
       ["systemctl", "--user", "daemon-reload"],
+      // Both registration names: an upgraded box can still carry the pre-rename
+      // entry, and leaving it points the CLI at an endpoint being deleted.
+      ["/usr/bin/claude", "mcp", "remove", "omg"],
       ["/usr/bin/claude", "mcp", "remove", "lfg"],
     ]);
     expect(f.output.some(line => line.includes("Sessions and config remain"))).toBe(true);
+  });
+
+  test("removes both units, so a reinstalled box has nothing left enabled", async () => {
+    const f = fixture();
+    roots.push(f.home);
+    // A box installed before the rename and reinstalled after it carries both.
+    // Sweeping only the resolved one leaves the other enabled and still
+    // starting a server at boot — "uninstall" has to actually uninstall.
+    const units = join(f.home, ".config", "systemd", "user");
+    writeFileSync(join(units, "omg.service"), "service\n");
+    writeFileSync(join(units, "omg-agents.slice"), "slice\n");
+
+    await cmdUninstall([], f.deps);
+
+    expect(f.commands).toEqual([
+      ["systemctl", "--user", "disable", "--now", "omg.service"],
+      ["systemctl", "--user", "disable", "--now", "lfg.service"],
+      ["systemctl", "--user", "daemon-reload"],
+      ["/usr/bin/claude", "mcp", "remove", "omg"],
+      ["/usr/bin/claude", "mcp", "remove", "lfg"],
+    ]);
+    for (const leftover of ["omg.service", "lfg.service", "omg-agents.slice", "lfg-agents.slice"]) {
+      expect(Bun.file(join(units, leftover)).exists()).resolves.toBe(false);
+    }
   });
 
   test("requires explicit confirmation before deleting local data", async () => {

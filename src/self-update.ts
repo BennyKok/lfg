@@ -9,6 +9,7 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { installedLaunchAgent, installedSystemdUnit } from "./service-unit.ts";
 
 export type SourceUpdateStatus = {
   channel: "source";
@@ -267,11 +268,14 @@ export function restartCommand(
   procRoot = "/proc",
 ): string[] | null {
   if (platform === "linux") {
-    if (existsSync(join(home, ".config", "systemd", "user", "lfg.service"))) {
+    // Whichever unit this box was installed under — see src/service-unit.ts.
+    // Restarting a hardcoded name would no-op on the other one.
+    const unit = installedSystemdUnit(home);
+    if (unit) {
       for (const systemctl of ["/usr/bin/systemctl", "/bin/systemctl"]) {
         try {
           accessSync(systemctl, constants.X_OK);
-          return [systemctl, "--user", "restart", "lfg.service"];
+          return [systemctl, "--user", "restart", `${unit}.service`];
         } catch {}
       }
     }
@@ -279,10 +283,11 @@ export function restartCommand(
   }
   if (platform === "darwin") {
     const launchctl = "/bin/launchctl";
-    if (!existsSync(join(home, "Library", "LaunchAgents", "dev.omg.lfg.plist"))) return null;
+    const label = installedLaunchAgent(home);
+    if (!label) return null;
     try {
       accessSync(launchctl, constants.X_OK);
-      return [launchctl, "kickstart", "-k", `gui/${process.getuid?.() ?? 0}/dev.omg.lfg`];
+      return [launchctl, "kickstart", "-k", `gui/${process.getuid?.() ?? 0}/${label}`];
     } catch {
       return null;
     }
@@ -386,6 +391,11 @@ export async function applyReleaseUpdate(
 
   const repoSlug = install.repoSlug!;
   const tag = status.latestTag!;
+  // Deliberately the pre-rename name as the unknown-install fallback: this
+  // branch is reached only when install.json records no asset, which means an
+  // install old enough to predate the field. The legacy name is published on
+  // every release, old and new; omg-bundle.tar.gz only exists on new ones, so
+  // defaulting to it would break updates for exactly the installs that land here.
   const asset = install.releaseAsset || "lfg-bundle.tar.gz";
   if (!/^[a-zA-Z0-9._-]+$/.test(asset)) throw new Error("The configured release asset is invalid.");
   const url = `https://github.com/${repoSlug}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(asset)}`;

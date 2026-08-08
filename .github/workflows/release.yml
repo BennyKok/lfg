@@ -67,9 +67,14 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          # Stable asset name: /releases/latest/download/lfg-bundle.tar.gz
+          # Stable asset name: /releases/latest/download/omg-bundle.tar.gz.
+          # lfg-bundle.tar.gz is the same tarball under its pre-rename name —
+          # every setup.sh already on a machine asks for it by name, so dropping
+          # it would break `latest` for every existing installer.
           tag_name: ${{ inputs.tag || github.ref_name }}
           files: |
+            dist/omg-bundle.tar.gz
+            dist/omg-bundle.tar.gz.sha256
             dist/lfg-bundle.tar.gz
             dist/lfg-bundle.tar.gz.sha256
             dist/lfg-dev-protocol-*.tgz

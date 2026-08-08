@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# lfg - one-command setup for a fresh VPS or macOS workstation.
+# omg - one-command setup for a fresh VPS or macOS workstation.
 #
-# Provisions Bun, tmux, git, fetches lfg, optionally joins your Tailscale
+# Provisions Bun, tmux, git, fetches omg, optionally joins your Tailscale
 # tailnet, and runs the web UI as a background user service. Agent CLIs are
 # detected but not installed unless explicitly requested.
 #
@@ -12,23 +12,59 @@
 #   curl -fsSL https://raw.githubusercontent.com/BennyKok/omg.dev/main/scripts/setup.sh | TS_AUTHKEY=tskey-auth-xxxx bash
 #
 # Re-run / update after install:
-#   lfg setup
+#   omg setup
 #
 # It is idempotent - safe to run repeatedly.
 
 set -euo pipefail
+
+# ---- OMG_* / LFG_* aliasing ---------------------------------------------
+# The bash half of src/env-compat.ts. This script reads LFG_* names internally;
+# mirroring first means `OMG_PORT=9000 curl ... | bash` works, and OMG_ wins
+# when a name is somehow set both ways. Must run before any default below is
+# resolved, or the mirrored value would arrive after the ${VAR:-default} that
+# was supposed to see it.
+for _omg_var in $(compgen -v OMG_ 2>/dev/null || true); do
+  _legacy_var="LFG_${_omg_var#OMG_}"
+  printf -v "$_legacy_var" '%s' "${!_omg_var}"
+  export "${_legacy_var?}"
+done
+unset _omg_var _legacy_var
 
 # ---- config (override via env) ----
 LFG_REPO_URL="${LFG_REPO_URL:-https://github.com/BennyKok/omg.dev.git}"
 # Where prebuilt release tarballs live (GitHub "owner/repo"). Defaults align
 # with LFG_REPO_URL but can be pointed at a fork.
 LFG_REPO_SLUG="${LFG_REPO_SLUG:-BennyKok/omg.dev}"
-LFG_DIR="${LFG_DIR:-$HOME/lfg}"
+# Install location. A fresh box gets ~/omg; a box that already has ~/lfg keeps
+# it, because moving a live install's directory would strip it of its data/ and
+# .env and orphan the unit's WorkingDirectory.
+if [ -n "${LFG_DIR:-}" ]; then
+  LFG_DIR="$LFG_DIR"
+elif [ -d "$HOME/lfg" ] && [ ! -d "$HOME/omg" ]; then
+  LFG_DIR="$HOME/lfg"
+else
+  LFG_DIR="$HOME/omg"
+fi
 LFG_REPOS_ROOT="${LFG_REPOS_ROOT:-$HOME/repos}"
 LFG_PORT="${LFG_PORT:-8766}"
 TS_AUTHKEY="${TS_AUTHKEY:-}"
-SERVICE="lfg"
-SERVICE_LABEL="dev.omg.lfg"
+# Service identity. Same rule as the install directory: new boxes get `omg`,
+# and a box already running `lfg.service` keeps it rather than being migrated
+# out from under a running control plane. Renaming a unit means stopping the
+# thing that is currently working and hoping its replacement comes up.
+if [ -f "$HOME/.config/systemd/user/lfg.service" ] && [ ! -f "$HOME/.config/systemd/user/omg.service" ]; then
+  SERVICE="lfg"
+else
+  SERVICE="omg"
+fi
+# Not dev.omg.omg: the mechanical reverse-DNS answer duplicates the word and
+# reads like a packaging bug in `launchctl list`.
+if [ -f "$HOME/Library/LaunchAgents/dev.omg.lfg.plist" ] && [ ! -f "$HOME/Library/LaunchAgents/dev.omg.serve.plist" ]; then
+  SERVICE_LABEL="dev.omg.lfg"
+else
+  SERVICE_LABEL="dev.omg.serve"
+fi
 # Install source:
 #   release (default) - download the bundled tarball, then run a production
 #                       install. Private/unpublished deps may be bundled under
@@ -92,11 +128,11 @@ case "$OS_NAME" in
     ;;
 esac
 
-# If invoked from inside an existing lfg checkout (i.e. via `lfg setup`), use it.
+# If invoked from inside an existing checkout (i.e. via `omg setup`), use it.
 SCRIPT_SRC="${BASH_SOURCE[0]:-}"
 if [ -n "$SCRIPT_SRC" ] && [ -f "$SCRIPT_SRC" ]; then
   MAYBE_ROOT="$(cd "$(dirname "$SCRIPT_SRC")/.." && pwd)"
-  if [ -f "$MAYBE_ROOT/package.json" ] && grep -q '"name": *"lfg"' "$MAYBE_ROOT/package.json" 2>/dev/null; then
+  if [ -f "$MAYBE_ROOT/package.json" ] && grep -qE '"name": *"(omg|lfg)"' "$MAYBE_ROOT/package.json" 2>/dev/null; then
     LFG_DIR="$MAYBE_ROOT"
   fi
 fi
@@ -215,7 +251,7 @@ if ! command -v claude >/dev/null 2>&1; then
     say "Installing the Claude CLI..."
     curl -fsSL https://claude.ai/install.sh | bash
   else
-    warn "Claude CLI not found. LFG will start, but Claude sessions will be unavailable until you install/authenticate claude. Re-run with LFG_INSTALL_CLAUDE=1 only if you want setup to run Anthropic's installer."
+    warn "Claude CLI not found. OMG will start, but Claude sessions will be unavailable until you install/authenticate claude. Re-run with LFG_INSTALL_CLAUDE=1 only if you want setup to run Anthropic's installer."
   fi
 fi
 export PATH="$HOME/.local/bin:$PATH"
@@ -305,10 +341,10 @@ fi
 
 if [ "$LFG_INSTALL_MODE" = "source" ]; then
   if [ -d "$LFG_DIR/.git" ]; then
-    say "Updating LFG at ${LFG_DIR} (git)..."
+    say "Updating OMG at ${LFG_DIR} (git)..."
     git -C "$LFG_DIR" pull --ff-only || warn "git pull skipped (local changes?)"
   else
-    say "Cloning LFG into ${LFG_DIR} (git)..."
+    say "Cloning OMG into ${LFG_DIR} (git)..."
     git clone "$LFG_REPO_URL" "$LFG_DIR"
   fi
   # The web UI ships prebuilt in web/dist, so no web build is needed here.
@@ -348,12 +384,28 @@ else
     fi
   }
 
-  ASSET="${LFG_RELEASE_ASSET:-lfg-bundle.tar.gz}"
+  ASSET="${LFG_RELEASE_ASSET:-omg-bundle.tar.gz}"
   URL="$(release_url "$ASSET")"
   say "Downloading bundled release (${LFG_RELEASE}) from ${LFG_REPO_SLUG}..."
   TMP_TGZ="$(mktemp_tgz)"
   if ! curl -fSL "$URL" -o "$TMP_TGZ"; then
     rm -f "$TMP_TGZ"
+    # Releases cut before the rename only carry lfg-bundle.tar.gz. Pinning
+    # LFG_RELEASE to any older tag has to keep working, so fall back by name
+    # before giving up.
+    if [ -z "${LFG_RELEASE_ASSET:-}" ] && [ "$ASSET" != "lfg-bundle.tar.gz" ]; then
+      ASSET="lfg-bundle.tar.gz"
+      URL="$(release_url "$ASSET")"
+      say "Trying the pre-rename asset name ($ASSET)..."
+      TMP_TGZ="$(mktemp_tgz)"
+      if ! curl -fSL "$URL" -o "$TMP_TGZ"; then
+        rm -f "$TMP_TGZ"
+        TMP_TGZ=""
+      fi
+    fi
+  fi
+  if [ -z "${TMP_TGZ:-}" ] || [ ! -s "$TMP_TGZ" ]; then
+    rm -f "${TMP_TGZ:-}"
     if [ -n "${LFG_RELEASE_ASSET:-}" ]; then
       die "Could not download $URL - check the tag, or use LFG_INSTALL_MODE=source."
     elif [ "${LFG_ALLOW_PLATFORM_BUNDLE:-0}" = "1" ]; then
@@ -387,8 +439,12 @@ else
   fi
 fi
 
-# ---- 6. expose the `lfg` command on PATH ----
+# ---- 6. expose the `omg` command on PATH ----
+# Both names point at the same CLI: `omg` is what this installs as, and `lfg`
+# stays behind it so existing scripts, cron entries and muscle memory keep
+# working on a box that upgrades into the new name.
 mkdir -p "$HOME/.local/bin"
+ln -sf "$LFG_DIR/src/cli.ts" "$HOME/.local/bin/omg"
 ln -sf "$LFG_DIR/src/cli.ts" "$HOME/.local/bin/lfg"
 chmod +x "$LFG_DIR/src/cli.ts" 2>/dev/null || true
 
@@ -397,21 +453,21 @@ install_lfg_mcp() {
   local mcp_args=("$BUN_BIN" "$LFG_DIR/src/cli.ts" "mcp")
   local installed=0
   if command -v claude >/dev/null 2>&1; then
-    say "Registering LFG MCP with Claude..."
+    say "Registering OMG MCP with Claude..."
     claude mcp remove lfg -s user >/dev/null 2>&1 || true
     if claude mcp add -s user lfg -- "${mcp_args[@]}" >/dev/null 2>&1; then
       installed=1
     else
-      warn "Could not register LFG MCP with Claude. Open Settings -> Coding agents in LFG and run Install MCP after Claude is authenticated."
+      warn "Could not register OMG MCP with Claude. Open Settings -> Coding agents in OMG and run Install MCP after Claude is authenticated."
     fi
   fi
   if command -v codex >/dev/null 2>&1; then
-    say "Registering LFG MCP with Codex..."
+    say "Registering OMG MCP with Codex..."
     codex mcp remove lfg >/dev/null 2>&1 || true
     if codex mcp add lfg -- "${mcp_args[@]}" >/dev/null 2>&1; then
       installed=1
     else
-      warn "Could not register LFG MCP with Codex. Open Settings -> Coding agents in LFG and run Install MCP after Codex is authenticated."
+      warn "Could not register OMG MCP with Codex. Open Settings -> Coding agents in OMG and run Install MCP after Codex is authenticated."
     fi
   fi
   if [ "$installed" != "1" ]; then
@@ -440,7 +496,7 @@ jq -n \
   --arg channel "$LFG_INSTALL_MODE" \
   --arg repoSlug "$LFG_REPO_SLUG" \
   --arg release "$LFG_RELEASE" \
-  --arg releaseAsset "${LFG_RELEASE_ASSET:-lfg-bundle.tar.gz}" \
+  --arg releaseAsset "${ASSET:-${LFG_RELEASE_ASSET:-omg-bundle.tar.gz}}" \
   --arg installedAt "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   '{channel:$channel, repoSlug:$repoSlug, release:$release, releaseAsset:$releaseAsset, installedAt:$installedAt}' \
   > "$LFG_DIR/data/install.json"
@@ -475,9 +531,9 @@ install_linux_service() {
   say "Installing the systemd user service (${SERVICE})..."
   UNIT_DIR="$HOME/.config/systemd/user"
   mkdir -p "$UNIT_DIR"
-  cat > "$UNIT_DIR/lfg-agents.slice" <<'UNIT'
+  cat > "$UNIT_DIR/$SERVICE-agents.slice" <<'UNIT'
 [Unit]
-Description=LFG managed agent memory boundary
+Description=OMG managed agent memory boundary
 
 [Slice]
 # Keep reclaim local to the swarm. memory.high throttles first; memory.max is
@@ -605,7 +661,7 @@ elif command -v tailscale >/dev/null 2>&1 && tailscale status >/dev/null 2>&1; t
     fi
   fi
 else
-  warn "Tailscale is not connected; LFG will be available on this machine at http://127.0.0.1:$LFG_PORT."
+  warn "Tailscale is not connected; OMG will be available on this machine at http://127.0.0.1:$LFG_PORT."
 fi
 
 # ---- done ----
@@ -615,9 +671,9 @@ if command -v tailscale >/dev/null 2>&1; then
 fi
 echo
 if [ "$OS_NAME" = "Linux" ]; then
-  say "Done. LFG is running as a systemd user service."
+  say "Done. OMG is running as a systemd user service."
 else
-  say "Done. LFG is running as a launchd user service."
+  say "Done. OMG is running as a launchd user service."
 fi
 [ "$TAILSCALE_SERVE_CONFIGURED" = "1" ] && [ -n "${URL:-}" ] && echo "    Web UI (tailnet only):  https://$URL"
 echo "    Local Web UI:         http://127.0.0.1:$LFG_PORT"
@@ -650,7 +706,7 @@ NEXT
 else
   cat <<NEXT
   3. Restart after any change:  launchctl kickstart -k gui/$(id -u)/$SERVICE_LABEL
-  4. Logs:                      tail -f "$HOME/Library/Logs/lfg.err.log"
+  4. Logs:                      tail -f "$HOME/Library/Logs/$SERVICE.err.log"
 
 Keep the UI bound to loopback unless you are fronting it with Tailscale.
 NEXT

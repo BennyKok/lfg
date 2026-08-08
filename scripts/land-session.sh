@@ -176,7 +176,17 @@ assert_web_bundle_complete
 
 deployed_head="$(git -C "$MAIN_ROOT" rev-parse HEAD)"
 if [ "${LFG_LAND_SKIP_RESTART:-0}" != "1" ]; then
-  service_name="${LFG_SERVICE_NAME:-lfg.service}"
+  # Resolve the unit rather than assuming one. A box installed after the OMG
+  # rename runs omg.service, and restarting a hardcoded lfg.service there would
+  # fail the `is-active` check below at best — or, if the old unit still exists
+  # alongside the new one, certify a deploy having restarted the wrong process.
+  if [ -n "${OMG_SERVICE_NAME:-${LFG_SERVICE_NAME:-}}" ]; then
+    service_name="${OMG_SERVICE_NAME:-$LFG_SERVICE_NAME}"
+  elif [ -f "$HOME/.config/systemd/user/omg.service" ]; then
+    service_name="omg.service"
+  else
+    service_name="lfg.service"
+  fi
   say "Restarting $service_name at $deployed_head"
   systemctl --user restart "$service_name"
   systemctl --user is-active --quiet "$service_name" \

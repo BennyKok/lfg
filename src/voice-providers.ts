@@ -14,6 +14,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { PATHS } from "./config.ts";
+import { restartHint } from "./service-unit.ts";
 
 export type VoiceSettings = {
   sttProvider: string;
@@ -529,10 +530,9 @@ export function listProviders() {
 export function voiceSetupInfo() {
   return {
     envFile: join(PATHS.root, ".env"),
-    restartCommand:
-      process.platform === "darwin"
-        ? "launchctl kickstart -k gui/$(id -u)/dev.omg.lfg"
-        : "systemctl --user restart lfg.service",
+    // Resolved, not hardcoded: this string is meant to be pasted into a shell,
+    // so naming a unit this box does not have is worse than useless.
+    restartCommand: restartHint(),
   };
 }
 

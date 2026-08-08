@@ -17,7 +17,7 @@ The installer keeps OMG bound to `127.0.0.1` and exposes it through
 
 ```bash
 hcloud server create \
-  --name lfg-1 \
+  --name omg-1 \
   --type cpx21 \
   --image ubuntu-24.04 \
   --location fsn1 \
@@ -27,14 +27,14 @@ hcloud server create \
 3. Watch first boot:
 
 ```bash
-ssh lfg@<server-ip> 'tail -f /var/log/cloud-init-output.log'
+ssh omg@<server-ip> 'tail -f /var/log/cloud-init-output.log'
 ```
 
 4. Check the app:
 
 ```bash
-ssh lfg@<server-ip> 'systemctl --user status lfg --no-pager'
-ssh lfg@<server-ip> 'journalctl --user -u lfg -f'
+ssh omg@<server-ip> 'systemctl --user status omg --no-pager'
+ssh omg@<server-ip> 'journalctl --user -u omg -f'
 ```
 
 When Tailscale is configured, the installer prints the tailnet-only HTTPS URL.
@@ -46,12 +46,12 @@ If you prefer the Hetzner Console:
 1. Create an Ubuntu 24.04 server.
 2. Paste the contents of `cloud-init.yaml` into the **Cloud config** field.
 3. Create the server.
-4. SSH in as `lfg` after cloud-init completes.
+4. SSH in as `omg` after cloud-init completes.
 
 ## Updating
 
-SSH into the server as `lfg` and run:
+SSH into the server as `omg` and run:
 
 ```bash
-lfg setup
+omg setup
 ```

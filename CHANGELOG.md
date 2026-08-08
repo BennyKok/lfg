@@ -2,6 +2,30 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - A new install is OMG all the way down (v0.1.303)
+
+- **A fresh machine now installs as `omg`.** It lands in `~/omg`, runs as
+  `omg.service` (or the `dev.omg.serve` launch agent on macOS), and puts both
+  `omg` and `lfg` on your `PATH`. The last places still saying LFG on a brand
+  new box are gone.
+- **An existing machine is left exactly where it is.** A box already running
+  from `~/lfg` under `lfg.service` keeps both names, and re-running setup will
+  not move it. Renaming a live install means stopping the control plane that is
+  currently working and hoping its replacement comes up — not something worth
+  doing to a machine that is fine, and not something you should have to think
+  about before updating.
+- **Everything that restarts the service now asks which one is installed**
+  rather than assuming. That was a real trap: the deploy script restarted a
+  hardcoded `lfg.service`, so on a newly-named box every future deploy would
+  have reported success while restarting nothing.
+- **Setup accepts `OMG_*` variables.** `OMG_PORT=9000 curl … | bash` works, and
+  every older `LFG_*` name is still read.
+- **Uninstall now removes both.** A box that was installed under the old name
+  and reinstalled under the new one could carry two service units; removing
+  only one left the other enabled and still starting a server at boot.
+- Releases publish `omg-bundle.tar.gz`, with the old `lfg-bundle.tar.gz` name
+  kept alongside it so installers already on a machine keep resolving.
+
 ## August 8, 2026 - A missing model list now repairs itself (v0.1.302)
 
 - **Installing an agent CLI after LFG is running no longer takes until the

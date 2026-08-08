@@ -3,7 +3,7 @@
 Self-hosted [NVIDIA Parakeet](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2)
 transcription service that drops in behind OMG's existing `/api/voice/stt` proxy
 — same wire contract the previous faster-whisper host used, so **no frontend or
-lfg-serve code changes are needed** beyond pointing `STT_UPSTREAM` at this box.
+omg code changes are needed** beyond pointing `STT_UPSTREAM` at this box.
 
 ## Contract
 
@@ -65,7 +65,7 @@ STT_UPSTREAM=http://<parakeet-box>:8087
 STT_TOKEN=<same secret>
 ```
 
-Then `systemctl --user restart lfg-serve.service`.
+Then restart the service (`systemctl --user restart omg.service`, or `lfg.service` on a box installed before the rename).
 
 ## Smoke test
 

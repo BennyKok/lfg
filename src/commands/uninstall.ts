@@ -9,6 +9,13 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { installInfo, PATHS, type InstallChannel } from "../config.ts";
+import { MCP_SERVER_NAME, MCP_SERVER_NAME_LEGACY } from "../coding-agents.ts";
+import {
+  SERVICE_LABEL,
+  SERVICE_LABEL_LEGACY,
+  SERVICE_NAME,
+  SERVICE_NAME_LEGACY,
+} from "../service-unit.ts";
 
 type CommandResult = { exitCode: number };
 
@@ -80,28 +87,40 @@ function removeReleaseApplication(root: string): void {
 }
 
 async function cleanupService(deps: UninstallDependencies): Promise<void> {
+  // Uninstall sweeps BOTH spellings, unlike everywhere else, which resolves to
+  // one. "Remove it" has to mean remove it: a box that was installed under the
+  // old name and reinstalled under the new one can carry both units, and
+  // cleaning up only the one we would have restarted leaves the other enabled
+  // and still starting a server at boot.
   if (deps.platform === "linux") {
-    const service = join(deps.home, ".config", "systemd", "user", "lfg.service");
-    if (existsSync(service)) {
-      const stopped = await deps.run(["systemctl", "--user", "disable", "--now", "lfg.service"]);
-      if (stopped.exitCode !== 0) throw new Error("Could not stop the LFG user service.");
+    const unitDir = join(deps.home, ".config", "systemd", "user");
+    for (const name of [SERVICE_NAME, SERVICE_NAME_LEGACY]) {
+      const service = join(unitDir, `${name}.service`);
+      if (existsSync(service)) {
+        const stopped = await deps.run(["systemctl", "--user", "disable", "--now", `${name}.service`]);
+        if (stopped.exitCode !== 0) throw new Error(`Could not stop the ${name} user service.`);
+      }
+      rmSync(service, { force: true });
+      rmSync(join(unitDir, `${name}-agents.slice`), { force: true });
     }
-    rmSync(service, { force: true });
-    rmSync(join(deps.home, ".config", "systemd", "user", "lfg-agents.slice"), { force: true });
     const reloaded = await deps.run(["systemctl", "--user", "daemon-reload"]);
     if (reloaded.exitCode !== 0) throw new Error("Could not reload the systemd user manager.");
     return;
   }
 
   if (deps.platform === "darwin") {
-    const service = join(deps.home, "Library", "LaunchAgents", "dev.omg.lfg.plist");
-    if (existsSync(service)) {
-      const stopped = await deps.run(["launchctl", "bootout", `gui/${process.getuid?.() ?? 0}`, service]);
-      if (stopped.exitCode !== 0) throw new Error("Could not stop the LFG launch agent.");
+    for (const label of [SERVICE_LABEL, SERVICE_LABEL_LEGACY]) {
+      const service = join(deps.home, "Library", "LaunchAgents", `${label}.plist`);
+      if (existsSync(service)) {
+        const stopped = await deps.run(["launchctl", "bootout", `gui/${process.getuid?.() ?? 0}`, service]);
+        if (stopped.exitCode !== 0) throw new Error(`Could not stop the ${label} launch agent.`);
+      }
+      rmSync(service, { force: true });
     }
-    rmSync(service, { force: true });
-    rmSync(join(deps.home, "Library", "Logs", "lfg.out.log"), { force: true });
-    rmSync(join(deps.home, "Library", "Logs", "lfg.err.log"), { force: true });
+    for (const stem of [SERVICE_NAME, SERVICE_NAME_LEGACY]) {
+      rmSync(join(deps.home, "Library", "Logs", `${stem}.out.log`), { force: true });
+      rmSync(join(deps.home, "Library", "Logs", `${stem}.err.log`), { force: true });
+    }
     return;
   }
 
@@ -138,12 +157,18 @@ export async function cmdUninstall(
   }
   if (purge) assertSafePurgeRoot(deps.root, deps.home);
 
-  deps.output("Stopping and removing the LFG service…");
+  deps.output("Stopping and removing the OMG service…");
   await cleanupService(deps);
 
+  // Both registration names, for the same reason the units are swept twice: an
+  // upgraded box can carry the pre-rename entry, and leaving it behind points a
+  // still-installed agent CLI at an endpoint that is being deleted.
   for (const cli of ["claude", "codex"]) {
     const binary = deps.which(cli);
-    if (binary) await deps.run([binary, "mcp", "remove", "lfg"]);
+    if (!binary) continue;
+    for (const name of [MCP_SERVER_NAME, MCP_SERVER_NAME_LEGACY]) {
+      await deps.run([binary, "mcp", "remove", name]);
+    }
   }
 
   removeOwnedCommand(deps.home, deps.root);
