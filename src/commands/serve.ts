@@ -2652,6 +2652,7 @@ a{color:#60a5fa}
           autoAgents?: Awaited<ReturnType<typeof listAutoAgents>> | null;
           findings?: Awaited<ReturnType<typeof listFindings>> | null;
           onboarding?: Awaited<ReturnType<typeof getOnboarding>> | null;
+          localUrl?: ReturnType<typeof mdnsStatus> | null;
         };
         return json(
           {
@@ -2670,6 +2671,7 @@ a{color:#60a5fa}
               findings: boot.findings ?? null,
             },
             onboarding: boot.onboarding ?? null,
+            localUrl: boot.localUrl ?? null,
             version: appVersion(),
           },
           { headers: { "Content-Type": "application/json", "Cache-Control": "no-cache" } },
