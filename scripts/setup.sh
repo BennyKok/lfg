@@ -443,10 +443,16 @@ run_agent_installer() {
   esac
 }
 
-# ensure_agent <label> <want-install> <already-present-exit-status>
+# ensure_agent <label> <want-install> <probe command...>
+#
+# The probe runs inside `if`, which is a condition context. Writing it as
+# `probe; ensure_agent ... "$?"` looks equivalent and is not: under
+# `set -euo pipefail` a probe that returns non-zero aborts the whole script, so
+# setup died on the first agent that was not installed - which is most machines.
 ensure_agent() {
-  local label="$1" want="$2" present="$3"
-  if [ "$present" = "0" ]; then
+  local label="$1" want="$2"
+  shift 2
+  if "$@" >/dev/null 2>&1; then
     AGENTS_READY+=("$label")
     return 0
   fi
@@ -463,17 +469,17 @@ ensure_agent() {
   fi
 }
 
-command -v claude >/dev/null 2>&1; ensure_agent claude "$LFG_INSTALL_CLAUDE" "$?"
+ensure_agent claude "$LFG_INSTALL_CLAUDE" command -v claude
 # Claude's installer drops the binary here, so PATH has to know about it before
 # anything downstream (MCP registration) looks for it.
 export PATH="$HOME/.local/bin:$PATH"
 ensure_path_line 'export PATH="$HOME/.local/bin:$PATH"'
 
-command -v codex >/dev/null 2>&1;    ensure_agent codex "$LFG_INSTALL_CODEX" "$?"
-command -v opencode >/dev/null 2>&1; ensure_agent opencode "$LFG_INSTALL_OPENCODE" "$?"
-command -v grok >/dev/null 2>&1;     ensure_agent grok "$LFG_INSTALL_GROK" "$?"
-has_cursor_cli;                      ensure_agent cursor "$LFG_INSTALL_CURSOR" "$?"
-command -v copilot >/dev/null 2>&1;  ensure_agent copilot "$LFG_INSTALL_COPILOT" "$?"
+ensure_agent codex    "$LFG_INSTALL_CODEX"    command -v codex
+ensure_agent opencode "$LFG_INSTALL_OPENCODE" command -v opencode
+ensure_agent grok     "$LFG_INSTALL_GROK"     command -v grok
+ensure_agent cursor   "$LFG_INSTALL_CURSOR"   has_cursor_cli
+ensure_agent copilot  "$LFG_INSTALL_COPILOT"  command -v copilot
 
 # ---- 4. fetch lfg (bundled release tarball, or git clone for dev) ----
 # A git checkout always wins - `lfg setup` from inside a dev clone updates via
