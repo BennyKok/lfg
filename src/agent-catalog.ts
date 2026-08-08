@@ -64,11 +64,12 @@ export const PI_MODELS: string[] = ["fable", "opus", "sonnet", "haiku", "deepsee
 // with the full credential-free Zen set instead of one representative id.
 export const OPENCODE_MODELS: string[] = [
   "opencode/deepseek-v4-flash-free",
+  "opencode/laguna-s-2.1-free",
+  "opencode/ling-3.0-tiny-free",
+  "opencode/longcat-2.0-free",
   "opencode/mimo-v2.5-free",
   "opencode/nemotron-3-ultra-free",
   "opencode/north-mini-code-free",
-  "opencode/ling-3.0-flash-free",
-  "opencode/laguna-s-2.1-free",
 ];
 export const COPILOT_MODELS: string[] = [
   "claude-sonnet-4.5",
