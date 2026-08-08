@@ -101,7 +101,6 @@ LFG_INSTALL_CODEX="${LFG_INSTALL_CODEX:-0}"
 LFG_INSTALL_OPENCODE="${LFG_INSTALL_OPENCODE:-0}"
 LFG_INSTALL_GROK="${LFG_INSTALL_GROK:-0}"
 LFG_INSTALL_CURSOR="${LFG_INSTALL_CURSOR:-0}"
-LFG_INSTALL_HERMES="${LFG_INSTALL_HERMES:-0}"
 LFG_INSTALL_COPILOT="${LFG_INSTALL_COPILOT:-0}"
 # Pin the installed @github/copilot version so setup is reproducible. Override
 # with LFG_COPILOT_VERSION=x.y.z (or "latest" for opt-in floating installs).
@@ -395,47 +394,18 @@ BUN_BIN="$(command -v bun || true)"
 [ -n "$BUN_BIN" ] || die "Bun is required but was not found on PATH."
 BUN_BIN="$(cd "$(dirname "$BUN_BIN")" && pwd)/$(basename "$BUN_BIN")"
 
-# ---- 3. agent CLIs (claude / codex / opencode / grok / cursor / hermes / copilot) ----
-# The release bundle ships NO vendored agent binaries - lfg drives whatever
-# `claude` / `codex` / `opencode` / `grok` / `agent` / `hermes` / `copilot` it finds on PATH (override via LFG_*_PATH).
-# Never install or upgrade these by default: they own user auth/config.
-if ! command -v claude >/dev/null 2>&1; then
-  if [ "$LFG_INSTALL_CLAUDE" = "1" ]; then
-    say "Installing the Claude CLI..."
-    curl -fsSL https://claude.ai/install.sh | bash
-  else
-    warn "Claude CLI not found. omg.dev will start, but Claude sessions will be unavailable until you install/authenticate claude. Re-run with LFG_INSTALL_CLAUDE=1 only if you want setup to run Anthropic's installer."
-  fi
-fi
-export PATH="$HOME/.local/bin:$PATH"
-ensure_path_line 'export PATH="$HOME/.local/bin:$PATH"'
+# ---- 3. agent CLIs ----
+# omg.dev drives whatever claude / codex / opencode / grok / cursor-agent /
+# copilot it finds on PATH (override via OMG_<AGENT>_PATH). None are installed
+# or upgraded by default: they own the user's auth and config.
+#
+# A missing agent is not worth a warning. Six near-identical paragraphs of "X
+# not found, re-run with LFG_INSTALL_X=1" buried the actual outcome of the
+# install in noise, for a situation that is both normal and fixable later from
+# Settings -> Coding agents. They are counted and reported in one line instead.
+AGENTS_READY=()
+AGENTS_MISSING=()
 
-# Optional runtimes. Best-effort: a missing binary just means that agent kind is
-# unavailable. Installing is explicit because these CLIs own user auth/config.
-if ! command -v codex >/dev/null 2>&1; then
-  if [ "$LFG_INSTALL_CODEX" = "1" ]; then
-    say "Installing the Codex CLI (optional)..."
-    "$BUN_BIN" add -g @openai/codex >/dev/null 2>&1 || warn "codex install failed - the 'codex' agent kind will be unavailable."
-  else
-    warn "Codex CLI not found. Codex sessions will be unavailable until you install/authenticate codex. Re-run with LFG_INSTALL_CODEX=1 only if you want setup to install it with Bun."
-  fi
-fi
-if ! command -v opencode >/dev/null 2>&1; then
-  if [ "$LFG_INSTALL_OPENCODE" = "1" ]; then
-    say "Installing OpenCode (optional)..."
-    "$BUN_BIN" add -g opencode-ai >/dev/null 2>&1 || warn "opencode install failed - the 'opencode' agent kind will be unavailable."
-  else
-    warn "OpenCode CLI not found. OpenCode sessions will be unavailable until you install/authenticate opencode. Re-run with LFG_INSTALL_OPENCODE=1 only if you want setup to install it with Bun."
-  fi
-fi
-if ! command -v grok >/dev/null 2>&1; then
-  if [ "$LFG_INSTALL_GROK" = "1" ]; then
-    say "Installing Grok CLI (optional)..."
-    curl -fsSL https://x.ai/cli/install.sh | bash || warn "Grok CLI install failed - the 'grok' agent kind will be unavailable."
-  else
-    warn "Grok CLI not found. Grok sessions will be unavailable until you install/authenticate grok. Re-run with LFG_INSTALL_GROK=1 only if you want setup to install it with Bun."
-  fi
-fi
 is_grok_agent() {
   local bin="$1"
   local real
@@ -455,35 +425,55 @@ has_cursor_cli() {
   [ -n "$agent_bin" ] && ! is_grok_agent "$agent_bin"
 }
 
-if ! has_cursor_cli; then
-  if [ "$LFG_INSTALL_CURSOR" = "1" ]; then
-    say "Installing Cursor CLI (optional)..."
-    curl -fsSL https://cursor.com/install | bash || warn "Cursor CLI install failed - the 'cursor' agent kind will be unavailable."
-  else
-    warn "Cursor CLI not found. Cursor sessions will be unavailable until you install/authenticate cursor-agent. Re-run with LFG_INSTALL_CURSOR=1 only if you want setup to run Cursor's installer."
+run_agent_installer() {
+  case "$1" in
+    claude)   curl -fsSL https://claude.ai/install.sh | bash ;;
+    codex)    "$BUN_BIN" add -g @openai/codex >/dev/null 2>&1 ;;
+    opencode) "$BUN_BIN" add -g opencode-ai >/dev/null 2>&1 ;;
+    grok)     curl -fsSL https://x.ai/cli/install.sh | bash ;;
+    cursor)   curl -fsSL https://cursor.com/install | bash ;;
+    copilot)
+      if [ "$LFG_COPILOT_VERSION" = "latest" ]; then
+        npm install -g "@github/copilot" >/dev/null 2>&1
+      else
+        npm install -g "@github/copilot@${LFG_COPILOT_VERSION}" >/dev/null 2>&1
+      fi
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# ensure_agent <label> <want-install> <already-present-exit-status>
+ensure_agent() {
+  local label="$1" want="$2" present="$3"
+  if [ "$present" = "0" ]; then
+    AGENTS_READY+=("$label")
+    return 0
   fi
-fi
-if ! command -v hermes >/dev/null 2>&1; then
-  if [ "$LFG_INSTALL_HERMES" = "1" ]; then
-    say "Installing Hermes Agent (optional)..."
-    curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash || warn "Hermes install failed - the 'hermes' agent kind will be unavailable."
-  else
-    warn "Hermes CLI not found. Hermes sessions will be unavailable until you install/authenticate hermes. Re-run with LFG_INSTALL_HERMES=1 only if you want setup to run Nous Research's installer."
+  if [ "$want" != "1" ]; then
+    AGENTS_MISSING+=("$label")
+    return 0
   fi
-fi
-if ! command -v copilot >/dev/null 2>&1; then
-  if [ "$LFG_INSTALL_COPILOT" = "1" ]; then
-    if [ "$LFG_COPILOT_VERSION" = "latest" ]; then
-      copilot_pkg="@github/copilot"
-    else
-      copilot_pkg="@github/copilot@${LFG_COPILOT_VERSION}"
-    fi
-    say "Installing GitHub Copilot CLI ($copilot_pkg, optional)..."
-    npm install -g "$copilot_pkg" >/dev/null 2>&1 || warn "Copilot CLI install failed - the 'copilot' agent kind will be unavailable. Requires Node 22+."
+  say "Installing ${label}..."
+  if run_agent_installer "$label"; then
+    AGENTS_READY+=("$label")
   else
-    warn "Copilot CLI not found. Copilot sessions will be unavailable until you install/authenticate copilot. Re-run with LFG_INSTALL_COPILOT=1 only if you want setup to install it via npm (requires Node 22+). Pin a specific version with LFG_COPILOT_VERSION."
+    warn "${label} install failed; it stays unavailable."
+    AGENTS_MISSING+=("$label")
   fi
-fi
+}
+
+command -v claude >/dev/null 2>&1; ensure_agent claude "$LFG_INSTALL_CLAUDE" "$?"
+# Claude's installer drops the binary here, so PATH has to know about it before
+# anything downstream (MCP registration) looks for it.
+export PATH="$HOME/.local/bin:$PATH"
+ensure_path_line 'export PATH="$HOME/.local/bin:$PATH"'
+
+command -v codex >/dev/null 2>&1;    ensure_agent codex "$LFG_INSTALL_CODEX" "$?"
+command -v opencode >/dev/null 2>&1; ensure_agent opencode "$LFG_INSTALL_OPENCODE" "$?"
+command -v grok >/dev/null 2>&1;     ensure_agent grok "$LFG_INSTALL_GROK" "$?"
+has_cursor_cli;                      ensure_agent cursor "$LFG_INSTALL_CURSOR" "$?"
+command -v copilot >/dev/null 2>&1;  ensure_agent copilot "$LFG_INSTALL_COPILOT" "$?"
 
 # ---- 4. fetch lfg (bundled release tarball, or git clone for dev) ----
 # A git checkout always wins - `lfg setup` from inside a dev clone updates via
@@ -559,7 +549,7 @@ else
   for candidate in "${ASSET_CANDIDATES[@]}"; do
     URL="$(release_url "$candidate")"
     attempt="$(mktemp_tgz)"
-    if curl -fSL "$URL" -o "$attempt" && [ -s "$attempt" ]; then
+    if curl -fL --progress-bar "$URL" -o "$attempt" && [ -s "$attempt" ]; then
       ASSET="$candidate"
       TMP_TGZ="$attempt"
       say "Using $ASSET."
@@ -902,7 +892,7 @@ TAILSCALE_SERVE_CONFIGURED=0
 
 # ---- 10. optionally expose the UI over the tailnet (HTTPS on MagicDNS), never publicly ----
 if [ "$LFG_TAILSCALE_SERVE" != "1" ]; then
-  warn "Skipping Tailscale Serve because LFG_TAILSCALE_SERVE=$LFG_TAILSCALE_SERVE."
+  :
 elif command -v tailscale >/dev/null 2>&1 && tailscale status >/dev/null 2>&1; then
   LFG_TAILSCALE_TARGET="http://127.0.0.1:$LFG_PORT"
   EXISTING_TAILSCALE_TARGET="$(tailscale_serve_endpoint_target "$LFG_TAILSCALE_HTTPS_PORT")"
@@ -924,62 +914,52 @@ else
 fi
 
 # ---- done ----
-URL=""
+TAILNET_URL=""
 if command -v tailscale >/dev/null 2>&1; then
-  URL="$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//' || true)"
+  TAILNET_URL="$(tailscale status --json 2>/dev/null | jq -r '.Self.DNSName // empty' | sed 's/\.$//' || true)"
 fi
-echo
-if [ "$OS_NAME" = "Linux" ]; then
-  say "Done. omg.dev is running as a systemd user service."
-else
-  say "Done. omg.dev is running as a launchd user service."
-fi
-[ "$TAILSCALE_SERVE_CONFIGURED" = "1" ] && [ -n "${URL:-}" ] && echo "    Web UI (tailnet only):  https://$URL"
-# The named host is an /etc/hosts mapping to 127.0.0.1, so it reaches the
-# loopback-pinned service from this machine only. Lead with it when it is
-# actually resolvable, and always print a bare loopback URL underneath so there
-# is a working link even when the hosts file could not be written.
+
+# The named URL is not setup's doing any more. On macOS `omg serve` advertises
+# omg.local over mDNS for as long as it runs, so by the time this prints, the
+# service is already answering there - no hosts file and no sudo. Saying
+# "optional, needs sudo" here was describing a mechanism we no longer use.
+NAMED_URL=""
 if [ "$LOCAL_HOSTNAME_READY" = "1" ]; then
-  echo "    Local Web UI:         http://$LFG_LOCAL_HOSTNAME:$LFG_PORT"
-  echo "    Local Web UI (direct): http://localhost:$LFG_PORT"
-else
-  echo "    Local Web UI:         http://127.0.0.1:$LFG_PORT"
-  echo "    Local Web UI (named): http://localhost:$LFG_PORT"
+  NAMED_URL="http://$LFG_LOCAL_HOSTNAME:$LFG_PORT"
+elif [ "$OS_NAME" = "Darwin" ] && command -v dns-sd >/dev/null 2>&1; then
+  NAMED_URL="http://omg.local:$LFG_PORT"
 fi
-if [ "$TAILSCALE_SERVE_CONFIGURED" = "1" ]; then
-  echo "    Tailscale cleanup:    sudo tailscale serve --https=$LFG_TAILSCALE_HTTPS_PORT off"
-fi
-# Everything that touches the system beyond this install directory is opt-in and
-# reversible. List it here rather than doing it: a first install should not be
-# the moment somebody is asked for a sudo password or a tailnet key.
-echo
-echo "  Optional, enable whenever you want:"
-[ "$LOCAL_HOSTNAME_READY" = "1" ] \
-  || echo "    Named local URL:      OMG_LOCAL_HOSTNAME=omg.local omg setup   (writes /etc/hosts, needs sudo)"
-[ "$TAILSCALE_SERVE_CONFIGURED" = "1" ] \
-  || echo "    Reach it remotely:    OMG_TAILSCALE_SERVE=1 omg setup           (installs + joins Tailscale)"
-echo
-cat <<NEXT
 
-Next steps:
-  1. Authenticate Claude once (interactive, one-time):
-       claude            # complete the browser OAuth, or set ANTHROPIC_API_KEY in $LFG_DIR/.env
-  2. Edit $LFG_DIR/.env for optional integrations (WhatsApp, GitHub token, etc.).
-NEXT
-
+echo
 if [ "$OS_NAME" = "Linux" ]; then
-  cat <<NEXT
-  3. Restart after any change:  systemctl --user restart $SERVICE
-  4. Logs:                      journalctl --user -u $SERVICE -f
-
-The UI is reachable only from devices on your tailnet. Do NOT open port $LFG_PORT
-or 443 to the public internet - Tailscale handles ingress over WireGuard.
-NEXT
+  say "omg.dev is running as a systemd user service."
 else
-  cat <<NEXT
-  3. Restart after any change:  launchctl kickstart -k gui/$(id -u)/$SERVICE_LABEL
-  4. Logs:                      tail -f "$HOME/Library/Logs/$SERVICE.err.log"
-
-Keep the UI bound to loopback unless you are fronting it with Tailscale.
-NEXT
+  say "omg.dev is running as a launchd user service."
 fi
+echo
+[ -n "$NAMED_URL" ] && printf '    Web UI     %s\n               %s\n' "$NAMED_URL" "http://localhost:$LFG_PORT"
+[ -n "$NAMED_URL" ] || printf '    Web UI     %s\n' "http://localhost:$LFG_PORT"
+[ "$TAILSCALE_SERVE_CONFIGURED" = "1" ] && [ -n "$TAILNET_URL" ] \
+  && printf '               %s  (tailnet)\n' "https://$TAILNET_URL"
+
+# One line about agents, instead of a warning per agent that is not installed.
+if [ "${#AGENTS_READY[@]}" -gt 0 ]; then
+  printf '    Agents     %s\n' "$(IFS=' '; echo "${AGENTS_READY[*]}")"
+else
+  printf '    Agents     none yet\n'
+fi
+if [ "${#AGENTS_MISSING[@]}" -gt 0 ]; then
+  printf '               add %s in Settings -> Coding agents\n' "$(IFS=' '; echo "${AGENTS_MISSING[*]}")"
+fi
+
+if [ "$TAILSCALE_SERVE_CONFIGURED" != "1" ]; then
+  printf '    Remote     OMG_TAILSCALE_SERVE=1 omg setup\n'
+fi
+if [ "$OS_NAME" = "Linux" ]; then
+  printf '    Service    systemctl --user restart %s\n' "$SERVICE"
+  printf '    Logs       journalctl --user -u %s -f\n' "$SERVICE"
+else
+  printf '    Service    launchctl kickstart -k gui/%s/%s\n' "$(id -u)" "$SERVICE_LABEL"
+  printf '    Logs       tail -f %s\n' "$HOME/Library/Logs/$SERVICE.err.log"
+fi
+echo
