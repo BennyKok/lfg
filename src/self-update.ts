@@ -489,7 +489,7 @@ export async function applyReleaseUpdate(
         latestVersion: status.latestVersion,
         latestTag: status.latestTag,
         restartSupported: true,
-        message: `LFG ${currentVersion} is installed.`,
+        message: `omg.dev ${currentVersion} is installed.`,
       },
     };
   } finally {
