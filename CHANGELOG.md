@@ -2,6 +2,25 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - `omg update`, and a setup that reports instead of narrating (v0.1.315)
+
+- **`omg update` updates this machine.** It was reachable before — a button in
+  the web UI, and `omg setup` picking up a release on its way past — but neither
+  is what you reach for in a terminal, and `setup` reads like it might
+  reconfigure the box. `omg update --check` reports without changing anything.
+- **Setup's output says what happened.** It used to end with a warning for every
+  agent CLI you had not installed, another for Tailscale Serve being off when
+  off is the default, and a "Next steps" block that had drifted out of date —
+  burying the one thing you want, which URL to open. It now prints the URLs,
+  which agents are ready, which can be added and where, and how to restart and
+  read logs.
+- **The named URL is not described as needing sudo any more.** Since v0.1.313
+  the server advertises `omg.local` over mDNS on macOS, so it is already live by
+  the time setup finishes.
+- **Hermes is gone.** It had already been dropped as an agent kind, but setup
+  still offered to install it and warned when it was missing.
+- Downloads show a progress bar instead of six columns of transfer statistics.
+
 ## August 8, 2026 - A fresh install opens, and cleanup stays in its lane (v0.1.314)
 
 - **"Choose a project" no longer opens stuck on "Opening…".** On a brand new
