@@ -2,6 +2,24 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - The worktree sweeper stays in its lane (v0.1.314)
+
+- **The sweeper no longer deletes worktrees it didn't create.** `~/lfg-worktrees`
+  is a shared directory, and the background cleanup treated everything in it as
+  its own — so a hand-made worktree, release checkout or clone parked there was
+  removed within minutes, dirty or not. It now only reclaims worktrees it
+  provisioned itself and leaves everything else alone permanently.
+- **Uncommitted work is never deleted.** Even for its own worktrees, the sweeper
+  now checks for uncommitted changes before removing one and holds it back if
+  there are any. The liveness checks it used before were heuristics; this is a
+  fact about the contents. Ignored files don't count, so a clean-but-built
+  worktree is still cleaned up.
+- **Cleanup no longer piles onto server restarts.** The first sweep ran 30
+  seconds after startup — before session recovery had re-adopted running
+  sessions, when the most worktrees look abandoned. Every multi-worktree
+  deletion we observed happened within 40 seconds of a restart. It now waits
+  five minutes.
+
 ## August 8, 2026 - omg.local, with no password prompt (v0.1.313)
 
 - **The web UI answers on `http://omg.local:8766` on macOS.** No sudo, no
