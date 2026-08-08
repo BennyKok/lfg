@@ -41,6 +41,28 @@ how prod breaks — see the avatar saga at the bottom.
    onto fresh `origin/main` before merging, and if a build fails on an import
    that "was definitely there," check whether the module was *removed* upstream.
 
+## The worktree root is swept — know what it will and won't touch
+
+`~/lfg-worktrees` (`LFG_WORKTREE_ROOT`) is where serve provisions per-session
+worktrees, and a background sweeper reclaims them every 15 minutes.
+
+The sweeper only deletes worktrees **it provisioned itself**, tracked by a
+marker in `~/lfg-worktrees/.lfg-owned/`. Anything else you put in that
+directory — a hand-made worktree, a release checkout, a full clone — is
+reported as `unmanaged` and left alone permanently.
+
+It also refuses to delete an owned worktree that has uncommitted changes
+(`git status --porcelain` non-empty), even when every liveness signal says the
+session is gone. Ignored files don't count, so a clean-but-built worktree is
+still reclaimable.
+
+Both guards exist because the sweeper previously treated every directory in
+that root as its own and removed it with `git worktree remove --force`. That
+deleted hand-made worktrees within minutes of creation (`vibes-frontdoor` and
+`vibes-lfgpin`, 2026-08-08) and took uncommitted work with it. If you want a
+worktree the sweeper can never reason about at all, keep it outside
+`~/lfg-worktrees` — `~/repos/<name>` is the convention.
+
 ## Settled decisions (don't re-litigate via merge)
 
 - **Avatar is unified.** The one initials-avatar is

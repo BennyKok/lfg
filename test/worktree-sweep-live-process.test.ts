@@ -25,6 +25,8 @@ type SweepResult = {
   kept: number;
   skippedYoung: number;
   failed: string[];
+  unmanaged: string[];
+  dirty: string[];
 };
 
 function runProbe(): { name: string; withLive: SweepResult; afterExit: SweepResult } {
@@ -36,11 +38,30 @@ function runProbe(): { name: string; withLive: SweepResult; afterExit: SweepResu
   writeFileSync(
     scriptPath,
     `
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 const root = process.env.LFG_WORKTREE_ROOT;
 const name = "lfg-sweepprobe";
 const dir = root + "/" + name;
-mkdirSync(dir, { recursive: true });
+mkdirSync(root, { recursive: true });
+
+const run = (cwd, ...args) =>
+  Bun.spawnSync(["git", "-C", cwd, ...args], { stdout: "ignore", stderr: "ignore" });
+
+// A real, CLEAN linked worktree: the only kind the sweeper is allowed to
+// reclaim, so a keep below can only have come from the liveness guard.
+const origin = process.env.PROBE_ORIGIN;
+mkdirSync(origin, { recursive: true });
+run(origin, "init", "-q", "-b", "main");
+run(origin, "config", "user.email", "probe@example.com");
+run(origin, "config", "user.name", "probe");
+writeFileSync(origin + "/README.md", "hi\\n");
+run(origin, "add", "-A");
+run(origin, "commit", "-qm", "init");
+run(origin, "worktree", "add", "-q", "-b", "session_probe", dir, "main");
+
+// Stand in for provisioning: the sweeper only considers worktrees it owns.
+mkdirSync(root + "/.lfg-owned", { recursive: true });
+writeFileSync(root + "/.lfg-owned/" + name, "0\\n");
 
 const { sweepStaleWorktrees } = await import(${JSON.stringify(join(REPO, "src/worktree.ts"))});
 
@@ -60,7 +81,11 @@ console.log(JSON.stringify({ name, withLive, afterExit }));
   );
   try {
     const r = Bun.spawnSync(["bun", scriptPath], {
-      env: { ...process.env, LFG_WORKTREE_ROOT: worktreeRoot },
+      env: {
+        ...process.env,
+        LFG_WORKTREE_ROOT: worktreeRoot,
+        PROBE_ORIGIN: join(root, "origin"),
+      },
       stdout: "pipe",
       stderr: "pipe",
     });

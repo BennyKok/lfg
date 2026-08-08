@@ -2,7 +2,15 @@
 // never collide on a shared checkout (see docs/repo-hygiene.md). Voice-only
 // orchestrator sessions are the lone automatic exception.
 
-import { existsSync, mkdirSync, readdirSync, readlinkSync, statSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readlinkSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import { MAIN_REF } from "./agents/collectors/git-fresh.ts";
@@ -22,6 +30,47 @@ export type SessionWorktree = {
   branch: string;
   path: string;
 };
+
+/**
+ * Sidecar marker directory recording which worktrees the sweeper provisioned.
+ *
+ * WORKTREE_ROOT is a shared directory on a developer's machine, and the sweeper
+ * used to treat every entry in it as its own to delete. It is not: people park
+ * hand-made worktrees, release checkouts and full clones there too, and those
+ * have no tmux session, no registry row and usually no process sitting in them,
+ * so they matched "stale" perfectly and were removed within a sweep of being
+ * created. (Observed 2026-08-08: `vibes-frontdoor` and `vibes-lfgpin`, both
+ * hand-made worktrees of ~/repos/vibes, reaped 22 minutes apart.)
+ *
+ * The marker lives OUTSIDE the worktree so it never shows up as an untracked
+ * file in `git status` — which the dirty check below depends on — and so it
+ * cannot dirty a branch a session is about to push.
+ */
+const OWNED_DIR = `${WORKTREE_ROOT}/.lfg-owned`;
+
+function ownedMarkerPath(name: string): string {
+  return `${OWNED_DIR}/${name}`;
+}
+
+function markWorktreeOwned(name: string): void {
+  try {
+    mkdirSync(OWNED_DIR, { recursive: true });
+    writeFileSync(ownedMarkerPath(name), `${Date.now()}\n`);
+  } catch {
+    // Best effort. A marker we failed to write means the sweeper leaves the
+    // worktree alone forever, which leaks a directory — the safe direction.
+  }
+}
+
+function isWorktreeOwned(name: string): boolean {
+  return existsSync(ownedMarkerPath(name));
+}
+
+function clearWorktreeOwned(name: string): void {
+  try {
+    rmSync(ownedMarkerPath(name), { force: true });
+  } catch {}
+}
 
 /**
  * Every git call here is awaited rather than spawnSync'd.
@@ -167,6 +216,10 @@ export async function prepareSessionWorktree(
   mkdirSync(WORKTREE_ROOT, { recursive: true });
 
   if (existsSync(wtPath)) {
+    // Backfill: a worktree provisioned before ownership markers existed is
+    // still ours, and re-marking it on reuse lets it be reclaimed normally
+    // instead of leaking forever.
+    markWorktreeOwned(sessionName);
     return { ok: true, worktree: { repoRoot: absRoot, branch, path: wtPath } };
   }
 
@@ -189,6 +242,7 @@ export async function prepareSessionWorktree(
     }
   }
 
+  markWorktreeOwned(sessionName);
   return { ok: true, worktree: { repoRoot: absRoot, branch, path: wtPath } };
 }
 
@@ -221,10 +275,33 @@ export async function removeSessionWorktree(
   sessionName: string,
 ): Promise<boolean> {
   const wtPath = `${WORKTREE_ROOT}/${sessionName}`;
-  if (!existsSync(wtPath)) return true;
+  if (!existsSync(wtPath)) {
+    clearWorktreeOwned(sessionName);
+    return true;
+  }
   const root = repoRoot ? resolve(repoRoot) : await repoRootFromWorktree(wtPath);
   if (!root) return false;
-  return (await git(root, ["worktree", "remove", "--force", wtPath])).ok;
+  const ok = (await git(root, ["worktree", "remove", "--force", wtPath])).ok;
+  if (ok) clearWorktreeOwned(sessionName);
+  return ok;
+}
+
+/**
+ * Does this worktree hold work that exists nowhere else?
+ *
+ * `git worktree remove --force` deletes a dirty tree without asking, so every
+ * liveness signal missing at once used to mean uncommitted work was gone. The
+ * liveness checks are heuristics; this is a fact about the contents. Ignored
+ * files (node_modules, build output) are excluded, so a clean-but-built
+ * worktree is still reclaimable.
+ *
+ * Fails CLOSED: anything unexpected reports dirty, so an unreadable worktree is
+ * kept rather than deleted.
+ */
+async function hasUncommittedWork(wtPath: string): Promise<boolean> {
+  const r = await git(wtPath, ["status", "--porcelain"], { timeoutMs: 10_000 });
+  if (!r.ok) return true;
+  return r.out.trim().length > 0;
 }
 
 export type WorktreeSweepResult = {
@@ -233,6 +310,10 @@ export type WorktreeSweepResult = {
   kept: number;
   skippedYoung: number;
   failed: string[];
+  /** Directories the sweeper did not provision, so may not delete. */
+  unmanaged: string[];
+  /** Owned worktrees held back because they contain uncommitted work. */
+  dirty: string[];
 };
 
 /**
@@ -296,11 +377,16 @@ export async function sweepStaleWorktrees(opts?: {
     kept: 0,
     skippedYoung: 0,
     failed: [],
+    unmanaged: [],
+    dirty: [],
   };
 
   if (!existsSync(WORKTREE_ROOT)) return result;
 
   for (const name of readdirSync(WORKTREE_ROOT)) {
+    // Dotfiles are bookkeeping (the ownership markers live here), never
+    // worktrees.
+    if (name.startsWith(".")) continue;
     const wtPath = `${WORKTREE_ROOT}/${name}`;
     try {
       if (!statSync(wtPath).isDirectory()) continue;
@@ -308,6 +394,13 @@ export async function sweepStaleWorktrees(opts?: {
       continue;
     }
     result.scanned++;
+
+    // The sweeper may only delete what the sweeper created. Everything else in
+    // this directory belongs to a human.
+    if (!isWorktreeOwned(name)) {
+      result.unmanaged.push(name);
+      continue;
+    }
 
     if (tmuxHasSession(name) || managed.has(name) || inUse.has(name)) {
       result.kept++;
@@ -320,6 +413,14 @@ export async function sweepStaleWorktrees(opts?: {
     } catch {}
     if (ageMs < minAgeMs) {
       result.skippedYoung++;
+      continue;
+    }
+
+    // Last line of defence. Every check above is a guess about whether a
+    // session is alive; this one asks whether losing the directory would lose
+    // work, and that is the only question that actually matters.
+    if (await hasUncommittedWork(wtPath)) {
+      result.dirty.push(name);
       continue;
     }
 
@@ -360,7 +461,8 @@ export function startWorktreeSweep(onLog: (s: string) => void = () => {}): void 
         onLog(
           `[worktree-sweep] scanned=${r.scanned} removed=${r.removed.length}` +
             (r.removed.length ? ` [${r.removed.join(", ")}]` : "") +
-            (r.failed.length ? ` failed=[${r.failed.join(", ")}]` : ""),
+            (r.failed.length ? ` failed=[${r.failed.join(", ")}]` : "") +
+            (r.dirty.length ? ` kept-dirty=[${r.dirty.join(", ")}]` : ""),
         );
       }
     } catch (e) {
@@ -371,6 +473,15 @@ export function startWorktreeSweep(onLog: (s: string) => void = () => {}): void 
   };
 
   sweepTimer = setInterval(run, intervalMs);
-  setTimeout(run, 30_000);
+  // The startup sweep used to fire 30s after boot — the single worst moment to
+  // run it. serve restarts often (14 times in one two-hour stretch), and every
+  // restart re-armed it, so the *effective* cadence was "once per restart",
+  // not the advertised 15 minutes. Worse, 30s in is when session recovery has
+  // not finished re-adopting sessions, so the managed registry is at its
+  // emptiest and the most worktrees look abandoned. Every multi-worktree
+  // removal in the observed logs happened within 40s of a start; the steady
+  // 15-minute sweeps removed nothing. Wait for the registry to warm up.
+  const startupDelayMs = Math.min(intervalMs, 5 * 60_000);
+  setTimeout(run, startupDelayMs);
   onLog(`[worktree-sweep] started (every ${Math.round(intervalMs / 60_000)}m, min-age ${Math.round(worktreeSweepMinAgeMs() / 1000)}s)`);
 }
