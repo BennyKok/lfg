@@ -14,11 +14,11 @@ Recent product updates and deployment notes.
   session stays quiet, because there the two modes do the same thing.
 - Worth knowing which you want: steering interrupts, and interrupting cancels
   tool calls that are already running.
-- **Install downloads are much smaller.** A linux-x64 bundle drops from 368MB to
-  43MB packed (1221MB to 251MB unpacked). It was carrying private copies of the
-  Claude, Codex and OpenCode binaries, which omg.dev never used — every backend
-  already prefers the agent installed on your own machine. Install agents from
-  Settings → Coding agents, as before.
+- **Install downloads are much smaller.** The published linux-x64 bundle drops
+  from 386MB to 61MB, and the dependencies it unpacks from 1221MB to 251MB. It
+  was carrying private copies of the Claude, Codex and OpenCode binaries, which
+  omg.dev never used — every backend already prefers the agent installed on your
+  own machine. Install agents from Settings → Coding agents, as before.
 
 ## August 8, 2026 - A steered turn stops repeating itself (v0.1.311)
 
