@@ -2,6 +2,29 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - Read and edit the files an agent touched (v0.1.301)
+
+- **There is now a Files panel in the chat.** The diffs bar only ever showed
+  what changed, so a session where an agent wrote three new documents left you
+  with an all-green diff and no way to read anything else in the checkout. Files
+  lists the whole tree — 1,200-odd paths for a typical session — with git status
+  badges on what the agent touched, and opens any file syntax-highlighted.
+- **You can browse out of the session, too.** The breadcrumb walks up to the
+  worktrees directory and the home directory, so a file that lives next to the
+  session is reachable without a terminal. Browsing stops at a ceiling, and
+  secrets — `~/.ssh`, `.env`, keys and certificates — are refused at every level.
+- **Edits go to the agent, not behind its back.** Editing a file and pressing
+  "Send to agent" turns the change into a patch and queues it as a message, so
+  the agent applies it with its own tools. Nothing writes to disk underneath a
+  running session, and the change shows up in the transcript instead of
+  appearing from nowhere.
+- **Opening the app is no slower.** The tree, the viewer and the editor each
+  load only when first used; the startup bundle grows by about 200 bytes.
+- **Typing no longer triggers shortcuts.** Keystrokes inside the new tree search
+  and editor were also reaching the app's global hotkeys, so typing could open
+  dialogs or jump between sessions mid-word. Every hotkey guard now sees focus
+  correctly.
+
 ## August 8, 2026 - One name everywhere, and agents can run the schedule (v0.1.300)
 
 - **The agent toolset is now `omg_*`.** Every tool an agent calls was named
