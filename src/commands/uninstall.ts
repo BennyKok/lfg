@@ -5,8 +5,9 @@ import {
   readlinkSync,
   readdirSync,
   rmSync,
+  writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { installInfo, PATHS, type InstallChannel } from "../config.ts";
 import { MCP_SERVER_NAME, MCP_SERVER_NAME_LEGACY } from "../coding-agents.ts";
@@ -24,10 +25,19 @@ export type UninstallDependencies = {
   home: string;
   root: string;
   channel: InstallChannel;
+  hostsFile: string;
   which: (name: string) => string | null;
   run: (command: string[]) => Promise<CommandResult>;
   output: (message: string) => void;
 };
+
+/**
+ * Delimiters for the block scripts/setup.sh appends to the hosts file for the
+ * named local URL. Keep both spellings in sync with that script: they are the
+ * only thing marking which lines are ours to delete.
+ */
+const HOSTS_BEGIN = "# >>> omg local hostname >>>";
+const HOSTS_END = "# <<< omg local hostname <<<";
 
 async function run(command: string[]): Promise<CommandResult> {
   const child = Bun.spawn(command, {
@@ -44,23 +54,64 @@ function defaultDependencies(): UninstallDependencies {
     home: homedir(),
     root: PATHS.root,
     channel: installInfo().channel,
+    hostsFile: "/etc/hosts",
     which: name => Bun.which(name),
     run,
     output: message => process.stdout.write(`${message}\n`),
   };
 }
 
-function removeOwnedCommand(home: string, root: string): boolean {
-  const command = join(home, ".local", "bin", "lfg");
-  try {
-    if (!lstatSync(command).isSymbolicLink()) return false;
-  } catch {
-    return false;
+/**
+ * Remove the command symlinks setup owns.
+ *
+ * Setup links BOTH `omg` and `lfg` at src/cli.ts, so sweeping only `lfg` left
+ * `omg` behind pointing at a file uninstall had just deleted - a dangling
+ * symlink on PATH that shadows a later reinstall's own link and fails with a
+ * confusing ENOENT rather than "not installed".
+ */
+function removeOwnedCommands(home: string, root: string): string[] {
+  const removed: string[] = [];
+  for (const name of ["omg", "lfg"]) {
+    const command = join(home, ".local", "bin", name);
+    try {
+      if (!lstatSync(command).isSymbolicLink()) continue;
+    } catch {
+      continue;
+    }
+    // Only ours: a link the user pointed somewhere else stays put.
+    const target = resolve(dirname(command), readlinkSync(command));
+    if (target !== join(root, "src", "cli.ts")) continue;
+    rmSync(command);
+    removed.push(name);
   }
-  const target = resolve(dirname(command), readlinkSync(command));
-  if (target !== join(root, "src", "cli.ts")) return false;
-  rmSync(command);
-  return true;
+  return removed;
+}
+
+/** Drop the named-local-URL block setup appended to the hosts file. */
+async function removeLocalHostname(deps: UninstallDependencies): Promise<void> {
+  let current: string;
+  try {
+    current = readFileSync(deps.hostsFile, "utf8");
+  } catch {
+    return;
+  }
+  const lines = current.split("\n");
+  const begin = lines.indexOf(HOSTS_BEGIN);
+  const end = lines.indexOf(HOSTS_END);
+  if (begin === -1 || end === -1 || end < begin) return;
+  const next = [...lines.slice(0, begin), ...lines.slice(end + 1)].join("\n");
+
+  // Stage then `sudo cp`: cp truncates the destination in place, so /etc/hosts
+  // keeps its own owner and mode instead of inheriting the staging file's.
+  const staging = join(tmpdir(), `omg-hosts-${process.pid}`);
+  writeFileSync(staging, next, { mode: 0o644 });
+  const copied = await deps.run(["sudo", "cp", staging, deps.hostsFile]);
+  rmSync(staging, { force: true });
+  if (copied.exitCode !== 0) {
+    deps.output(`Could not update ${deps.hostsFile}. Remove the "${HOSTS_BEGIN}" block by hand.`);
+    return;
+  }
+  deps.output(`Removed the named local URL from ${deps.hostsFile}.`);
 }
 
 function assertSafePurgeRoot(root: string, home: string): void {
@@ -176,7 +227,8 @@ export async function cmdUninstall(
     }
   }
 
-  removeOwnedCommand(deps.home, deps.root);
+  removeOwnedCommands(deps.home, deps.root);
+  await removeLocalHostname(deps);
 
   if (purge) {
     rmSync(deps.root, { recursive: true, force: true });
