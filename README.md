@@ -328,9 +328,8 @@ Variables use the `OMG_` prefix. These are the ones most people touch:
 Other groups: agent-specific behaviour (`OMG_COPILOT_ALLOW_ALL_TOOLS`,
 `OMG_PI_PROFILE_DIR` — see
 [custom agent profiles](./docs/custom-agent-profiles.md)), relay event
-forwarding (`OMG_CONNECT_EVENTS*`), backend tracing
-(`OMG_TRACE_RETENTION_DAYS`, `OMG_TRACE_TRANSCRIPT_*`), and the optional
-WhatsApp bridge (`OMG_WHATSAPP_*`).
+forwarding (`OMG_CONNECT_EVENTS*`), and backend tracing
+(`OMG_TRACE_RETENTION_DAYS`, `OMG_TRACE_TRANSCRIPT_*`).
 
 Backend diagnostics append to `data/logs/trace-YYYY-MM-DD.jsonl` (API timings,
 transcript indexing, live stream stalls, send queue state).

@@ -6,7 +6,6 @@ Usage:
   omg agents [list|run|show]       Run / inspect insight agents (see 'agents help')
   omg subagent [create|models]      Spawn a managed worker session on any harness
   omg mcp                          Run the omg.dev MCP stdio server
-  omg whatsapp [run|sessions]      Run the optional WhatsApp control sidecar
   omg connect <code>               Pair this box to a remote-access relay (EXPERIMENTAL)
   omg setup                        Provision this box (Bun, tmux, service)
   omg update [--check]             Update to the latest release and restart
@@ -43,7 +42,6 @@ const COMPUTER_VERBS = new Set([
   "subagent",
   "subagents",
   "connect",
-  "whatsapp",
 ]);
 
 function unwrapComputerNamespace(argv: string[]): string[] {
@@ -84,10 +82,6 @@ async function main() {
     case "mcp": {
       const { cmdMcp } = await import("./commands/mcp.ts");
       return await cmdMcp();
-    }
-    case "whatsapp": {
-      const { cmdWhatsapp } = await import("./commands/whatsapp.ts");
-      return await cmdWhatsapp(rest);
     }
     case "connect": {
       const { cmdConnect } = await import("./commands/connect.ts");
