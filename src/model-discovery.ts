@@ -16,6 +16,8 @@ export type DiscoveredModelProvider = {
   error?: string;
   refreshedAt: number;
   durationMs: number;
+  /** Consecutive failed discovery attempts; absent/0 once the provider answers. */
+  failedAttempts?: number;
 };
 
 export type ModelDiscoveryCache = {
@@ -29,6 +31,24 @@ export type ModelDiscoveryCache = {
 
 const CACHE_PATH = join(PATHS.data, "model-catalog.json");
 const DEFAULT_REFRESH_CRON = "0 8 * * *";
+/** Every provider a full refresh probes. `codex-aisdk` is mirrored from `codex`. */
+const REFRESH_KEYS: ProviderKey[] = ["claude", "aisdk", "codex", "grok", "cursor", "opencode"];
+/**
+ * Providers whose failure is structural rather than transient: they expose no
+ * model-list command at all, so every attempt returns the same error. Retrying
+ * them would spin a probe every tick forever and never change the answer.
+ */
+const NO_DISCOVERY_COMMAND: ReadonlySet<ProviderKey> = new Set<ProviderKey>(["claude", "aisdk"]);
+/**
+ * A failed provider is written to the cache like any other, which used to make
+ * the scheduler consider the catalog done until the next daily cron — so a box
+ * that booted before its agent CLI was installed (a fresh sandbox, most often)
+ * served the static fallback list for up to 24 hours, and installing the CLI
+ * changed nothing until 08:00 the next day. Retry on this backoff instead, and
+ * keep retrying at the cap so a CLI installed at any point is picked up within
+ * half an hour.
+ */
+const RETRY_BACKOFF_MS = [60_000, 2 * 60_000, 5 * 60_000, 10 * 60_000, 20 * 60_000, 30 * 60_000];
 const DEFAULT_TIMEOUT_MS = 20_000;
 const MODEL_ID_RE = /^[A-Za-z0-9_.:/\-[\],=]+$/;
 const ANSI_RE = /\x1B\[[0-?]*[ -/]*[@-~]/g;
@@ -354,29 +374,72 @@ export function readModelDiscoveryCacheSync(): ModelDiscoveryCache | null {
   return readCacheFile();
 }
 
+/** Delay before the next retry of a provider that has failed `attempts` times. */
+export function retryDelayMs(attempts: number): number {
+  const index = Math.min(Math.max(attempts, 1), RETRY_BACKOFF_MS.length) - 1;
+  return RETRY_BACKOFF_MS[index]!;
+}
+
+/**
+ * Providers whose last discovery failed and whose backoff has elapsed. Pure so
+ * the retry policy is testable without spawning a CLI or touching the cache.
+ */
+export function providersDueForRetry(
+  cache: ModelDiscoveryCache | null,
+  now: number,
+): ProviderKey[] {
+  if (!cache) return [];
+  const due: ProviderKey[] = [];
+  for (const key of REFRESH_KEYS) {
+    if (NO_DISCOVERY_COMMAND.has(key)) continue;
+    const provider = cache.providers?.[key];
+    // A key absent from the cache was never probed (an older cache, or a
+    // partial write) — discover it rather than wait for the daily cron.
+    if (!provider) {
+      due.push(key);
+      continue;
+    }
+    if (provider.ok) continue;
+    if (now - provider.refreshedAt >= retryDelayMs(provider.failedAttempts ?? 1)) due.push(key);
+  }
+  return due;
+}
+
 export async function refreshModelCatalog(input: {
   reason?: string;
   scheduledRunAt?: number;
+  /** Probe only these providers, keeping every other cached entry as-is. */
+  only?: ProviderKey[];
   onLog?: (line: string) => void;
 } = {}): Promise<ModelDiscoveryCache> {
   const started = Date.now();
   const onLog = input.onLog ?? (() => {});
   onLog(`[models] refreshing catalog${input.reason ? ` (${input.reason})` : ""}`);
   const prior = readCacheFile();
-  const keys: ProviderKey[] = ["claude", "aisdk", "codex", "grok", "cursor", "opencode"];
+  const only = input.only?.length ? new Set(input.only) : null;
+  const keys = only ? REFRESH_KEYS.filter((key) => only.has(key)) : [...REFRESH_KEYS];
   const results = await Promise.all(keys.map((key) => discoverProvider(key)));
-  const providers: Partial<Record<ProviderKey, DiscoveredModelProvider>> = {};
+  // A partial refresh must not drop the providers it did not probe.
+  const providers: Partial<Record<ProviderKey, DiscoveredModelProvider>> = only
+    ? { ...(prior?.providers ?? {}) }
+    : {};
   for (const result of results) {
-    providers[result.key] = result;
+    const failedAttempts = result.ok ? 0 : (prior?.providers?.[result.key]?.failedAttempts ?? 0) + 1;
+    providers[result.key] = failedAttempts ? { ...result, failedAttempts } : result;
     const count = result.ok ? result.models.length : 0;
     onLog(`[models] ${result.key}: ${result.ok ? `${count} models` : result.error || "failed"}`);
   }
-  if (providers.codex) {
+  // Only re-mirror when codex was actually probed, or a partial refresh of some
+  // other provider would overwrite codex-aisdk with a stale copy.
+  if (keys.includes("codex") && providers.codex) {
     providers["codex-aisdk"] = { ...providers.codex, key: "codex-aisdk" };
   }
   const cache: ModelDiscoveryCache = {
     version: 1,
-    refreshedAt: Date.now(),
+    // `refreshedAt` gates the daily cron, so it means "last full refresh". A
+    // partial retry advancing it would suppress that day's scheduled refresh
+    // for every provider it did not probe.
+    refreshedAt: only ? prior?.refreshedAt ?? Date.now() : Date.now(),
     schedule: refreshCron(),
     timeZone: schedulerTimeZone(),
     lastScheduledRunAt: input.scheduledRunAt ?? prior?.lastScheduledRunAt,
@@ -477,10 +540,20 @@ export function startModelDiscoveryScheduler(onLog: (line: string) => void = () 
         return;
       }
       const due = mostRecentDue(schedule, now, tz);
-      if (due === null) return;
-      if (cache.lastScheduledRunAt && cache.lastScheduledRunAt >= due) return;
-      if (cache.refreshedAt >= due) return;
-      await refreshModelCatalog({ reason: "scheduled", scheduledRunAt: due, onLog }).catch((e) => onLog(`[models] scheduled refresh failed: ${e}`));
+      const scheduled =
+        due !== null &&
+        !(cache.lastScheduledRunAt && cache.lastScheduledRunAt >= due) &&
+        cache.refreshedAt < due;
+      if (scheduled) {
+        await refreshModelCatalog({ reason: "scheduled", scheduledRunAt: due, onLog }).catch((e) => onLog(`[models] scheduled refresh failed: ${e}`));
+        return;
+      }
+      // Between scheduled runs, keep chasing providers that failed. Without
+      // this a CLI installed after boot stays invisible until the next cron.
+      const retry = providersDueForRetry(cache, now.getTime());
+      if (!retry.length) return;
+      await refreshModelCatalog({ reason: `retry ${retry.join(", ")}`, only: retry, onLog })
+        .catch((e) => onLog(`[models] retry refresh failed: ${e}`));
     } finally {
       ticking = false;
     }
