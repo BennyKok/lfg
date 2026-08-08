@@ -2,6 +2,33 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - A quiet install and an update that stops doing the work twice (v0.1.310)
+
+- **Updating no longer re-downloads the dependencies it just downloaded.** The
+  per-platform bundles from v0.1.309 arrive with `node_modules` already resolved
+  and pruned for your machine, and setup skips `bun install` when it sees them —
+  but the in-app updater deleted that tree and re-resolved the whole graph from
+  npm, musl builds and all. A bundle install has an empty Bun cache, so updating
+  was slower than installing. It now keeps what the bundle shipped. (Installs
+  already on v0.1.309 pay the old cost once more, on the way to this release.)
+- **Both paths clear the old dependency tree before extracting**, so an update
+  can no longer leave behind files the new release deleted, and a
+  platform-neutral bundle landing on an existing install still gets the install
+  it needs instead of running new code against old dependencies.
+- **A first install touches nothing you did not ask for.** Tailscale is no
+  longer installed on every Linux box: it is behind `OMG_INSTALL_TAILSCALE`,
+  never prompts for an auth key, and cannot fail the install. Piping setup into
+  `bash` used to end with a daemon nobody asked for and a failed install, since
+  the key prompt has no TTY there. The `omg.local` hosts entry is opt-in for the
+  same reason — no sudo prompt for a cosmetic URL. Both extras are printed at
+  the end so they stay discoverable.
+- **Setup stops overwriting commands and shell lines it does not own.** It
+  linked `omg` and `lfg` with `ln -sf`, which silently replaced any other `omg`
+  on your PATH; it now writes only when the path is free or already ours, and
+  warns otherwise. PATH lines appended to `.bashrc` / `.zshrc` are tagged, so
+  `omg uninstall` can take exactly its own lines back out.
+- The README offers both `bun` and `npm` for installing the CLI.
+
 ## August 8, 2026 - Installs stop downloading what they cannot run (v0.1.309)
 
 - **A first install no longer resolves dependencies on your machine.** Every
