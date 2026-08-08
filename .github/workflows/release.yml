@@ -115,7 +115,12 @@ jobs:
           # registry yet. npm does not validate that at publish time, so the
           # result is a window where a published package cannot be installed.
           for pkg in protocol client react app; do
-            tgz="$(ls dist/omg-dev-${pkg}-*.tgz)"
+            # "./" is load-bearing. `npm publish dist/omg-dev-protocol-1.0.0.tgz`
+            # parses as the GitHub shorthand <owner>/<repo> — npm resolves it to
+            # ssh://git@github.com/dist/omg-dev-protocol-1.0.0.tgz.git and fails
+            # with a public-key error that reads nothing like a bad path. An
+            # explicit relative prefix forces the file-path interpretation.
+            tgz="./$(ls dist/omg-dev-${pkg}-*.tgz)"
             name="$(tar -xzOf "$tgz" package/package.json | jq -r .name)"
             version="$(tar -xzOf "$tgz" package/package.json | jq -r .version)"
             echo "▸ $name@$version"
