@@ -2,6 +2,24 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - Dictation shows words as you speak on hosted workspaces (v0.1.297)
+
+- **Dictation is live on a hosted workspace.** Words now appear while you are
+  still talking. Until now a hosted workspace held no speech key, so the
+  browser's realtime socket was refused the moment it opened and every take
+  quietly degraded to uploading the whole clip after you stopped — a blank
+  composer while you spoke, the transcript arriving all at once at the end,
+  and nothing on screen explaining why. Audio now streams to the platform's
+  own relay instead, which keeps the provider credential host-side, so there
+  is no key to enter and nothing to configure.
+- **A dead speech provider can no longer be chosen.** Three separate defaults
+  used to pin a keyless machine to a provider that could not answer: the
+  default was a fixed name, a previously saved choice was honoured even with
+  nothing behind it, and both fallbacks named one provider outright. Each now
+  resolves against what is actually available.
+- **When dictation cannot stream, the mic says so.** The button reads
+  "transcribes after you stop" rather than looking like it has hung.
+
 ## August 7, 2026 - Settings move to the OMG_ prefix (v0.1.296)
 
 - **Configuration variables are now named `OMG_*`.** New installs are seeded
