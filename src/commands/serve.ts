@@ -1,3 +1,4 @@
+import { startMdnsAlias, stopMdnsAlias } from "../mdns-alias.ts";
 import { mkdir, open, readdir, realpath, stat } from "node:fs/promises";
 import { appendFileSync, existsSync, statfsSync, statSync, mkdirSync, readFileSync, type Dirent } from "node:fs";
 import { tmpdir, homedir, loadavg, cpus, totalmem, freemem } from "node:os";
@@ -6479,4 +6480,17 @@ a{color:#60a5fa}
 
   console.log(`lfg web → http://${server.hostname}:${server.port}`);
   console.log(`  agents dir: ${AGENTS_DIR}`);
+
+  // Advertise omg.local for this machine's loopback over mDNS (macOS only).
+  // Owned by the server rather than by setup because the registration lives
+  // exactly as long as the process holding it — which also means stopping the
+  // server is a complete uninstall of the name, with nothing left on disk.
+  startMdnsAlias(Number(server.port));
+  for (const signal of ["SIGINT", "SIGTERM"] as const) {
+    process.on(signal, () => {
+      stopMdnsAlias();
+      process.exit(0);
+    });
+  }
+  process.on("exit", stopMdnsAlias);
 }
