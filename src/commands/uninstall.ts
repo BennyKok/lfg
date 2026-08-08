@@ -67,15 +67,20 @@ function assertSafePurgeRoot(root: string, home: string): void {
   const resolvedRoot = resolve(root);
   const resolvedHome = resolve(home);
   if (resolvedRoot === "/" || resolvedRoot === resolvedHome || resolvedRoot === dirname(resolvedHome)) {
-    throw new Error(`Refusing to purge unsafe LFG root: ${resolvedRoot}`);
+    throw new Error(`Refusing to purge unsafe OMG root: ${resolvedRoot}`);
   }
   try {
     const manifest = JSON.parse(readFileSync(join(resolvedRoot, "package.json"), "utf8")) as {
       name?: unknown;
     };
-    if (manifest.name !== "lfg") throw new Error("not lfg");
+    // Either package name. This guard is the only thing standing between
+    // `--purge` and an `rm -rf` of whatever directory it was pointed at, so it
+    // must not start refusing real installs the day the manifest is renamed —
+    // the failure would read as "this is not an installation", which is exactly
+    // the wrong thing to tell someone about their own install.
+    if (manifest.name !== "omg" && manifest.name !== "lfg") throw new Error("unrecognised manifest");
   } catch {
-    throw new Error(`Refusing to purge ${resolvedRoot}: it is not an LFG installation.`);
+    throw new Error(`Refusing to purge ${resolvedRoot}: it is not an OMG installation.`);
   }
 }
 
