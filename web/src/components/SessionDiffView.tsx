@@ -347,7 +347,10 @@ export const SessionDiffBar = memo(function SessionDiffBar({
 
   return (
     <>
-      <div className="pointer-events-none absolute inset-x-0 bottom-3 z-20 flex justify-center gap-2">
+      {/* Two pills on one row: on a narrow phone a busy review pill ("12 files
+          +2043 −817 Review") plus Files is wider than the viewport, so let the
+          row wrap and keep it off the screen edges rather than clipping. */}
+      <div className="pointer-events-none absolute inset-x-0 bottom-3 z-20 flex flex-wrap justify-center gap-2 px-3">
         {hasDiffs ? (
           <button
             type="button"

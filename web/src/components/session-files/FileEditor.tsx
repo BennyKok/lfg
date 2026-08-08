@@ -9,6 +9,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import { EditProvider, File } from "@pierre/diffs/react";
 import { Editor } from "@pierre/diffs/edit";
+import { pinShadowTextSizeForTouch } from "@/lib/shadow-text-size";
 import { PIERRE_THEME, type SessionFile, type ThemeType } from "./types";
 
 function FileEditorInner({
@@ -41,17 +42,25 @@ function FileEditorInner({
     [themeType],
   );
 
+  // Same shadow-root problem as the tree's search box: the editor's real input
+  // sits behind a shadow boundary the app's "16px on coarse pointers" rule
+  // cannot cross, so tapping into a file on iOS zoomed the whole viewport.
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => pinShadowTextSizeForTouch(hostRef.current), []);
+
   return (
-    <EditProvider createEditor={createEditor}>
-      <File
-        // A stable cacheKey per path lets the editor keep undo history and
-        // cursor position when the user toggles between view and edit.
-        file={{ name: file.name, contents: file.contents, cacheKey: file.path }}
-        options={options}
-        edit
-        disableWorkerPool
-      />
-    </EditProvider>
+    <div ref={hostRef}>
+      <EditProvider createEditor={createEditor}>
+        <File
+          // A stable cacheKey per path lets the editor keep undo history and
+          // cursor position when the user toggles between view and edit.
+          file={{ name: file.name, contents: file.contents, cacheKey: file.path }}
+          options={options}
+          edit
+          disableWorkerPool
+        />
+      </EditProvider>
+    </div>
   );
 }
 

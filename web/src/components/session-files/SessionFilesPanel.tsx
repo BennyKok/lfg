@@ -11,12 +11,23 @@
 // There is no write endpoint. "Send to agent" turns the edit into a unified diff
 // and posts it to the session's message queue, so the agent applies it with its
 // own tools and stays the single writer of its worktree.
+//
+// Layout is two different shapes, not one shape that shrinks:
+//   • md and up — tree in a fixed left column, file in the right pane.
+//   • phone     — one pane at a time. The tree owns the whole sheet; opening a
+//                 file pushes a full-screen file screen over it (own header,
+//                 Back returns to the tree with the selection intact). A 208px
+//                 tree stacked over a 5-line file view, which is what a single
+//                 responsive stack produced, is unusable for both jobs at once.
+// The sheet rides --lfg-visual-* so the soft keyboard shrinks it instead of
+// shoving it under the keyboard, and every edge respects the safe-area insets.
 
 import { memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowUpFromLine,
   Check,
+  ChevronLeft,
   ChevronRight,
   FileCode,
   Loader2,
@@ -62,7 +73,13 @@ const Spinner = ({ label }: { label: string }) => (
 // Clickable path segments from the ceiling down to the current root. Anything
 // above the ceiling is rendered as inert text, because the server would refuse
 // it anyway.
+//
+// One line that scrolls sideways, never a wrapping block: a deep path used to
+// wrap to two or three rows on a phone and push the whole header — and with it
+// the tree — down the screen. The rail is auto-scrolled to the end so the
+// segments nearest the current directory are the ones on screen.
 function Breadcrumb({ tree, onNavigate }: { tree: SessionTree; onNavigate: (root: string) => void }) {
+  const railRef = useRef<HTMLElement | null>(null);
   const crumbs = useMemo(() => {
     const segments = tree.root.split("/").filter(Boolean);
     return segments.map((name, i) => {
@@ -71,16 +88,24 @@ function Breadcrumb({ tree, onNavigate }: { tree: SessionTree; onNavigate: (root
     });
   }, [tree.root, tree.ceiling]);
 
+  useEffect(() => {
+    const rail = railRef.current;
+    if (rail) rail.scrollLeft = rail.scrollWidth;
+  }, [crumbs]);
+
   return (
-    <nav className="flex min-w-0 flex-wrap items-center gap-0.5 font-mono text-[11px] text-muted-foreground">
+    <nav
+      ref={railRef}
+      className="flex min-w-0 items-center gap-0.5 overflow-x-auto whitespace-nowrap font-mono text-[11px] text-muted-foreground [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+    >
       {crumbs.map((crumb, i) => (
-        <span key={crumb.abs} className="flex items-center gap-0.5">
+        <span key={crumb.abs} className="flex shrink-0 items-center gap-0.5">
           {i > 0 ? <ChevronRight className="size-3 opacity-50" /> : null}
           {crumb.browsable && crumb.abs !== tree.root ? (
             <button
               type="button"
               onClick={() => onNavigate(crumb.abs)}
-              className="rounded px-1 py-0.5 transition-colors hover:bg-muted hover:text-foreground"
+              className="rounded px-1 py-1 transition-colors hover:bg-muted hover:text-foreground md:py-0.5"
             >
               {crumb.name}
             </button>
@@ -108,6 +133,11 @@ function SessionFilesViewer({ sid, onClose }: { sid: string; onClose: () => void
   const [editing, setEditing] = useState(false);
   const [note, setNote] = useState("");
   const [send, setSend] = useState<SendState>({ kind: "idle" });
+  // Which of the two phone screens is on top. Deliberately separate from
+  // `selected`: Back must reveal the tree without clearing the selection, or the
+  // tree would no longer report a re-tap of the same row (its own
+  // already-reported guard) and that file could never be reopened.
+  const [phoneScreen, setPhoneScreen] = useState<"tree" | "file">("tree");
   const themeType = useThemeType();
 
   // The editor reports every keystroke; keep it in a ref so typing does not
@@ -138,7 +168,17 @@ function SessionFilesViewer({ sid, onClose }: { sid: string; onClose: () => void
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    // Lock the page behind the sheet, the way the session sheet does. Standalone
+    // omg already pins body overflow in its base layer, but the embeddable build
+    // scopes that rule under html[data-lfg-app-surface] — in a host page the body
+    // does scroll, and a touch-scroll off the end of the tree would drag the host
+    // around under the sheet.
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previousOverflow;
+    };
   }, [onClose]);
 
   const openFile = useCallback(
@@ -146,6 +186,9 @@ function SessionFilesViewer({ sid, onClose }: { sid: string; onClose: () => void
       if (!tree) return;
       // Re-opening the file that is already open would refetch it and drop an
       // in-progress edit. Selecting the current row again is a no-op.
+      // Even a repeat tap has to push the phone's file screen — that is how the
+      // user gets back to a file they left with Back.
+      setPhoneScreen("file");
       if (relPath === selectedRef.current) return;
       selectedRef.current = relPath;
       setSelected(relPath);
@@ -175,7 +218,13 @@ function SessionFilesViewer({ sid, onClose }: { sid: string; onClose: () => void
     setSelected(null);
     setFile(null);
     setEditing(false);
+    setPhoneScreen("tree");
   }, []);
+
+  // Back from the phone's file screen. The selection, the loaded file and any
+  // draft all stay put, so re-opening the same row restores the screen rather
+  // than refetching and discarding an unsent edit.
+  const backToTree = useCallback(() => setPhoneScreen("tree"), []);
 
   // Seed the editor from the draft so leaving and re-entering edit mode does not
   // silently drop unsent work. Recomputed only when the file changes or edit
@@ -236,13 +285,38 @@ function SessionFilesViewer({ sid, onClose }: { sid: string; onClose: () => void
     }
   }, [sid, file, selected, note]);
 
+  // Phones get one screen at a time; md and up keeps both panes side by side.
+  const fileScreenUp = !!selected && phoneScreen === "file";
+
+  // On a phone the sheet runs to the physical bottom edge, so whichever block
+  // ends up last has to clear the home indicator. Only the last one: padding
+  // every candidate would leave a dead band mid-sheet.
+  const banner = send.kind === "sent" || send.kind === "error";
+  const lastBlock = banner ? "banner" : editing ? "editor" : "content";
+
   const body = (
-    <div className="fixed inset-0 z-[110] flex flex-col bg-background/80 backdrop-blur-sm" onClick={onClose}>
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Session files"
+      // Pinned to the *visual* viewport rather than sized in dvh. iOS keeps the
+      // layout viewport full height when the soft keyboard opens and scrolls the
+      // page instead, so a dvh-sized sheet ends up half under the keyboard and
+      // dragged around by that scroll. The app shell measures the real visible
+      // band every frame and publishes it; ride those vars. Desktop, where the
+      // vars are absent, falls back to dvh.
+      className="fixed inset-x-0 z-[110] flex flex-col bg-background/80 backdrop-blur-sm"
+      style={{
+        top: "var(--lfg-visual-offset-top, 0px)",
+        height: "var(--lfg-visual-height, var(--lfg-app-height, 100dvh))",
+      }}
+      onClick={onClose}
+    >
       <div
-        className="mx-auto flex h-full w-full max-w-6xl flex-col overflow-hidden bg-background md:my-6 md:h-[calc(100%-3rem)] md:rounded-2xl md:border md:border-border md:shadow-2xl"
+        className="relative mx-auto flex h-full w-full max-w-6xl flex-col overflow-hidden bg-background md:my-6 md:h-[calc(100%-3rem)] md:rounded-2xl md:border md:border-border md:shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <header className="flex items-center gap-3 border-b border-border px-4 py-3">
+        <header className="flex items-center gap-2 border-b border-border px-3 py-2 pt-[calc(0.5rem+env(safe-area-inset-top,0px))] md:gap-3 md:px-4 md:py-3 md:pt-3">
           <FileCode className="size-4 shrink-0 text-[var(--primary)]" />
           <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold text-foreground">Files</div>
@@ -252,53 +326,75 @@ function SessionFilesViewer({ sid, onClose }: { sid: string; onClose: () => void
             <button
               type="button"
               onClick={() => navigate(tree.parent!)}
-              className="flex shrink-0 items-center gap-1.5 rounded-lg border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              // min-h-9 keeps the hit target thumb-sized on a phone without
+              // inflating the desktop header.
+              className="flex min-h-9 shrink-0 items-center gap-1.5 rounded-lg border border-border px-2.5 text-[12px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:min-h-0 md:px-2 md:py-1 md:text-[11px]"
             >
-              <ArrowUpFromLine className="size-3" /> Up
+              <ArrowUpFromLine className="size-3.5 md:size-3" /> Up
             </button>
           ) : null}
           <button
             type="button"
             onClick={onClose}
             aria-label="Close files"
-            className="shrink-0 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="flex size-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:size-auto md:p-1.5"
           >
-            <X className="size-4" />
+            <X className="size-5 md:size-4" />
           </button>
         </header>
 
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-          <aside className="h-52 shrink-0 overflow-hidden border-b border-border md:h-auto md:w-72 md:border-b-0 md:border-r">
-            {treeError ? (
-              <div className="px-3 py-2 text-[12px] text-[var(--destructive)]">Could not list files: {treeError}</div>
-            ) : !tree ? (
-              <Spinner label="Listing files…" />
-            ) : (
-              <Suspense fallback={<Spinner label="Loading tree…" />}>
-                <FileTreePane
-                  paths={tree.paths}
-                  gitStatus={tree.gitStatus}
-                  selectedPath={selected}
-                  onSelectFile={openFile}
-                />
-              </Suspense>
-            )}
-          </aside>
-
-          <section className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {/* Phone: the tree owns the whole sheet. md: a fixed left column. */}
+          <aside className="flex min-h-0 flex-1 flex-col overflow-hidden border-border md:h-auto md:w-72 md:flex-none md:border-r">
             {tree?.truncated ? (
-              <div className="border-b border-border bg-[var(--warning)]/10 px-3 py-1.5 text-[11px] text-[var(--warning)]">
+              <div className="shrink-0 border-b border-border bg-[var(--warning)]/10 px-3 py-1.5 text-[11px] text-[var(--warning)]">
                 This directory is very large — the listing was truncated.
               </div>
             ) : null}
+            <div className="min-h-0 flex-1 overflow-hidden pb-[var(--lfg-safe-bottom,0px)] md:pb-0">
+              {treeError ? (
+                <div className="px-3 py-2 text-[12px] text-[var(--destructive)]">
+                  Could not list files: {treeError}
+                </div>
+              ) : !tree ? (
+                <Spinner label="Listing files…" />
+              ) : (
+                <Suspense fallback={<Spinner label="Loading tree…" />}>
+                  <FileTreePane
+                    paths={tree.paths}
+                    gitStatus={tree.gitStatus}
+                    selectedPath={selected}
+                    onSelectFile={openFile}
+                  />
+                </Suspense>
+              )}
+            </div>
+          </aside>
 
+          {/* Phone: pushed over the whole sheet (header included) when a file is
+              open, so the file gets the full screen instead of the leftovers
+              under a tree. md: the static right pane, always present. */}
+          <section
+            className={cn(
+              "min-h-0 min-w-0 flex-col bg-background md:static md:flex md:flex-1",
+              fileScreenUp ? "absolute inset-0 z-20 flex" : "hidden",
+            )}
+          >
             {!selected ? (
               <div className="flex flex-1 items-center justify-center px-6 text-center text-[13px] text-muted-foreground">
                 Select a file to read it. Changed files carry a git badge.
               </div>
             ) : (
               <>
-                <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+                <div className="flex items-center gap-2 border-b border-border px-2 py-2 pt-[calc(0.5rem+env(safe-area-inset-top,0px))] md:px-3 md:pt-2">
+                  <button
+                    type="button"
+                    onClick={backToTree}
+                    aria-label="Back to file tree"
+                    className="flex size-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
+                  >
+                    <ChevronLeft className="size-5" />
+                  </button>
                   <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-foreground">{selected}</span>
                   {file && !file.binary ? (
                     <button
@@ -310,18 +406,31 @@ function SessionFilesViewer({ sid, onClose }: { sid: string; onClose: () => void
                         setSend({ kind: "idle" });
                       }}
                       className={cn(
-                        "flex shrink-0 items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] transition-colors",
+                        "flex min-h-9 shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-[12px] transition-colors md:min-h-0 md:px-2 md:py-1 md:text-[11px]",
                         editing
                           ? "border-[var(--primary)]/40 bg-[var(--primary)]/10 text-foreground"
                           : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",
                       )}
                     >
-                      <Pencil className="size-3" /> {editing ? "Editing" : "Edit"}
+                      <Pencil className="size-3.5 md:size-3" /> {editing ? "Editing" : "Edit"}
                     </button>
                   ) : null}
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    aria-label="Close files"
+                    className="flex size-9 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground md:hidden"
+                  >
+                    <X className="size-5" />
+                  </button>
                 </div>
 
-                <div className="min-h-0 flex-1 overflow-auto text-[12px]">
+                <div
+                  className={cn(
+                    "min-h-0 flex-1 overflow-auto overscroll-contain text-[12px]",
+                    lastBlock === "content" && "pb-[var(--lfg-safe-bottom,0px)] md:pb-0",
+                  )}
+                >
                   {fileError ? (
                     <div className="px-3 py-2 text-[12px] text-[var(--destructive)]">Could not open: {fileError}</div>
                   ) : fileLoading || !file ? (
@@ -345,7 +454,12 @@ function SessionFilesViewer({ sid, onClose }: { sid: string; onClose: () => void
                 </div>
 
                 {editing ? (
-                  <div className="space-y-2 border-t border-border p-3">
+                  <div
+                    className={cn(
+                      "shrink-0 space-y-2 border-t border-border p-3",
+                      lastBlock === "editor" && "pb-[max(var(--lfg-safe-bottom,0px),0.75rem)] md:pb-3",
+                    )}
+                  >
                     <textarea
                       value={note}
                       onChange={(e) => setNote(e.target.value)}
@@ -353,7 +467,9 @@ function SessionFilesViewer({ sid, onClose }: { sid: string; onClose: () => void
                       placeholder="Optional: anything else the agent should do alongside this edit"
                       className="w-full resize-none rounded-lg border border-border bg-card px-2.5 py-2 text-[12px] text-foreground outline-none placeholder:text-muted-foreground focus:border-[var(--primary)]/50"
                     />
-                    <div className="flex items-center gap-2">
+                    {/* Stacked on a phone: side by side, the explainer squeezed
+                        the button down to a sliver of a tap target. */}
+                    <div className="flex flex-col gap-2 md:flex-row md:items-center">
                       <p className="min-w-0 flex-1 text-[11px] text-muted-foreground">
                         Your edit is sent to the agent as a patch — it applies the change, so nothing here writes to
                         disk behind its back.
@@ -362,7 +478,7 @@ function SessionFilesViewer({ sid, onClose }: { sid: string; onClose: () => void
                         type="button"
                         onClick={sendToAgent}
                         disabled={send.kind === "sending"}
-                        className="flex shrink-0 items-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 py-1.5 text-[12px] font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-60"
+                        className="flex min-h-11 w-full shrink-0 items-center justify-center gap-1.5 rounded-lg bg-[var(--primary)] px-3 text-[13px] font-medium text-[var(--primary-foreground)] transition-opacity hover:opacity-90 disabled:opacity-60 md:min-h-0 md:w-auto md:py-1.5 md:text-[12px]"
                       >
                         {send.kind === "sending" ? (
                           <Loader2 className="size-3.5 animate-spin" />
@@ -376,13 +492,13 @@ function SessionFilesViewer({ sid, onClose }: { sid: string; onClose: () => void
                 ) : null}
 
                 {send.kind === "sent" ? (
-                  <div className="flex items-center gap-2 border-t border-[var(--success)]/40 bg-[var(--success)]/10 px-3 py-2 text-[12px] text-foreground">
+                  <div className="flex shrink-0 items-center gap-2 border-t border-[var(--success)]/40 bg-[var(--success)]/10 px-3 py-2 pb-[max(var(--lfg-safe-bottom,0px),0.5rem)] text-[12px] text-foreground md:pb-2">
                     <Check className="size-3.5 text-[var(--success)]" /> Patch queued — the agent will apply it on its
                     next turn.
                   </div>
                 ) : null}
                 {send.kind === "error" ? (
-                  <div className="border-t border-[var(--destructive)]/40 bg-[var(--destructive)]/10 px-3 py-2 text-[12px] text-[var(--destructive)]">
+                  <div className="shrink-0 border-t border-[var(--destructive)]/40 bg-[var(--destructive)]/10 px-3 py-2 pb-[max(var(--lfg-safe-bottom,0px),0.5rem)] text-[12px] text-[var(--destructive)] md:pb-2">
                     {send.message}
                   </div>
                 ) : null}

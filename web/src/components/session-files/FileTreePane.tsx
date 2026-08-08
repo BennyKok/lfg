@@ -9,6 +9,7 @@
 
 import { memo, useEffect, useRef } from "react";
 import { FileTree, useFileTree, useFileTreeSelection } from "@pierre/trees/react";
+import { pinShadowTextSizeForTouch } from "@/lib/shadow-text-size";
 import type { TreeGitStatusEntry } from "./types";
 
 export type FileTreePaneProps = {
@@ -61,7 +62,48 @@ function FileTreePaneInner({ paths, gitStatus, selectedPath, onSelectFile }: Fil
     onSelectFile(path);
   }, [model, selection, onSelectFile]);
 
-  return <FileTree model={model} className="h-full w-full" style={{ height: "100%" }} />;
+  const hostRef = useRef<HTMLDivElement | null>(null);
+
+  // The tree's search box lives in a shadow root at 13px, where the app's global
+  // "16px on coarse pointers" rule cannot reach it — so tapping it zoomed iOS
+  // Safari into the sheet and left no way back out.
+  useEffect(() => pinShadowTextSizeForTouch(hostRef.current), []);
+
+  // Re-tapping the row that is already selected.
+  //
+  // On a phone the file opens as its own screen and Back returns here with the
+  // row still selected, so tapping it again is the obvious way to get the file
+  // back — but selecting an already-selected path is a no-op inside the tree
+  // (it does not bump the controller's selection version, so nothing is
+  // emitted) and the tap would do nothing at all. The click that produced it
+  // still crosses the shadow boundary on its way out, so re-report from there.
+  // By the time this listener runs the tree has already applied any selection
+  // change of its own, so a tap on a *different* row falls through to the
+  // effect above instead of double-reporting.
+  const onSelectFileRef = useRef(onSelectFile);
+  useEffect(() => {
+    onSelectFileRef.current = onSelectFile;
+  }, [onSelectFile]);
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const onClick = (event: MouseEvent) => {
+      // Typing in the tree's own search box must not reopen anything.
+      if (event.composedPath().some((node) => node instanceof HTMLInputElement)) return;
+      const path = model.getSelectedPaths()[0];
+      if (!path || path !== lastReported.current) return;
+      if (model.getItem(path)?.isDirectory()) return;
+      onSelectFileRef.current(path);
+    };
+    host.addEventListener("click", onClick);
+    return () => host.removeEventListener("click", onClick);
+  }, [model]);
+
+  return (
+    <div ref={hostRef} className="h-full w-full">
+      <FileTree model={model} className="h-full w-full" style={{ height: "100%" }} />
+    </div>
+  );
 }
 
 // Expand the ancestors of the file being restored so it is visible on open.
