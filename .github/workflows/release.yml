@@ -97,8 +97,18 @@ jobs:
             echo "::warning title=npm publish skipped::NPM_PUBLISH_TOKEN is not set, so @omg-dev/* was NOT published for this tag. Add the secret and re-run this workflow to publish."
             exit 0
           fi
-          REG="https://registry.npmjs.org"
-          echo "//registry.npmjs.org/:_authToken=${NPM_PUBLISH_TOKEN}" > "$HOME/.npmrc.publish"
+          REG="https://registry.npmjs.org/"
+          # Job-local userconfig, never the shared ~/.npmrc: the private-registry
+          # step above owns that file, and this token must not end up as the
+          # default credential for every later command. Mirrors the same pattern
+          # in BennyKok/vibes, which publishes @omg-dev/cli into this scope.
+          NPMRC="$RUNNER_TEMP/.npmrc.publish"
+          printf '//registry.npmjs.org/:_authToken=%s\n' "$NPM_PUBLISH_TOKEN" > "$NPMRC"
+          chmod 600 "$NPMRC"
+          # Fail fast and legibly on a bad or expired token, rather than
+          # discovering it as an opaque 401 partway through the loop.
+          npm whoami --userconfig "$NPMRC" --registry "$REG"
+
           # Dependency order, not glob order. `dist/omg-dev-*.tgz` expands
           # alphabetically to app, client, protocol, react — publishing app
           # first, whose pinned dependency on protocol does not exist on the
@@ -108,21 +118,28 @@ jobs:
             tgz="$(ls dist/omg-dev-${pkg}-*.tgz)"
             name="$(tar -xzOf "$tgz" package/package.json | jq -r .name)"
             version="$(tar -xzOf "$tgz" package/package.json | jq -r .version)"
-            # Re-running a release must not fail the workflow. A version that is
-            # already on the registry is the expected outcome of a re-run, not
-            # an error — and npm cannot overwrite it anyway.
-            if npm view "$name@$version" version --registry "$REG" >/dev/null 2>&1; then
-              echo "already published: $name@$version"
-              continue
+            echo "▸ $name@$version"
+            # Idempotency is decided by the publish result, not a prior `npm
+            # view`: a pre-check races anything else publishing the same version
+            # and turns a transient registry read failure into a wrong decision.
+            # Only a genuine conflict is tolerated — auth, validation and network
+            # errors must still fail the release.
+            if ! out=$(npm publish "$tgz" \
+                --userconfig "$NPMRC" \
+                --registry "$REG" \
+                --access public \
+                --provenance 2>&1); then
+              if echo "$out" | grep -qE 'EPUBLISHCONFLICT|cannot publish over|already published|409'; then
+                echo "  already published, skipping"
+              else
+                echo "$out" >&2
+                exit 1
+              fi
+            else
+              echo "$out"
             fi
-            echo "publishing $name@$version"
-            npm publish "$tgz" \
-              --registry "$REG" \
-              --userconfig "$HOME/.npmrc.publish" \
-              --access public \
-              --provenance
           done
-          rm -f "$HOME/.npmrc.publish"
+          rm -f "$NPMRC"
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
