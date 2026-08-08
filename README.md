@@ -54,12 +54,13 @@ npm install --global @omg-dev/cli && omg computer setup
 > works; if you install with `npm` and see
 > `env: bun: No such file or directory`, install [Bun](https://bun.sh) and retry.
 
-Then open **http://omg.local:8766**.
+Then open **http://localhost:8766**.
 
 No omg.dev account is needed for this — `omg computer setup` provisions a purely
 local install. The CLI installs Bun, `tmux`, and `git`, fetches the latest
-release, writes `.env`, maps `omg.local` to `127.0.0.1`, and starts omg.dev as a
-user service bound to loopback. On a fresh Ubuntu/Debian box, add
+release, writes `.env`, and starts omg.dev as a user service bound to loopback.
+It touches nothing outside the install directory — no sudo prompt, no daemons
+you did not ask for. The extras below are opt-in. On a fresh Ubuntu/Debian box, add
 `OMG_INSTALL_SYSTEM_DEPS=1` so it may `apt-get` the base packages.
 
 The install lands in `~/omg` and runs as `omg.service` (launchd: `dev.omg.serve`).
@@ -71,23 +72,34 @@ machine. See [how installs stay small](#how-installs-stay-small).
 Next: [connect a coding agent](#connect-a-coding-agent) so you have something to
 run, then [reach it from your phone](#reach-it-from-your-phone).
 
-### Named local URL
+### Optional extras
 
-Setup maps `omg.local` to `127.0.0.1` in `/etc/hosts`, so the UI has a stable
-address without ever binding to a non-loopback interface. Both of these reach
-the same server:
+Everything that reaches outside the install directory is off by default and can
+be turned on later, once omg.dev is already running.
 
-```text
-http://omg.local:8766     # named
-http://localhost:8766     # direct
+**A named local URL.** Maps a hostname to `127.0.0.1` in `/etc/hosts`, so the UI
+has a memorable address without binding the server to any non-loopback
+interface:
+
+```bash
+OMG_LOCAL_HOSTNAME=omg.local omg setup   # needs sudo: /etc/hosts is root-owned
 ```
 
-Set `OMG_LOCAL_HOSTNAME` to choose a different name, or empty to skip the hosts
-file entirely. `omg uninstall` removes the entry.
+Then `http://omg.local:8766` and `http://localhost:8766` both reach it.
+`omg uninstall` removes the entry. Note that browsers only grant "secure
+context" to `https://`, `localhost`, and loopback IPs — so **install the PWA
+from `localhost:8766`**, not from `omg.local`, or the service worker will not
+register.
 
-Browsers only grant "secure context" to `https://`, `localhost`, and loopback
-IPs — so **install the PWA from `localhost:8766`**, not from `omg.local`, or the
-service worker will not register.
+**Remote access.** Installs Tailscale, joins your tailnet, and serves the UI
+over HTTPS on your tailnet only:
+
+```bash
+OMG_TAILSCALE_SERVE=1 TS_AUTHKEY=tskey-auth-... omg setup
+```
+
+That gives you a portless `https://` URL that works from your phone, with a
+publicly valid certificate and nothing exposed to your LAN or the internet.
 
 ### Run from source
 
@@ -300,7 +312,8 @@ Variables use the `OMG_` prefix. These are the ones most people touch:
 | --- | --- |
 | `OMG_HOST` | Bind address. Keep `127.0.0.1` unless you know the risk. |
 | `OMG_PORT` | Web UI and API port. Defaults to `8766`. |
-| `OMG_LOCAL_HOSTNAME` | Named local URL mapped to loopback. Defaults to `omg.local`; empty skips the hosts file. |
+| `OMG_LOCAL_HOSTNAME` | Named local URL mapped to loopback, e.g. `omg.local`. Empty (the default) skips the hosts file. |
+| `OMG_INSTALL_TAILSCALE` | Install and join Tailscale. Off by default; implied by `OMG_TAILSCALE_SERVE`. |
 | `OMG_REPOS_ROOT` | Directory scanned for git repos. |
 | `ANTHROPIC_API_KEY` | Optional API key for Claude / Pi flows. |
 | `OMG_<AGENT>_PATH` | Override a CLI's binary path (`OMG_CLAUDE_PATH`, `OMG_CODEX_PATH`, `OMG_OPENCODE_PATH`, `OMG_CURSOR_PATH`, `OMG_HERMES_PATH`, `OMG_PI_PATH`, `OMG_COPILOT_PATH`). |

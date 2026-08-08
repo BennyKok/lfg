@@ -48,11 +48,15 @@ else
 fi
 LFG_REPOS_ROOT="${LFG_REPOS_ROOT:-$HOME/repos}"
 LFG_PORT="${LFG_PORT:-8766}"
-# Named local URL. Maps a hostname to 127.0.0.1 in /etc/hosts so the UI has a
-# memorable address, without binding the server to any non-loopback interface -
-# an mDNS <host>.local name resolves to the LAN address instead, where nothing
-# is listening. Set to empty to skip the hosts file entirely.
-LFG_LOCAL_HOSTNAME="${LFG_LOCAL_HOSTNAME-omg.local}"
+# Named local URL, opt-in. Maps a hostname to 127.0.0.1 in /etc/hosts so the UI
+# has a memorable address, without binding the server to any non-loopback
+# interface - an mDNS <host>.local name resolves to the LAN address instead,
+# where nothing is listening.
+#
+# Off by default because /etc/hosts is root-owned, and a sudo password prompt
+# has no business interrupting a first install for a cosmetic URL. Turn it on
+# when you want it:  OMG_LOCAL_HOSTNAME=omg.local omg setup
+LFG_LOCAL_HOSTNAME="${LFG_LOCAL_HOSTNAME-}"
 LFG_HOSTS_FILE="${LFG_HOSTS_FILE:-/etc/hosts}"
 TS_AUTHKEY="${TS_AUTHKEY:-}"
 # Service identity. Same rule as the install directory: new boxes get `omg`,
@@ -107,8 +111,14 @@ LFG_INSTALL_COPILOT="${LFG_INSTALL_COPILOT:-0}"
 # safety classification, exploitable through prompt injection).
 LFG_COPILOT_VERSION="${LFG_COPILOT_VERSION:-1.0.71}"
 LFG_INSTALL_MCP="${LFG_INSTALL_MCP:-1}"
+# Installing the Tailscale daemon is a separate decision from exposing the UI
+# over it. Both are off unless asked for.
+LFG_INSTALL_TAILSCALE="${LFG_INSTALL_TAILSCALE:-0}"
 LFG_TAILSCALE_SERVE="${LFG_TAILSCALE_SERVE:-0}"
 LFG_TAILSCALE_SERVE_OVERWRITE="${LFG_TAILSCALE_SERVE_OVERWRITE:-0}"
+# Asking to be served over the tailnet is asking for the tailnet. Without this,
+# OMG_TAILSCALE_SERVE=1 on a box with no Tailscale would quietly do nothing.
+[ "$LFG_TAILSCALE_SERVE" = "1" ] && LFG_INSTALL_TAILSCALE=1
 LFG_TAILSCALE_HTTPS_PORT="${LFG_TAILSCALE_HTTPS_PORT:-443}"
 
 say()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
@@ -596,30 +606,37 @@ jq -n \
   '{channel:$channel, repoSlug:$repoSlug, release:$release, releaseAsset:$releaseAsset, installedAt:$installedAt}' \
   > "$LFG_DIR/data/install.json"
 
-# ---- 8. Tailscale ----
-if ! command -v tailscale >/dev/null 2>&1; then
-  if [ "$OS_NAME" = "Linux" ]; then
-    say "Installing Tailscale..."
-    curl -fsSL https://tailscale.com/install.sh | sh
-  else
-    warn "Tailscale CLI not found. Install Tailscale for macOS to enable tailnet access, then re-run setup."
-  fi
-fi
-if command -v tailscale >/dev/null 2>&1 && ! tailscale status >/dev/null 2>&1; then
-  say "Joining your tailnet..."
-  if [ -z "$TS_AUTHKEY" ]; then
-    if [ -t 0 ]; then
-      read -rsp "Tailscale auth key (tskey-auth-...): " TS_AUTHKEY; echo
-    elif [ "$OS_NAME" = "Darwin" ]; then
-      warn "No tailnet session and no TS_AUTHKEY; skipping Tailscale setup on macOS."
+# ---- 8. Tailscale (opt-in) ----
+# Remote access is a choice, not part of getting omg.dev running. Setup used to
+# install the Tailscale daemon on every Linux box whether or not the user wanted
+# remote access, then interactively demand an auth key - and with no TTY, which
+# is exactly what `curl ... | bash` gives you, it called die(). A fresh box got a
+# system daemon it never asked for and a failed install, for an optional feature.
+#
+# Nothing here installs, joins, or fails any more unless explicitly requested.
+# Enable it afterwards, once the thing is actually running:
+#   OMG_INSTALL_TAILSCALE=1 TS_AUTHKEY=tskey-auth-... omg setup
+if [ "$LFG_INSTALL_TAILSCALE" = "1" ]; then
+  if ! command -v tailscale >/dev/null 2>&1; then
+    if [ "$OS_NAME" = "Linux" ]; then
+      say "Installing Tailscale..."
+      curl -fsSL https://tailscale.com/install.sh | sh || warn "Tailscale install failed; remote access stays unavailable."
     else
-      die "No tailnet session and no TTY. Re-run with TS_AUTHKEY=tskey-auth-... prefixed."
+      warn "Tailscale CLI not found. Install Tailscale for macOS, then re-run setup."
     fi
   fi
-  if [ -n "$TS_AUTHKEY" ]; then
-    tailscale_sudo up --authkey "$TS_AUTHKEY" --ssh
-    unset TS_AUTHKEY
+  if command -v tailscale >/dev/null 2>&1 && ! tailscale status >/dev/null 2>&1; then
+    if [ -n "$TS_AUTHKEY" ]; then
+      say "Joining your tailnet..."
+      tailscale_sudo up --authkey "$TS_AUTHKEY" --ssh || warn "Could not join the tailnet."
+      unset TS_AUTHKEY
+    else
+      # Never block an install on a secret the user has not been asked for yet.
+      warn "Tailscale is installed but not logged in. Run: sudo tailscale up --ssh"
+    fi
   fi
+elif command -v tailscale >/dev/null 2>&1 && tailscale status >/dev/null 2>&1; then
+  say "Tailscale is already connected; leaving it as it is."
 fi
 
 install_linux_service() {
@@ -786,9 +803,16 @@ else
 fi
 if [ "$TAILSCALE_SERVE_CONFIGURED" = "1" ]; then
   echo "    Tailscale cleanup:    sudo tailscale serve --https=$LFG_TAILSCALE_HTTPS_PORT off"
-else
-  echo "    Tailscale setup:      OMG_TAILSCALE_SERVE=1 omg setup"
 fi
+# Everything that touches the system beyond this install directory is opt-in and
+# reversible. List it here rather than doing it: a first install should not be
+# the moment somebody is asked for a sudo password or a tailnet key.
+echo
+echo "  Optional, enable whenever you want:"
+[ "$LOCAL_HOSTNAME_READY" = "1" ] \
+  || echo "    Named local URL:      OMG_LOCAL_HOSTNAME=omg.local omg setup   (writes /etc/hosts, needs sudo)"
+[ "$TAILSCALE_SERVE_CONFIGURED" = "1" ] \
+  || echo "    Reach it remotely:    OMG_TAILSCALE_SERVE=1 omg setup           (installs + joins Tailscale)"
 echo
 cat <<NEXT
 
