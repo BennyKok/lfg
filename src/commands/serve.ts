@@ -3590,7 +3590,7 @@ a{color:#60a5fa}
           if (install.channel !== "source" && install.channel !== "release") {
             return err(400, "UI updates are only available for Git and release installs.");
           }
-          if (selfUpdateRunning) return err(409, "An LFG update is already running.");
+          if (selfUpdateRunning) return err(409, "An omg.dev update is already running.");
           selfUpdateRunning = true;
           try {
             const result = install.channel === "source"

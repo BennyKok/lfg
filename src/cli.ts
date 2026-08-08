@@ -5,11 +5,12 @@ Usage:
   omg serve                        Run the web UI + control server (default :8766)
   omg agents [list|run|show]       Run / inspect insight agents (see 'agents help')
   omg subagent [create|models]      Spawn a managed worker session on any harness
-  omg mcp                          Run the OMG MCP stdio server
+  omg mcp                          Run the omg.dev MCP stdio server
   omg whatsapp [run|sessions]      Run the optional WhatsApp control sidecar
   omg connect <code>               Pair this box to a remote-access relay (EXPERIMENTAL)
-  omg setup                        Provision this box (Bun, tmux, Tailscale, service)
-  omg uninstall [--purge --yes]    Remove OMG (preserves sessions/config by default)
+  omg setup                        Provision this box (Bun, tmux, service)
+  omg update [--check]             Update to the latest release and restart
+  omg uninstall [--purge --yes]    Remove omg.dev (preserves sessions/config by default)
 
 Env (read from process env / .env, see .env.example):
   OMG_PORT, OMG_HOST, OMG_REPOS_ROOT  (the older LFG_* spellings still work)
@@ -54,6 +55,10 @@ async function main() {
     case "setup": {
       const { cmdSetup } = await import("./commands/setup.ts");
       return await cmdSetup(rest);
+    }
+    case "update": {
+      const { cmdUpdate } = await import("./commands/update.ts");
+      return await cmdUpdate(rest);
     }
     case "uninstall": {
       const { cmdUninstall } = await import("./commands/uninstall.ts");

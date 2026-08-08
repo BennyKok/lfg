@@ -224,7 +224,7 @@ export async function releaseUpdateStatus(
     return {
       channel: "release",
       state: "blocked",
-      message: "Could not determine the installed LFG version.",
+      message: "Could not determine the installed omg.dev version.",
       restartSupported: restartCommand() !== null,
     };
   }
@@ -248,12 +248,12 @@ export async function releaseUpdateStatus(
       restartSupported: restartCommand() !== null,
     };
     if (cleanVersion(currentVersion) === latestVersion) {
-      return { ...base, state: "up-to-date", message: `LFG ${currentVersion} is up to date.` };
+      return { ...base, state: "up-to-date", message: `omg.dev ${currentVersion} is up to date.` };
     }
     return {
       ...base,
       state: "available",
-      message: `LFG ${latestVersion} is available (installed ${currentVersion}).`,
+      message: `omg.dev ${latestVersion} is available (installed ${currentVersion}).`,
     };
   } catch (e) {
     return {
@@ -346,14 +346,14 @@ export async function sourceUpdateStatus(root: string, fetch = true): Promise<So
   if (!inside.ok || inside.stdout !== "true") return blocked("This install is not a Git checkout.");
 
   const branch = await run(["git", "branch", "--show-current"], root);
-  if (!branch.ok || !branch.stdout) return blocked("The LFG checkout has a detached HEAD.");
+  if (!branch.ok || !branch.stdout) return blocked("The omg.dev checkout has a detached HEAD.");
   if (branch.stdout !== "main") {
-    return blocked(`LFG is on branch ${branch.stdout}; switch to main before updating.`);
+    return blocked(`omg.dev is on branch ${branch.stdout}; switch to main before updating.`);
   }
 
   const dirty = await run(["git", "status", "--porcelain"], root);
-  if (!dirty.ok) return blocked(dirty.stderr || "Could not inspect the LFG checkout.");
-  if (dirty.stdout) return blocked("The LFG checkout has local changes. Commit or stash them first.");
+  if (!dirty.ok) return blocked(dirty.stderr || "Could not inspect the omg.dev checkout.");
+  if (dirty.stdout) return blocked("The omg.dev checkout has local changes. Commit or stash them first.");
 
   if (fetch) {
     const fetched = await run(["git", "fetch", "--quiet", "origin", "main"], root);
@@ -371,7 +371,7 @@ export async function sourceUpdateStatus(root: string, fetch = true): Promise<So
     restartSupported: restartCommand() !== null,
   };
   if (head.stdout === latest.stdout) {
-    return { ...base, state: "up-to-date", message: `LFG is up to date (${short(head.stdout)}).` };
+    return { ...base, state: "up-to-date", message: `omg.dev is up to date (${short(head.stdout)}).` };
   }
 
   const behind = await run(["git", "merge-base", "--is-ancestor", "HEAD", "origin/main"], root);
