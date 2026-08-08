@@ -2,6 +2,25 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - omg.local, with no password prompt (v0.1.313)
+
+- **The web UI answers on `http://omg.local:8766` on macOS.** No sudo, no
+  `/etc/hosts` edit, no DNS record, and it works offline. omg.dev advertises the
+  name over mDNS while the server is running, pointing it at `127.0.0.1` — the
+  server stays bound to loopback exactly as before. Stopping the server stops
+  the name resolving, which leaves nothing behind to clean up. Set
+  `OMG_MDNS_HOSTNAME` to pick a different name, or empty to turn it off.
+- macOS only for now. Doing this on Linux would mean installing avahi-daemon,
+  and a first install should not drag in a system daemon for a nicer URL —
+  Linux keeps the opt-in `/etc/hosts` entry.
+- **Setup prefers a DNS name that already points at loopback** over editing
+  `/etc/hosts`, when one exists, and only trusts it when *every* address it
+  resolves to is loopback.
+- Note `.local` is shared with your network, and browsers only treat
+  `localhost` and loopback IPs as secure origins — **install the PWA from
+  `localhost:8766`**, not from `omg.local`, or the service worker will not
+  register.
+
 ## August 8, 2026 - Queue a message without cutting the turn off (v0.1.312)
 
 - **Cmd/Ctrl+Enter queues a message instead of interrupting.** Holding the send
