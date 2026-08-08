@@ -254,11 +254,49 @@ tailscale_serve_endpoint_target() {
   ' 2>/dev/null
 }
 
-# ---- named local URL (/etc/hosts) ----
+# ---- named local URL ----
+# Two ways to give the UI a memorable address, preferred in this order:
+#
+#   1. A public DNS name whose A record points at 127.0.0.1. Costs the user
+#      nothing: no sudo, no hosts file, no cleanup on uninstall, and it works
+#      identically on macOS and Linux. This is how Drizzle Studio and friends do
+#      it. Requires one A record on a domain we control, so it is checked rather
+#      than assumed - and only trusted when it really resolves to loopback,
+#      since a name that resolves anywhere else would point the UI at a machine
+#      that is not this one.
+#   2. An /etc/hosts entry, which works offline and for any name, but is
+#      root-owned and therefore needs sudo. Opt-in via OMG_LOCAL_HOSTNAME.
+LFG_DNS_HOSTNAME="${LFG_DNS_HOSTNAME-local.omg.dev}"
+
 # Keep these markers in sync with src/commands/uninstall.ts, which removes the
 # same block. They delimit the only lines setup owns in the hosts file.
 HOSTS_BEGIN="# >>> omg local hostname >>>"
 HOSTS_END="# <<< omg local hostname <<<"
+
+resolves_to_loopback() { # every A record for $1 is 127.x, and there is at least one
+  local name="$1" addrs=""
+  if command -v dig >/dev/null 2>&1; then
+    addrs="$(dig +short +time=2 +tries=1 A "$name" 2>/dev/null | grep -E '^[0-9.]+$' || true)"
+  elif command -v getent >/dev/null 2>&1; then
+    addrs="$(getent ahostsv4 "$name" 2>/dev/null | awk '{print $1}' | sort -u || true)"
+  elif command -v dscacheutil >/dev/null 2>&1; then
+    addrs="$(dscacheutil -q host -a name "$name" 2>/dev/null | awk '/^ip_address:/ {print $2}' || true)"
+  else
+    return 1
+  fi
+  [ -n "$addrs" ] || return 1
+  local addr
+  while IFS= read -r addr; do
+    [ -n "$addr" ] || continue
+    case "$addr" in
+      127.*) ;;
+      *) return 1 ;;
+    esac
+  done <<EOF
+$addrs
+EOF
+  return 0
+}
 
 hosts_entry_present() { # already mapped to loopback, by us or by hand?
   local name="$1"
@@ -271,7 +309,26 @@ hosts_entry_present() { # already mapped to loopback, by us or by hand?
 
 LOCAL_HOSTNAME_READY=0
 ensure_local_hostname() {
+  # A DNS name that already points at loopback needs nothing installed, so it
+  # wins over the hosts file whenever it is available - no sudo, nothing for
+  # uninstall to clean up. An explicit OMG_LOCAL_HOSTNAME still overrides it,
+  # because someone naming a host by hand means it.
+  if [ -z "$LFG_LOCAL_HOSTNAME" ] && [ -n "$LFG_DNS_HOSTNAME" ]; then
+    if resolves_to_loopback "$LFG_DNS_HOSTNAME"; then
+      LFG_LOCAL_HOSTNAME="$LFG_DNS_HOSTNAME"
+      LOCAL_HOSTNAME_READY=1
+      say "Named local URL: ${LFG_DNS_HOSTNAME} (public DNS, already points at 127.0.0.1)."
+      return 0
+    fi
+  fi
   [ -n "$LFG_LOCAL_HOSTNAME" ] || return 0
+  # An explicit name that is already a loopback DNS record needs no hosts entry
+  # either.
+  if resolves_to_loopback "$LFG_LOCAL_HOSTNAME"; then
+    LOCAL_HOSTNAME_READY=1
+    say "Named local URL: ${LFG_LOCAL_HOSTNAME} (already resolves to 127.0.0.1)."
+    return 0
+  fi
   # A pre-existing mapping counts as ready. Rewriting a line we did not add
   # would take ownership of it, and uninstall would then delete someone else's
   # entry.

@@ -77,15 +77,21 @@ run, then [reach it from your phone](#reach-it-from-your-phone).
 Everything that reaches outside the install directory is off by default and can
 be turned on later, once omg.dev is already running.
 
-**A named local URL.** Maps a hostname to `127.0.0.1` in `/etc/hosts`, so the UI
-has a memorable address without binding the server to any non-loopback
-interface:
+**A named local URL.** Gives the UI a memorable address without binding the
+server to any non-loopback interface. Setup takes the cheapest route available:
+
+- If a public DNS name already points at `127.0.0.1` — `local.omg.dev` — it is
+  used as-is. No sudo, no hosts file, nothing for uninstall to undo, and it
+  behaves the same on macOS and Linux. Only trusted when *every* address it
+  resolves to is loopback.
+- Otherwise, opt in to an `/etc/hosts` entry, which works offline and for any
+  name you like, but is root-owned:
 
 ```bash
 OMG_LOCAL_HOSTNAME=omg.local omg setup   # needs sudo: /etc/hosts is root-owned
 ```
 
-Then `http://omg.local:8766` and `http://localhost:8766` both reach it.
+Either way `http://localhost:8766` keeps working.
 `omg uninstall` removes the entry. Note that browsers only grant "secure
 context" to `https://`, `localhost`, and loopback IPs — so **install the PWA
 from `localhost:8766`**, not from `omg.local`, or the service worker will not
