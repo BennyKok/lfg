@@ -2,6 +2,16 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - The @omg-dev packages actually reach npm (v0.1.308)
+
+- **`@omg-dev/protocol`, `@omg-dev/client`, `@omg-dev/react` and `@omg-dev/app`
+  are on npm as of this release.** The v0.1.306 notes announced the move, but no
+  release had managed to publish: `npm publish` was handed the tarball as
+  `dist/omg-dev-protocol-….tgz`, which npm reads as a GitHub `owner/repo`
+  shorthand rather than a file, so it tried to clone it over SSH and failed on a
+  public key. Nothing was ever half-published — the packages publish in
+  dependency order, so the failure hit the first one and stopped there.
+
 ## August 8, 2026 - Browsing files works on a phone (v0.1.307)
 
 - **The file tree gets the whole screen, and so does the file.** Files opened
