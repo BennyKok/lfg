@@ -1,6 +1,14 @@
 import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { PATHS, localServeHost } from "../config.ts";
+import {
+  BOX_CAPS,
+  CAP_BINARY,
+  CAP_HTTP_STREAM,
+  decodeBinaryFrame,
+  encodeBinaryFrame,
+  negotiateCaps,
+} from "../relay-frames.ts";
 
 // lfg connect — generic remote-access relay client.
 //
@@ -19,11 +27,31 @@ import { PATHS, localServeHost } from "../config.ts";
 // perimeter, so this client authenticates to the RELAY (pairing code once,
 // then a persisted bearer token) — it does not change `serve` itself.
 //
-// Wire protocol (JSON frames over one WebSocket to LFG_RELAY_URL):
-//   client → relay   {type:"pair", code, computerUrl?}       (first connect only)
-//   relay  → client   {type:"paired", token, boxId}           (persist token; reconnect with it instead of a code)
-//   client → relay   {type:"hello", token, computerUrl?}      (subsequent connects)
-//   relay  → client   {type:"hello-ok"}                        (optional; unknown frame types are ignored anyway)
+// Wire protocol (frames over one WebSocket to LFG_RELAY_URL):
+//   client → relay   {type:"pair", code, computerUrl?, caps}  (first connect only)
+//   relay  → client   {type:"paired", token, boxId, caps?}     (persist token; reconnect with it instead of a code)
+//   client → relay   {type:"hello", token, computerUrl?, caps} (subsequent connects)
+//   relay  → client   {type:"hello-ok", caps?}                 (optional; unknown frame types are ignored anyway)
+//
+// CAPABILITY NEGOTIATION. `caps` is this build's wire features (see
+// src/relay-frames.ts); the relay answers with the subset it also speaks, and
+// that intersection governs the connection. Both omissions are meaningful and
+// both must keep working: a relay predating negotiation answers with no `caps`
+// and gets the JSON-only protocol below, and a box predating it advertises
+// none, so a new relay serves it the same way. Never make a cap the default.
+//
+//   binary       payload frames are [4B BE header length][JSON header][bytes]
+//                instead of base64 inside the JSON. Applies to ws-msg,
+//                stream-data and http-body.
+//   http-stream  a response comes back as http-head → http-body* → http-end
+//                rather than one buffered http-response:
+//                  client → relay  {type:"http-head", id, status, headers}
+//                  client → relay  {type:"http-body", id} + raw bytes
+//                  client → relay  {type:"http-end",  id, error?}
+//                Without it, a response body has to fit in ONE frame after a
+//                4/3 base64 inflation. That is not a soft limit — the relay's
+//                WebSocket server closes the connection on an oversized frame,
+//                so a single large artifact took the whole box offline.
 //   relay  → client   {type:"error", message}                  (pairing/hello rejected — relay closes right after)
 //   relay  → client   {type:"http", id, method, path, headers, bodyB64?}
 //   client → relay   {type:"http-response", id, status, headers, bodyB64?}
@@ -307,6 +335,10 @@ export function openLocalWsTunnel(
   tunnels: WsTunnels,
   send: (payload: unknown) => void,
   connect: (url: string) => WebSocket = (url) => new WebSocket(url),
+  /** Payload-carrying send. Defaults to base64-in-JSON so a caller that hasn't
+   *  negotiated binary framing (and every existing test) keeps working. */
+  sendPayload: (header: Record<string, unknown>, payload: Uint8Array) => void = (header, payload) =>
+    send({ ...header, dataB64: Buffer.from(payload).toString("base64") }),
 ): void {
   let local: WebSocket;
   try {
@@ -322,10 +354,10 @@ export function openLocalWsTunnel(
   local.addEventListener("message", (event: MessageEvent) => {
     const data = event.data;
     const binary = typeof data !== "string";
-    const buf = binary
-      ? Buffer.from(data as ArrayBuffer)
-      : Buffer.from(String(data), "utf8");
-    send({ type: "ws-msg", id: frame.id, dataB64: buf.toString("base64"), binary });
+    const bytes = binary
+      ? new Uint8Array(data as ArrayBuffer)
+      : new TextEncoder().encode(String(data));
+    sendPayload({ type: "ws-msg", id: frame.id, binary }, bytes);
   });
   local.addEventListener("close", (event: CloseEvent) => {
     tunnels.delete(frame.id);
@@ -345,6 +377,9 @@ export function openLocalWsTunnel(
 export function applyWsTunnelFrame(
   frame: { type: string; id: string; [k: string]: unknown },
   tunnels: WsTunnels,
+  /** Present when the frame arrived as a binary frame — already bytes, so
+   *  `dataB64` is absent and must not be consulted. */
+  payload?: Uint8Array,
 ): void {
   const local = tunnels.get(frame.id);
   if (!local) return;
@@ -357,10 +392,11 @@ export function applyWsTunnelFrame(
     }
     return;
   }
-  const dataB64 = typeof frame.dataB64 === "string" ? frame.dataB64 : "";
-  const buf = Buffer.from(dataB64, "base64");
+  const bytes =
+    payload ??
+    Buffer.from(typeof frame.dataB64 === "string" ? frame.dataB64 : "", "base64");
   try {
-    local.send(frame.binary ? buf : buf.toString("utf8"));
+    local.send(frame.binary ? bytes : new TextDecoder().decode(bytes));
   } catch {
     /* socket raced closed — the close frame will clean up */
   }
@@ -413,6 +449,9 @@ export function openLocalStreamTunnel(
   tunnels: StreamTunnels,
   send: (payload: unknown) => void,
   fetchImpl: typeof fetch = fetch,
+  /** Payload-carrying send — see openLocalWsTunnel. */
+  sendPayload: (header: Record<string, unknown>, payload: Uint8Array) => void = (header, payload) =>
+    send({ ...header, dataB64: Buffer.from(payload).toString("base64") }),
 ): void {
   const controller = new AbortController();
   tunnels.set(frame.id, controller);
@@ -439,7 +478,7 @@ export function openLocalStreamTunnel(
         const { done, value } = await reader.read();
         if (done) break;
         if (value && value.length) {
-          send({ type: "stream-data", id: frame.id, dataB64: Buffer.from(value).toString("base64") });
+          sendPayload({ type: "stream-data", id: frame.id }, value);
         }
       }
       tunnels.delete(frame.id);
@@ -462,6 +501,77 @@ export function applyStreamCloseFrame(frame: { id: string }, tunnels: StreamTunn
     controller.abort();
   } catch {
     /* already aborted */
+  }
+}
+
+/**
+ * Proxies one relayed HTTP request onto local serve and STREAMS the reply back
+ * as bounded binary frames: one `http-head`, then an `http-body` per chunk as
+ * it arrives, then `http-end`.
+ *
+ * This is the same job `forwardToLocalServe` does, minus its two costs. That
+ * one reads the entire body into memory and base64's it into a single JSON
+ * frame — a 4/3 inflation on every byte, and a frame the relay may simply
+ * refuse. An oversized frame is not a failed request: the relay's WebSocket
+ * server closes the connection, which took the whole box offline whenever
+ * someone opened a large artifact. Here no chunk is bigger than what the local
+ * response hands over, so body size and frame size are unrelated.
+ *
+ * Only used when the relay advertised CAP_HTTP_STREAM; otherwise the caller
+ * falls back to the buffered pair, which every relay understands.
+ */
+export async function streamToLocalServe(
+  frame: HttpFrame,
+  sendBinary: (header: Record<string, unknown>, payload: Uint8Array) => void,
+  sendJson: (payload: unknown) => void,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetchImpl(`http://${LOCAL_HOST}:${LOCAL_PORT}${frame.path}`, {
+      method: frame.method,
+      headers: frame.headers,
+      body: frame.bodyB64 ? Buffer.from(frame.bodyB64, "base64") : undefined,
+    });
+  } catch (error) {
+    sendJson({
+      type: "http-head",
+      id: frame.id,
+      status: 502,
+      headers: { "content-type": "text/plain" },
+    });
+    sendBinary(
+      { type: "http-body", id: frame.id },
+      new TextEncoder().encode(`lfg connect: local serve unreachable — ${String(error)}`),
+    );
+    sendJson({ type: "http-end", id: frame.id });
+    return;
+  }
+
+  sendJson({
+    type: "http-head",
+    id: frame.id,
+    status: response.status,
+    headers: Object.fromEntries(response.headers.entries()),
+  });
+
+  const body = response.body;
+  if (!body) {
+    sendJson({ type: "http-end", id: frame.id });
+    return;
+  }
+  const reader = body.getReader();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value && value.length) sendBinary({ type: "http-body", id: frame.id }, value);
+    }
+    sendJson({ type: "http-end", id: frame.id });
+  } catch (error) {
+    // The head is already gone, so the relay must be told this body is short
+    // rather than being left to reassemble a truncated response as a success.
+    sendJson({ type: "http-end", id: frame.id, error: String(error) });
   }
 }
 
@@ -991,8 +1101,12 @@ function connectSocket(
 ): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(relayUrl);
+    ws.binaryType = "arraybuffer";
     ws.addEventListener("open", () => {
-      ws.send(JSON.stringify(hello));
+      // Advertise what this build speaks. A relay that predates capability
+      // negotiation ignores the extra field and answers without one, which is
+      // exactly the "no caps" answer that keeps us on the JSON-only path.
+      ws.send(JSON.stringify({ ...hello, caps: BOX_CAPS }));
       resolve(ws);
     });
     ws.addEventListener("error", (event) => reject(new Error(`relay connection failed: ${String(event)}`)));
@@ -1102,9 +1216,30 @@ async function runConnectLoop(explicitComputerUrl?: string): Promise<void> {
       // relay socket closes, so a reconnect never resurrects a stale tunnel.
       const wsTunnels: WsTunnels = new Map();
       const streamTunnels: StreamTunnels = new Map();
+      // Filled in from the relay's hello-ok/paired answer. Empty until then,
+      // and empty forever against a relay that predates negotiation — so every
+      // send below has to keep working with no caps at all.
+      const caps = new Set<string>();
       const sendFrame = (payload: unknown) => {
         try {
           ws.send(JSON.stringify(payload));
+        } catch {
+          /* relay socket closing — the close handler tears the tunnels down */
+        }
+      };
+      /** Payload-carrying send: raw bytes when the relay understands them,
+       *  base64-in-JSON when it does not. */
+      const sendPayload = (
+        header: Record<string, unknown>,
+        payload: Uint8Array,
+        legacyField = "dataB64",
+      ) => {
+        try {
+          ws.send(
+            caps.has(CAP_BINARY)
+              ? encodeBinaryFrame(header, payload)
+              : JSON.stringify({ ...header, [legacyField]: Buffer.from(payload).toString("base64") }),
+          );
         } catch {
           /* relay socket closing — the close handler tears the tunnels down */
         }
@@ -1113,9 +1248,26 @@ async function runConnectLoop(explicitComputerUrl?: string): Promise<void> {
         ws.addEventListener("message", (event) => {
           void (async () => {
             let frame: unknown;
-            try {
-              frame = JSON.parse(String(event.data));
-            } catch {
+            let payload: Uint8Array | undefined;
+            const data = event.data;
+            if (typeof data !== "string") {
+              const bytes = data instanceof ArrayBuffer ? new Uint8Array(data) : new Uint8Array(data as ArrayBufferLike);
+              const decoded = decodeBinaryFrame(bytes);
+              if (!decoded) return;
+              frame = decoded.header;
+              payload = decoded.payload;
+            } else {
+              try {
+                frame = JSON.parse(data);
+              } catch {
+                return;
+              }
+            }
+            // The relay's answer to hello/pair carries the negotiated set.
+            const frameType = (frame as { type?: unknown })?.type;
+            if (frameType === "hello-ok" || frameType === "paired") {
+              for (const cap of negotiateCaps((frame as { caps?: unknown }).caps)) caps.add(cap);
+              if (caps.size) console.log(`lfg connect: negotiated ${[...caps].join(", ")}`);
               return;
             }
             if (frame && typeof frame === "object" && (frame as { type?: unknown }).type === "ping") {
@@ -1129,22 +1281,28 @@ async function runConnectLoop(explicitComputerUrl?: string): Promise<void> {
               return;
             }
             if (isWsOpenFrame(frame)) {
-              openLocalWsTunnel(frame, wsTunnels, sendFrame);
+              openLocalWsTunnel(frame, wsTunnels, sendFrame, undefined, sendPayload);
               return;
             }
             if (isWsTunnelFrame(frame)) {
-              applyWsTunnelFrame(frame, wsTunnels);
+              applyWsTunnelFrame(frame, wsTunnels, payload);
               return;
             }
             if (isStreamOpenFrame(frame)) {
-              openLocalStreamTunnel(frame, streamTunnels, sendFrame);
+              openLocalStreamTunnel(frame, streamTunnels, sendFrame, undefined, sendPayload);
               return;
             }
             if (isStreamCloseFrame(frame)) {
               applyStreamCloseFrame(frame, streamTunnels);
               return;
             }
-            if (isHttpFrame(frame)) ws.send(JSON.stringify(await forwardToLocalServe(frame)));
+            if (isHttpFrame(frame)) {
+              if (caps.has(CAP_HTTP_STREAM)) {
+                await streamToLocalServe(frame, sendPayload, sendFrame);
+              } else {
+                ws.send(JSON.stringify(await forwardToLocalServe(frame)));
+              }
+            }
           })();
         });
         ws.addEventListener("close", () => resolveClosed());

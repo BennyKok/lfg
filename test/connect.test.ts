@@ -10,8 +10,11 @@ import {
   isReportableTransition,
   isTopLevelSession,
   normalizeComputerUrl,
+  streamToLocalServe,
+  applyWsTunnelFrame,
   type SessionLite,
 } from "../src/commands/connect.ts";
+import { decodeBinaryFrame, encodeBinaryFrame, negotiateCaps } from "../src/relay-frames.ts";
 
 describe("normalizeComputerUrl", () => {
   test("canonicalizes the explicit outer URL advertised during connect", () => {
@@ -501,5 +504,199 @@ describe("diffAskEvents", () => {
     expect(events[0]!.options).toEqual(["a", "b", "c", "d"]);
     expect(events[0]!.agent).toBeNull();
     expect([...seen]).toEqual(["ok"]);
+  });
+});
+
+// ---- Binary framing + streamed http responses ----
+//
+// The JSON-only protocol had to base64 every payload byte, which cost a 4/3
+// inflation and — because a response had to fit in ONE frame — let a large
+// artifact exceed the relay's frame ceiling. An oversized frame does not fail
+// the request; the relay's WebSocket server closes the box's connection. These
+// pin the wire format, the negotiation that keeps old peers working, and the
+// streaming path that makes body size independent of frame size.
+
+describe("binary frame codec", () => {
+  test("round-trips a header and raw payload", () => {
+    const payload = new Uint8Array([0, 1, 2, 253, 254, 255]);
+    const decoded = decodeBinaryFrame(encodeBinaryFrame({ type: "http-body", id: "r1" }, payload));
+    expect(decoded?.header).toEqual({ type: "http-body", id: "r1" });
+    expect(Array.from(decoded!.payload)).toEqual(Array.from(payload));
+  });
+
+  test("survives a payload that is not valid UTF-8", () => {
+    // The whole point of binary framing: these bytes cannot survive a string
+    // round trip, which is why the JSON path had to base64 them.
+    const payload = new Uint8Array([0xff, 0xfe, 0x00, 0x80]);
+    const decoded = decodeBinaryFrame(encodeBinaryFrame({ type: "ws-msg", id: "t", binary: true }, payload));
+    expect(Array.from(decoded!.payload)).toEqual([0xff, 0xfe, 0x00, 0x80]);
+  });
+
+  test("handles an empty payload and a large one", () => {
+    expect(decodeBinaryFrame(encodeBinaryFrame({ type: "x" }, new Uint8Array(0)))?.payload.length).toBe(0);
+    const big = new Uint8Array(1_000_000).fill(9);
+    const decoded = decodeBinaryFrame(encodeBinaryFrame({ type: "x" }, big));
+    expect(decoded?.payload.length).toBe(1_000_000);
+    expect(decoded?.payload[999_999]).toBe(9);
+  });
+
+  test("rejects junk rather than throwing, so a bad frame can fall through to JSON", () => {
+    expect(decodeBinaryFrame(new Uint8Array([1, 2]))).toBeNull();
+    expect(decodeBinaryFrame(new Uint8Array([0, 0, 0, 0]))).toBeNull();
+    // Header length longer than the frame.
+    const truncated = new Uint8Array(8);
+    new DataView(truncated.buffer).setUint32(0, 999, false);
+    expect(decodeBinaryFrame(truncated)).toBeNull();
+    // Well-formed length, unparseable JSON.
+    const badJson = new Uint8Array(4 + 3);
+    new DataView(badJson.buffer).setUint32(0, 3, false);
+    badJson.set(new TextEncoder().encode("{{{"), 4);
+    expect(decodeBinaryFrame(badJson)).toBeNull();
+  });
+
+  test("a text JSON frame is never mistaken for a binary one", () => {
+    const json = new TextEncoder().encode(JSON.stringify({ type: "ping" }));
+    expect(decodeBinaryFrame(json)).toBeNull();
+  });
+});
+
+describe("capability negotiation", () => {
+  test("keeps only what both ends speak", () => {
+    expect(negotiateCaps(["binary", "http-stream"])).toEqual(["binary", "http-stream"]);
+    expect(negotiateCaps(["binary"])).toEqual(["binary"]);
+    expect(negotiateCaps(["telepathy"])).toEqual([]);
+  });
+
+  test("a peer that predates negotiation yields no caps, not a crash", () => {
+    // This is the backward-compatibility contract in one line: absent `caps`
+    // must mean "legacy JSON only", never "assume the new format".
+    expect(negotiateCaps(undefined)).toEqual([]);
+    expect(negotiateCaps(null)).toEqual([]);
+    expect(negotiateCaps("binary")).toEqual([]);
+    expect(negotiateCaps([1, 2, 3])).toEqual([]);
+  });
+});
+
+describe("streamToLocalServe", () => {
+  /** Collects what the box would put on the wire. */
+  function recorder() {
+    const json: Array<Record<string, unknown>> = [];
+    const binary: Array<{ header: Record<string, unknown>; payload: Uint8Array }> = [];
+    return {
+      json,
+      binary,
+      sendJson: (p: unknown) => json.push(p as Record<string, unknown>),
+      sendBinary: (header: Record<string, unknown>, payload: Uint8Array) =>
+        binary.push({ header, payload: new Uint8Array(payload) }),
+      body: () => {
+        const total = binary.reduce((n, b) => n + b.payload.length, 0);
+        const out = new Uint8Array(total);
+        let at = 0;
+        for (const b of binary) { out.set(b.payload, at); at += b.payload.length; }
+        return out;
+      },
+    };
+  }
+
+  test("streams a body larger than any single frame, in order and intact", async () => {
+    // 26 MB is the artifact that took the box offline on the buffered path.
+    const total = 27_508_662;
+    const chunkSize = 64 * 1024;
+    let sent = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent >= total) { controller.close(); return; }
+        const size = Math.min(chunkSize, total - sent);
+        const chunk = new Uint8Array(size);
+        // A recognisable, position-dependent pattern so reordering or a
+        // dropped chunk cannot pass.
+        for (let i = 0; i < size; i++) chunk[i] = (sent + i) % 251;
+        sent += size;
+        controller.enqueue(chunk);
+      },
+    });
+    const rec = recorder();
+    await streamToLocalServe(
+      { type: "http", id: "req-big", method: "GET", path: "/api/artifacts/vid" },
+      rec.sendBinary,
+      rec.sendJson,
+      (async () => new Response(stream, { status: 200, headers: { "content-type": "video/mp4" } })) as unknown as typeof fetch,
+    );
+
+    expect(rec.json[0]).toMatchObject({ type: "http-head", id: "req-big", status: 200 });
+    expect(rec.json.at(-1)).toEqual({ type: "http-end", id: "req-big" });
+    expect(rec.binary.length).toBeGreaterThan(1);
+    // No frame carries anything close to a whole body.
+    for (const frame of rec.binary) {
+      expect(frame.header).toEqual({ type: "http-body", id: "req-big" });
+      expect(frame.payload.length).toBeLessThanOrEqual(chunkSize);
+    }
+    const body = rec.body();
+    expect(body.length).toBe(total);
+    expect(body[0]).toBe(0);
+    expect(body[total - 1]).toBe((total - 1) % 251);
+    expect(body[12_345_678]).toBe(12_345_678 % 251);
+  });
+
+  test("reports the status and headers before any body arrives", async () => {
+    const rec = recorder();
+    await streamToLocalServe(
+      { type: "http", id: "r", method: "GET", path: "/nope" },
+      rec.sendBinary,
+      rec.sendJson,
+      (async () => new Response("missing", { status: 404, headers: { "content-type": "text/plain" } })) as unknown as typeof fetch,
+    );
+    expect(rec.json[0]).toMatchObject({ type: "http-head", id: "r", status: 404 });
+    expect(new TextDecoder().decode(rec.body())).toBe("missing");
+  });
+
+  test("an unreachable local serve becomes a 502 head, not a dropped request", async () => {
+    const rec = recorder();
+    await streamToLocalServe(
+      { type: "http", id: "r", method: "GET", path: "/x" },
+      rec.sendBinary,
+      rec.sendJson,
+      (async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch,
+    );
+    expect(rec.json[0]).toMatchObject({ type: "http-head", id: "r", status: 502 });
+    expect(new TextDecoder().decode(rec.body())).toContain("local serve unreachable");
+    expect(rec.json.at(-1)).toEqual({ type: "http-end", id: "r" });
+  });
+
+  test("a body that dies mid-stream ends with an error rather than looking complete", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new Uint8Array([1, 2, 3])); },
+      pull() { throw new Error("disk went away"); },
+    });
+    const rec = recorder();
+    await streamToLocalServe(
+      { type: "http", id: "r", method: "GET", path: "/x" },
+      rec.sendBinary,
+      rec.sendJson,
+      (async () => new Response(stream, { status: 200 })) as unknown as typeof fetch,
+    );
+    const end = rec.json.at(-1) as { type: string; error?: string };
+    expect(end.type).toBe("http-end");
+    expect(end.error).toContain("disk went away");
+  });
+});
+
+describe("tunnel payload framing", () => {
+  test("a relayed binary ws-msg reaches the local socket as raw bytes", () => {
+    const sent: unknown[] = [];
+    const tunnels = new Map([["t1", { send: (d: unknown) => sent.push(d) } as unknown as WebSocket]]);
+    const payload = new Uint8Array([0xff, 0x00, 0x80]);
+    applyWsTunnelFrame({ type: "ws-msg", id: "t1", binary: true }, tunnels, payload);
+    expect(Array.from(sent[0] as Uint8Array)).toEqual([0xff, 0x00, 0x80]);
+  });
+
+  test("a legacy base64 ws-msg still works when no payload accompanies it", () => {
+    const sent: unknown[] = [];
+    const tunnels = new Map([["t1", { send: (d: unknown) => sent.push(d) } as unknown as WebSocket]]);
+    applyWsTunnelFrame(
+      { type: "ws-msg", id: "t1", binary: false, dataB64: Buffer.from("hi").toString("base64") },
+      tunnels,
+    );
+    expect(sent[0]).toBe("hi");
   });
 });
