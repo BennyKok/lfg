@@ -80,14 +80,17 @@ jobs:
       # with its own token, keeps consuming and publishing separate.
       #
       # Only runs for a real tag: a workflow_dispatch dev build has no version
-      # to publish, and burning a version number is not undoable.
+      # to publish, and burning a version number is not undoable. The condition
+      # resolves the tag exactly the way the GitHub release step below does — a
+      # manual dispatch that passes `tag` is a real release and must publish,
+      # and testing only github.ref would silently skip it.
       #
       # A missing token warns instead of skipping silently. Gating the whole
       # step on the secret would mean a release that quietly ships no packages
       # and a green checkmark saying it worked — the release log has to say why
       # nothing was published.
       - name: Publish packages to npm
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        if: ${{ startsWith(inputs.tag || github.ref_name, 'v') }}
         run: |
           set -euo pipefail
           if [ -z "${NPM_PUBLISH_TOKEN:-}" ]; then
