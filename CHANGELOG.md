@@ -2,6 +2,24 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - Queue a message without cutting the turn off (v0.1.312)
+
+- **Cmd/Ctrl+Enter queues a message instead of interrupting.** Holding the send
+  button has always queued behind the running turn, but the gesture is
+  pointer-only, so a laptop had no way to reach it — typing and pressing Enter
+  always interrupted. Plain Enter still steers.
+- **Queueing now tells you it happened.** Steering and queueing looked identical
+  at the moment you sent; the difference only showed up later, in whether the
+  agent's work survived. A queue that lands mid-turn now says so once. An idle
+  session stays quiet, because there the two modes do the same thing.
+- Worth knowing which you want: steering interrupts, and interrupting cancels
+  tool calls that are already running.
+- **Install downloads are much smaller.** A linux-x64 bundle drops from 368MB to
+  43MB packed (1221MB to 251MB unpacked). It was carrying private copies of the
+  Claude, Codex and OpenCode binaries, which omg.dev never used — every backend
+  already prefers the agent installed on your own machine. Install agents from
+  Settings → Coding agents, as before.
+
 ## August 8, 2026 - A steered turn stops repeating itself (v0.1.311)
 
 - **Steering a running turn no longer duplicates it down the chat.** Sending a
