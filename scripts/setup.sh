@@ -556,13 +556,49 @@ else
   fi
 fi
 
-# ---- 6. expose the `omg` command on PATH ----
-# Both names point at the same CLI: `omg` is what this installs as, and `lfg`
-# stays behind it so existing scripts, cron entries and muscle memory keep
-# working on a box that upgrades into the new name.
+# ---- 6. expose the command on PATH ----
+# `lfg` is the unambiguous name for this CLI and is always installed: existing
+# scripts, cron entries and muscle memory keep working, and the npm CLI
+# (@omg-dev/cli) resolves `lfg` when it forwards a command here.
 mkdir -p "$HOME/.local/bin"
-link_command omg "$LFG_DIR/src/cli.ts"
 link_command lfg "$LFG_DIR/src/cli.ts"
+
+# `omg` is contested in a way link_command cannot see: it guards the path
+# ~/.local/bin/omg, but the npm CLI (@omg-dev/cli) installs its `omg` in the npm
+# global bin. Linking ours anyway leaves two programs under one name, with PATH
+# order deciding which the name means — and since we prepend ~/.local/bin, ours
+# wins and silently shadows theirs.
+#
+# Find an `omg` that is not ours. `command -v` cannot answer this: with
+# ~/.local/bin first, it returns our own symlink on any box we have already
+# touched, so we would keep the name forever.
+other_omg=""
+_saved_ifs="$IFS"
+IFS=:
+for _dir in $PATH; do
+  [ -n "$_dir" ] || continue
+  [ "$_dir/omg" = "$HOME/.local/bin/omg" ] && continue
+  if [ -x "$_dir/omg" ]; then other_omg="$_dir/omg"; break; fi
+done
+IFS="$_saved_ifs"
+
+# Hand the name over only to a CLI that can actually reach this install — a
+# newer @omg-dev/cli forwards what it does not own to `lfg`, so `omg serve`
+# still works. An older one only prints its own help, so surrendering to it
+# would strip commands off this box. Ask rather than assume: its answer to an
+# unknown command says which of the two it is. That keeps this independent of
+# the npm CLI's release, and self-healing if that CLI is later downgraded.
+if [ -n "$other_omg" ] \
+  && "$other_omg" __omg_forward_probe </dev/null 2>&1 \
+    | grep -q "run and manage your AI coding agents"; then
+  say "omg is provided by $other_omg and forwards here - this CLI is 'lfg'."
+  # Only ever remove our own link, matching link_command's ownership rule.
+  _ours="$(readlink "$HOME/.local/bin/omg" 2>/dev/null || true)"
+  case "$_ours" in */src/cli.ts) rm -f "$HOME/.local/bin/omg" ;; esac
+else
+  [ -n "$other_omg" ] && say "omg at $other_omg cannot forward here yet - keeping ours."
+  link_command omg "$LFG_DIR/src/cli.ts"
+fi
 chmod +x "$LFG_DIR/src/cli.ts" 2>/dev/null || true
 
 install_lfg_mcp() {
