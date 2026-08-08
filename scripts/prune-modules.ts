@@ -39,7 +39,47 @@ export function fieldAllows(field: unknown, value: string): boolean {
   return positive.includes(value) || positive.includes("any");
 }
 
-export type Manifest = { os?: unknown; cpu?: unknown; libc?: unknown };
+/**
+ * Agent runtimes the SDKs carry their own private copy of.
+ *
+ * These are whole coding-agent binaries — ~1 GB of the tree — shipped as a
+ * fallback for users who have not installed that agent. omg.dev does not need
+ * them: every backend already prefers the CLI on the user's machine
+ * (`pathToClaudeCodeExecutable`, `codexPathOverride`, and a PATH lookup for
+ * opencode), and the product's whole premise is that you bring agent CLIs you
+ * already own and authenticate.
+ *
+ * Dropping them is safe for imports: the binaries are resolved when a session
+ * spawns, not at module load, so `import("@openai/codex-sdk")` still works with
+ * its 336 MB dependency absent. A machine with no such CLI simply cannot start
+ * that agent kind, and is told to install it — from Settings → Coding agents,
+ * or `OMG_INSTALL_<AGENT>=1 omg setup`, which is also how a hosted image
+ * provisions them on top of this same lean bundle.
+ *
+ * `@earendil-works/pi-coding-agent` is deliberately NOT here: Pi has no
+ * separately installable binary, so shipping it is the only way it runs, and it
+ * is 15 MB rather than hundreds.
+ */
+export const AGENT_RUNTIME_PREFIXES = [
+  "@anthropic-ai/claude-agent-sdk-", // platform binaries; the JS SDK itself stays
+  "@openai/codex", // the CLI package + its platform binary; codex-sdk stays
+  "opencode-ai",
+  "opencode-linux",
+  "opencode-darwin",
+  "opencode-windows",
+];
+
+/** True when a package is a bundled agent runtime rather than a real dependency. */
+export function isAgentRuntime(name: string): boolean {
+  // Exact-match guards so `@openai/codex-sdk` and `@opencode-ai/sdk` survive:
+  // both start with a listed prefix but are the JS clients we actually import.
+  if (name === "@openai/codex-sdk") return false;
+  if (name.startsWith("@opencode-ai/")) return false;
+  if (name === "@anthropic-ai/claude-agent-sdk") return false;
+  return AGENT_RUNTIME_PREFIXES.some(prefix => name === prefix || name.startsWith(prefix));
+}
+
+export type Manifest = { os?: unknown; cpu?: unknown; libc?: unknown; name?: unknown };
 
 /** True when a manifest's declared platform gating excludes the target. */
 export function isIncompatible(manifest: Manifest, target: Target): boolean {
@@ -190,7 +230,12 @@ export type PruneResult = {
   linksSwept: number;
 };
 
-export function prune(root: string, target: Target, dryRun = false): PruneResult {
+export function prune(
+  root: string,
+  target: Target,
+  dryRun = false,
+  dropAgentRuntimes = false,
+): PruneResult {
   const removed: { name: string; bytes: number }[] = [];
   let bytesFreed = 0;
   for (const dir of packageDirs(root)) {
@@ -204,7 +249,11 @@ export function prune(root: string, target: Target, dryRun = false): PruneResult
     }
     const manifest = readManifest(real);
     if (!manifest) continue;
-    if (!isIncompatible(manifest, target)) continue;
+    // Trust the manifest's own name over the directory, which is mangled to
+    // `@scope+name@version` in Bun's store.
+    const declared = typeof manifest.name === "string" ? manifest.name : "";
+    const unwanted = dropAgentRuntimes && declared !== "" && isAgentRuntime(declared);
+    if (!unwanted && !isIncompatible(manifest, target)) continue;
     const bytes = dirSize(real);
     removed.push({ name: real.slice(root.length + 1), bytes });
     bytesFreed += bytes;
@@ -232,8 +281,9 @@ if (import.meta.main) {
   };
   const dryRun = argv.includes("--dry-run");
   const quiet = argv.includes("--quiet");
+  const dropAgentRuntimes = argv.includes("--drop-agent-runtimes");
 
-  const result = prune(root, target, dryRun);
+  const result = prune(root, target, dryRun, dropAgentRuntimes);
   const mb = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   if (!quiet) {
     for (const entry of [...result.removed].sort((a, b) => b.bytes - a.bytes).slice(0, 12)) {

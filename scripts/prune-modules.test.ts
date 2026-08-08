@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, symlinkSync, writeFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fieldAllows, isIncompatible, prune, type Target } from "./prune-modules.ts";
+import { fieldAllows, isAgentRuntime, isIncompatible, prune, type Target } from "./prune-modules.ts";
 
 const GLIBC_X64: Target = { os: "linux", cpu: "x64", libc: "glibc" };
 
@@ -50,6 +50,75 @@ describe("incompatibility", () => {
   test("wrong os or cpu is incompatible", () => {
     expect(isIncompatible({ os: ["darwin"] }, GLIBC_X64)).toBe(true);
     expect(isIncompatible({ cpu: ["arm64"] }, GLIBC_X64)).toBe(true);
+  });
+});
+
+describe("telling agent runtimes from real dependencies", () => {
+  // ~1GB of the tree: whole coding-agent binaries the SDKs carry as a fallback.
+  test("bundled agent binaries are recognised", () => {
+    for (const name of [
+      "@anthropic-ai/claude-agent-sdk-linux-x64",
+      "@anthropic-ai/claude-agent-sdk-darwin-arm64",
+      "@openai/codex",
+      "@openai/codex-linux-x64",
+      "opencode-ai",
+      "opencode-linux-x64",
+      "opencode-linux-x64-baseline",
+      "opencode-darwin-arm64",
+    ]) {
+      expect(isAgentRuntime(name)).toBe(true);
+    }
+  });
+
+  // The dangerous half: these share a prefix with the runtimes above but are
+  // the JS clients omg.dev actually imports. Deleting one breaks the backend.
+  test("the SDK clients we import are never treated as runtimes", () => {
+    for (const name of [
+      "@anthropic-ai/claude-agent-sdk",
+      "@openai/codex-sdk",
+      "@opencode-ai/sdk",
+    ]) {
+      expect(isAgentRuntime(name)).toBe(false);
+    }
+  });
+
+  // Pi has no separately installable binary, so shipping it is the only way it
+  // runs at all - and it is 15MB, not hundreds.
+  test("pi stays bundled", () => {
+    expect(isAgentRuntime("@earendil-works/pi-coding-agent")).toBe(false);
+  });
+
+  test("ordinary dependencies are untouched", () => {
+    for (const name of ["zod", "yaml", "sharp", "marked", "playwright", "@modelcontextprotocol/sdk"]) {
+      expect(isAgentRuntime(name)).toBe(false);
+    }
+  });
+});
+
+describe("pruning agent runtimes", () => {
+  test("removes them only when asked, and keeps the SDK client", () => {
+    const root = mkdtempSync(join(tmpdir(), "prune-agents-"));
+    const modules = join(root, "node_modules");
+    const mk = (spec: string, name: string) => {
+      const dir = join(modules, ".bun", spec, "node_modules", ...name.split("/"));
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "package.json"), JSON.stringify({ name }));
+      writeFileSync(join(dir, "bin.bin"), "x".repeat(2048));
+      return dir;
+    };
+    const runtime = mk("@openai+codex@1.0.0", "@openai/codex");
+    const client = mk("@openai+codex-sdk@1.0.0", "@openai/codex-sdk");
+    const pi = mk("@earendil-works+pi@1.0.0", "@earendil-works/pi-coding-agent");
+
+    // Default behaviour must not touch them.
+    prune(modules, GLIBC_X64);
+    expect(existsSync(runtime)).toBe(true);
+
+    prune(modules, GLIBC_X64, false, true);
+
+    expect(existsSync(runtime)).toBe(false);
+    expect(existsSync(client)).toBe(true);
+    expect(existsSync(pi)).toBe(true);
   });
 });
 

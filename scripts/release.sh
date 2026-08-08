@@ -171,9 +171,17 @@ for platform in $PLATFORMS; do
     rm -rf "$pstage"
     continue
   fi
+  # Drop the agent runtimes the SDKs bundle - whole coding-agent binaries, about
+  # 1GB of the tree, shipped only as a fallback for machines that lack the CLI.
+  # Every backend already prefers the user's own binary, and a hosted image adds
+  # them on top of this same bundle with OMG_INSTALL_CLAUDE=1 / _OPENCODE=1.
+  # Set LFG_BUNDLE_AGENT_RUNTIMES=1 to build the heavy variant anyway.
+  drop_agents="--drop-agent-runtimes"
+  [ "${LFG_BUNDLE_AGENT_RUNTIMES:-0}" = "1" ] && drop_agents=""
+  # shellcheck disable=SC2086
   bun run "$ROOT/scripts/prune-modules.ts" \
     --root "$pstage/lfg/node_modules" \
-    --os "$target_os" --cpu "$target_cpu" --libc glibc --quiet
+    --os "$target_os" --cpu "$target_cpu" --libc glibc --quiet $drop_agents
   platform_asset="omg-${platform}.tar.gz"
   tar -C "$pstage" -czf "$OUT_DIR/$platform_asset" lfg
   ( cd "$OUT_DIR" && printf '%s  %s\n' "$(sha256_file "$platform_asset")" "$platform_asset" \

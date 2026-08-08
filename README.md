@@ -334,39 +334,45 @@ transcript indexing, live stream stalls, send queue state).
 
 Each release publishes a bundle per platform — `omg-linux-x64.tar.gz`,
 `omg-linux-arm64.tar.gz`, `omg-darwin-x64.tar.gz`, `omg-darwin-arm64.tar.gz` —
-with `node_modules` already installed for that target and pruned of anything it
-cannot run. Setup downloads the one matching your machine and skips dependency
-resolution entirely.
+with `node_modules` already installed for that target. Setup downloads the one
+matching your machine and skips dependency resolution entirely.
 
-This matters more than it sounds. Resolution was never the slow part: a cold
-`bun install --production` finishes in about **3 seconds**. The problem was that
-it dragged roughly **2 GB** behind it, most of it agent-runtime binaries pulled
-in as transitive `optionalDependencies` — and **667 MB of that could not execute
-on the target at all**:
+A first install used to pull about **2 GB** and resolve the graph locally. It is
+now **43 MB**, and nothing is resolved on your machine. Two things got removed:
 
-| Package | Size | On a glibc host |
-| --- | --- | --- |
-| `@openai/codex-linux-x64` | 336 MB | used |
-| `@anthropic-ai/claude-agent-sdk-linux-x64` | 247 MB | used |
-| `@anthropic-ai/claude-agent-sdk-linux-x64-musl` | 279 MB | **unusable** |
-| `opencode-linux-x64-musl` | 185 MB | **unusable** |
-| `opencode-linux-x64-baseline-musl` | 185 MB | **unusable** |
-| `@img/sharp-libvips-linuxmusl-x64` | 18 MB | **unusable** |
+**Builds the machine cannot execute (667 MB).** npm gates platform packages with
+the `os`, `cpu`, and `libc` manifest fields. Bun honours `os` and `cpu` when
+resolving `optionalDependencies` but *not* `libc`, and there is no
+`bun install --libc` to opt out — so every glibc Linux install also downloaded
+the musl builds of the Claude agent SDK, both opencode variants, and sharp's
+libvips.
 
-npm expresses this with the `libc` manifest field, and Bun honours `os` and
-`cpu` when resolving `optionalDependencies` but not `libc` — so every glibc
-Linux install also downloaded the musl builds, with no
-`bun install --libc` flag to opt out. [`scripts/prune-modules.ts`](./scripts/prune-modules.ts)
-removes them at release time and sweeps the symlinks left behind.
-
-Building bundles for other platforms works because `bun install --os --cpu`
-resolves another target's optional dependencies, so a Linux CI box can produce
-correct macOS bundles.
+**Agent runtimes omg.dev does not need (about 1 GB).** The Claude, Codex, and
+OpenCode SDKs each bundle a private copy of that agent's binary, as a fallback
+for machines without the CLI. omg.dev already prefers the CLI on your machine —
+`pathToClaudeCodeExecutable`, `codexPathOverride`, and a `PATH` lookup for
+opencode — which is the whole premise of bringing your own agent accounts. So
+the bundled copies are dropped, and you install the agents you actually want:
 
 ```bash
-scripts/release.sh                          # neutral bundle + all platforms
+# from the UI: Settings → Coding agents → Install
+OMG_INSTALL_CLAUDE=1 OMG_INSTALL_OPENCODE=1 omg setup   # or headless
+```
+
+That is also how a hosted image ships with agents preinstalled — the same lean
+bundle, plus the agents it wants on top. Pi is the exception and stays bundled:
+it has no separately installable binary, and it is 15 MB.
+
+[`scripts/prune-modules.ts`](./scripts/prune-modules.ts) does both removals at
+release time and sweeps the symlinks left behind. Building bundles for other
+platforms works because `bun install --os --cpu` resolves another target's
+optional dependencies, so a Linux CI box can produce correct macOS bundles.
+
+```bash
+scripts/release.sh                                 # neutral bundle + all platforms
 LFG_RELEASE_PLATFORMS="linux-x64" scripts/release.sh
-LFG_SKIP_PLATFORM_BUNDLES=1 scripts/release.sh   # neutral bundle only
+LFG_BUNDLE_AGENT_RUNTIMES=1 scripts/release.sh     # keep the bundled agent binaries
+LFG_SKIP_PLATFORM_BUNDLES=1 scripts/release.sh     # neutral bundle only
 ```
 
 The platform-neutral `omg-bundle.tar.gz` is still published, and setup falls
