@@ -158,11 +158,22 @@ jobs:
           # they are what the bundle's own pruned manifest can fall back to, and
           # an attached artifact is the record of exactly what a tag shipped.
           tag_name: ${{ inputs.tag || github.ref_name }}
+          #
+          # The omg-<os>-<arch> bundles are what setup.sh asks for first: they
+          # carry node_modules already installed and pruned for that target, so
+          # an install resolves nothing locally. Matched by glob rather than
+          # listed one per line on purpose — release.sh skips a platform whose
+          # cross-install fails instead of failing the whole build, and naming
+          # them individually would turn that survivable skip into a release
+          # that cannot publish. The glob needs two dashes, so it cannot pick up
+          # omg-bundle.tar.gz.
           files: |
             dist/omg-bundle.tar.gz
             dist/omg-bundle.tar.gz.sha256
             dist/lfg-bundle.tar.gz
             dist/lfg-bundle.tar.gz.sha256
+            dist/omg-*-*.tar.gz
+            dist/omg-*-*.tar.gz.sha256
             dist/omg-dev-protocol-*.tgz
             dist/omg-dev-client-*.tgz
             dist/omg-dev-react-*.tgz

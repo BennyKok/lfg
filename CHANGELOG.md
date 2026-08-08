@@ -2,6 +2,32 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - Installs stop downloading what they cannot run (v0.1.309)
+
+- **A first install no longer resolves dependencies on your machine.** Every
+  release now publishes a bundle per platform — `omg-linux-x64`,
+  `omg-linux-arm64`, `omg-darwin-x64`, `omg-darwin-arm64` — with `node_modules`
+  already installed for that target. Setup downloads the one matching your
+  machine and skips `bun install` entirely.
+- **667 MB of every Linux install was unusable.** npm gates platform packages
+  with the `libc` field, and Bun filters `optionalDependencies` by `os` and
+  `cpu` but not `libc` — so glibc machines also downloaded the musl builds of
+  the Claude agent SDK, both opencode variants, and sharp's libvips. There is no
+  `bun install --libc` to opt out. Release bundles are pruned instead.
+- **The platform bundles were already being built and thrown away.** v0.1.308
+  built all four, but the release workflow's upload list never named them, so
+  only the platform-neutral bundle shipped.
+- **A named local URL.** Setup maps `omg.local` to `127.0.0.1` so the web UI has
+  a memorable address, without binding the server to any non-loopback
+  interface. Install the PWA from `localhost` — a `.local` origin over plain
+  HTTP is not a secure context, so service workers will not register there.
+- **`omg uninstall` cleans up after itself properly.** It removed only the `lfg`
+  command while setup installs both names, leaving `omg` on PATH pointing at a
+  deleted file, where it would shadow a later reinstall. It now removes both,
+  plus the hosts entry, and leaves alone any symlink it does not own.
+- Product prose is `omg.dev` throughout, the README carries the real omg.dev
+  mark, and the third-party cloud-hosting guide is gone.
+
 ## August 8, 2026 - The @omg-dev packages actually reach npm (v0.1.308)
 
 - **`@omg-dev/protocol`, `@omg-dev/client`, `@omg-dev/react` and `@omg-dev/app`
