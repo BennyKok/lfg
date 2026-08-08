@@ -38,11 +38,21 @@ authenticate. It does not resell tokens and has no model of its own.
 
 ## Quick start
 
-The `omg` CLI is the supported way to install and manage omg.dev:
+The `omg` CLI is the supported way to install and manage omg.dev. Use whichever
+package manager you already have:
+
+```bash
+bun install --global @omg-dev/cli && omg computer setup
+```
 
 ```bash
 npm install --global @omg-dev/cli && omg computer setup
 ```
+
+> The published CLI is currently shebanged `#!/usr/bin/env bun`, so an `npm`
+> install still needs `bun` on your `PATH` to run. The `bun` line above always
+> works; if you install with `npm` and see
+> `env: bun: No such file or directory`, install [Bun](https://bun.sh) and retry.
 
 Then open **http://omg.local:8766**.
 
