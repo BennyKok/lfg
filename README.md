@@ -2,17 +2,18 @@
   <img src="https://raw.githubusercontent.com/BennyKok/omg.dev/main/docs/images/lfg-icon.png" alt="lfg icon" width="96" />
 </a>
 
-# lfg
+# omg
 
 **Run your AI coding agents on your own machine — and drive them from your phone.**
 
-*The open-source agent control plane behind [omg.dev](https://omg.dev). The CLI is `lfg`.*
+*Open source, MIT. `omg` is the project; `lfg` is still the command it installs —
+the CLI rename is in progress. [omg.dev](https://omg.dev) is the hosted version.*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/BennyKok/omg.dev?style=flat)](https://github.com/BennyKok/omg.dev/stargazers)
 [![npm](https://img.shields.io/npm/v/@omg-dev/cli?label=%40omg-dev%2Fcli)](https://www.npmjs.com/package/@omg-dev/cli)
 
-[Quick start](#quick-start) · [Why lfg](#why-lfg) · [Agents](#connect-a-coding-agent) · [Remote access](#reach-it-from-your-phone) · [Security](#security)
+[Quick start](#quick-start) · [Why omg](#why-omg) · [Agents](#connect-a-coding-agent) · [Remote access](#reach-it-from-your-phone) · [Security](#security)
 
 <p>
   <img src="https://raw.githubusercontent.com/BennyKok/omg.dev/main/docs/images/lfg-screenshot-1.jpg" alt="lfg web UI" width="31%" />
@@ -26,13 +27,13 @@ Running one coding agent in a terminal is fine. Running five is not: they die
 when you close the laptop, you can't tell which one is stuck waiting on a
 permission prompt, and you have to be at your desk to answer it.
 
-`lfg` turns a Linux box or macOS workstation into a private control plane for
+omg turns a Linux box or macOS workstation into a private control plane for
 Claude Code, Codex, OpenCode, Cursor, Grok, Hermes, Pi, and GitHub Copilot. Each
 agent runs in a long-lived `tmux` session that survives disconnects. The
 transcript streams to a web UI you can install as a PWA — so you can check on
 work, answer prompts, and steer from your phone.
 
-**You bring your own agent accounts.** `lfg` drives CLIs you already own and
+**You bring your own agent accounts.** omg drives CLIs you already own and
 authenticate. It does not resell tokens and has no model of its own.
 
 ## Quick start
@@ -46,7 +47,7 @@ Then open **http://127.0.0.1:8766**.
 That's the whole install. The script provisions Bun, `tmux`, and `git`,
 downloads the latest release, writes `.env`, and starts `lfg` as a user service
 bound to loopback. On a fresh Ubuntu/Debian box, add
-`LFG_INSTALL_SYSTEM_DEPS=1` so it may `apt-get` the base packages.
+`OMG_INSTALL_SYSTEM_DEPS=1` so it may `apt-get` the base packages.
 
 Next: [connect a coding agent](#connect-a-coding-agent) so you have something to
 run, then [reach it from your phone](#reach-it-from-your-phone).
@@ -73,7 +74,7 @@ the curious.
 - At least one coding agent CLI — see [below](#connect-a-coding-agent)
 - Optional: [Tailscale](https://tailscale.com) for private remote access
 
-## Why lfg?
+## Why omg?
 
 - **Run agents where your code lives.** Sessions execute on your machine, in
   your repos, with your local CLIs and credentials — not a remote sandbox you
@@ -95,7 +96,7 @@ the curious.
 
 ## Connect a coding agent
 
-`lfg` drives agent CLIs that you own and authenticate. Open **Settings → Coding
+omg drives agent CLIs that you own and authenticate. Open **Settings → Coding
 agents** in the web UI to install one, check its binary path and auth state, and
 register LFG's MCP server with it.
 
@@ -121,21 +122,21 @@ Claude and Codex when they are already installed.
 
 ## Reach it from your phone
 
-`lfg` binds to loopback and has **no authentication of its own** — it trusts the
+omg binds to loopback and has **no authentication of its own** — it trusts the
 network you put it behind. There are two supported ways to reach it remotely:
 
 **Tailscale (recommended).** The simplest choice if you only open the UI from
 your own devices:
 
 ```bash
-LFG_TAILSCALE_SERVE=1 lfg setup
+OMG_TAILSCALE_SERVE=1 lfg setup
 ```
 
 **A relay (experimental).** For the case Tailscale can't cover — rendering a
 session from your box on a *public* web origin:
 
 ```bash
-LFG_RELAY_URL=wss://your-relay.example/connect lfg connect ABC123   # outbound only, no inbound port
+OMG_RELAY_URL=wss://your-relay.example/connect lfg connect ABC123   # outbound only, no inbound port
 ```
 
 No relay ships with LFG itself; the protocol is generic and any operator can
@@ -151,16 +152,16 @@ omg connect        # installs LFG if needed, then pairs and connects
 Full comparison, the pairing flow, and opt-in session lifecycle events:
 **[docs/remote-access.md](./docs/remote-access.md)**.
 
-Do not put `lfg` on the public internet without your own auth in front of it.
+Do not put omg on the public internet without your own auth in front of it.
 See [Security](#security).
 
 ## Security
 
-`lfg` launches AI agents with shell access on your machine. The control API is
+omg launches AI agents with shell access on your machine. The control API is
 unauthenticated by design because it is meant to run on loopback and be reached
 privately through Tailscale.
 
-**Do not expose `lfg` directly to the public internet.** Read
+**Do not expose omg directly to the public internet.** Read
 [SECURITY.md](./SECURITY.md) before sharing access.
 
 ## Don't want to run a box?
@@ -173,7 +174,7 @@ server to provision. There's a free tier, and it's entirely optional: everything
 above works forever without an account.
 
 One click on [omg.dev/sandbox/templates/lfg](https://omg.dev/sandbox/templates/lfg)
-gives you a workspace with the LFG web UI already up. Workspaces hibernate when
+gives you a workspace with the omg web UI already up. Workspaces hibernate when
 idle and wake on the same URL.
 
 > **Which should I pick?** Install locally if you want agents working on the
@@ -300,7 +301,7 @@ authenticated CLIs.
 
 Platform-specific account, networking, and secret requirements live in each
 `deploy/*/README.md`. In short: keep public networking off unless you put auth
-in front of `lfg`, prefer Tailscale for remote access, and scope provider keys
+in front of omg, prefer Tailscale for remote access, and scope provider keys
 to that environment only.
 
 ## Embedding LFG in your own product
