@@ -18,6 +18,20 @@
 
 set -euo pipefail
 
+# ---- prefix compatibility ----
+# Shell twin of src/env-compat.ts. Every knob below is read as LFG_*, but the
+# project's prefix is now OMG_* and this script already writes OMG_* into .env
+# and the service units. The TS CLI aliases the two before spawning this script,
+# so `omg setup` already honours OMG_*; the `curl | bash` entry point does not,
+# which makes OMG_INSTALL_SYSTEM_DEPS=1 the one documented knob that silently
+# does nothing. Mirror OMG_* onto LFG_*; OMG_* wins when both are set.
+for _omg_var in "${!OMG_@}"; do
+  _omg_suffix="${_omg_var#OMG_}"
+  [ -n "$_omg_suffix" ] || continue
+  printf -v "LFG_${_omg_suffix}" '%s' "${!_omg_var}"
+done
+unset _omg_var _omg_suffix
+
 # ---- config (override via env) ----
 LFG_REPO_URL="${LFG_REPO_URL:-https://github.com/BennyKok/omg.dev.git}"
 # Where prebuilt release tarballs live (GitHub "owner/repo"). Defaults align

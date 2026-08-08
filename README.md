@@ -46,7 +46,7 @@ Then open **http://127.0.0.1:8766**.
 That's the whole install. The script provisions Bun, `tmux`, and `git`,
 downloads the latest release, writes `.env`, and starts `omg` as a user service
 bound to loopback. On a fresh Ubuntu/Debian box, add
-`LFG_INSTALL_SYSTEM_DEPS=1` so it may `apt-get` the base packages.
+`OMG_INSTALL_SYSTEM_DEPS=1` so it may `apt-get` the base packages.
 
 Next: [connect a coding agent](#connect-a-coding-agent) so you have something to
 run, then [reach it from your phone](#reach-it-from-your-phone).
