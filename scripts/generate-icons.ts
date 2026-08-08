@@ -82,7 +82,7 @@ await Promise.all([
     // image whose current alpha samples happen to be opaque.
     opaqueBackground: "#3b5bf6",
   }),
-  render("icon.svg", "docs/images/lfg-icon.png", 192),
+  render("icon.svg", "docs/images/omg-icon.png", 192),
   render("icon-maskable.svg", "web/public/icon-maskable-512.png", 512, {
     opaqueBackground: "#3b5bf6",
   }),

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFile } from "node:fs/promises";
 import sharp from "sharp";
 
-describe("LFG icon assets", () => {
+describe("OMG icon assets", () => {
   // The mark must be real outlines, not a bitmap. It shipped for five weeks as
   // a grid of ~680 8.28px <rect>s — a 34x26 pixel image in SVG clothing. The
   // header draws it in a 24px box where the glyph gets ~11.7px for 32 source
@@ -143,7 +143,7 @@ describe("LFG icon assets", () => {
       ["web/public/icon-512.png", 512, 512],
       ["web/public/icon-maskable-512.png", 512, 512],
       ["web/public/apple-touch-icon.png", 180, 180],
-      ["docs/images/lfg-icon.png", 192, 192],
+      ["docs/images/omg-icon.png", 192, 192],
     ] as const;
 
     for (const [path, width, height] of assets) {

@@ -48,6 +48,12 @@ else
 fi
 LFG_REPOS_ROOT="${LFG_REPOS_ROOT:-$HOME/repos}"
 LFG_PORT="${LFG_PORT:-8766}"
+# Named local URL. Maps a hostname to 127.0.0.1 in /etc/hosts so the UI has a
+# memorable address, without binding the server to any non-loopback interface -
+# an mDNS <host>.local name resolves to the LAN address instead, where nothing
+# is listening. Set to empty to skip the hosts file entirely.
+LFG_LOCAL_HOSTNAME="${LFG_LOCAL_HOSTNAME-omg.local}"
+LFG_HOSTS_FILE="${LFG_HOSTS_FILE:-/etc/hosts}"
 TS_AUTHKEY="${TS_AUTHKEY:-}"
 # Service identity. Same rule as the install directory: new boxes get `omg`,
 # and a box already running `lfg.service` keeps it rather than being migrated
@@ -201,6 +207,51 @@ tailscale_serve_endpoint_target() {
       | .value
     ) // empty
   ' 2>/dev/null
+}
+
+# ---- named local URL (/etc/hosts) ----
+# Keep these markers in sync with src/commands/uninstall.ts, which removes the
+# same block. They delimit the only lines setup owns in the hosts file.
+HOSTS_BEGIN="# >>> omg local hostname >>>"
+HOSTS_END="# <<< omg local hostname <<<"
+
+hosts_entry_present() { # already mapped to loopback, by us or by hand?
+  local name="$1"
+  awk -v want="$name" '
+    { sub(/#.*/, "") }
+    $1 == "127.0.0.1" { for (i = 2; i <= NF; i++) if ($i == want) { found = 1 } }
+    END { exit found ? 0 : 1 }
+  ' "$LFG_HOSTS_FILE" 2>/dev/null
+}
+
+LOCAL_HOSTNAME_READY=0
+ensure_local_hostname() {
+  [ -n "$LFG_LOCAL_HOSTNAME" ] || return 0
+  # A pre-existing mapping counts as ready. Rewriting a line we did not add
+  # would take ownership of it, and uninstall would then delete someone else's
+  # entry.
+  if hosts_entry_present "$LFG_LOCAL_HOSTNAME"; then
+    LOCAL_HOSTNAME_READY=1
+    say "Named local URL already configured (${LFG_LOCAL_HOSTNAME})."
+    return 0
+  fi
+  # curl|bash leaves stdin on the pipe, so -t 0 is false even on a real
+  # terminal; sudo can still prompt through /dev/tty. Only give up when there is
+  # no cached credential AND nowhere to ask.
+  if ! sudo -n true 2>/dev/null && [ ! -t 0 ] && [ ! -c /dev/tty ]; then
+    warn "No sudo available for ${LFG_HOSTS_FILE}; skipping ${LFG_LOCAL_HOSTNAME}. http://localhost:$LFG_PORT still works."
+    return 0
+  fi
+  say "Mapping ${LFG_LOCAL_HOSTNAME} to 127.0.0.1 in ${LFG_HOSTS_FILE} (needs sudo)..."
+  # 127.0.0.1 only. The service binds IPv4 loopback, so publishing a ::1 twin
+  # would hand browsers an address that refuses the connection - and browsers
+  # prefer IPv6 when both resolve.
+  if printf '%s\n127.0.0.1\t%s\n%s\n' "$HOSTS_BEGIN" "$LFG_LOCAL_HOSTNAME" "$HOSTS_END" \
+    | sudo tee -a "$LFG_HOSTS_FILE" >/dev/null; then
+    LOCAL_HOSTNAME_READY=1
+  else
+    warn "Could not write ${LFG_HOSTS_FILE}; skipping ${LFG_LOCAL_HOSTNAME}. http://localhost:$LFG_PORT still works."
+  fi
 }
 
 # ---- 1. base packages ----
@@ -639,6 +690,8 @@ else
   install_macos_service
 fi
 
+ensure_local_hostname
+
 TAILSCALE_SERVE_CONFIGURED=0
 
 # ---- 10. optionally expose the UI over the tailnet (HTTPS on MagicDNS), never publicly ----
@@ -676,15 +729,21 @@ else
   say "Done. OMG is running as a launchd user service."
 fi
 [ "$TAILSCALE_SERVE_CONFIGURED" = "1" ] && [ -n "${URL:-}" ] && echo "    Web UI (tailnet only):  https://$URL"
-echo "    Local Web UI:         http://127.0.0.1:$LFG_PORT"
-# The service is pinned to LFG_HOST=127.0.0.1, so localhost is the only named
-# host that resolves to it. A LAN name (<host>.local) would not reach a
-# loopback listener - use Tailscale Serve for off-box access instead.
-echo "    Local Web UI (named): http://localhost:$LFG_PORT"
+# The named host is an /etc/hosts mapping to 127.0.0.1, so it reaches the
+# loopback-pinned service from this machine only. Lead with it when it is
+# actually resolvable, and always print a bare loopback URL underneath so there
+# is a working link even when the hosts file could not be written.
+if [ "$LOCAL_HOSTNAME_READY" = "1" ]; then
+  echo "    Local Web UI:         http://$LFG_LOCAL_HOSTNAME:$LFG_PORT"
+  echo "    Local Web UI (direct): http://localhost:$LFG_PORT"
+else
+  echo "    Local Web UI:         http://127.0.0.1:$LFG_PORT"
+  echo "    Local Web UI (named): http://localhost:$LFG_PORT"
+fi
 if [ "$TAILSCALE_SERVE_CONFIGURED" = "1" ]; then
   echo "    Tailscale cleanup:    sudo tailscale serve --https=$LFG_TAILSCALE_HTTPS_PORT off"
 else
-  echo "    Tailscale setup:      LFG_TAILSCALE_SERVE=1 lfg setup"
+  echo "    Tailscale setup:      OMG_TAILSCALE_SERVE=1 omg setup"
 fi
 echo
 cat <<NEXT
