@@ -15824,6 +15824,13 @@ function ProjectFolderBrowser({
   const [folderName, setFolderName] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  // `browser?.directories` only guards the null payload, not a payload that
+  // came back without the list (an error envelope, an older/proxied backend, a
+  // 200 with an empty body). Reading `.map` off that undefined throws during
+  // render, and since App is the ROOT route component the whole app lands in
+  // the router crash boundary over a folder list. Default to empty instead.
+  const directories = browser?.directories ?? [];
+
   const browse = useCallback(async (path?: string) => {
     setLoading(true);
     setError(null);
@@ -15896,7 +15903,7 @@ function ProjectFolderBrowser({
                 <span className="text-sm font-medium">Back</span>
               </button>
             ) : null}
-            {browser?.directories.map((directory) => (
+            {directories.map((directory) => (
               <button
                 key={directory.path}
                 type="button"
@@ -15913,7 +15920,7 @@ function ProjectFolderBrowser({
                 <ChevronRight className="size-4 text-muted-foreground" />
               </button>
             ))}
-            {!loading && browser?.directories.length === 0 ? (
+            {!loading && browser && directories.length === 0 ? (
               <div className="px-4 py-10 text-center text-sm text-muted-foreground">This folder is empty</div>
             ) : null}
             {loading ? (
