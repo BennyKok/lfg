@@ -15831,14 +15831,29 @@ function ProjectFolderBrowser({
   // the router crash boundary over a folder list. Default to empty instead.
   const directories = browser?.directories ?? [];
 
-  const browse = useCallback(async (path?: string) => {
+  const browse = useCallback(async (path?: string, fallbackToRoot = false) => {
     setLoading(true);
     setError(null);
     try {
       const query = path ? `?path=${encodeURIComponent(path)}` : "";
       setBrowser(await api<FolderBrowserPayload>(`/api/filesystem/directories${query}`));
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Couldn't open this folder");
+      const message = e instanceof Error ? e.message : "Couldn't open this folder";
+      // The picker opens on the last-used project path, which may have since
+      // been deleted or moved (a pruned worktree, a renamed repo). Without a
+      // fallback that 400 strands the drawer on an empty list with every
+      // action disabled — no listing, no way back, only Close. Drop to the
+      // default root so the user can still navigate somewhere real.
+      if (path && fallbackToRoot) {
+        try {
+          setBrowser(await api<FolderBrowserPayload>("/api/filesystem/directories"));
+          setError(`${path} is unavailable (${message}) — showing your projects folder instead.`);
+          return;
+        } catch {
+          // Root is unreachable too; report the original failure below.
+        }
+      }
+      setError(message);
     } finally {
       setLoading(false);
     }
@@ -15848,7 +15863,7 @@ function ProjectFolderBrowser({
     if (!open) return;
     setCreating(startCreating);
     setFolderName("");
-    void browse(initialPath);
+    void browse(initialPath, true);
   }, [browse, initialPath, open, startCreating]);
 
   async function finish(endpoint: string, body: object) {
