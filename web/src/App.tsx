@@ -307,6 +307,7 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu";
 import { cn } from "@/lib/utils";
+import { deepActiveElement, isTypingTarget } from "@/lib/active-element";
 import { useExtensionNavTabs } from "./lib/extensions";
 import type { ExtensionNavTab } from "./lib/extensions";
 import {
@@ -5198,12 +5199,12 @@ export function App() {
     // because <html> is sized from --lfg-app-height the whole document stays
     // locked into the top slice of the screen until the next pinch or rotate.
     const keyboardCapableFocus = () => {
-      const el = document.activeElement as HTMLElement | null;
+      // Shadow-piercing: the Pierre tree and editor keep their real input inside
+      // a shadow root, so document.activeElement alone would report the host.
+      const el = deepActiveElement();
       if (!el || el === document.body || el === document.documentElement) return false;
-      const tag = el.tagName;
       // IFRAME counts: focus may sit in embedded content we can't inspect.
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "IFRAME") return true;
-      return el.isContentEditable === true;
+      return isTypingTarget(el);
     };
     let disposed = false;
     let staleRetries = 0;
@@ -6066,9 +6067,7 @@ export function App() {
       if (s.tab !== "live") return;
       const options = s.projectOptions;
       if (options.length <= 1) return;
-      const el = document.activeElement as HTMLElement | null;
-      const tag = el?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || el?.isContentEditable) return;
+      if (isTypingTarget()) return;
       e.preventDefault();
       s.setProjectFilter(cycleProjectFilter(options, s.projectFilter, e.shiftKey ? -1 : 1));
     };
@@ -10392,9 +10391,7 @@ function RailStage({
 
       // Never hijack browser combos or typing in a composer/input.
       if (mod || e.altKey) return;
-      const el = document.activeElement as HTMLElement | null;
-      const tag = el?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || el?.isContentEditable) return;
+      if (isTypingTarget()) return;
 
       const idx = cur ? order.indexOf(cur) : -1;
       const move = (delta: number, shift: boolean, open: boolean) => {
@@ -13683,9 +13680,9 @@ function SessionTitleSheet({
         requestClose();
         return;
       }
-      // Don't hijack arrows while the user is typing in the composer / rename field.
-      const t = e.target as HTMLElement | null;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      // Don't hijack arrows while the user is typing in the composer / rename
+      // field, or inside a shadow-DOM surface like the file tree or editor.
+      if (isTypingTarget(e.target as HTMLElement | null) || isTypingTarget()) return;
       if (renamingInline) return;
       if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
         e.preventDefault();

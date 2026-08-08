@@ -67,6 +67,7 @@ import {
   computeSessionDiffSummary,
   computeSessionFilePatch,
 } from "../session-diff.ts";
+import { listSessionTree, readSessionFile } from "../session-files.ts";
 import { reportClientError, listClientErrors } from "../client-errors.ts";
 import { getAllUsage, getProviderUsage, listUsageProviders } from "../usage.ts";
 import { sessionTokenUsage } from "../session-token-usage.ts";
@@ -5750,6 +5751,37 @@ a{color:#60a5fa}
           if (!p) return err(400, "missing path");
           const file = computeSessionFilePatch(sess.cwd, p);
           if (!file) return err(404, "no diff for path");
+          return json({ file });
+        }
+      }
+
+      // Files panel: flat path listing for one root. @pierre/trees virtualizes
+      // the whole list, so this returns every path under `root` at once rather
+      // than one directory level per request. `?root=` navigates (including up,
+      // bounded by the browsing ceiling); omitted, it means the session's cwd.
+      {
+        const m = path.match(/^\/api\/sessions\/([0-9a-fA-F-]{36})\/tree$/);
+        if (m && req.method === "GET") {
+          const sess = (await listSessions()).find((s) => s.sessionId === m[1]);
+          if (!sess) return err(404, "session not found");
+          const tree = listSessionTree(sess.cwd, url.searchParams.get("root"));
+          if (!tree.ok) return err(403, tree.error ?? "cannot list that directory");
+          return json({ tree });
+        }
+      }
+
+      // One file's contents, shaped for @pierre/diffs' FileContents. Read-only:
+      // a user edit reaches disk as a patch sent to the agent, never as a write
+      // from here, so the agent stays the single writer of its own worktree.
+      {
+        const m = path.match(/^\/api\/sessions\/([0-9a-fA-F-]{36})\/file$/);
+        if (m && req.method === "GET") {
+          const sess = (await listSessions()).find((s) => s.sessionId === m[1]);
+          if (!sess) return err(404, "session not found");
+          const p = url.searchParams.get("path");
+          if (!p) return err(400, "missing path");
+          const file = await readSessionFile(sess.cwd, p);
+          if ("error" in file) return err(file.error === "file not found" ? 404 : 403, file.error);
           return json({ file });
         }
       }

@@ -19,5 +19,8 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["src", "vite.config.ts"],
+  // Tests run under `bun test` from the repo root, which supplies the bun:test
+  // types. The app build has no bun typings, so exclude them here.
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx"]
 }
