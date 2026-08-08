@@ -2,6 +2,24 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - A new account sees the whole free model tier (v0.1.298)
+
+- **The model picker no longer hides most of the free tier on a fresh
+  install.** OpenCode publishes seven models that need no credentials, but a
+  brand new account saw exactly one of them and reasonably concluded that was
+  the entire free offering. Live discovery had always listed all seven — it
+  just does not run until a few seconds after boot, and anyone who opened the
+  picker before then got a built-in fallback list that held a single entry.
+  That list now carries all seven, so the first look is the true one. The
+  default is unchanged.
+- **The README now leads with installing the open-source project.** The
+  one-line `curl` install is the first thing on the page, followed by what
+  `lfg` is for and why you would want it; install management and the hosted
+  option moved below. It also states plainly that you bring your own agent
+  accounts, and that everything works forever without an account. The
+  from-source steps had you `cd` into a directory that the clone does not
+  create — fixed.
+
 ## August 8, 2026 - Dictation shows words as you speak on hosted workspaces (v0.1.297)
 
 - **Dictation is live on a hosted workspace.** Words now appear while you are
