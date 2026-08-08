@@ -687,6 +687,17 @@ type GlobalSettings = {
   maxLiveAgents: number;
   agentsPaused: boolean;
   transcriptView: TranscriptView;
+  // Advertise a .local name for this machine over mDNS. macOS only; the
+  // capability is reported separately from the preference so the UI can say
+  // why it is unavailable rather than offering a switch that does nothing.
+  localUrlEnabled: boolean;
+};
+
+type LocalUrlCapability = {
+  supported: boolean;
+  active: boolean;
+  hostname: string | null;
+  port: number | null;
 };
 
 type TranscriptViewPreference = {
@@ -5109,6 +5120,7 @@ export function App() {
     maxLiveAgents: 16,
     agentsPaused: false,
     transcriptView: "full",
+    localUrlEnabled: true,
   });
   const [schedTz, setSchedTz] = useState<string>(DEFAULT_SCHED_TZ);
   const [findings, setFindings] = useState<AutoFinding[]>([]);
@@ -5373,6 +5385,7 @@ export function App() {
       maxLiveAgents: 16,
       agentsPaused: false,
       transcriptView: "full",
+      localUrlEnabled: true,
     });
     // Guard sessions to [] — it feeds `allLiveSessions`/`liveSessions` which
     // call `.filter()` unconditionally on render, so a malformed/empty payload

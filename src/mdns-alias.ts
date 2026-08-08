@@ -30,6 +30,8 @@
 import { ENV_PREFIX, ENV_PREFIX_LEGACY } from "./env-compat.ts";
 
 let registration: ReturnType<typeof Bun.spawn> | null = null;
+/** What is currently advertised, so the toggle can report and restart it. */
+let active: { hostname: string; port: number } | null = null;
 
 /**
  * Read OMG_MDNS_HOSTNAME, falling back to the legacy LFG_ spelling.
@@ -113,6 +115,7 @@ export function startMdnsAlias(port: number, overrides: Partial<MdnsDeps> = {}):
   ]);
   if (!child) return null;
   registration = child as ReturnType<typeof Bun.spawn>;
+  active = { hostname, port };
   deps.log(`  named local url: http://${hostname}:${port} (mDNS, this machine only)`);
   return hostname;
 }
@@ -126,4 +129,46 @@ export function stopMdnsAlias(): void {
     /* already gone */
   }
   registration = null;
+  active = null;
+}
+
+/**
+ * Whether this machine can advertise a .local name, and whether it currently is.
+ *
+ * `supported` is a property of the machine, not a preference: Linux has no
+ * dns-sd, so the setting is shown as unavailable there rather than as an
+ * option that silently does nothing.
+ */
+export function mdnsStatus(
+  overrides: Partial<Pick<MdnsDeps, "platform" | "which">> = {},
+): { supported: boolean; active: boolean; hostname: string | null; port: number | null } {
+  const platform = overrides.platform ?? process.platform;
+  const which = overrides.which ?? ((name: string) => Bun.which(name));
+  const supported = platform === "darwin" && which("dns-sd") !== null;
+  return {
+    supported,
+    active: registration !== null,
+    hostname: active?.hostname ?? (supported ? mdnsHostname(platform) || null : null),
+    port: active?.port ?? null,
+  };
+}
+
+/**
+ * Turn the advertisement on or off at runtime.
+ *
+ * No privilege is involved — registering an mDNS record is an unprivileged
+ * operation — so this is safe to drive from a settings toggle, unlike the
+ * /etc/hosts route it replaced.
+ */
+export function setMdnsEnabled(
+  enabled: boolean,
+  port: number,
+  overrides: Partial<MdnsDeps> = {},
+): string | null {
+  if (!enabled) {
+    stopMdnsAlias();
+    return null;
+  }
+  if (registration) return active?.hostname ?? null;
+  return startMdnsAlias(port, overrides);
 }
