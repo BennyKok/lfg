@@ -2,6 +2,24 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - Installs get smaller again: 61MB to 34MB (v0.1.318)
+
+- **Source maps are no longer shipped.** They were 27MB of a 61MB download —
+  700 files, 117MB unpacked — and nothing fetches them: the build marks them
+  `hidden`, so no bundle references one. They exist to map a minified frame back
+  to source while debugging, which pays off in a checkout (that builds its own),
+  not on a release install that ships no source to map back to. Still generated,
+  just not shipped.
+- **pi is installed on request rather than bundled.** Its provider layer
+  declares eleven SDKs — Anthropic, OpenAI, Google GenAI, Mistral, Bedrock,
+  OpenTelemetry — which is where the 24MB of Mistral in every install came from,
+  for a provider omg.dev never calls. Together that was 115MB of a 244MB
+  `node_modules`, for one optional agent among eight. Install it with
+  `OMG_INSTALL_PI=1 omg setup`, or from Settings → Coding agents; the choice is
+  recorded so later updates keep it.
+- A fresh install is now **34MB to download and 138MB on disk**, down from
+  ~2GB and 1.2GB this morning.
+
 ## August 8, 2026 - A switch for the named local URL, and one CLI surface (v0.1.317)
 
 - **Settings has a switch for the named local URL.** Turn `omg.local` on or off
