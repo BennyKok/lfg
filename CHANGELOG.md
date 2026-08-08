@@ -2,6 +2,19 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - The folder picker can no longer take the app down (v0.1.304)
+
+- **Browsing for a project folder can't crash the app anymore.** The picker
+  read the folder list straight off whatever the server sent back, so a reply
+  that arrived without one took out the entire page — App is the root of the
+  router, so a single missing list meant the crash screen instead of the app.
+  It now falls back to an empty list and keeps the "This folder is empty" hint
+  for when the folder really is empty.
+- **`uninstall --purge` accepts an install under either name.** Its safety
+  guard insisted the manifest say `lfg`, so a renamed install would have been
+  told it is "not an OMG installation" — about its own directory. It now
+  recognises both names, and still refuses anything that is neither.
+
 ## August 8, 2026 - A new install is OMG all the way down (v0.1.303)
 
 - **A fresh machine now installs as `omg`.** It lands in `~/omg`, runs as
