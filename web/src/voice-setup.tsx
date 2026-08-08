@@ -27,8 +27,17 @@ type ProviderOption = {
 export type VoiceConfig = {
   settings: { sttProvider: string };
   providers: { stt: ProviderOption[] };
+  /** Dictation shows words as you speak. False = transcript only after the take. */
+  streaming?: boolean;
   setup: { envFile: string; restartCommand: string };
 };
+
+/** True when dictation will only produce text after the take ends. The mic still
+ * works; it just can't show a running transcript, and the UI should say so
+ * rather than looking like it hung. */
+export function voiceIsBatchOnly(cfg: VoiceConfig | null): boolean {
+  return cfg?.streaming === false;
+}
 
 const SETUP_EVENT = "lfg:voice-setup";
 
@@ -116,6 +125,17 @@ export function voiceConfiguredCached(capability: VoiceCapability): boolean | nu
     prefetchVoiceConfig(); // refresh in the background, answer from what we have
   }
   return voiceReady(cached.cfg, capability);
+}
+
+/** Synchronous, cache-only read of whether dictation is batch-only right now.
+ * Unknown (nothing cached yet) reads as false so the UI never claims a downgrade
+ * it hasn't confirmed. */
+export function voiceBatchOnlyCached(): boolean {
+  if (!cached) {
+    prefetchVoiceConfig();
+    return false;
+  }
+  return voiceIsBatchOnly(cached.cfg);
 }
 
 export async function ensureVoiceConfigured(capability: VoiceCapability): Promise<boolean> {

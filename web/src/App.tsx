@@ -233,6 +233,7 @@ import {
   invalidateVoiceConfig,
   prefetchVoiceConfig,
   showVoiceSetup,
+  voiceBatchOnlyCached,
   voiceConfiguredCached,
   VoiceSetupDialog,
 } from "./voice-setup";
@@ -3477,6 +3478,7 @@ const MicButton = forwardRef<
 
   if (!supported) return null;
   const recording = state === "recording";
+  const batchOnly = voiceBatchOnlyCached();
   // While recording, the button reacts to the live mic level: it scales up and
   // throws a red glow ring that swells with your volume. Inline transitions keep
   // it snappy (the className `transition` would lag the per-frame updates by
@@ -3508,7 +3510,17 @@ const MicButton = forwardRef<
               : "Stop dictation — tap the X above, or press Esc, to cancel"
             : "Dictate"
         }
-        title={recording ? "Tap to send · X or Esc to cancel" : "Tap to dictate · hold to talk"}
+        title={
+          // A batch-only provider still transcribes, it just can't show words as
+          // you speak. Saying so beats looking frozen until the take ends.
+          batchOnly
+            ? recording
+              ? "Transcribes after you stop · X or Esc to cancel"
+              : "Tap to dictate · transcript appears after you stop"
+            : recording
+              ? "Tap to send · X or Esc to cancel"
+              : "Tap to dictate · hold to talk"
+        }
         style={reactiveStyle}
         className={cn(
           "flex shrink-0 touch-none select-none items-center justify-center rounded-full transition",
