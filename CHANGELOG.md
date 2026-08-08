@@ -2,6 +2,24 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - A switch for the named local URL, and one CLI surface (v0.1.317)
+
+- **Settings has a switch for the named local URL.** Turn `omg.local` on or off
+  while the server runs — it takes effect immediately, because advertising the
+  name is just registering an mDNS record. A machine that cannot do it (anything
+  but macOS) shows the switch disabled and says why, rather than offering a
+  control that silently does nothing.
+- **`omg computer <verb>` works on this CLI too.** `omg` may be this command or
+  the omg.dev CLI depending on which comes first on your PATH, and only one
+  spelling can work with both — so machine verbs now answer to either form. The
+  bare verbs are unchanged, so the service unit and existing MCP registrations
+  keep working.
+- **`connect status --json`** gives the omg.dev CLI a real contract to read.
+  It previously recovered the relay URL by pattern-matching this command's
+  English, which the rename to omg.dev had just changed underneath it.
+- Fixed: bootstrap dropped data it had already gathered, and `omg update`
+  reported "LFG" in the one message a successful update prints.
+
 ## August 8, 2026 - Fix: setup failed when an agent CLI was missing (v0.1.316)
 
 - **`omg setup` aborted with "setup failed at line 472" on any machine missing
