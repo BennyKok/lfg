@@ -2,8 +2,20 @@ import { homedir } from "node:os";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
 
+/**
+ * Where to look for projects.
+ *
+ * An empty value is not a choice, it is an unfilled placeholder. `??` only
+ * falls back on null/undefined, so `LFG_REPOS_ROOT=` in a .env resolved the
+ * root to the empty string — and .env is copied from .env.example, which ships
+ * exactly that line. Every install with an unedited .env therefore had no repos
+ * root, which surfaces as a folder picker stuck on "Opening…": the server
+ * answers its own default-directory request with 400 "folder does not exist",
+ * and the picker's fallback to the repos root lands on the same error.
+ */
 export function reposRoot(): string {
-  return process.env.LFG_REPOS_ROOT ?? `${homedir()}/repos`;
+  const configured = process.env.LFG_REPOS_ROOT?.trim();
+  return configured || `${homedir()}/repos`;
 }
 
 function topFolderName(absCwd: string): string {

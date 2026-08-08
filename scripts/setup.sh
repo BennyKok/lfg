@@ -706,7 +706,36 @@ fi
 # New installs are seeded with the OMG_ prefix. Existing installs keep whatever
 # LFG_ names they already have - appending an OMG_ twin would silently out-rank
 # a customised legacy value, since OMG_ wins in src/env-compat.ts.
-seed_env() { grep -qE "^(OMG_|LFG_)$1=" "$LFG_DIR/.env" || echo "OMG_$1=$2" >> "$LFG_DIR/.env"; }
+#
+# An EMPTY assignment does not count as set. .env is copied from .env.example,
+# which carries `OMG_REPOS_ROOT=` as a documentation placeholder, and a presence
+# check matched that line and skipped the seed - so every fresh install ended up
+# with no repos root at all. That is not cosmetic: the folder picker asks the
+# server for its default directory, gets 400 "folder does not exist", and the
+# drawer strands on "Opening..." with nothing to navigate from.
+#
+# A placeholder is filled in place rather than appended to, so .env keeps one
+# assignment per key instead of two that disagree.
+seed_env() {
+  local key="$1" value="$2" file="$LFG_DIR/.env"
+  # A real value - anything that is not whitespace - is the user's, and stays.
+  grep -qE "^(OMG_|LFG_)${key}=[[:space:]]*[^[:space:]]" "$file" && return 0
+  if grep -qE "^(OMG_|LFG_)${key}=[[:space:]]*$" "$file"; then
+    local staged
+    staged="$(mktemp "${TMPDIR:-/tmp}/lfg-env.XXXXXX")"
+    awk -v key="$key" -v value="$value" '
+      !filled && $0 ~ ("^(OMG_|LFG_)" key "=[[:space:]]*$") {
+        print "OMG_" key "=" value
+        filled = 1
+        next
+      }
+      { print }
+    ' "$file" > "$staged" && cat "$staged" > "$file"
+    rm -f "$staged"
+    return 0
+  fi
+  printf '%s=%s\n' "OMG_$key" "$value" >> "$file"
+}
 seed_env HOST 127.0.0.1
 seed_env PORT "$LFG_PORT"
 seed_env REPOS_ROOT "$LFG_REPOS_ROOT"
