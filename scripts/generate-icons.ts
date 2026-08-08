@@ -82,7 +82,11 @@ await Promise.all([
     // image whose current alpha samples happen to be opaque.
     opaqueBackground: "#3b5bf6",
   }),
-  render("icon.svg", "docs/images/omg-icon.png", 192),
+  // docs/images/omg-icon.png is deliberately NOT generated here. It is the
+  // omg.dev brand mark, copied from the product's own icon set, whereas
+  // web/public/icon.svg still draws the legacy lfg wordmark. Regenerating the
+  // README icon from that source would silently put "lfg" back at the top of
+  // the README every time someone ran `bun run icons`.
   render("icon-maskable.svg", "web/public/icon-maskable-512.png", 512, {
     opaqueBackground: "#3b5bf6",
   }),

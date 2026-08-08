@@ -302,7 +302,7 @@ if ! command -v claude >/dev/null 2>&1; then
     say "Installing the Claude CLI..."
     curl -fsSL https://claude.ai/install.sh | bash
   else
-    warn "Claude CLI not found. OMG will start, but Claude sessions will be unavailable until you install/authenticate claude. Re-run with LFG_INSTALL_CLAUDE=1 only if you want setup to run Anthropic's installer."
+    warn "Claude CLI not found. omg.dev will start, but Claude sessions will be unavailable until you install/authenticate claude. Re-run with LFG_INSTALL_CLAUDE=1 only if you want setup to run Anthropic's installer."
   fi
 fi
 export PATH="$HOME/.local/bin:$PATH"
@@ -392,10 +392,10 @@ fi
 
 if [ "$LFG_INSTALL_MODE" = "source" ]; then
   if [ -d "$LFG_DIR/.git" ]; then
-    say "Updating OMG at ${LFG_DIR} (git)..."
+    say "Updating omg.dev at ${LFG_DIR} (git)..."
     git -C "$LFG_DIR" pull --ff-only || warn "git pull skipped (local changes?)"
   else
-    say "Cloning OMG into ${LFG_DIR} (git)..."
+    say "Cloning omg.dev into ${LFG_DIR} (git)..."
     git clone "$LFG_REPO_URL" "$LFG_DIR"
   fi
   # The web UI ships prebuilt in web/dist, so no web build is needed here.
@@ -513,21 +513,21 @@ install_lfg_mcp() {
   local mcp_args=("$BUN_BIN" "$LFG_DIR/src/cli.ts" "mcp")
   local installed=0
   if command -v claude >/dev/null 2>&1; then
-    say "Registering OMG MCP with Claude..."
+    say "Registering omg.dev MCP with Claude..."
     claude mcp remove lfg -s user >/dev/null 2>&1 || true
     if claude mcp add -s user lfg -- "${mcp_args[@]}" >/dev/null 2>&1; then
       installed=1
     else
-      warn "Could not register OMG MCP with Claude. Open Settings -> Coding agents in OMG and run Install MCP after Claude is authenticated."
+      warn "Could not register omg.dev MCP with Claude. Open Settings -> Coding agents in omg.dev and run Install MCP after Claude is authenticated."
     fi
   fi
   if command -v codex >/dev/null 2>&1; then
-    say "Registering OMG MCP with Codex..."
+    say "Registering omg.dev MCP with Codex..."
     codex mcp remove lfg >/dev/null 2>&1 || true
     if codex mcp add lfg -- "${mcp_args[@]}" >/dev/null 2>&1; then
       installed=1
     else
-      warn "Could not register OMG MCP with Codex. Open Settings -> Coding agents in OMG and run Install MCP after Codex is authenticated."
+      warn "Could not register omg.dev MCP with Codex. Open Settings -> Coding agents in omg.dev and run Install MCP after Codex is authenticated."
     fi
   fi
   if [ "$installed" != "1" ]; then
@@ -593,7 +593,7 @@ install_linux_service() {
   mkdir -p "$UNIT_DIR"
   cat > "$UNIT_DIR/$SERVICE-agents.slice" <<'UNIT'
 [Unit]
-Description=OMG managed agent memory boundary
+Description=omg.dev managed agent memory boundary
 
 [Slice]
 # Keep reclaim local to the swarm. memory.high throttles first; memory.max is
@@ -603,7 +603,7 @@ MemoryMax=5G
 UNIT
   cat > "$UNIT_DIR/$SERVICE.service" <<UNIT
 [Unit]
-Description=lfg - self-hosted AI coding agent control plane
+Description=omg.dev - self-hosted AI coding agent control plane
 After=network-online.target tailscaled.service
 Wants=network-online.target
 
@@ -723,7 +723,7 @@ elif command -v tailscale >/dev/null 2>&1 && tailscale status >/dev/null 2>&1; t
     fi
   fi
 else
-  warn "Tailscale is not connected; OMG will be available on this machine at http://127.0.0.1:$LFG_PORT."
+  warn "Tailscale is not connected; omg.dev will be available on this machine at http://127.0.0.1:$LFG_PORT."
 fi
 
 # ---- done ----
@@ -733,9 +733,9 @@ if command -v tailscale >/dev/null 2>&1; then
 fi
 echo
 if [ "$OS_NAME" = "Linux" ]; then
-  say "Done. OMG is running as a systemd user service."
+  say "Done. omg.dev is running as a systemd user service."
 else
-  say "Done. OMG is running as a launchd user service."
+  say "Done. omg.dev is running as a launchd user service."
 fi
 [ "$TAILSCALE_SERVE_CONFIGURED" = "1" ] && [ -n "${URL:-}" ] && echo "    Web UI (tailnet only):  https://$URL"
 # The named host is an /etc/hosts mapping to 127.0.0.1, so it reaches the

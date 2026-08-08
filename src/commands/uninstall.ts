@@ -118,7 +118,7 @@ function assertSafePurgeRoot(root: string, home: string): void {
   const resolvedRoot = resolve(root);
   const resolvedHome = resolve(home);
   if (resolvedRoot === "/" || resolvedRoot === resolvedHome || resolvedRoot === dirname(resolvedHome)) {
-    throw new Error(`Refusing to purge unsafe OMG root: ${resolvedRoot}`);
+    throw new Error(`Refusing to purge unsafe omg.dev root: ${resolvedRoot}`);
   }
   try {
     const manifest = JSON.parse(readFileSync(join(resolvedRoot, "package.json"), "utf8")) as {
@@ -131,7 +131,7 @@ function assertSafePurgeRoot(root: string, home: string): void {
     // the wrong thing to tell someone about their own install.
     if (manifest.name !== "omg" && manifest.name !== "lfg") throw new Error("unrecognised manifest");
   } catch {
-    throw new Error(`Refusing to purge ${resolvedRoot}: it is not an OMG installation.`);
+    throw new Error(`Refusing to purge ${resolvedRoot}: it is not an omg.dev installation.`);
   }
 }
 
@@ -213,7 +213,7 @@ export async function cmdUninstall(
   }
   if (purge) assertSafePurgeRoot(deps.root, deps.home);
 
-  deps.output("Stopping and removing the OMG service…");
+  deps.output("Stopping and removing the omg.dev service…");
   await cleanupService(deps);
 
   // Both registration names, for the same reason the units are swept twice: an
@@ -232,17 +232,17 @@ export async function cmdUninstall(
 
   if (purge) {
     rmSync(deps.root, { recursive: true, force: true });
-    deps.output("LFG and all of its local data were removed.");
+    deps.output("omg.dev and all of its local data were removed.");
     return;
   }
 
   if (deps.channel === "release") {
     removeReleaseApplication(deps.root);
-    deps.output(`LFG was removed. Sessions and config remain in ${deps.root} for a future reinstall.`);
+    deps.output(`omg.dev was removed. Sessions and config remain in ${deps.root} for a future reinstall.`);
     deps.output("Shared tools such as Bun, Tailscale, tmux, and coding-agent CLIs were left installed.");
     return;
   }
 
-  deps.output(`LFG was disabled and removed from PATH. Source and data remain in ${deps.root}.`);
+  deps.output(`omg.dev was disabled and removed from PATH. Source and data remain in ${deps.root}.`);
   deps.output("Shared tools such as Bun, Tailscale, tmux, and coding-agent CLIs were left installed.");
 }
