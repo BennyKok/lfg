@@ -165,7 +165,7 @@ register omg.dev's MCP server with it.
 | Cursor | `cursor-agent` | |
 | Grok | `grok` | |
 | GitHub Copilot | `copilot` | Needs Node 22+ |
-| Pi | *bundled* | Ships with omg.dev (`@earendil-works/pi-coding-agent`); no separate install |
+| Pi | *installed on request* | `OMG_INSTALL_PI=1 omg setup` — its provider layer pulls ~115 MB, so it is not shipped by default |
 
 OAuth-based agents need a one-time terminal or browser login. API-key providers
 read env vars such as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` from `.env`. Pi
@@ -365,8 +365,8 @@ OMG_INSTALL_CLAUDE=1 OMG_INSTALL_OPENCODE=1 omg setup   # or headless
 ```
 
 That is also how a hosted image ships with agents preinstalled — the same lean
-bundle, plus the agents it wants on top. Pi is the exception and stays bundled:
-it has no separately installable binary, and it is 15 MB.
+bundle, plus the agents it wants on top. Pi is installed on request too (`OMG_INSTALL_PI=1 omg setup`): it has no
+separately installable binary, and its provider layer pulls ~115 MB.
 
 [`scripts/prune-modules.ts`](./scripts/prune-modules.ts) does both removals at
 release time and sweeps the symlinks left behind. Building bundles for other

@@ -544,9 +544,11 @@ function installCommandFor(kind: CodingAgentKind): string | null {
   if (kind === "cursor") return "curl -fsSL https://cursor.com/install | bash";
   if (kind === "hermes") return "curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash";
   if (kind === "copilot") return "npm install -g @github/copilot";
-  // pi ships bundled with LFG (node_modules/@earendil-works/pi-coding-agent) —
-  // there is nothing separate to install.
-  if (kind === "pi") return null;
+  // pi is no longer bundled. Its provider layer (@earendil-works/pi-ai) pulls
+  // in eleven SDKs — Anthropic, OpenAI, Google GenAI, Mistral, Bedrock — which
+  // came to 115MB of a 244MB install, for one optional agent among eight.
+  // OMG_INSTALL_PI is recorded in .env so updates keep it.
+  if (kind === "pi") return "OMG_INSTALL_PI=1 omg setup";
   return null;
 }
 
@@ -883,7 +885,7 @@ function statusFor(kind: CodingAgentKind): CodingAgentStatus {
     addBinary("pi runtime", piPath());
     addAuth("pi auth", hasPiAuth(), "set ANTHROPIC_API_KEY or configure ~/.pi/agent/auth.json");
     instructions.push(
-      "pi ships bundled with LFG. Set ANTHROPIC_API_KEY or configure ~/.pi/agent/auth.json — pi has no login step.",
+      "Install pi with `OMG_INSTALL_PI=1 omg setup`, then set ANTHROPIC_API_KEY or configure ~/.pi/agent/auth.json — pi has no login step.",
     );
     // No setup.sh install path and no login subcommand: pi is ready as soon as
     // the bundled runtime exists and its file-based auth is in place.

@@ -7,8 +7,13 @@ const REPO_ROOT = join(import.meta.dir, "..");
 function piPackageName(): string {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, "package.json"), "utf8")) as {
     dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
   };
-  const names = Object.keys(manifest.dependencies ?? {}).filter((n) => n.endsWith("/pi-coding-agent"));
+  // pi moved to devDependencies when it stopped being bundled: a production
+  // install must not carry it, but a checkout still needs it to run the tests
+  // below and to develop against. The pin matters wherever it lives.
+  const names = Object.keys({ ...manifest.dependencies, ...manifest.devDependencies })
+    .filter((n) => n.endsWith("/pi-coding-agent"));
   expect(names).toHaveLength(1);
   return names[0];
 }

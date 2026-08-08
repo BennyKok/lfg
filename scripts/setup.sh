@@ -102,6 +102,11 @@ LFG_INSTALL_OPENCODE="${LFG_INSTALL_OPENCODE:-0}"
 LFG_INSTALL_GROK="${LFG_INSTALL_GROK:-0}"
 LFG_INSTALL_CURSOR="${LFG_INSTALL_CURSOR:-0}"
 LFG_INSTALL_COPILOT="${LFG_INSTALL_COPILOT:-0}"
+# pi is not bundled any more: its provider layer pulls eleven SDKs (Anthropic,
+# OpenAI, Google GenAI, Mistral, Bedrock) totalling ~115MB, for one optional
+# agent. Opting in is recorded in .env so a later update reinstalls it instead
+# of silently dropping it when the release tree is replaced.
+LFG_INSTALL_PI="${LFG_INSTALL_PI:-0}"
 # Pin the installed @github/copilot version so setup is reproducible. Override
 # with LFG_COPILOT_VERSION=x.y.z (or "latest" for opt-in floating installs).
 # 1.0.71 audits clean; <=1.0.42 is affected by GHSA-9ccr-r5hg-74gf
@@ -425,6 +430,11 @@ has_cursor_cli() {
   [ -n "$agent_bin" ] && ! is_grok_agent "$agent_bin"
 }
 
+pi_pinned_version() {
+  jq -r '(.devDependencies["@earendil-works/pi-coding-agent"] // .dependencies["@earendil-works/pi-coding-agent"] // "latest")' \
+    "$LFG_DIR/package.json" 2>/dev/null | sed 's/^[\^~]//'
+}
+
 run_agent_installer() {
   case "$1" in
     claude)   curl -fsSL https://claude.ai/install.sh | bash ;;
@@ -432,6 +442,11 @@ run_agent_installer() {
     opencode) "$BUN_BIN" add -g opencode-ai >/dev/null 2>&1 ;;
     grok)     curl -fsSL https://x.ai/cli/install.sh | bash ;;
     cursor)   curl -fsSL https://cursor.com/install | bash ;;
+    pi)
+      # Installed into the install directory, which is where the harness and
+      # detection both look for it.
+      ( cd "$LFG_DIR" && "$BUN_BIN" add "@earendil-works/pi-coding-agent@$(pi_pinned_version)" >/dev/null 2>&1 )
+      ;;
     copilot)
       if [ "$LFG_COPILOT_VERSION" = "latest" ]; then
         npm install -g "@github/copilot" >/dev/null 2>&1
@@ -480,6 +495,7 @@ ensure_agent opencode "$LFG_INSTALL_OPENCODE" command -v opencode
 ensure_agent grok     "$LFG_INSTALL_GROK"     command -v grok
 ensure_agent cursor   "$LFG_INSTALL_CURSOR"   has_cursor_cli
 ensure_agent copilot  "$LFG_INSTALL_COPILOT"  command -v copilot
+ensure_agent pi       "$LFG_INSTALL_PI"       test -f "$LFG_DIR/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"
 
 # ---- 4. fetch lfg (bundled release tarball, or git clone for dev) ----
 # A git checkout always wins - `lfg setup` from inside a dev clone updates via
@@ -732,6 +748,10 @@ seed_env() {
   fi
   printf '%s=%s\n' "OMG_$key" "$value" >> "$file"
 }
+# Record the pi opt-in. A release update replaces the tree and clears
+# node_modules, so without this the agent someone deliberately installed would
+# vanish on the next update with no explanation.
+[ "$LFG_INSTALL_PI" = "1" ] && seed_env INSTALL_PI 1
 seed_env HOST 127.0.0.1
 seed_env PORT "$LFG_PORT"
 seed_env REPOS_ROOT "$LFG_REPOS_ROOT"

@@ -105,6 +105,13 @@ cp -r \
   .env.example README.md CHANGELOG.md LICENSE SECURITY.md CONTRIBUTING.md \
   "$STAGE/lfg/"
 cp -r web/dist "$STAGE/lfg/web/dist"
+# Source maps are built with sourcemap: "hidden", so no bundle references them
+# and no browser ever fetches one. They were still 27MB of a 61MB download -
+# 700 files, 117MB unpacked, shipped to every install for a debugging aid that
+# only pays off in a source checkout, which builds its own. Keep generating
+# them; stop shipping them.
+find "$STAGE/lfg/web/dist" -name '*.map' -delete
+say "Web UI staged ($(du -sh "$STAGE/lfg/web/dist" | cut -f1), source maps excluded)."
 bun run scripts/prepare-release-manifest.ts "$STAGE/lfg/package.json"
 
 VENDOR_PACKAGES="${LFG_VENDOR_PACKAGES:-}"
