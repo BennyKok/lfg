@@ -143,6 +143,11 @@ if [ -n "$SCRIPT_SRC" ] && [ -f "$SCRIPT_SRC" ]; then
   fi
 fi
 
+# Tag every line we append to a user's shell rc, so uninstall can take exactly
+# its own lines back out instead of leaving PATH edits behind forever. Keep in
+# sync with src/commands/uninstall.ts.
+RC_MARKER="# added by omg.dev setup"
+
 ensure_path_line() { # append a line to common interactive shell rc files once
   [ "$LFG_UPDATE_SHELL_RC" = "1" ] || return 0
   local line="$1"
@@ -151,8 +156,38 @@ ensure_path_line() { # append a line to common interactive shell rc files once
     files+=("$HOME/.zshrc")
   fi
   for file in "${files[@]}"; do
-    grep -qxF "$line" "$file" 2>/dev/null || echo "$line" >> "$file"
+    # Substring match, not whole-line: installs from before the marker existed
+    # carry the bare line, and appending a marked twin would duplicate the PATH
+    # entry on every subsequent setup.
+    grep -qF "$line" "$file" 2>/dev/null && continue
+    printf '%s %s\n' "$line" "$RC_MARKER" >> "$file"
   done
+}
+
+# Link a command name at our CLI without trampling someone else's.
+#
+# `ln -sf` overwrites whatever is in the way, which made setup the destructive
+# half of a pair whose uninstall carefully refuses to remove a link it does not
+# own. That asymmetry bites hardest on `omg`: the omg.dev CLI installs a command
+# by the same name, so an unconditional force-link silently replaces it.
+link_command() {
+  local name="$1" target="$2" path="$HOME/.local/bin/$1"
+  if [ -e "$path" ] || [ -L "$path" ]; then
+    local current=""
+    [ -L "$path" ] && current="$(readlink "$path" 2>/dev/null || true)"
+    if [ "$current" != "$target" ]; then
+      # Ours from a previous install (any install dir) is fair game to update;
+      # anything else belongs to the user or another tool.
+      case "$current" in
+        */src/cli.ts) ;;
+        *)
+          warn "Leaving existing ${path} alone (not installed by omg.dev). Run it as ${target} or remove that file and re-run setup."
+          return 0
+          ;;
+      esac
+    fi
+  fi
+  ln -sf "$target" "$path"
 }
 
 sha256_file() {
@@ -504,8 +539,8 @@ fi
 # stays behind it so existing scripts, cron entries and muscle memory keep
 # working on a box that upgrades into the new name.
 mkdir -p "$HOME/.local/bin"
-ln -sf "$LFG_DIR/src/cli.ts" "$HOME/.local/bin/omg"
-ln -sf "$LFG_DIR/src/cli.ts" "$HOME/.local/bin/lfg"
+link_command omg "$LFG_DIR/src/cli.ts"
+link_command lfg "$LFG_DIR/src/cli.ts"
 chmod +x "$LFG_DIR/src/cli.ts" 2>/dev/null || true
 
 install_lfg_mcp() {

@@ -215,6 +215,48 @@ describe("omg uninstall", () => {
     expect(hosts).toContain("10.0.0.5\tkeep.example");
   });
 
+  // Setup appends PATH lines to the user's shell rc. Leaving them behind meant
+  // an uninstall still edited every new shell forever.
+  test("removes its own shell rc lines and leaves the user's alone", async () => {
+    const f = fixture();
+    roots.push(f.home);
+    const rc = join(f.home, ".bashrc");
+    writeFileSync(
+      rc,
+      [
+        "# user's own file",
+        'export EDITOR=vim',
+        'export PATH="$HOME/.bun/bin:$PATH" # added by omg.dev setup',
+        'export PATH="$HOME/.local/bin:$PATH" # added by omg.dev setup',
+        'export PATH="$HOME/mytools:$PATH"',
+        "",
+      ].join("\n"),
+    );
+
+    await cmdUninstall([], f.deps);
+
+    const after = readFileSync(rc, "utf8");
+    expect(after).not.toContain("added by omg.dev setup");
+    expect(after).not.toContain(".bun/bin");
+    expect(after).toContain("export EDITOR=vim");
+    expect(after).toContain("$HOME/mytools");
+    expect(after).toContain("# user's own file");
+  });
+
+  test("leaves an untagged PATH line alone rather than guessing", async () => {
+    const f = fixture();
+    roots.push(f.home);
+    const rc = join(f.home, ".bashrc");
+    // Pre-marker installs wrote the bare line. It is indistinguishable from one
+    // the user added, so it is not ours to delete.
+    const original = 'export PATH="$HOME/.bun/bin:$PATH"\n';
+    writeFileSync(rc, original);
+
+    await cmdUninstall([], f.deps);
+
+    expect(readFileSync(rc, "utf8")).toBe(original);
+  });
+
   test("leaves a hosts file that has no OMG block alone", async () => {
     const f = fixture();
     roots.push(f.home);

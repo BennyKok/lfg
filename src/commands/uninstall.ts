@@ -39,6 +39,14 @@ export type UninstallDependencies = {
 const HOSTS_BEGIN = "# >>> omg local hostname >>>";
 const HOSTS_END = "# <<< omg local hostname <<<";
 
+/**
+ * Tag scripts/setup.sh appends to every shell rc line it writes. Uninstall
+ * removes exactly the tagged lines: untagged PATH edits predate the marker or
+ * belong to the user, and guessing at those would edit a file we do not own.
+ */
+const RC_MARKER = "# added by omg.dev setup";
+const RC_FILES = [".bashrc", ".zshrc"];
+
 async function run(command: string[]): Promise<CommandResult> {
   const child = Bun.spawn(command, {
     stdin: "ignore",
@@ -85,6 +93,23 @@ function removeOwnedCommands(home: string, root: string): string[] {
     removed.push(name);
   }
   return removed;
+}
+
+/** Take back the PATH lines setup appended to the user's shell rc files. */
+function removeShellRcLines(deps: UninstallDependencies): void {
+  for (const name of RC_FILES) {
+    const path = join(deps.home, name);
+    let current: string;
+    try {
+      current = readFileSync(path, "utf8");
+    } catch {
+      continue;
+    }
+    if (!current.includes(RC_MARKER)) continue;
+    const kept = current.split("\n").filter(line => !line.includes(RC_MARKER));
+    writeFileSync(path, kept.join("\n"));
+    deps.output(`Removed omg.dev's PATH lines from ~/${name}.`);
+  }
 }
 
 /** Drop the named-local-URL block setup appended to the hosts file. */
@@ -228,6 +253,7 @@ export async function cmdUninstall(
   }
 
   removeOwnedCommands(deps.home, deps.root);
+  removeShellRcLines(deps);
   await removeLocalHostname(deps);
 
   if (purge) {
