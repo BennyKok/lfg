@@ -2,6 +2,19 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - The folder picker finds its way back (v0.1.305)
+
+- **A deleted project folder no longer traps the picker.** "Choose a project"
+  opens on the folder you used last, remembered in the browser and never
+  rechecked. Once that folder was deleted or renamed — a pruned worktree, a
+  repo moved on disk — opening the picker showed "folder does not exist" over
+  an empty list, with the header stuck on "Opening…" and both **New Folder**
+  and **Use This Folder** greyed out. Closing and reopening returned to the
+  same dead end. The picker now drops back to your projects folder and says
+  which path went missing, so you can navigate on from there. Clicking into a
+  folder that genuinely fails still reports the error where it happened
+  instead of jumping you elsewhere.
+
 ## August 8, 2026 - The folder picker can no longer take the app down (v0.1.304)
 
 - **Browsing for a project folder can't crash the app anymore.** The picker
