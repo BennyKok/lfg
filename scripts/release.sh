@@ -145,6 +145,44 @@ SIZE="$(du -h "$OUT_DIR/$ASSET" | cut -f1)"
 say "Built $OUT_DIR/$ASSET ($SIZE)"
 cat "$OUT_DIR/$ASSET.sha256"
 
+# ---- per-platform bundles -------------------------------------------------
+# The neutral bundle above ships no dependencies, so every install resolves the
+# graph itself and pulls ~2GB - including musl builds that cannot execute on a
+# glibc host, because Bun filters optionalDependencies by os and cpu but not by
+# libc. These bundles carry node_modules already installed and pruned for one
+# target, which is what lets setup.sh skip `bun install` entirely.
+PLATFORM_ASSETS=()
+PLATFORMS="${LFG_RELEASE_PLATFORMS:-linux-x64 linux-arm64 darwin-x64 darwin-arm64}"
+if [ "${LFG_SKIP_PLATFORM_BUNDLES:-0}" = "1" ]; then
+  say "LFG_SKIP_PLATFORM_BUNDLES=1 - neutral bundle only."
+  PLATFORMS=""
+fi
+for platform in $PLATFORMS; do
+  target_os="${platform%-*}"
+  target_cpu="${platform#*-}"
+  # musl targets would want the mirror-image prune; setup.sh requires apt-get or
+  # Homebrew, so every bundle we publish is a glibc/darwin one.
+  pstage="$(mktemp -d "${TMPDIR:-/tmp}/lfg-platform.XXXXXX")"
+  say "Building platform bundle ${platform}..."
+  cp -a "$STAGE/lfg" "$pstage/lfg"
+  if ! ( cd "$pstage/lfg" && unset CI && bun install --production \
+           --os="$target_os" --cpu="$target_cpu" >/dev/null 2>&1 ); then
+    printf '\033[1;33m[!]\033[0m %s\n' "bun install failed for $platform - skipping that bundle." >&2
+    rm -rf "$pstage"
+    continue
+  fi
+  bun run "$ROOT/scripts/prune-modules.ts" \
+    --root "$pstage/lfg/node_modules" \
+    --os "$target_os" --cpu "$target_cpu" --libc glibc --quiet
+  platform_asset="omg-${platform}.tar.gz"
+  tar -C "$pstage" -czf "$OUT_DIR/$platform_asset" lfg
+  ( cd "$OUT_DIR" && printf '%s  %s\n' "$(sha256_file "$platform_asset")" "$platform_asset" \
+      > "$platform_asset.sha256" )
+  say "  $platform_asset ($(du -h "$OUT_DIR/$platform_asset" | cut -f1))"
+  PLATFORM_ASSETS+=("$OUT_DIR/$platform_asset" "$OUT_DIR/$platform_asset.sha256")
+  rm -rf "$pstage"
+done
+
 if [ -z "$VERSION" ]; then
   echo
   say "No version given - artifact built but not published."
@@ -159,11 +197,13 @@ if gh release view "$VERSION" --repo "$REPO_SLUG" >/dev/null 2>&1; then
     "$OUT_DIR/$ASSET" "$OUT_DIR/$ASSET.sha256" \
     "$OUT_DIR/$LEGACY_ASSET" "$OUT_DIR/$LEGACY_ASSET.sha256" \
     "$OUT_DIR"/omg-dev-*.tgz \
+    ${PLATFORM_ASSETS+"${PLATFORM_ASSETS[@]}"} \
     --repo "$REPO_SLUG" --clobber
 else
   gh release create "$VERSION" \
     "$OUT_DIR/$ASSET" "$OUT_DIR/$ASSET.sha256" \
     "$OUT_DIR/$LEGACY_ASSET" "$OUT_DIR/$LEGACY_ASSET.sha256" "$OUT_DIR"/omg-dev-*.tgz \
+    ${PLATFORM_ASSETS+"${PLATFORM_ASSETS[@]}"} \
     --repo "$REPO_SLUG" --title "$VERSION" --generate-notes
 fi
 say "Done. Latest-release install URL:"

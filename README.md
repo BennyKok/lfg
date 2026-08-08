@@ -53,11 +53,9 @@ user service bound to loopback. On a fresh Ubuntu/Debian box, add
 
 The install lands in `~/omg` and runs as `omg.service` (launchd: `dev.omg.serve`).
 
-> **Heads up on the first install.** Provisioning currently downloads roughly
-> 2 GB of agent-runtime binaries, so on a home connection expect minutes, not
-> seconds. Making this dramatically smaller is
-> [active work](#making-installs-smaller) — the resolver is fast; the payload is
-> not.
+Setup downloads a bundle built for your exact OS and CPU with dependencies
+already installed, so nothing is resolved, compiled, or fetched from npm on your
+machine. See [how installs stay small](#how-installs-stay-small).
 
 Next: [connect a coding agent](#connect-a-coding-agent) so you have something to
 run, then [reach it from your phone](#reach-it-from-your-phone).
@@ -308,32 +306,49 @@ WhatsApp bridge (`OMG_WHATSAPP_*`).
 Backend diagnostics append to `data/logs/trace-YYYY-MM-DD.jsonl` (API timings,
 transcript indexing, live stream stalls, send queue state).
 
-## Making installs smaller
+## How installs stay small
 
-A first install currently downloads about **2 GB**, and almost none of that is
-OMG itself — it is agent-runtime binaries pulled in as transitive
-`optionalDependencies`:
+Each release publishes a bundle per platform — `omg-linux-x64.tar.gz`,
+`omg-linux-arm64.tar.gz`, `omg-darwin-x64.tar.gz`, `omg-darwin-arm64.tar.gz` —
+with `node_modules` already installed for that target and pruned of anything it
+cannot run. Setup downloads the one matching your machine and skips dependency
+resolution entirely.
 
-| Package | Size |
-| --- | --- |
-| `@openai/codex-linux-x64` | 336 MB |
-| `@anthropic-ai/claude-agent-sdk-linux-x64` | 247 MB |
-| `@anthropic-ai/claude-agent-sdk-linux-x64-musl` | 242 MB |
-| `opencode-linux-x64-baseline` | 150 MB |
-| `opencode-linux-x64-musl` | 147 MB |
-| `opencode-linux-x64-baseline-musl` | 147 MB |
+This matters more than it sounds. Resolution was never the slow part: a cold
+`bun install --production` finishes in about **3 seconds**. The problem was that
+it dragged roughly **2 GB** behind it, most of it agent-runtime binaries pulled
+in as transitive `optionalDependencies` — and **667 MB of that could not execute
+on the target at all**:
 
-**556 MB of that cannot execute on a glibc machine at all** — they are `musl`
-builds. `opencode-ai` alone declares twelve platform variants, and while Bun
-filters `optionalDependencies` by `os` and `cpu`, it does not filter by `libc`,
-so the wrong-libc builds land on every Linux install. There is no
-`bun install --libc` flag to opt out.
+| Package | Size | On a glibc host |
+| --- | --- | --- |
+| `@openai/codex-linux-x64` | 336 MB | used |
+| `@anthropic-ai/claude-agent-sdk-linux-x64` | 247 MB | used |
+| `@anthropic-ai/claude-agent-sdk-linux-x64-musl` | 279 MB | **unusable** |
+| `opencode-linux-x64-musl` | 185 MB | **unusable** |
+| `opencode-linux-x64-baseline-musl` | 185 MB | **unusable** |
+| `@img/sharp-libvips-linuxmusl-x64` | 18 MB | **unusable** |
 
-Dependency resolution itself is not the bottleneck — a cold
-`bun install --production` completes in about 3 seconds. The fix is to stop
-shipping bytes the target platform can never run, by publishing pruned
-per-platform release bundles rather than resolving the graph on each machine.
-Tracking issue welcome; see [CONTRIBUTING.md](./CONTRIBUTING.md).
+npm expresses this with the `libc` manifest field, and Bun honours `os` and
+`cpu` when resolving `optionalDependencies` but not `libc` — so every glibc
+Linux install also downloaded the musl builds, with no
+`bun install --libc` flag to opt out. [`scripts/prune-modules.ts`](./scripts/prune-modules.ts)
+removes them at release time and sweeps the symlinks left behind.
+
+Building bundles for other platforms works because `bun install --os --cpu`
+resolves another target's optional dependencies, so a Linux CI box can produce
+correct macOS bundles.
+
+```bash
+scripts/release.sh                          # neutral bundle + all platforms
+LFG_RELEASE_PLATFORMS="linux-x64" scripts/release.sh
+LFG_SKIP_PLATFORM_BUNDLES=1 scripts/release.sh   # neutral bundle only
+```
+
+The platform-neutral `omg-bundle.tar.gz` is still published, and setup falls
+back to it (then to the pre-rename `lfg-bundle.tar.gz`) when no platform bundle
+matches — an unusual architecture still installs, it just resolves dependencies
+locally the old way.
 
 ## Deploy to a cloud host
 

@@ -181,7 +181,7 @@ platform_asset() {
     arm64|aarch64) arch="arm64" ;;
     *) die "Unsupported CPU architecture: $(uname -m)" ;;
   esac
-  printf 'lfg-%s-%s.tar.gz' "$os" "$arch"
+  printf 'omg-%s-%s.tar.gz' "$os" "$arch"
 }
 
 tailscale_sudo() {
@@ -435,40 +435,43 @@ else
     fi
   }
 
-  ASSET="${LFG_RELEASE_ASSET:-omg-bundle.tar.gz}"
-  URL="$(release_url "$ASSET")"
+  # Asset preference, best first:
+  #   1. omg-<os>-<arch>  - ships node_modules already installed and pruned for
+  #      this platform, so no dependency resolution happens here at all. That is
+  #      the difference between a ~2GB download and a small one, because the
+  #      neutral bundle's target-side install also pulls musl builds this host
+  #      cannot execute (Bun filters optionalDependencies by os and cpu, not libc).
+  #   2. omg-bundle       - platform-neutral, needs a target-side bun install.
+  #   3. lfg-bundle       - pre-rename name; pinning LFG_RELEASE to an older tag
+  #                         has to keep working.
+  # An explicit LFG_RELEASE_ASSET overrides the lot and is never second-guessed.
+  if [ -n "${LFG_RELEASE_ASSET:-}" ]; then
+    ASSET_CANDIDATES=("$LFG_RELEASE_ASSET")
+  else
+    ASSET_CANDIDATES=("$(platform_asset)" "omg-bundle.tar.gz" "lfg-bundle.tar.gz")
+  fi
+
   say "Downloading bundled release (${LFG_RELEASE}) from ${LFG_REPO_SLUG}..."
-  TMP_TGZ="$(mktemp_tgz)"
-  if ! curl -fSL "$URL" -o "$TMP_TGZ"; then
-    rm -f "$TMP_TGZ"
-    # Releases cut before the rename only carry lfg-bundle.tar.gz. Pinning
-    # LFG_RELEASE to any older tag has to keep working, so fall back by name
-    # before giving up.
-    if [ -z "${LFG_RELEASE_ASSET:-}" ] && [ "$ASSET" != "lfg-bundle.tar.gz" ]; then
-      ASSET="lfg-bundle.tar.gz"
-      URL="$(release_url "$ASSET")"
-      say "Trying the pre-rename asset name ($ASSET)..."
-      TMP_TGZ="$(mktemp_tgz)"
-      if ! curl -fSL "$URL" -o "$TMP_TGZ"; then
-        rm -f "$TMP_TGZ"
-        TMP_TGZ=""
-      fi
+  TMP_TGZ=""
+  ASSET=""
+  for candidate in "${ASSET_CANDIDATES[@]}"; do
+    URL="$(release_url "$candidate")"
+    attempt="$(mktemp_tgz)"
+    if curl -fSL "$URL" -o "$attempt" && [ -s "$attempt" ]; then
+      ASSET="$candidate"
+      TMP_TGZ="$attempt"
+      say "Using $ASSET."
+      break
     fi
-  fi
-  if [ -z "${TMP_TGZ:-}" ] || [ ! -s "$TMP_TGZ" ]; then
-    rm -f "${TMP_TGZ:-}"
+    rm -f "$attempt"
+  done
+  if [ -z "$ASSET" ]; then
     if [ -n "${LFG_RELEASE_ASSET:-}" ]; then
-      die "Could not download $URL - check the tag, or use LFG_INSTALL_MODE=source."
-    elif [ "${LFG_ALLOW_PLATFORM_BUNDLE:-0}" = "1" ]; then
-      ASSET="$(platform_asset)"
-      URL="$(release_url "$ASSET")"
-      warn "Platform-neutral bundle not found; trying platform asset $ASSET."
-      TMP_TGZ="$(mktemp_tgz)"
-      curl -fSL "$URL" -o "$TMP_TGZ" || die "Could not download $URL - check the tag, or use LFG_INSTALL_MODE=source."
-    else
-      die "Could not download $URL - check the tag, set LFG_RELEASE_ASSET explicitly, or use LFG_INSTALL_MODE=source."
+      die "Could not download ${LFG_RELEASE_ASSET} - check the tag, or use LFG_INSTALL_MODE=source."
     fi
+    die "Could not download any release asset (${ASSET_CANDIDATES[*]}) - check the tag, set LFG_RELEASE_ASSET explicitly, or use LFG_INSTALL_MODE=source."
   fi
+  URL="$(release_url "$ASSET")"
   # Verify the checksum when the release ships one (best-effort).
   if curl -fsSL "$URL.sha256" -o "$TMP_TGZ.sha256" 2>/dev/null; then
     EXPECTED="$(awk '{print $1}' "$TMP_TGZ.sha256")"
@@ -481,12 +484,18 @@ else
   extract_release_archive "$TMP_TGZ" "$LFG_DIR"
   rm -f "$TMP_TGZ" "$TMP_TGZ.sha256"
 
-  if [ "${LFG_SKIP_BUN_INSTALL:-0}" != "1" ]; then
+  # A platform bundle already carries node_modules, correct for this OS/arch and
+  # pruned of builds that cannot run here. Re-resolving on top of it would undo
+  # the entire point of shipping it, so only install when dependencies are
+  # genuinely absent.
+  if [ "${LFG_SKIP_BUN_INSTALL:-0}" = "1" ]; then
+    warn "Skipping production dependency install because LFG_SKIP_BUN_INSTALL=1."
+  elif [ -d "$LFG_DIR/node_modules" ] && [ -n "$(ls -A "$LFG_DIR/node_modules" 2>/dev/null)" ]; then
+    say "Dependencies shipped with $ASSET - skipping install."
+  else
     say "Installing production dependencies on this machine..."
     rm -rf "$LFG_DIR/node_modules"
     ( cd "$LFG_DIR" && unset CI && "$BUN_BIN" install --production )
-  else
-    warn "Skipping production dependency install because LFG_SKIP_BUN_INSTALL=1."
   fi
 fi
 
