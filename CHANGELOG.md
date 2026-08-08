@@ -2,6 +2,20 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - The folder picker works on a fresh install (v0.1.314)
+
+- **"Choose a project" no longer opens stuck on "Opening…".** On a brand new
+  install, before anyone touched a setting, the picker showed an empty listing
+  and "folder does not exist". `.env` is copied from `.env.example`, which
+  ships `OMG_REPOS_ROOT=` as documentation, and that empty value was read as a
+  deliberate answer rather than an unfilled placeholder — so the server had no
+  repos root and answered its own default-directory request with a 400.
+- The picker's fallback, added in v0.1.305 so a missing folder could not strand
+  the drawer, landed on the same error: it falls back *to* the repos root, and
+  the repos root was the thing that was empty.
+- Existing installs are repaired by updating — no `.env` edit needed. Re-running
+  `omg setup` also fills the placeholder in place.
+
 ## August 8, 2026 - The worktree sweeper stays in its lane (v0.1.314)
 
 - **The folder picker works on a brand-new install.** It could open on
