@@ -30,7 +30,11 @@ afterEach(() => {
  * passed while the real script kept the name on every upgraded box.
  */
 function exposeCommands(
-  options: { otherOmg?: "forwards" | "legacy"; staleOmgLink?: boolean } = {},
+  options: {
+    otherOmg?: "forwards" | "legacy";
+    staleOmgLink?: boolean;
+    npmInLocalBin?: boolean;
+  } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "omg-command-name-"));
   roots.push(root);
@@ -49,16 +53,20 @@ function exposeCommands(
   // A different program already answering to `omg` — the npm CLI. "forwards"
   // is a version that hands unknown commands to this install (its output is
   // then the local CLI's help); "legacy" is one that only prints its own.
+  //
+  // `npmInLocalBin` reproduces the layout on a real box: npm's global prefix is
+  // often ~/.local, so `npm i -g @omg-dev/cli` lands its omg in the same
+  // directory we install into.
   const extraPath: string[] = [];
   if (options.otherOmg) {
-    const dir = join(root, "npm-bin");
+    const dir = options.npmInLocalBin ? join(home, ".local", "bin") : join(root, "npm-bin");
     mkdirSync(dir, { recursive: true });
     const reply =
       options.otherOmg === "forwards"
         ? "omg — run and manage your AI coding agents on your own box"
         : "omg — deploy a local project to omg.dev";
     writeFileSync(join(dir, "omg"), `#!/bin/sh\necho "${reply}"\n`, { mode: 0o755 });
-    extraPath.push(dir);
+    if (!options.npmInLocalBin) extraPath.push(dir);
   }
 
   const source = readFileSync(SETUP_SH, "utf8");
@@ -131,6 +139,15 @@ describe("setup.sh: which command names it installs", () => {
     const result = exposeCommands({ otherOmg: "legacy" });
     expect(result.omg).toBe(true);
     expect(result.stdout).toContain("cannot forward here yet");
+  });
+
+  test("finds the npm CLI even when it installs into ~/.local/bin", () => {
+    // npm's global prefix is commonly ~/.local, so its omg lands in the very
+    // directory we install into. Treating that path as "ours" by location
+    // would hide the one CLI this arbitration exists to detect.
+    const result = exposeCommands({ otherOmg: "forwards", npmInLocalBin: true });
+    expect(result.stdout).toContain("forwards here");
+    expect(result.lfg).toBe(true);
   });
 
   test("keeps its own omg across a plain re-run", () => {

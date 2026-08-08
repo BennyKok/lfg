@@ -626,16 +626,27 @@ link_command lfg "$LFG_DIR/src/cli.ts"
 # order deciding which the name means — and since we prepend ~/.local/bin, ours
 # wins and silently shadows theirs.
 #
-# Find an `omg` that is not ours. `command -v` cannot answer this: with
-# ~/.local/bin first, it returns our own symlink on any box we have already
-# touched, so we would keep the name forever.
+# Find an `omg` that is not ours. Two things this must not assume:
+#
+#   - that `command -v omg` finds it. With ~/.local/bin first on PATH it
+#     returns our own symlink on any box we have already touched, so we would
+#     keep the name forever.
+#   - that ~/.local/bin/omg is ours. npm's global prefix is often ~/.local, so
+#     `npm i -g @omg-dev/cli` puts *its* omg in that very directory. Skipping
+#     the path would hide the one CLI we are looking for.
+#
+# Identify ours the way link_command does: by what the link points at.
 other_omg=""
 _saved_ifs="$IFS"
 IFS=:
 for _dir in $PATH; do
   [ -n "$_dir" ] || continue
-  [ "$_dir/omg" = "$HOME/.local/bin/omg" ] && continue
-  if [ -x "$_dir/omg" ]; then other_omg="$_dir/omg"; break; fi
+  [ -x "$_dir/omg" ] || continue
+  case "$(readlink "$_dir/omg" 2>/dev/null || true)" in
+    */src/cli.ts) continue ;;
+  esac
+  other_omg="$_dir/omg"
+  break
 done
 IFS="$_saved_ifs"
 
