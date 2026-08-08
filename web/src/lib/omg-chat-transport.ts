@@ -334,6 +334,15 @@ export function appendOmgTranscriptEvent(
   return current;
 }
 
+// The stream handed back to a steering send that is riding an already-open live
+// stream. It carries no chunks, so the AI SDK adds no second assistant message
+// and settles the send immediately.
+function emptyChunkStream(): ReadableStream<UIMessageChunk> {
+  return new ReadableStream<UIMessageChunk>({
+    start: (controller) => controller.close(),
+  });
+}
+
 class OmgChunkEmitter {
   private activeTextIds = new Set<string>();
   private textById: Record<string, string> = {};
@@ -484,6 +493,11 @@ export class OmgChatTransport implements ChatTransport<OmgChatMessage> {
   private readonly apiBase: string;
   private readonly usesConfiguredTransport: boolean;
   private readonly sessionId: string;
+  // Live emitters held by this transport. See sendMessages: at most one, ever.
+  // Scoped to the instance rather than to the session id on purpose — a stream
+  // that is created and then never consumed would otherwise hold a global slot
+  // forever, muting the session; here it dies with the transport.
+  private liveStreams = 0;
 
   constructor({ sessionId, apiBase = "", subscribeTranscript, fetch: fetchImpl }: OmgChatTransportOptions) {
     this.sessionId = sessionId;
@@ -508,52 +522,85 @@ export class OmgChatTransport implements ChatTransport<OmgChatMessage> {
   }: Parameters<ChatTransport<OmgChatMessage>["sendMessages"]>[0]): Promise<ReadableStream<UIMessageChunk>> {
     const text = this.extractLatestUserText(messages);
     if (!text) throw new Error("Cannot send an empty message");
-    const stream = this.createStream(abortSignal);
-    const response = await this.fetchImpl(this.requestTarget(`/api/sessions/${encodeURIComponent(this.sessionId)}/send`), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text, mode: (body as { mode?: string } | undefined)?.mode }),
-      signal: abortSignal,
-    });
-    if (!response.ok) {
-      const data = await response.json().catch(() => null) as { error?: string } | null;
-      throw new Error(data?.error || `${response.status} ${response.statusText}`);
+    // Steering — a second send while the previous turn is still streaming — must
+    // NOT open a second live stream. AbstractChat keeps one `activeResponse` per
+    // call but a single `lastMessage`, and every stream write picks
+    // replace-vs-append by comparing its own message id against the tail of the
+    // list. Two concurrent responses therefore each find the OTHER one's message
+    // at the tail on every chunk and push a fresh copy of themselves instead of
+    // replacing — so one steered turn repeats its whole
+    // thinking + tools + text group down the transcript, once per chunk, until
+    // the turn ends. (The AI SDK neither serializes nor aborts the first
+    // response; `makeRequest` just overwrites `this.activeResponse`.)
+    //
+    // A single emitter is also what the design already means: it subscribes to
+    // the SESSION, not to this individual send, so the stream that is already
+    // open renders the steered turn too. The extra send only needs to reach the
+    // server, and its (empty) stream resolves immediately.
+    const live = this.liveStreams === 0 ? this.createLiveStream(abortSignal) : null;
+    try {
+      const response = await this.fetchImpl(this.requestTarget(`/api/sessions/${encodeURIComponent(this.sessionId)}/send`), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text, mode: (body as { mode?: string } | undefined)?.mode }),
+        signal: abortSignal,
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => null) as { error?: string } | null;
+        throw new Error(data?.error || `${response.status} ${response.statusText}`);
+      }
+    } catch (error) {
+      // Nothing will ever consume this stream, so release the subscription and
+      // the slot here — otherwise one failed send would leave liveStreams stuck
+      // above zero and silently mute every later turn in this session.
+      live?.release();
+      throw error;
     }
-    return stream;
+    return live ? live.stream : emptyChunkStream();
   }
 
   async reconnectToStream(): Promise<ReadableStream<UIMessageChunk> | null> {
     return null;
   }
 
-  private createStream(abortSignal?: AbortSignal): ReadableStream<UIMessageChunk> {
+  // Claims this transport's single live-stream slot and holds it until the
+  // emitter closes, the consumer cancels, or the caller releases it.
+  private createLiveStream(abortSignal?: AbortSignal): {
+    stream: ReadableStream<UIMessageChunk>;
+    release: () => void;
+  } {
     let unsubscribe: (() => void) | null = null;
     let emitter: OmgChunkEmitter | null = null;
+    let released = false;
     const sid = this.sessionId;
-    return new ReadableStream<UIMessageChunk>({
+    this.liveStreams += 1;
+    const release = () => {
+      if (released) return;
+      released = true;
+      this.liveStreams -= 1;
+      unsubscribe?.();
+      unsubscribe = null;
+      emitter = null;
+    };
+    const stream = new ReadableStream<UIMessageChunk>({
       start: (controller) => {
-        const cleanup = () => {
-          unsubscribe?.();
-          unsubscribe = null;
-        };
         if (!this.subscribeTranscript) {
           controller.enqueue({ type: "error", errorText: "live transcript subscription is unavailable" });
           controller.close();
+          release();
           return;
         }
-        emitter = new OmgChunkEmitter(controller, cleanup);
+        emitter = new OmgChunkEmitter(controller, release);
         unsubscribe = this.subscribeTranscript(sid, (event) => emitter?.handle(event));
         abortSignal?.addEventListener("abort", () => {
-          cleanup();
-          emitter?.abort("aborted");
+          const active = emitter;
+          release();
+          active?.abort("aborted");
         }, { once: true });
       },
-      cancel: () => {
-        unsubscribe?.();
-        unsubscribe = null;
-        emitter = null;
-      },
+      cancel: release,
     });
+    return { stream, release };
   }
 
   private extractLatestUserText(messages: OmgChatMessage[]) {
