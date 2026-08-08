@@ -2,6 +2,20 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - A missing model list now repairs itself (v0.1.302)
+
+- **Installing an agent CLI after LFG is running no longer takes until the
+  next morning to show up.** LFG asks each agent CLI what models it offers a
+  few seconds after starting. If a CLI was not installed or signed in yet, that
+  failure was recorded as the answer and nothing asked again until 08:00 the
+  following day — so a box set up in the wrong order, most often a fresh
+  workspace, showed a stale built-in model list for up to 24 hours no matter
+  what you installed in the meantime. Failed lookups are now retried on a
+  widening interval that tops out at half an hour, so a CLI installed at any
+  point is picked up on its own. A harness that has no model-list command is
+  left alone rather than retried forever, and a retry no longer disturbs the
+  providers that already answered.
+
 ## August 8, 2026 - Read and edit the files an agent touched (v0.1.301)
 
 - **There is now a Files panel in the chat.** The diffs bar only ever showed
