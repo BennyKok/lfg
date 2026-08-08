@@ -11,7 +11,7 @@ hosted OMG workspaces, that hop is Cloudflare, not Bun. Cloudflare is already
 serving the relevant public hosts over HTTP/2, so changing Bun from HTTP/1.1
 would not remove a browser-side six-connection limit for those URLs. If a real
 workspace still shows `http/1.1` in Chrome, the operator should fix the edge
-zone or route configuration for that hostname, not the lfg process.
+zone or route configuration for that hostname, not the OMG process.
 
 ## Current Serving Topology
 
@@ -26,11 +26,11 @@ zone or route configuration for that hostname, not the lfg process.
 
 Repo-local deployment paths:
 
-- Self-hosted setup: `scripts/setup.sh` keeps lfg on loopback and optionally
+- Self-hosted setup: `scripts/setup.sh` keeps OMG on loopback and optionally
   fronts it with `tailscale serve --https=<port> http://127.0.0.1:<LFG_PORT>`.
 - Fly: `fly.toml` has no public `http_service`; `deploy/fly/README.md` says to
   use private networking, WireGuard, Tailscale, or a local proxy.
-- Railway and Render: the shared Dockerfile binds lfg to the platform-provided
+- Railway and Render: the shared Dockerfile binds OMG to the platform-provided
   port; the platform edge is the browser-facing TLS/protocol terminator.
 - OMG one-click workspace: `deploy/omg/README.md` says the control plane starts
   `lfg serve --host 0.0.0.0 --port 8766` and redirects the browser to the
@@ -44,7 +44,7 @@ browser
   -> Cloudflare Tunnel
   -> Go `vibes-sandbox` HTTP server on :7070
   -> Go preview/deploy reverse proxy
-  -> sandbox VM port, e.g. lfg on :8766
+  -> sandbox VM port, e.g. OMG on :8766
 ```
 
 Relevant platform files:
@@ -106,11 +106,11 @@ browser-side queueing anyway.
 
 ## Lowest-Risk Recommendation
 
-For OMG-hosted lfg:
+For OMG-hosted workspaces:
 
 1. Leave `src/commands/serve.ts` as HTTP/1.1.
 2. Keep HTTP/2 enabled on the Cloudflare zone for `preview.omg.dev`,
-   `apps.omg.dev`, `omgs.app`, and any workspace hostnames used by lfg.
+   `apps.omg.dev`, `omgs.app`, and any workspace hostnames used by OMG.
 3. If a specific workspace still shows `http/1.1` in Chrome DevTools, check the
    exact request hostname with:
 
@@ -124,7 +124,7 @@ For OMG-hosted lfg:
    plans when the edge has an SSL certificate.
 5. Do not enable Cloudflare Tunnel `http2Origin` for this purpose. Cloudflare
    documents that setting as cloudflared-to-origin HTTP/2, requiring TLS at the
-   origin. It would not change the browser-to-Cloudflare protocol, and lfg/Bun
+   origin. It would not change the browser-to-Cloudflare protocol, and OMG/Bun
    is not serving HTTPS with HTTP/2.
 
 For self-hosted Tailscale Serve:
@@ -141,7 +141,7 @@ For self-hosted Tailscale Serve:
 
 No code or deploy config change was made.
 
-There is no safe, repo-local, config-only HTTP/2 switch in lfg that affects the
+There is no safe, repo-local, config-only HTTP/2 switch in OMG that affects the
 browser-facing OMG hop. The relevant public Cloudflare hosts already negotiate
 HTTP/2. Changing Bun TLS/server behavior would be riskier, would alter local or
 sandbox runtime behavior, and would not address the browser connection cap when

@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { dirname } from "node:path";
 import { PATHS } from "./config.ts";
-import { LFG_CAPABILITY_VERSION } from "./lfg-capabilities.ts";
+import { OMG_CAPABILITY_VERSION } from "./omg-capabilities.ts";
 
 function registryPath(): string {
   return `${PATHS.data}/managed-sessions.json`;
@@ -272,7 +272,7 @@ export function addManaged(rec: ManagedSession, idempotencyKey?: string): AddMan
     }
     const stored = {
       ...rec,
-      capabilityVersion: rec.capabilityVersion ?? LFG_CAPABILITY_VERSION,
+      capabilityVersion: rec.capabilityVersion ?? OMG_CAPABILITY_VERSION,
     };
     all.sessions[rec.tmuxName] = stored;
     if (claimKey) all.creationClaims[claimKey] = stored;

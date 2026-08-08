@@ -1,7 +1,7 @@
 # Parakeet STT host
 
 Self-hosted [NVIDIA Parakeet](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v2)
-transcription service that drops in behind lfg's existing `/api/voice/stt` proxy
+transcription service that drops in behind OMG's existing `/api/voice/stt` proxy
 — same wire contract the previous faster-whisper host used, so **no frontend or
 lfg-serve code changes are needed** beyond pointing `STT_UPSTREAM` at this box.
 
@@ -41,7 +41,7 @@ pip install -r requirements.txt
 Create `/opt/parakeet-stt/parakeet-stt.env`:
 
 ```
-STT_TOKEN=<same secret as lfg's STT_TOKEN>
+STT_TOKEN=<same secret as OMG's STT_TOKEN>
 STT_MODEL=nvidia/parakeet-tdt-0.6b-v2   # or -v3 for multilingual
 STT_DEVICE=cuda
 STT_PORT=8087
@@ -56,9 +56,9 @@ sudo systemctl enable --now parakeet-stt
 curl -s localhost:8087/health   # { ok: true, ... } once the model has loaded
 ```
 
-## Wire lfg to it
+## Wire OMG to it
 
-On the lfg box, in `.env`:
+On the OMG box, in `.env`:
 
 ```
 STT_UPSTREAM=http://<parakeet-box>:8087
@@ -82,7 +82,7 @@ curl -sS -X POST http://<parakeet-box>:8087/stt \
 - `-v2` is English-only; `-v3` covers ~25 languages with auto language ID.
 - First boot downloads the model from Hugging Face (~2.4 GB); subsequent starts
   are fast.
-- **Not currently wired into lfg.** `serve` routes `/api/voice/stt` through
+- **Not currently wired into OMG.** `serve` routes `/api/voice/stt` through
   `src/voice-providers.ts`, which only has ElevenLabs and OpenAI adapters — it
   does not read `STT_UPSTREAM`. Using this box means adding a self-hosted
   adapter there first.

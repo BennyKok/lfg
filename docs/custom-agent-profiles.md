@@ -4,7 +4,7 @@ A **custom agent profile** points a managed coding agent at extra system-prompt
 text, extra skills, and a display-name override, sourced from a plain local
 directory you control. Think of it like your own `~/.claude/CLAUDE.md`: a
 reusable customization that layers **on top of** an agent's built-in defaults,
-updates without an LFG code change or release (just edit the files), and is a
+updates without an OMG code change or release (just edit the files), and is a
 complete no-op when unconfigured.
 
 It is designed to be generic. Today it is wired into the **`pi`** backend via the
@@ -45,7 +45,7 @@ my-profile/
 
 ## What it does under the hood
 
-When a `pi` session starts, LFG reads the profile directory and appends the
+When a `pi` session starts, OMG reads the profile directory and appends the
 matching flags to the arguments it passes to pi's own CLI:
 
 - `system-prompt.md` / `system-prompt.txt` → `--append-system-prompt <path>`
@@ -64,7 +64,7 @@ tooltip) instead of `pi`.
 
 Profile loading never crashes a session. If the directory is missing, a
 referenced file is absent, `profile.json` is malformed, or `skills/` is not a
-directory, LFG logs a `[agent-profile] …` warning and simply skips that part —
+directory, OMG logs a `[agent-profile] …` warning and simply skips that part —
 the session still starts with whatever remains (or with no customization at
 all).
 
@@ -74,6 +74,6 @@ all).
   written generically so other backends can adopt the same convention later.
 - **Keep it local.** The profile directory and its contents live on your
   machine, not in this repo — nothing product- or partner-specific belongs in
-  LFG itself.
+  OMG itself.
 - **No restart needed to change contents.** Editing the files takes effect on
   the next `pi` session you start; the env var itself is read at session launch.

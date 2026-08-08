@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { PATHS, localServeBaseUrl } from "./config.ts";
-import { lfgCapabilityAccess } from "./lfg-capabilities.ts";
+import { omgCapabilityAccess } from "./omg-capabilities.ts";
 import { githubCliPath } from "./tool-connections.ts";
 import {
   DEFAULT_CLAUDE_ACCOUNT_ID,
@@ -45,7 +45,7 @@ export type CodingAgentStatus = {
   /** True only when the user connected this provider's account. Platform API
    *  keys can make an agent runnable, but they are not a user login. */
   accountConnected: boolean;
-  lfgCapabilityAccess: "mcp" | "contract-only";
+  omgCapabilityAccess: "mcp" | "contract-only";
   checks: CodingAgentCheck[];
   instructions: string[];
   canAutoSetup: boolean;
@@ -431,13 +431,23 @@ function claudeEnvFor(configDir: string | null): Record<string, string | undefin
   return configDir ? { ...process.env, CLAUDE_CONFIG_DIR: configDir } : process.env;
 }
 
+// The name each agent CLI files this MCP server under. It is user-visible: it
+// becomes the tool namespace an agent sees, e.g. `mcp__omg__omg_ship`.
+//
+// It was `lfg` before the rename. Registrations are persisted in each CLI's own
+// user-scope config, so the old entry survives an upgrade and has to be removed
+// explicitly — leaving both would register the same ~30 tools twice under two
+// namespaces, in the context window of every session, pointing at one endpoint.
+export const MCP_SERVER_NAME = "omg";
+export const MCP_SERVER_NAME_LEGACY = "lfg";
+
 async function hasClaudeLfgMcp(): Promise<boolean> {
   const claude = claudePath();
   if (!claude) return false;
   // Registered means registered *everywhere a session can run*: one unregistered
   // account dir is one account whose sessions launch mute.
   const perDir = await Promise.all(claudeConfigDirs().map(async (configDir) => {
-    const out = await commandOutputAsync([claude, "mcp", "get", "lfg"], claudeEnvFor(configDir));
+    const out = await commandOutputAsync([claude, "mcp", "get", MCP_SERVER_NAME], claudeEnvFor(configDir));
     if (!out.ok) return false;
     // Only the HTTP registration counts. A leftover stdio entry from an older
     // install reports as "not installed" so setup replaces it.
@@ -450,7 +460,7 @@ async function hasCodexLfgMcp(): Promise<boolean> {
   const codex = codexPath();
   const args = mcpCommandArgs();
   if (!codex || !args) return false;
-  const out = await commandOutputAsync([codex, "mcp", "get", "lfg"]);
+  const out = await commandOutputAsync([codex, "mcp", "get", MCP_SERVER_NAME]);
   if (!out.ok) return false;
   return args.every((part) => out.text.includes(part));
 }
@@ -458,7 +468,9 @@ async function hasCodexLfgMcp(): Promise<boolean> {
 async function commandHasLfgMcp(binary: string | null): Promise<boolean> {
   if (!binary) return false;
   const out = await commandOutputAsync([binary, "mcp", "list"]);
-  return out.ok && /\blfg\b/i.test(out.text);
+  // Only the new name counts as installed, so a box still carrying the old
+  // registration is re-run by setup and gets the legacy entry cleaned up.
+  return out.ok && new RegExp(`\\b${MCP_SERVER_NAME}\\b`, "i").test(out.text);
 }
 
 function hasOpencodeLfgMcp(): Promise<boolean> {
@@ -895,7 +907,7 @@ function statusFor(kind: CodingAgentKind): CodingAgentStatus {
   return {
     configured: checks.every((c) => c.ok),
     accountConnected,
-    lfgCapabilityAccess: lfgCapabilityAccess(kind),
+    omgCapabilityAccess: omgCapabilityAccess(kind),
     checks,
     instructions,
     canAutoSetup,
@@ -1004,9 +1016,10 @@ async function installClaudeMcp(claude: string): Promise<void> {
   // event loop. Ordering per dir still holds.
   for (const configDir of claudeConfigDirs()) {
     const env = claudeEnvFor(configDir);
-    await commandOutputAsync([claude, "mcp", "remove", "lfg", "-s", "user"], env);
+    await commandOutputAsync([claude, "mcp", "remove", MCP_SERVER_NAME_LEGACY, "-s", "user"], env);
+    await commandOutputAsync([claude, "mcp", "remove", MCP_SERVER_NAME, "-s", "user"], env);
     const out = await commandOutputAsync([
-      claude, "mcp", "add", "-s", "user", "--transport", "http", "lfg", mcpHttpUrl(),
+      claude, "mcp", "add", "-s", "user", "--transport", "http", MCP_SERVER_NAME, mcpHttpUrl(),
     ], env);
     if (!out.ok) throw new Error(out.text.trim() || "Claude MCP install failed");
   }
@@ -1023,16 +1036,18 @@ export async function registerClaudeMcpForAccount(accountId: string): Promise<bo
   const configDir = claudeAccountConfigDir(accountId);
   if (!claude || !configDir) return false;
   const env = claudeEnvFor(configDir);
-  await commandOutputAsync([claude, "mcp", "remove", "lfg", "-s", "user"], env);
+  await commandOutputAsync([claude, "mcp", "remove", MCP_SERVER_NAME_LEGACY, "-s", "user"], env);
+  await commandOutputAsync([claude, "mcp", "remove", MCP_SERVER_NAME, "-s", "user"], env);
   const out = await commandOutputAsync([
-    claude, "mcp", "add", "-s", "user", "--transport", "http", "lfg", mcpHttpUrl(),
+    claude, "mcp", "add", "-s", "user", "--transport", "http", MCP_SERVER_NAME, mcpHttpUrl(),
   ], env);
   return out.ok;
 }
 
 function installCodexMcp(codex: string, args: string[]): void {
-  commandOutput([codex, "mcp", "remove", "lfg"]);
-  const out = commandOutput([codex, "mcp", "add", "lfg", "--", ...args]);
+  commandOutput([codex, "mcp", "remove", MCP_SERVER_NAME_LEGACY]);
+  commandOutput([codex, "mcp", "remove", MCP_SERVER_NAME]);
+  const out = commandOutput([codex, "mcp", "add", MCP_SERVER_NAME, "--", ...args]);
   if (!out.ok) throw new Error(out.text.trim() || "Codex MCP install failed");
 }
 
@@ -1050,11 +1065,14 @@ export function withOpencodeLfgMcp(current: Record<string, unknown>, args: strin
   const mcp = typeof current.mcp === "object" && current.mcp !== null
     ? current.mcp as Record<string, unknown>
     : {};
+  // Drop the pre-rename entry rather than merging over it: both would resolve to
+  // the same server and register its whole toolset twice.
+  const { [MCP_SERVER_NAME_LEGACY]: _legacy, ...rest } = mcp;
   return {
     ...current,
     mcp: {
-      ...mcp,
-      lfg: { type: "local", command: args, enabled: true },
+      ...rest,
+      [MCP_SERVER_NAME]: { type: "local", command: args, enabled: true },
     },
   };
 }
@@ -1063,11 +1081,12 @@ export function withCursorLfgMcp(current: Record<string, unknown>, args: string[
   const mcpServers = typeof current.mcpServers === "object" && current.mcpServers !== null
     ? current.mcpServers as Record<string, unknown>
     : {};
+  const { [MCP_SERVER_NAME_LEGACY]: _legacy, ...rest } = mcpServers;
   return {
     ...current,
     mcpServers: {
-      ...mcpServers,
-      lfg: { command: args[0], args: args.slice(1) },
+      ...rest,
+      [MCP_SERVER_NAME]: { command: args[0], args: args.slice(1) },
     },
   };
 }
@@ -1079,8 +1098,9 @@ async function installOpencodeMcp(args: string[]): Promise<void> {
 }
 
 function installGrokMcp(grok: string, args: string[]): void {
-  commandOutput([grok, "mcp", "remove", "lfg", "--scope", "user"]);
-  const out = commandOutput([grok, "mcp", "add", "lfg", "--scope", "user", "--", ...args]);
+  commandOutput([grok, "mcp", "remove", MCP_SERVER_NAME_LEGACY, "--scope", "user"]);
+  commandOutput([grok, "mcp", "remove", MCP_SERVER_NAME, "--scope", "user"]);
+  const out = commandOutput([grok, "mcp", "add", MCP_SERVER_NAME, "--scope", "user", "--", ...args]);
   if (!out.ok) throw new Error(out.text.trim() || "Grok MCP install failed");
 }
 
@@ -1089,7 +1109,7 @@ async function installCursorMcp(args: string[]): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
   mergeJsonConfig(path, (current) => withCursorLfgMcp(current, args));
   const cursor = cursorPath();
-  if (cursor) commandOutput([cursor, "mcp", "enable", "lfg"]);
+  if (cursor) commandOutput([cursor, "mcp", "enable", MCP_SERVER_NAME]);
 }
 
 export async function runSetupAction(key: string): Promise<void> {

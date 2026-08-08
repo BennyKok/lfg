@@ -1,6 +1,6 @@
 # OMG
 
-OMG is the one-click hosted workspace path for `lfg`.
+omg.dev is the one-click hosted workspace path for OMG.
 
 [![Deploy on omg](https://omg.dev/deploy-badge.svg?v=2)](https://omg.dev/sandbox/templates/lfg)
 
@@ -19,7 +19,7 @@ are still being designed.
 
 ## First-run Agent Setup
 
-The workspace is intentionally fresh. In LFG, open **Settings → Coding agents**
+The workspace is intentionally fresh. In OMG, open **Settings → Coding agents**
 to check Claude, Codex, OpenCode, Hermes, and Grok setup. The screen reports the
 installed binary path, auth state, and setup action where automatic install is
 supported.
@@ -32,11 +32,11 @@ For Claude or Codex, complete the normal CLI login inside the workspace, or set
 The OMG side owns the launch route and template lifecycle:
 
 - Route: `https://omg.dev/sandbox/templates/<template-id>`
-- LFG repo URL: `https://github.com/BennyKok/omg.dev`
+- OMG repo URL: `https://github.com/BennyKok/omg.dev`
 - Template: `lfg`
 - Port: `8766`
 - Start command: `lfg serve --host 0.0.0.0 --port 8766`
 
 The underlying lifecycle test in the OMG repo creates the sandbox from
 `templateId: "lfg"`, resolves the `8766` public URL, hibernates it, wakes it with
-readiness port `8766`, and verifies the URL still reaches LFG.
+readiness port `8766`, and verifies the URL still reaches OMG.

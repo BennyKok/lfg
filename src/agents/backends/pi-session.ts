@@ -32,7 +32,7 @@ import {
   currentBootId,
 } from "../../aisdk-registry.ts";
 import { agentProfileCliArgs, loadAgentProfileFromEnv } from "../../agent-profile.ts";
-import { sessionTitleFromPrompt } from "../../lfg-capabilities.ts";
+import { sessionTitleFromPrompt } from "../../omg-capabilities.ts";
 import type { SessionMsg } from "../../sessions.ts";
 import { indexSessionMessagesDirect } from "../../transcript-index.ts";
 import { makeDraftPublisher } from "./draft.ts";

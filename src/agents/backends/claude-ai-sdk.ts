@@ -5,7 +5,7 @@
 // legacy CLI path, but uses the official Agent SDK `query()` surface so report
 // generation no longer depends on the Vercel AI SDK Claude Code provider.
 
-import { lfgMcpServers } from "../../config.ts";
+import { omgMcpServers } from "../../config.ts";
 
 export type AiSdkOptions = {
   /** Model id: "opus" | "sonnet" | "haiku" or a full id like "claude-opus-4-8". */
@@ -99,7 +99,7 @@ export async function pipeToClaudeAiSdk(
       // user-scope registration is session-agnostic — it has to be, one config
       // serves every session — so without this the serve process cannot tell
       // who is calling and every session-scoped tool fails "sessionId required".
-      ...lfgMcpServers(),
+      ...omgMcpServers(),
       includePartialMessages: true,
       ...(effort ? { effort } : {}),
       // env is intentionally omitted: Agent SDK then inherits process.env,

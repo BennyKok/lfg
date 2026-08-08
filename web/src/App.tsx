@@ -222,7 +222,7 @@ import {
   parseMessageAttachments,
   type MessageAttachment,
 } from "./lib/message-attachments";
-import { parseLfgPromptEnvelope } from "./lib/lfg-prompt-envelope";
+import { parseOmgPromptEnvelope } from "./lib/omg-prompt-envelope";
 import {
   messagesForTranscriptView,
   type TranscriptView,
@@ -379,7 +379,7 @@ export type CodingAgentInfo = {
   status: {
     configured: boolean;
     accountConnected: boolean;
-    lfgCapabilityAccess: "mcp" | "contract-only";
+    omgCapabilityAccess: "mcp" | "contract-only";
     setupRunning: boolean;
     setupProgress?: { percent: number; label: string };
     canAutoSetup: boolean;
@@ -7648,14 +7648,14 @@ function LiveHeaderContext({
           intro
             ? hosted
               ? "omg.dev"
-              : "LFG"
+              : "OMG"
             : questionCount
               ? `${headline}. Tap to open notifications`
               : actionInMotion
                 ? `${welcomeMessage}. ${ambientContext}`
                 : welcomeMessage
         }
-        title={intro ? (hosted ? "omg.dev" : "LFG") : "Open notifications"}
+        title={intro ? (hosted ? "omg.dev" : "OMG") : "Open notifications"}
         className={cn(
           "relative flex h-11 w-full items-center overflow-hidden rounded-full text-left transition-colors active:scale-[0.98]",
           showCard && "glass-island",
@@ -8548,7 +8548,7 @@ function OnboardingFlow({
 
         {step === "profile" && (
           <>
-            <h1 className="text-xl font-semibold">Welcome to lfg</h1>
+            <h1 className="text-xl font-semibold">Welcome to omg</h1>
             <p className="mb-5 mt-1 text-sm text-muted-foreground">
               Set up your profile — sessions you start are tagged to you.
             </p>
@@ -14752,7 +14752,7 @@ const ChatStream = memo(function ChatStream({
         <ConversationEmptyState
           title={
             transcriptView.value === "user-lfg-output"
-              ? "No user or LFG output messages yet"
+              ? "No user or OMG output messages yet"
               : "No transcript messages yet"
           }
         />
@@ -15474,7 +15474,7 @@ function MessageBubble({
     message.role === "user" && !!message.pending,
   );
   const lfgEnvelope = useMemo(
-    () => (message.role === "user" ? parseLfgPromptEnvelope(message.text || "") : null),
+    () => (message.role === "user" ? parseOmgPromptEnvelope(message.text || "") : null),
     [message.role, message.text],
   );
   // Attachments ride along in the user's text as absolute upload paths (the
@@ -20510,7 +20510,7 @@ function LfgUpdateSection() {
       await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
     setRestarting(false);
-    setError("LFG did not come back after restarting. Check the service logs.");
+    setError("OMG did not come back after restarting. Check the service logs.");
   }
 
   async function update() {
@@ -20522,13 +20522,13 @@ function LfgUpdateSection() {
       setInfo(next);
       if (next.restarting) {
         setRestarting(true);
-        toast.success("LFG updated. Restarting…");
+        toast.success("OMG updated. Restarting…");
         void waitForRestart(next.bootId);
       } else {
-        toast.success("LFG is already up to date");
+        toast.success("OMG is already up to date");
       }
     } catch (e) {
-      const message = e instanceof Error ? e.message : "Could not update LFG";
+      const message = e instanceof Error ? e.message : "Could not update OMG";
       setError(message);
       toast.error(message);
     } finally {
@@ -20571,7 +20571,7 @@ function LfgUpdateSection() {
               size="sm"
               onClick={() => void update()}
               disabled={busy || !status.restartSupported}
-              title={status.restartSupported ? "Update to origin/main and restart LFG" : "Automatic restart is unavailable"}
+              title={status.restartSupported ? "Update to origin/main and restart OMG" : "Automatic restart is unavailable"}
             >
               {updating || restarting ? <Loader2 className="size-4 animate-spin" /> : <ArrowDown className="size-4" />}
               {restarting ? "Restarting…" : updating ? "Updating…" : "Update & restart"}

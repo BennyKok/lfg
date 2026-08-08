@@ -7,9 +7,11 @@
     "web"
   ],
   "bin": {
+    "omg": "./src/cli.ts",
     "lfg": "./src/cli.ts"
   },
   "scripts": {
+    "omg": "bun run src/cli.ts",
     "lfg": "bun run src/cli.ts",
     "serve": "bun run src/cli.ts serve",
     "agents": "bun run src/cli.ts agents",

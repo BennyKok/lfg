@@ -30,14 +30,14 @@ describe("closeLfgSession", () => {
     expect(request?.url).toBe("http://127.0.0.1:9876/api/sessions/target-session/close");
     expect(request?.init).toMatchObject({
       method: "POST",
-      body: JSON.stringify({ source: "mcp_lfg_close_session" }),
+      body: JSON.stringify({ source: "mcp_omg_close_session" }),
     });
   });
 
   test("refuses to close the calling session", async () => {
     process.env.LFG_SESSION_ID = "same-session";
     await expect(closeLfgSession("same-session")).rejects.toThrow(
-      "lfg_close_session cannot close the calling session",
+      "omg_close_session cannot close the calling session",
     );
   });
 });
@@ -180,7 +180,7 @@ describe("sendToOrigin", () => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "X-LFG-Session-ID": "11111111-1111-4111-8111-111111111111",
+        "X-OMG-Session-ID": "11111111-1111-4111-8111-111111111111",
       },
     });
   });
@@ -190,6 +190,6 @@ describe("sendToOrigin", () => {
     await expect(sendToOrigin({
       text: "wrong target",
       sessionId: "22222222-2222-4222-8222-222222222222",
-    })).rejects.toThrow("owning LFG session");
+    })).rejects.toThrow("owning OMG session");
   });
 });

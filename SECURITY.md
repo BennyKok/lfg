@@ -1,9 +1,9 @@
 # Security
 
-lfg is powerful on purpose, and that means it has a real blast radius. Please
+OMG is powerful on purpose, and that means it has a real blast radius. Please
 understand it before you run it anywhere shared.
 
-## What lfg can do
+## What OMG can do
 
 - **Spawns AI coding agents with shell access.** Sessions run `claude` / `codex` / `agent`
   on your box (often with permissions skipped so they don't block), so an agent
@@ -32,7 +32,7 @@ understand it before you run it anywhere shared.
 - **Run as a non-root user.** The setup script refuses to run as root and installs
   a systemd *user* service. Agents should never run as root.
 - **Scope your credentials.** Use a dedicated, least-privilege GitHub token and
-  SSH keys; assume anything reachable by an agent on the box is reachable by lfg.
+  SSH keys; assume anything reachable by an agent on the box is reachable by OMG.
 - **Treat Tailscale auth keys as secrets.** Pass `TS_AUTHKEY` on the setup command
   line only; it is never written to disk. Prefer ephemeral, pre-approved, tagged,
   single-use keys.

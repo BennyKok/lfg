@@ -2,11 +2,11 @@
 
 Hetzner does not provide arbitrary GitHub-repo deploy buttons like Railway. Its
 official "Deploy to Hetzner Cloud" button only preselects one of Hetzner's App
-images. For `lfg`, use cloud-init or the `hcloud` CLI to create a normal Ubuntu
+images. For OMG, use cloud-init or the `hcloud` CLI to create a normal Ubuntu
 server and run `scripts/setup.sh` on first boot.
 
-The installer keeps `lfg` bound to `127.0.0.1` and exposes it through
-`tailscale serve`. Do not open the `lfg` port to the public internet.
+The installer keeps OMG bound to `127.0.0.1` and exposes it through
+`tailscale serve`. Do not open the OMG port to the public internet.
 
 ## One-command Server Create
 

@@ -1,6 +1,6 @@
 # Koyeb
 
-Koyeb can deploy `lfg` from the shared Dockerfile. This is best for a hosted
+Koyeb can deploy OMG from the shared Dockerfile. This is best for a hosted
 demo unless you add authentication and a private access path.
 
 The Dockerfile builds from the source tree Koyeb checks out — there is no bundle
@@ -20,4 +20,4 @@ Recommended variables:
 - Optional provider keys such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and
   `ELEVENLABS_API_KEY`
 
-Do not publish an unauthenticated `lfg` instance to the public internet.
+Do not publish an unauthenticated OMG instance to the public internet.

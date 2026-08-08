@@ -1,6 +1,6 @@
 # Fly.io
 
-Fly is a good fit for a private `lfg` deployment because it has persistent
+Fly is a good fit for a private OMG deployment because it has persistent
 volumes and private networking. The checked-in `fly.toml` intentionally does not
 define a public `http_service`; expose the UI through Fly private networking,
 WireGuard, Tailscale, or a local proxy rather than publishing an unauthenticated
@@ -28,4 +28,4 @@ Then open `http://127.0.0.1:8766`.
 - The Dockerfile builds from the source tree `fly deploy` uploads — there is no
   bundle to publish first.
 - Authenticate agent CLIs inside the machine if you need CLI-backed sessions.
-- Keep public services disabled unless you add authentication in front of `lfg`.
+- Keep public services disabled unless you add authentication in front of OMG.

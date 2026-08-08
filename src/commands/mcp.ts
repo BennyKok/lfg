@@ -3,17 +3,18 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { AsyncLocalStorage } from "node:async_hooks";
 import * as z from "zod/v4";
 import {
+  AUTO_AGENT_BACKENDS,
   MODEL_OPTIONS,
   listModelCatalog,
   thinkingLevelsForAgent,
 } from "../agent-catalog.ts";
 import { localServeBaseUrl } from "../config.ts";
 import {
-  LFG_CAPABILITIES,
-  LFG_CAPABILITY_VERSION,
-  LFG_MCP_INSTRUCTIONS,
+  OMG_CAPABILITIES,
+  OMG_CAPABILITY_VERSION,
+  OMG_MCP_INSTRUCTIONS,
   SHORT_SESSION_ID_LENGTH,
-} from "../lfg-capabilities.ts";
+} from "../omg-capabilities.ts";
 import { shippedCloseDecision } from "../shipped-lifecycle.ts";
 
 type Repo = { name: string; cwd: string; project?: string };
@@ -218,11 +219,11 @@ function sessionParent(session: SessionRow): string | undefined {
   return session.parentSessionId ?? session.parentNativeSessionId ?? undefined;
 }
 
-// Which LFG session is on the other end of this tool call.
+// Which OMG session is on the other end of this tool call.
 //
-// Under stdio, that is ambient: the agent CLI spawns `lfg mcp` as its own child,
-// so LFG_SESSION_ID in the environment *is* the caller. The shared HTTP endpoint
-// (src/mcp-http.ts) has no such luxury — one `lfg serve` process answers every
+// Under stdio, that is ambient: the agent CLI spawns `omg mcp` as its own child,
+// so OMG_SESSION_ID in the environment *is* the caller. The shared HTTP endpoint
+// (src/mcp-http.ts) has no such luxury — one `omg serve` process answers every
 // session, and its own environment names none of them. Identity therefore has to
 // ride the request and be carried, per call, to whatever handler needs it.
 //
@@ -237,6 +238,20 @@ export function withCallerSession<T>(sessionId: string | undefined, fn: () => T)
 }
 
 /**
+ * Read a config value under the OMG_ prefix, falling back to the pre-rename LFG_ one.
+ *
+ * applyEnvAliases() already mirrors the two prefixes at CLI startup, so this is
+ * belt-and-braces — but it guards the two values that are load-bearing for
+ * *identity*, where the failure mode is silent rather than loud: a tmux pane
+ * started before the rename exports only LFG_SESSION_ID, and a miss there does
+ * not throw, it just downgrades the caller to anonymous and lets a
+ * session-scoped tool act on the wrong session (or refuse to act at all).
+ */
+function envValue(suffix: string): string | undefined {
+  return process.env[`OMG_${suffix}`]?.trim() || process.env[`LFG_${suffix}`]?.trim() || undefined;
+}
+
+/**
  * The calling session, request-scoped first and ambient second.
  *
  * Every session-scoped tool resolves identity through here, so the stdio and
@@ -244,13 +259,13 @@ export function withCallerSession<T>(sessionId: string | undefined, fn: () => T)
  * to "no caller".
  */
 function callerSessionId(): string | undefined {
-  return callerSession.getStore()?.trim() || process.env.LFG_SESSION_ID?.trim() || undefined;
+  return callerSession.getStore()?.trim() || envValue("SESSION_ID");
 }
 
 async function activeSessionId(input?: string): Promise<string> {
   const sessionId = input?.trim() || callerSessionId();
   if (!sessionId) {
-    throw new Error("sessionId required; pass it explicitly or run inside an LFG-managed session");
+    throw new Error("sessionId required; pass it explicitly or run inside an OMG-managed session");
   }
   return await resolveSid(sessionId);
 }
@@ -261,14 +276,14 @@ export async function closeLfgSession(sessionIdInput: string) {
   const sessionId = await resolveSid(sessionIdInput);
   const caller = callerSessionId();
   if (caller && caller === sessionId) {
-    throw new Error("lfg_close_session cannot close the calling session");
+    throw new Error("omg_close_session cannot close the calling session");
   }
   const data = await api<{ ok?: boolean }>(
     `/api/sessions/${encodeURIComponent(sessionId)}/close`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ source: "mcp_lfg_close_session" }),
+      body: JSON.stringify({ source: "mcp_omg_close_session" }),
     },
   );
   return { closed: data.ok !== false, sessionId: shortSid(sessionId) };
@@ -297,7 +312,7 @@ async function ownedSessionId(input?: string): Promise<string> {
   const sessionId = await activeSessionId(input);
   const caller = callerSessionId();
   if (caller && caller !== sessionId) {
-    throw new Error("session-owned actions can only target their owning LFG session");
+    throw new Error("session-owned actions can only target their owning OMG session");
   }
   return sessionId;
 }
@@ -313,7 +328,7 @@ export async function sendToOrigin(input: {
     `/api/sessions/${encodeURIComponent(sessionId)}/origin-deliveries`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json", "X-LFG-Session-ID": sessionId },
+      headers: { "Content-Type": "application/json", "X-OMG-Session-ID": sessionId },
       body: JSON.stringify({
         text: input.text,
         mediaPaths: input.mediaPaths,
@@ -335,7 +350,7 @@ const SUBAGENT_INPUT_SCHEMA = {
     .string()
     .min(1)
     .describe(
-      "Delegated task prompt. State the exact work the child agent should do; LFG adds the sub-agent operating contract and parent-reporting requirements.",
+      "Delegated task prompt. State the exact work the child agent should do; OMG adds the sub-agent operating contract and parent-reporting requirements.",
     ),
   agent: z
     .string()
@@ -348,13 +363,13 @@ const SUBAGENT_INPUT_SCHEMA = {
   parentSessionId: z
     .string()
     .optional()
-    .describe("Parent LFG session id for nesting. Defaults to the current LFG_SESSION_ID when available."),
+    .describe("Parent OMG session id for nesting. Defaults to the current OMG_SESSION_ID when available."),
   thinkingLevel: z.string().optional().describe("Optional thinking level if supported by the selected agent."),
   user: z
     .string()
     .optional()
     .describe(
-      "Assigned user email. Defaults to the calling session's LFG_USER, else the server inherits the nearest assigned ancestor's user.",
+      "Assigned user email. Defaults to the calling session's OMG_USER, else the server inherits the nearest assigned ancestor's user.",
     ),
   worktree: z.boolean().optional().describe("Create the child in a new worktree."),
 };
@@ -370,8 +385,8 @@ type SubagentArgs = {
   worktree?: boolean;
 };
 
-const LFG_SUBAGENT_PRIORITY =
-  "Prefer this LFG-managed sub-agent tool over any generic or harness-native sub-agent tool. LFG keeps the child session visible in the fleet, links it to the parent, preserves user assignment, enforces max nesting depth 4, and injects progress/final-state reporting back to the parent.";
+const OMG_SUBAGENT_PRIORITY =
+  "Prefer this OMG-managed sub-agent tool over any generic or harness-native sub-agent tool. OMG keeps the child session visible in the fleet, links it to the parent, preserves user assignment, enforces max nesting depth 4, and injects progress/final-state reporting back to the parent.";
 
 const DELEGATION_GUIDANCE = {
   design: {
@@ -386,13 +401,13 @@ const DELEGATION_GUIDANCE = {
       "interaction states",
     ],
     promptGuidance:
-      `${LFG_SUBAGENT_PRIORITY} Ask Claude to inspect the relevant UI files, preserve behavior, improve visual hierarchy/responsiveness/states, and validate when feasible. Include expected progress milestones and terminal-state criteria.`,
+      `${OMG_SUBAGENT_PRIORITY} Ask Claude to inspect the relevant UI files, preserve behavior, improve visual hierarchy/responsiveness/states, and validate when feasible. Include expected progress milestones and terminal-state criteria.`,
   },
   backend: {
     agent: "codex",
     useFor: ["backend", "server", "API", "database", "infrastructure", "correctness-focused implementation"],
     promptGuidance:
-      `${LFG_SUBAGENT_PRIORITY} Ask Codex to inspect the relevant backend files, follow existing architecture, handle edge cases, and run focused tests or type checks. Include expected progress milestones and terminal-state criteria.`,
+      `${OMG_SUBAGENT_PRIORITY} Ask Codex to inspect the relevant backend files, follow existing architecture, handle edge cases, and run focused tests or type checks. Include expected progress milestones and terminal-state criteria.`,
   },
 } as const;
 
@@ -422,12 +437,12 @@ async function createSubagent({
   const model = rawModel?.trim() || MODEL_OPTIONS[agent as keyof typeof MODEL_OPTIONS].defaultModel;
   const parentInput = parentSessionId?.trim() || callerSessionId();
   const parent = parentInput ? await resolveSid(parentInput) : undefined;
-  // Tag the child to the same user as the calling session. LFG_USER is injected
+  // Tag the child to the same user as the calling session. OMG_USER is injected
   // at spawn (see tmux.ts addSessionEnv); without this, subagents created from
   // sessions whose parent chain has no live assigned ancestor (headless/cron
   // callers, chained subagents) landed unassigned and were invisible in
   // per-user session views.
-  const assignedUser = user?.trim() || process.env.LFG_USER?.trim() || undefined;
+  const assignedUser = user?.trim() || envValue("USER") || undefined;
   const created = await api<SessionCreateResponse>("/api/sessions/new", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -451,50 +466,50 @@ async function createSubagent({
 }
 
 /**
- * Build the LFG MCP server, transport-free.
+ * Build the OMG MCP server, transport-free.
  *
  * Every tool here is a thin proxy: it calls `api()`, which is an HTTP request
- * to the `lfg serve` process on this box. The server holds no state of its own,
- * which is what makes it safe to share — see `serveLfgMcpRequest` in
+ * to the `omg serve` process on this box. The server holds no state of its own,
+ * which is what makes it safe to share — see `serveOmgMcpRequest` in
  * ../commands/serve.ts, where one in-process instance answers every agent over
  * HTTP instead of each agent spawning its own copy.
  */
-export function buildLfgMcpServer(): McpServer {
+export function buildOmgMcpServer(): McpServer {
   const server = new McpServer({
-    name: "lfg",
+    name: "omg",
     version: VERSION,
   }, {
-    instructions: LFG_MCP_INSTRUCTIONS,
+    instructions: OMG_MCP_INSTRUCTIONS,
   });
 
   server.registerTool(
-    "lfg_capabilities",
+    "omg_capabilities",
     {
-      title: "Inspect LFG Agent Capabilities",
+      title: "Inspect OMG Agent Capabilities",
       description:
-        "Bootstrap the LFG product workflow. Returns the current capability contract, when to use each LFG feature, and whether this long-lived session launched with an older capability version. Call this when deciding how to present completed work or when an expected LFG tool seems unavailable.",
+        "Bootstrap the OMG product workflow. Returns the current capability contract, when to use each OMG feature, and whether this long-lived session launched with an older capability version. Call this when deciding how to present completed work or when an expected OMG tool seems unavailable.",
       inputSchema: {},
     },
     async () => {
-      const launchedWith = process.env.LFG_CAPABILITY_VERSION?.trim() || null;
+      const launchedWith = process.env.OMG_CAPABILITY_VERSION?.trim() || null;
       return result({
-        currentVersion: LFG_CAPABILITY_VERSION,
+        currentVersion: OMG_CAPABILITY_VERSION,
         launchedWith,
-        stale: !!launchedWith && launchedWith !== LFG_CAPABILITY_VERSION,
-        capabilities: LFG_CAPABILITIES,
+        stale: !!launchedWith && launchedWith !== OMG_CAPABILITY_VERSION,
+        capabilities: OMG_CAPABILITIES,
         refreshGuidance:
-          launchedWith && launchedWith !== LFG_CAPABILITY_VERSION
-            ? "This session predates the current LFG capability contract. Finish or pause active work, then close and resume the session to reload its MCP catalog."
+          launchedWith && launchedWith !== OMG_CAPABILITY_VERSION
+            ? "This session predates the current OMG capability contract. Finish or pause active work, then close and resume the session to reload its MCP catalog."
             : null,
       });
     },
   );
 
   server.registerTool(
-    "lfg_list_sessions",
+    "omg_list_sessions",
     {
-      title: "List LFG Sessions",
-      description: "List live LFG runtime sessions, optionally filtered to children of a parent session.",
+      title: "List OMG Sessions",
+      description: "List live OMG runtime sessions, optionally filtered to children of a parent session.",
       inputSchema: {
         parentSessionId: z.string().optional().describe("Only return children of this parent session id."),
         driveableOnly: z.boolean().optional().describe("When true, only return sessions with sessionId and tmuxTarget."),
@@ -517,11 +532,11 @@ export function buildLfgMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "lfg_find_sessions",
+    "omg_find_sessions",
     {
-      title: "Find Historical LFG Sessions",
+      title: "Find Historical OMG Sessions",
       description:
-        "Find durable LFG sessions, including ended sessions no longer present in tmux or the process table. Filters compose, results are newest-first, and text searches titles plus normalized transcript content.",
+        "Find durable OMG sessions, including ended sessions no longer present in tmux or the process table. Filters compose, results are newest-first, and text searches titles plus normalized transcript content.",
       inputSchema: {
         sessionId: z
           .string()
@@ -581,9 +596,9 @@ export function buildLfgMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "lfg_get_session_tree",
+    "omg_get_session_tree",
     {
-      title: "Get LFG Session Tree",
+      title: "Get OMG Session Tree",
       description: "Return runtime sessions grouped by parent/child relationship.",
       inputSchema: {},
     },
@@ -610,12 +625,12 @@ export function buildLfgMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "lfg_get_session_messages",
+    "omg_get_session_messages",
     {
-      title: "Get LFG Session Messages",
+      title: "Get OMG Session Messages",
       description: "Read recent or full normalized transcript messages for a session.",
       inputSchema: {
-        sessionId: z.string().describe("LFG session id."),
+        sessionId: z.string().describe("OMG session id."),
         limit: z.number().int().min(1).max(200).optional().describe("Recent message count when full is false."),
         full: z.boolean().optional().describe("Read the full transcript instead of a recent tail."),
       },
@@ -634,12 +649,12 @@ export function buildLfgMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "lfg_send_session_message",
+    "omg_send_session_message",
     {
-      title: "Send LFG Session Message",
-      description: "Steer or queue a message to an existing LFG session.",
+      title: "Send OMG Session Message",
+      description: "Steer or queue a message to an existing OMG session.",
       inputSchema: {
-        sessionId: z.string().describe("LFG session id."),
+        sessionId: z.string().describe("OMG session id."),
         text: z.string().min(1).describe("Instruction text to send."),
         mode: z.enum(["steer", "queue"]).optional().describe("steer may interrupt active work; queue waits."),
       },
@@ -660,20 +675,20 @@ export function buildLfgMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "lfg_close_session",
+    "omg_close_session",
     {
-      title: "Close LFG Session",
+      title: "Close OMG Session",
       description:
-        "Close another LFG runtime session that is clearly finished. Resolve the exact target id with lfg_list_sessions first. The calling session cannot close itself.",
+        "Close another OMG runtime session that is clearly finished. Resolve the exact target id with omg_list_sessions first. The calling session cannot close itself.",
       inputSchema: {
-        sessionId: z.string().min(1).describe("Exact LFG session id returned by lfg_list_sessions."),
+        sessionId: z.string().min(1).describe("Exact OMG session id returned by omg_list_sessions."),
       },
     },
     async ({ sessionId }) => result(await closeLfgSession(sessionId)),
   );
 
   server.registerTool(
-    "lfg_ask_user",
+    "omg_ask_user",
     {
       title: "Ask The User A Question",
       description:
@@ -693,16 +708,16 @@ export function buildLfgMcpServer(): McpServer {
         sessionId: z
           .string()
           .optional()
-          .describe("Session the answer should be delivered to. Defaults to LFG_SESSION_ID (this session)."),
+          .describe("Session the answer should be delivered to. Defaults to OMG_SESSION_ID (this session)."),
         user: z
           .string()
           .optional()
-          .describe("User email to notify. Defaults to the calling session's LFG_USER."),
+          .describe("User email to notify. Defaults to the calling session's OMG_USER."),
       },
     },
     async ({ question, options, sessionId, user }) => {
       const sid = await activeSessionId(sessionId);
-      const who = user?.trim() || process.env.LFG_USER?.trim() || null;
+      const who = user?.trim() || envValue("USER") || null;
       const data = await api<{ id: string; status: string }>("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -726,18 +741,18 @@ export function buildLfgMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "lfg_send_to_origin",
+    "omg_send_to_origin",
     {
       title: "Send A Message To The Originating Channel",
       description:
-        "Send text and/or session-owned image/video artifacts back to the channel that launched this LFG session. The channel adapter owns final delivery (for example iMessage via Blooio); LFG never receives phone numbers or transport credentials.",
+        "Send text and/or session-owned image/video artifacts back to the channel that launched this OMG session. The channel adapter owns final delivery (for example iMessage via Blooio); OMG never receives phone numbers or transport credentials.",
       inputSchema: {
         text: z.string().max(4_000).optional().describe("Optional message text delivered with the media."),
         mediaPaths: z
           .array(z.string().min(1))
           .max(3)
           .optional()
-          .describe("Up to three absolute local image/video paths. LFG stores them as session artifacts before delivery."),
+          .describe("Up to three absolute local image/video paths. OMG stores them as session artifacts before delivery."),
         artifactIds: z
           .array(z.string().min(1))
           .max(3)
@@ -746,7 +761,7 @@ export function buildLfgMcpServer(): McpServer {
         sessionId: z
           .string()
           .optional()
-          .describe("Owning LFG session id. Defaults to LFG_SESSION_ID and cannot target another session."),
+          .describe("Owning OMG session id. Defaults to OMG_SESSION_ID and cannot target another session."),
       },
     },
     async ({ text, mediaPaths, artifactIds, sessionId }) =>
@@ -754,16 +769,16 @@ export function buildLfgMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "lfg_display_image",
+    "omg_display_image",
     {
-      title: "Display Image In LFG",
+      title: "Display Image In OMG",
       description:
-        "Display a local image file, such as a screenshot captured while testing, in the LFG session transcript.",
+        "Display a local image file, such as a screenshot captured while testing, in the OMG session transcript.",
       inputSchema: {
         path: z.string().min(1).describe("Absolute path to a png, jpg, jpeg, webp, or gif image on this machine."),
         caption: z.string().optional().describe("Short caption shown under the image."),
         alt: z.string().optional().describe("Short alt text for the image."),
-        sessionId: z.string().optional().describe("Target LFG session id. Defaults to LFG_SESSION_ID."),
+        sessionId: z.string().optional().describe("Target OMG session id. Defaults to OMG_SESSION_ID."),
       },
     },
     async ({ path, caption, alt, sessionId }) => {
@@ -785,16 +800,16 @@ export function buildLfgMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "lfg_display_video",
+    "omg_display_video",
     {
-      title: "Display Video In LFG",
+      title: "Display Video In OMG",
       description:
-        "Display a local video file, such as a screen recording captured while testing, inline in the LFG session transcript.",
+        "Display a local video file, such as a screen recording captured while testing, inline in the OMG session transcript.",
       inputSchema: {
         path: z.string().min(1).describe("Absolute path to an mp4, m4v, webm, mov, or ogv video on this machine."),
         caption: z.string().optional().describe("Short caption shown under the video."),
         alt: z.string().optional().describe("Short accessible description of the video."),
-        sessionId: z.string().optional().describe("Target LFG session id. Defaults to LFG_SESSION_ID."),
+        sessionId: z.string().optional().describe("Target OMG session id. Defaults to OMG_SESSION_ID."),
       },
     },
     async ({ path, caption, alt, sessionId }) => {
@@ -816,17 +831,17 @@ export function buildLfgMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "lfg_publish_artifact",
+    "omg_publish_artifact",
     {
-      title: "Publish HTML Artifact In LFG",
+      title: "Publish HTML Artifact In OMG",
       description:
-        "Publish a self-contained HTML artifact (report, data view, live dashboard) into the LFG session transcript. Re-publishing with the same id updates one card in place. Optionally attach an executable server-side refresh script inside the owning session cwd; LFG invokes the path with explicit argv (never a shell), validates complete HTML output, and preserves the last good version on failure. Omit html only when updating an existing artifact's refresh configuration. Static HTML renders as sanitized native DOM; scripted HTML runs in an isolated iframe with no network or host-execution access.",
+        "Publish a self-contained HTML artifact (report, data view, live dashboard) into the OMG session transcript. Re-publishing with the same id updates one card in place. Optionally attach an executable server-side refresh script inside the owning session cwd; OMG invokes the path with explicit argv (never a shell), validates complete HTML output, and preserves the last good version on failure. Omit html only when updating an existing artifact's refresh configuration. Static HTML renders as sanitized native DOM; scripted HTML runs in an isolated iframe with no network or host-execution access.",
       inputSchema: {
-        html: z.string().min(1).optional().describe("Complete self-contained HTML document (inline CSS/JS/data only; no external resources). For native light/dark theming, use the --lfg-artifact-background, --lfg-artifact-surface, --lfg-artifact-foreground, --lfg-artifact-muted, --lfg-artifact-muted-foreground, --lfg-artifact-border, --lfg-artifact-accent, --lfg-artifact-accent-foreground, and --lfg-artifact-code-background CSS variables. Text colors come from -foreground/-muted-foreground; --lfg-artifact-muted is a surface, so text painted with it vanishes into its own background. Key dark mode off :root[data-theme='dark'], which the renderer stamps — a card is themed by LFG independently of the desktop, so prefers-color-scheme answers the wrong question. May be omitted only to update refresh settings for an existing id."),
+        html: z.string().min(1).optional().describe("Complete self-contained HTML document (inline CSS/JS/data only; no external resources). For native light/dark theming, use the --omg-artifact-background, --omg-artifact-surface, --omg-artifact-foreground, --omg-artifact-muted, --omg-artifact-muted-foreground, --omg-artifact-border, --omg-artifact-accent, --omg-artifact-accent-foreground, and --omg-artifact-code-background CSS variables. Text colors come from -foreground/-muted-foreground; --omg-artifact-muted is a surface, so text painted with it vanishes into its own background. Key dark mode off :root[data-theme='dark'], which the renderer stamps — a card is themed by OMG independently of the desktop, so prefers-color-scheme answers the wrong question. May be omitted only to update refresh settings for an existing id."),
         id: z.string().optional().describe("Stable artifact id (3-64 chars: lowercase letters, digits, dashes). Re-publish with the same id to update in place."),
         title: z.string().optional().describe("Short title shown on the artifact card."),
         caption: z.string().optional().describe("Short caption shown under the artifact."),
-        sessionId: z.string().optional().describe("Target LFG session id. Defaults to LFG_SESSION_ID."),
+        sessionId: z.string().optional().describe("Target OMG session id. Defaults to OMG_SESSION_ID."),
         refreshScriptPath: z.string().nullable().optional().describe("Absolute executable script path inside the owning session cwd. Set null to remove the refresh configuration."),
         refreshArgv: z.array(z.string()).max(32).optional().describe("Explicit arguments passed directly to the script; shell syntax is never evaluated."),
         refreshIntervalSeconds: z.number().int().min(10).max(604800).optional().describe("Automatic refresh interval in seconds (10 seconds to 7 days)."),
@@ -844,7 +859,7 @@ export function buildLfgMcpServer(): McpServer {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            ...(hasRefreshChanges ? { "X-LFG-Session-ID": sid } : {}),
+            ...(hasRefreshChanges ? { "X-OMG-Session-ID": sid } : {}),
           },
           body: JSON.stringify({
             html,
@@ -868,15 +883,15 @@ export function buildLfgMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "lfg_refresh_artifact",
+    "omg_refresh_artifact",
     {
-      title: "Refresh Or Inspect An LFG HTML Artifact",
+      title: "Refresh Or Inspect An OMG HTML Artifact",
       description:
         "Run the owning HTML artifact's configured server-side script now, or inspect persisted refresh status. Manual runs also work when the automatic schedule is disabled. A successful data refresh updates the stable card and refresh timestamp without creating a new artifact revision.",
       inputSchema: {
         id: z.string().min(3).describe("Stable HTML artifact id."),
         action: z.enum(["now", "status"]).optional().describe("Run now (default) or only return persisted status."),
-        sessionId: z.string().optional().describe("Owning LFG session id. Defaults to LFG_SESSION_ID and cannot target another session."),
+        sessionId: z.string().optional().describe("Owning OMG session id. Defaults to OMG_SESSION_ID and cannot target another session."),
       },
     },
     async ({ id, action, sessionId }) => {
@@ -884,7 +899,7 @@ export function buildLfgMcpServer(): McpServer {
       const method = action === "status" ? "GET" : "POST";
       const data = await api<ImageArtifactResponse & { started?: boolean; error?: string; refresh?: unknown }>(
         `/api/sessions/${encodeURIComponent(sid)}/artifacts/html/${encodeURIComponent(id)}/refresh`,
-        { method, headers: { "X-LFG-Session-ID": sid } },
+        { method, headers: { "X-OMG-Session-ID": sid } },
       );
       return result({
         refreshed: method === "POST" ? data.ok === true : undefined,
@@ -897,32 +912,32 @@ export function buildLfgMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "lfg_delete_artifact",
+    "omg_delete_artifact",
     {
-      title: "Delete An LFG Artifact",
+      title: "Delete An OMG Artifact",
       description:
-        "Permanently delete an artifact owned by this LFG session. HTML refresh schedules and active refresh processes are stopped before the artifact is removed.",
+        "Permanently delete an artifact owned by this OMG session. HTML refresh schedules and active refresh processes are stopped before the artifact is removed.",
       inputSchema: {
         id: z.string().min(3).describe("Artifact id to permanently delete."),
-        sessionId: z.string().optional().describe("Owning LFG session id. Defaults to LFG_SESSION_ID and cannot target another session."),
+        sessionId: z.string().optional().describe("Owning OMG session id. Defaults to OMG_SESSION_ID and cannot target another session."),
       },
     },
     async ({ id, sessionId }) => {
       const sid = await ownedSessionId(sessionId);
       const data = await api<ImageArtifactResponse>(
         `/api/sessions/${encodeURIComponent(sid)}/artifacts/${encodeURIComponent(id)}`,
-        { method: "DELETE", headers: { "X-LFG-Session-ID": sid } },
+        { method: "DELETE", headers: { "X-OMG-Session-ID": sid } },
       );
       return result({ deleted: data.ok === true, sessionId: shortSid(sid), artifact: data.artifact });
     },
   );
 
   server.registerTool(
-    "lfg_ship",
+    "omg_ship",
     {
-      title: "Post To The LFG Shipped Channel",
+      title: "Post To The OMG Shipped Channel",
       description:
-        "Post a verified result in the LFG Shipped feed, then explicitly decide whether its source session should close. A Shipped post does not itself prove production deployment. Set closeSession true only when the requested outcome (including deployment when requested) and conversation are genuinely finished; that call is terminal and leaves the session resumable. Set it false for quick chats or likely follow-up, and the session stays live. Never use this for planning, partial, blocked, or still-unverified work. Write it like a launch tweet: a punchy headline + at most 1-2 short sentences on the outcome and why it matters. To update an earlier post, pass its id.",
+        "Post a verified result in the OMG Shipped feed, then explicitly decide whether its source session should close. A Shipped post does not itself prove production deployment. Set closeSession true only when the requested outcome (including deployment when requested) and conversation are genuinely finished; that call is terminal and leaves the session resumable. Set it false for quick chats or likely follow-up, and the session stays live. Never use this for planning, partial, blocked, or still-unverified work. Write it like a launch tweet: a punchy headline + at most 1-2 short sentences on the outcome and why it matters. To update an earlier post, pass its id.",
       inputSchema: {
         title: z.string().min(1).describe("Short headline for what shipped (e.g. 'WhatsApp reconnect loop fixed')."),
         id: z.string().optional().describe("Existing ship post id to update in place (returned when the post was created)."),
@@ -938,7 +953,7 @@ export function buildLfgMcpServer(): McpServer {
           .describe("Local image/video files to attach (absolute paths) — screenshots or recordings of the result."),
         artifactIds: z.array(z.string()).optional().describe("Existing artifact ids to embed (e.g. a published html dashboard)."),
         project: z.string().optional().describe("Project label shown on the post."),
-        sessionId: z.string().optional().describe("Source LFG session id. Defaults to LFG_SESSION_ID."),
+        sessionId: z.string().optional().describe("Source OMG session id. Defaults to OMG_SESSION_ID."),
         closeSession: z
           .boolean()
           .describe("Explicit lifecycle decision: true closes this genuinely finished conversation after posting; false keeps it live for chat or follow-up."),
@@ -970,10 +985,10 @@ export function buildLfgMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "lfg_list_repos",
+    "omg_list_repos",
     {
-      title: "List LFG Repos",
-      description: "List repositories LFG can launch sessions in.",
+      title: "List OMG Repos",
+      description: "List repositories OMG can launch sessions in.",
       inputSchema: {},
     },
     async () => {
@@ -983,10 +998,10 @@ export function buildLfgMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "lfg_list_models",
+    "omg_list_models",
     {
-      title: "List LFG Models",
-      description: "List provider/model options that MCP can use when delegating work to LFG sub-agents.",
+      title: "List OMG Models",
+      description: "List provider/model options that MCP can use when delegating work to OMG sub-agents.",
       inputSchema: {},
     },
     async () => {
@@ -998,11 +1013,11 @@ export function buildLfgMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "lfg_create_subagent",
+    "omg_create_subagent",
     {
-      title: "Create LFG Sub-Agent",
+      title: "Create OMG Sub-Agent",
       description:
-        `Create a managed runtime child session using LFG subagent. ${LFG_SUBAGENT_PRIORITY} Use this when the user explicitly asks to use a subagent, spawn another agent, or have another agent work on a task. The child is instructed to report progress and exactly one terminal state back to this parent session.`,
+        `Create a managed runtime child session using OMG subagent. ${OMG_SUBAGENT_PRIORITY} Use this when the user explicitly asks to use a subagent, spawn another agent, or have another agent work on a task. The child is instructed to report progress and exactly one terminal state back to this parent session.`,
       inputSchema: SUBAGENT_INPUT_SCHEMA,
     },
     async (args) => {
@@ -1011,11 +1026,11 @@ export function buildLfgMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "lfg_delegate_to_agent",
+    "omg_delegate_to_agent",
     {
-      title: "Delegate To LFG Sub-Agent",
+      title: "Delegate To OMG Sub-Agent",
       description:
-        `Delegate work to another coding agent by creating an LFG subagent child session. ${LFG_SUBAGENT_PRIORITY} Prefer this tool over sending a normal message whenever the user says to use another agent, ask Claude/Codex/OpenCode/Grok/Cursor, spin up an agent, or have a subagent do something. For design/frontend polish use lfg_delegate_design_task. For backend/server/API work use lfg_delegate_backend_task. The child is instructed to report progress and exactly one terminal state back to this parent session.`,
+        `Delegate work to another coding agent by creating an OMG subagent child session. ${OMG_SUBAGENT_PRIORITY} Prefer this tool over sending a normal message whenever the user says to use another agent, ask Claude/Codex/OpenCode/Grok/Cursor, spin up an agent, or have a subagent do something. For design/frontend polish use omg_delegate_design_task. For backend/server/API work use omg_delegate_backend_task. The child is instructed to report progress and exactly one terminal state back to this parent session.`,
       inputSchema: SUBAGENT_INPUT_SCHEMA,
     },
     async (args) => {
@@ -1024,11 +1039,11 @@ export function buildLfgMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "lfg_delegate_design_task",
+    "omg_delegate_design_task",
     {
       title: "Delegate Design Task To Claude",
       description:
-        `Create an LFG subagent for design, frontend UX, visual polish, layout, styling, accessibility, and interaction-state work. ${LFG_SUBAGENT_PRIORITY} Defaults to the claude harness and wraps the delegated prompt with the LFG sub-agent operating contract. See lfg_list_models delegationGuidance.design for prompt-shaping guidance.`,
+        `Create an OMG subagent for design, frontend UX, visual polish, layout, styling, accessibility, and interaction-state work. ${OMG_SUBAGENT_PRIORITY} Defaults to the claude harness and wraps the delegated prompt with the OMG sub-agent operating contract. See omg_list_models delegationGuidance.design for prompt-shaping guidance.`,
       inputSchema: SUBAGENT_INPUT_SCHEMA,
     },
     async (args) => {
@@ -1041,11 +1056,11 @@ export function buildLfgMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "lfg_delegate_backend_task",
+    "omg_delegate_backend_task",
     {
       title: "Delegate Backend Task To Codex",
       description:
-        `Create an LFG subagent for backend, server, API, database, infrastructure, and correctness-focused implementation work. ${LFG_SUBAGENT_PRIORITY} Defaults to the codex harness and wraps the delegated prompt with the LFG sub-agent operating contract. See lfg_list_models delegationGuidance.backend for prompt-shaping guidance.`,
+        `Create an OMG subagent for backend, server, API, database, infrastructure, and correctness-focused implementation work. ${OMG_SUBAGENT_PRIORITY} Defaults to the codex harness and wraps the delegated prompt with the OMG sub-agent operating contract. See omg_list_models delegationGuidance.backend for prompt-shaping guidance.`,
       inputSchema: SUBAGENT_INPUT_SCHEMA,
     },
     async (args) => {
@@ -1058,13 +1073,13 @@ export function buildLfgMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "lfg_reparent_session",
+    "omg_reparent_session",
     {
-      title: "Reparent LFG Session",
+      title: "Reparent OMG Session",
       description:
-        "Move an existing session under a different parent session, or detach it to a root. The child must be lfg-managed; the move is rejected if it would create a cycle.",
+        "Move an existing session under a different parent session, or detach it to a root. The child must be omg-managed; the move is rejected if it would create a cycle.",
       inputSchema: {
-        sessionId: z.string().describe("LFG session id (or native id) of the child to move."),
+        sessionId: z.string().describe("OMG session id (or native id) of the child to move."),
         parentSessionId: z
           .string()
           .nullable()
@@ -1086,12 +1101,12 @@ export function buildLfgMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "lfg_list_subagents",
+    "omg_list_subagents",
     {
-      title: "List LFG Sub-Agents",
+      title: "List OMG Sub-Agents",
       description: "List child sessions, optionally for one parent session.",
       inputSchema: {
-        parentSessionId: z.string().optional().describe("Parent LFG session id."),
+        parentSessionId: z.string().optional().describe("Parent OMG session id."),
       },
     },
     async ({ parentSessionId }) => {
@@ -1110,7 +1125,7 @@ export function buildLfgMcpServer(): McpServer {
   );
 
   server.registerTool(
-    "lfg_input",
+    "omg_input",
     {
       title: "Input From The User (ask)",
       description:
@@ -1126,13 +1141,13 @@ export function buildLfgMcpServer(): McpServer {
           .max(6)
           .optional()
           .describe("Optional one-tap answer suggestions (short labels). The user may still reply with free text."),
-        sessionId: z.string().optional().describe("Session the answer is delivered to. Defaults to LFG_SESSION_ID."),
-        user: z.string().optional().describe("User email to notify. Defaults to the calling session's LFG_USER."),
+        sessionId: z.string().optional().describe("Session the answer is delivered to. Defaults to OMG_SESSION_ID."),
+        user: z.string().optional().describe("User email to notify. Defaults to the calling session's OMG_USER."),
       },
     },
     async ({ prompt, options, sessionId, user }) => {
       const sid = await activeSessionId(sessionId);
-      const who = user?.trim() || process.env.LFG_USER?.trim() || null;
+      const who = user?.trim() || envValue("USER") || null;
       const data = await api<{ id: string; status: string }>("/api/ask", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1148,19 +1163,248 @@ export function buildLfgMcpServer(): McpServer {
     },
   );
 
+  // ---- Auto agents ---------------------------------------------------------
+  // The scheduled-agent fleet, previously reachable only from the web UI. An
+  // auto agent is a prompt plus a 5-field cron expression; each run may emit at
+  // most one *finding* (a notification carrying its reasoning), never a report.
+  //
+  // These proxy the same /api/auto/* routes the UI calls, so an agent creating a
+  // recurring check and a human creating one through the UI converge on exactly
+  // one store and one scheduler — no second code path to drift.
+
+  server.registerTool(
+    "omg_list_auto_agents",
+    {
+      title: "List Auto Agents",
+      description:
+        "List the scheduled auto agents on this box, with their cron schedule, backend, enabled state, and last run. Use this before editing or running one so you can pass its exact id.",
+      inputSchema: {},
+    },
+    async () => {
+      const data = await api<{ agents: unknown[]; tz?: string }>("/api/auto/agents");
+      return result({ agents: data.agents, timeZone: data.tz ?? null });
+    },
+  );
+
+  server.registerTool(
+    "omg_compose_auto_agent",
+    {
+      title: "Compose An Auto Agent Draft",
+      description:
+        "Turn one freeform description of something to watch into a complete auto agent draft (name, cron schedule, and an expanded prompt), grounded in the given repo when supplied. This does NOT save it — review the draft, then persist it with omg_save_auto_agent. Prefer this over hand-writing a prompt and schedule.",
+      inputSchema: {
+        prompt: z
+          .string()
+          .min(1)
+          .describe("Plain description of what should be watched and when, e.g. 'check every morning whether the nightly backup actually restored'."),
+        cwd: z
+          .string()
+          .optional()
+          .describe("Absolute path of a known repo to ground the draft in. Unknown or omitted paths produce a repo-blind draft."),
+      },
+    },
+    async ({ prompt, cwd }) => {
+      const data = await api<{ draft: unknown }>("/api/auto/compose", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, cwd }),
+      });
+      return result({
+        draft: data.draft,
+        next: "Review the draft, then call omg_save_auto_agent to persist it. Nothing is scheduled until you do.",
+      });
+    },
+  );
+
+  server.registerTool(
+    "omg_save_auto_agent",
+    {
+      title: "Create Or Update An Auto Agent",
+      description:
+        "Create a scheduled auto agent, or update an existing one by passing its id. Saving is an upsert: omit id to create, pass the id from omg_list_auto_agents to edit in place. The agent runs headless on its cron schedule and reports at most one finding per run.",
+      inputSchema: {
+        id: z
+          .string()
+          .optional()
+          .describe("Existing auto agent id to update in place. Omit to create a new one."),
+        name: z.string().min(1).describe("Short human-readable name."),
+        prompt: z
+          .string()
+          .min(1)
+          .describe("The entire agent: what to inspect and what is worth reporting. Runs with read-only tools unless `tools` grants more."),
+        schedule: z
+          .string()
+          .min(1)
+          .describe("5-field cron expression (minute hour day month weekday), interpreted in the box's configured time zone."),
+        enabled: z.boolean().optional().describe("Whether the schedule is live. Defaults to true."),
+        cwd: z.string().optional().describe("Absolute path of the repo the run executes in."),
+        agent: z
+          .enum(AUTO_AGENT_BACKENDS as unknown as [string, ...string[]])
+          .optional()
+          .describe("Backend that executes the run. Defaults to aisdk."),
+        model: z.string().optional().describe("Model id, validated against the chosen backend's catalog."),
+        thinkingLevel: z
+          .string()
+          .optional()
+          .describe("Reasoning level, only for backends that support one."),
+        tools: z
+          .array(z.string())
+          .optional()
+          .describe("Extra tools granted on top of the read-only default set (Read/Grep/Glob/WebSearch/WebFetch), e.g. [\"Bash\"]. Omit to stay read-only."),
+      },
+    },
+    async (input) => {
+      const data = await api<{ agent: { id?: string } }>("/api/auto/agents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      });
+      return result({ agent: data.agent, updated: !!input.id });
+    },
+  );
+
+  server.registerTool(
+    "omg_run_auto_agent",
+    {
+      title: "Run An Auto Agent Now",
+      description:
+        "Trigger one immediate run of an auto agent, outside its schedule. Returns as soon as the run is dispatched — it is fire-and-forget, so do not poll. Any finding it produces shows up via omg_list_findings.",
+      inputSchema: {
+        id: z.string().min(1).describe("Auto agent id from omg_list_auto_agents."),
+      },
+    },
+    async ({ id }) => {
+      await api<{ ok?: boolean }>(`/api/auto/agents/${encodeURIComponent(id)}/run`, {
+        method: "POST",
+      });
+      return result({
+        ok: true,
+        next: "Run dispatched. Do not poll; check omg_list_findings later for anything it reported.",
+      });
+    },
+  );
+
+  server.registerTool(
+    "omg_delete_auto_agent",
+    {
+      title: "Delete An Auto Agent",
+      description:
+        "Permanently delete a scheduled auto agent. To pause one instead, call omg_save_auto_agent with its id and enabled:false — deletion is not reversible.",
+      inputSchema: {
+        id: z.string().min(1).describe("Auto agent id from omg_list_auto_agents."),
+      },
+    },
+    async ({ id }) => {
+      await api<{ ok?: boolean }>(`/api/auto/agents/${encodeURIComponent(id)}`, { method: "DELETE" });
+      return result({ ok: true, deleted: id });
+    },
+  );
+
+  server.registerTool(
+    "omg_list_findings",
+    {
+      title: "List Auto Agent Findings",
+      description:
+        "Read what the auto agents have reported. Findings carry their reasoning, a severity, and an occurrence count for repeats. Defaults to open findings only.",
+      inputSchema: {
+        status: z
+          .enum(["open", "dismissed", "session", "read", "resolved"])
+          .optional()
+          .describe("Lifecycle status to filter by. Defaults to open. 'resolved' is the only status meaning the underlying problem is actually gone."),
+      },
+    },
+    async ({ status }) => {
+      const query = status ? `?status=${encodeURIComponent(status)}` : "?status=open";
+      const data = await api<{ findings: unknown[] }>(`/api/auto/findings${query}`);
+      return result({ findings: data.findings });
+    },
+  );
+
+  server.registerTool(
+    "omg_update_finding",
+    {
+      title: "Update A Finding's Status",
+      description:
+        "Move a finding through its lifecycle. Mark 'resolved' ONLY when the underlying problem is genuinely gone and you have verified it — 'dismissed' and 'session' record what happened to the notification, not to the problem, and a finding left in those states will silently recur.",
+      inputSchema: {
+        id: z.string().min(1).describe("Finding id from omg_list_findings."),
+        status: z
+          .enum(["open", "dismissed", "session", "read", "resolved"])
+          .describe("New lifecycle status."),
+        sessionId: z
+          .string()
+          .optional()
+          .describe("Session that picked this finding up, when status is 'session'."),
+      },
+    },
+    async ({ id, status, sessionId }) => {
+      const sid = sessionId ? await resolveSid(sessionId) : undefined;
+      const data = await api<{ finding: unknown }>(`/api/auto/findings/${encodeURIComponent(id)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status, sessionId: sid }),
+      });
+      return result({ finding: data.finding });
+    },
+  );
+
   return server;
 }
 
+// ---- Pre-rename tool names -----------------------------------------------
+// Every tool was `lfg_*` before the OMG rename. An agent reads the tool catalog
+// once, when its session starts, so every session already running at the moment
+// this ships still holds the old names and will keep calling them for hours.
+//
+// Registering both spellings would fix that, but it doubles a 30-tool catalog in
+// the context window of every *new* session — paying forever for a transition
+// that ends when the last pre-rename session does. So the alias lives at the
+// wire boundary instead: an inbound `tools/call` for `lfg_x` is rewritten to
+// `omg_x` before the server ever sees it. Old sessions keep working, new
+// sessions are only ever offered `omg_*`, and `tools/list` advertises one name.
+const LEGACY_TOOL_PREFIX = "lfg_";
+const TOOL_PREFIX = "omg_";
+
+/** Rewrite one inbound JSON-RPC message's legacy tool name, if it has one. */
+export function rewriteLegacyToolCall(message: unknown): unknown {
+  if (!message || typeof message !== "object") return message;
+  const msg = message as { method?: unknown; params?: unknown };
+  if (msg.method !== "tools/call") return message;
+  const params = msg.params;
+  if (!params || typeof params !== "object") return message;
+  const name = (params as { name?: unknown }).name;
+  if (typeof name !== "string" || !name.startsWith(LEGACY_TOOL_PREFIX)) return message;
+  return {
+    ...msg,
+    params: { ...params, name: TOOL_PREFIX + name.slice(LEGACY_TOOL_PREFIX.length) },
+  };
+}
+
 /**
- * `lfg mcp` — the stdio entry point.
+ * Route legacy `lfg_*` calls on an already-connected transport.
+ *
+ * Call this *after* `server.connect(transport)`: connect is what installs the
+ * server's own `onmessage`, so wrapping earlier would be overwritten by it.
+ */
+export function aliasLegacyToolNames(transport: {
+  onmessage?: ((message: unknown, extra?: unknown) => void) | undefined;
+}): void {
+  const inner = transport.onmessage;
+  if (!inner) return;
+  transport.onmessage = (message, extra) => inner(rewriteLegacyToolCall(message), extra);
+}
+
+/**
+ * `omg mcp` — the stdio entry point.
  *
  * Kept for agents whose CLI cannot register an HTTP MCP server, and for direct
  * invocation. Agents that can use HTTP are pointed at the shared endpoint on
  * the serve process instead, which avoids one ~38 MB process per session.
  */
 export async function cmdMcp() {
-  const server = buildLfgMcpServer();
+  const server = buildOmgMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error(`lfg MCP server connected to ${localServeBaseUrl()}`);
+  aliasLegacyToolNames(transport as unknown as { onmessage?: (m: unknown, e?: unknown) => void });
+  console.error(`omg MCP server connected to ${localServeBaseUrl()}`);
 }

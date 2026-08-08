@@ -1,12 +1,12 @@
 # Railway
 
-Railway is a demo-friendly deployment target for `lfg`. It can run the web UI
+Railway is a demo-friendly deployment target for OMG. It can run the web UI
 and API from this repository, but it does not have your local repositories,
 `tmux` sessions, or authenticated agent CLIs unless you add them to that
 container yourself.
 
 Use Railway for a quick hosted preview. For day-to-day agent work, install
-`lfg` on the machine that already has your repos and CLI credentials.
+OMG on the machine that already has your repos and CLI credentials.
 
 ## Deploy from GitHub
 

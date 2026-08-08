@@ -213,32 +213,51 @@ export function parseNativeArtifact(source: string): NativeArtifactDocument {
  * Baseline styles applied *before* the artifact's own CSS.
  *
  * The shadow boundary blocks selectors but lets custom properties and inherited
- * values cross it. Map LFG's semantic palette onto an artifact-specific contract
+ * values cross it. Map OMG's semantic palette onto an artifact-specific contract
  * so an artifact can follow the app theme without coupling itself to the host's
  * internal token names. Authored CSS comes after this baseline, so an artifact
  * that intentionally paints its own visual identity still wins.
+ *
+ * The tokens were named `--lfg-artifact-*` before the OMG rename. Every artifact
+ * published under that spelling is still on disk and still rendered here, so the
+ * old names are kept as aliases of the new ones rather than dropped — an
+ * artifact authored last month must not lose its theming because the brand
+ * changed. New artifacts are told about `--omg-artifact-*` only.
  */
 export const NATIVE_ARTIFACT_BASE_CSS = `
 :host {
-  --lfg-artifact-background: var(--background, #f2f2f7);
-  --lfg-artifact-surface: var(--card, #ffffff);
-  --lfg-artifact-foreground: var(--foreground, #000000);
-  --lfg-artifact-muted: var(--muted, #f9f9fb);
-  --lfg-artifact-muted-foreground: var(--muted-foreground, rgba(60, 60, 67, 0.6));
-  --lfg-artifact-border: var(--border, rgba(60, 60, 67, 0.12));
-  --lfg-artifact-accent: var(--primary, #007aff);
-  --lfg-artifact-accent-foreground: var(--primary-foreground, #ffffff);
-  --lfg-artifact-code-background: var(--code-bg, rgba(120, 120, 128, 0.08));
+  --omg-artifact-background: var(--background, #f2f2f7);
+  --omg-artifact-surface: var(--card, #ffffff);
+  --omg-artifact-foreground: var(--foreground, #000000);
+  --omg-artifact-muted: var(--muted, #f9f9fb);
+  --omg-artifact-muted-foreground: var(--muted-foreground, rgba(60, 60, 67, 0.6));
+  --omg-artifact-border: var(--border, rgba(60, 60, 67, 0.12));
+  --omg-artifact-accent: var(--primary, #007aff);
+  --omg-artifact-accent-foreground: var(--primary-foreground, #ffffff);
+  --omg-artifact-code-background: var(--code-bg, rgba(120, 120, 128, 0.08));
   /* Shorthands for the three most-reached-for tokens, so an artifact that
      guesses the short name gets the theme instead of silently falling through
-     to its own hardcoded fallback. muted-fg especially: --lfg-artifact-muted
+     to its own hardcoded fallback. muted-fg especially: --omg-artifact-muted
      is a surface, and text painted with it vanishes into its own background. */
-  --lfg-artifact-bg: var(--lfg-artifact-background);
-  --lfg-artifact-fg: var(--lfg-artifact-foreground);
-  --lfg-artifact-muted-fg: var(--lfg-artifact-muted-foreground);
+  --omg-artifact-bg: var(--omg-artifact-background);
+  --omg-artifact-fg: var(--omg-artifact-foreground);
+  --omg-artifact-muted-fg: var(--omg-artifact-muted-foreground);
+  /* Pre-rename aliases — see the note above. */
+  --lfg-artifact-background: var(--omg-artifact-background);
+  --lfg-artifact-surface: var(--omg-artifact-surface);
+  --lfg-artifact-foreground: var(--omg-artifact-foreground);
+  --lfg-artifact-muted: var(--omg-artifact-muted);
+  --lfg-artifact-muted-foreground: var(--omg-artifact-muted-foreground);
+  --lfg-artifact-border: var(--omg-artifact-border);
+  --lfg-artifact-accent: var(--omg-artifact-accent);
+  --lfg-artifact-accent-foreground: var(--omg-artifact-accent-foreground);
+  --lfg-artifact-code-background: var(--omg-artifact-code-background);
+  --lfg-artifact-bg: var(--omg-artifact-background);
+  --lfg-artifact-fg: var(--omg-artifact-foreground);
+  --lfg-artifact-muted-fg: var(--omg-artifact-muted-foreground);
   display: block;
-  background: var(--lfg-artifact-surface);
-  color: var(--lfg-artifact-foreground);
+  background: var(--omg-artifact-surface);
+  color: var(--omg-artifact-foreground);
   color-scheme: inherit;
   font: inherit;
   line-height: 1.5;
@@ -249,5 +268,5 @@ export const NATIVE_ARTIFACT_BASE_CSS = `
 img, svg, video, canvas { max-width: 100%; height: auto; }
 table { max-width: 100%; }
 pre { overflow: auto; }
-a { color: var(--lfg-artifact-accent); }
+a { color: var(--omg-artifact-accent); }
 `;

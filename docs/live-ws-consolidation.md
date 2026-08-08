@@ -2,11 +2,11 @@
 
 Status: design / not yet implemented.
 
-Provenance: This protocol is **independently implemented for lfg**. Its channel/
+Provenance: This protocol is **independently implemented for OMG**. Its channel/
 resume design is *inspired by* the architecture of our separate realtime work
 (multiplexed subscriptions, seq-ring replay, snapshot/gap semantics) but contains
 **no copied code** from any closed-source repository. Implementers MUST work only
-from this document and lfg's own existing code (`src/live-ws.ts`,
+from this document and OMG's own existing code (`src/live-ws.ts`,
 `web/src/useLiveSocket.ts`). Do NOT open or copy from other repos.
 
 ## Goal
@@ -81,13 +81,13 @@ rides the one socket, distinguished by `(kind, key)`:
 ## Auth
 - Browsers can't set WS headers → pass the bearer as a **subprotocol**
   `Sec-WebSocket-Protocol: lfg-bearer.<token>`; server echoes via handleProtocols
-  and verifies on upgrade with the same check the HTTP API uses. (Match lfg's
+  and verifies on upgrade with the same check the HTTP API uses. (Match OMG's
   current auth model; today's live endpoints are effectively unauthenticated in
   this tree — keep parity, don't regress.)
 
 ## Caveats to honor
 - Per-channel seq is in-memory per-process → resets on server restart; a resuming
-  client then gets a `gap`+`snapshot`. Fine for lfg's single-node model; document
+  client then gets a `gap`+`snapshot`. Fine for OMG's single-node model; document
   it. Do NOT assume seq survives a redeploy.
 - Ring buffers are memory-only; size them per channel type.
 

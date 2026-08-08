@@ -2,6 +2,29 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - One name everywhere, and agents can run the schedule (v0.1.300)
+
+- **The agent toolset is now `omg_*`.** Every tool an agent calls was named
+  `lfg_*` while the product, the site and the settings had already become OMG,
+  so the one surface an agent reads all day was the last one still disagreeing.
+  The MCP server is registered as `omg`, so tools now read
+  `mcp__omg__omg_ship`, and the launch contract is the OMG runtime contract.
+- **Nothing has to be restarted for this.** Sessions already running keep the
+  tool list they started with, and their `lfg_*` calls are translated at the
+  connection instead of failing. New sessions see only the new names, so the
+  catalog does not carry both spellings forever.
+- **Agents can now manage the scheduled fleet.** Auto agents — a prompt plus a
+  cron schedule, reporting findings — were reachable only from the web UI, so
+  asking an agent to "check this every morning" had nowhere to go. There are
+  now tools to list, compose, save, run, and delete them, and to read and
+  resolve their findings. They call the same routes the UI does, so an agent
+  and a human are editing one fleet.
+- **`omg` is now the command.** `lfg` keeps working as an alias, and the older
+  `LFG_*` variables are still read.
+- Artifacts published before the rename keep their theming: the older
+  `--lfg-artifact-*` style variables are still supplied alongside the new
+  `--omg-artifact-*` ones.
+
 ## August 8, 2026 - Every open dependency advisory is closed (v0.1.299)
 
 - **The three open Dependabot alerts are fixed.** All of them sat in the mobile

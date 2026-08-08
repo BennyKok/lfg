@@ -1,18 +1,20 @@
 #!/usr/bin/env bun
-const HELP = `lfg — run and manage your AI coding agents on your own box
+const HELP = `omg — run and manage your AI coding agents on your own box
 
 Usage:
-  lfg serve                        Run the web UI + control server (default :8766)
-  lfg agents [list|run|show]       Run / inspect insight agents (see 'agents help')
-  lfg subagent [create|models]      Spawn a managed worker session on any harness
-  lfg mcp                          Run the LFG MCP stdio server
-  lfg whatsapp [run|sessions]      Run the optional WhatsApp control sidecar
-  lfg connect <code>               Pair this box to a remote-access relay (EXPERIMENTAL)
-  lfg setup                        Provision this box (Bun, tmux, Tailscale, service)
-  lfg uninstall [--purge --yes]    Remove LFG (preserves sessions/config by default)
+  omg serve                        Run the web UI + control server (default :8766)
+  omg agents [list|run|show]       Run / inspect insight agents (see 'agents help')
+  omg subagent [create|models]      Spawn a managed worker session on any harness
+  omg mcp                          Run the OMG MCP stdio server
+  omg whatsapp [run|sessions]      Run the optional WhatsApp control sidecar
+  omg connect <code>               Pair this box to a remote-access relay (EXPERIMENTAL)
+  omg setup                        Provision this box (Bun, tmux, Tailscale, service)
+  omg uninstall [--purge --yes]    Remove OMG (preserves sessions/config by default)
 
 Env (read from process env / .env, see .env.example):
-  LFG_PORT, LFG_HOST, LFG_REPOS_ROOT
+  OMG_PORT, OMG_HOST, OMG_REPOS_ROOT  (the older LFG_* spellings still work)
+
+\`lfg\` remains a working alias for this command.
 `;
 
 async function main() {

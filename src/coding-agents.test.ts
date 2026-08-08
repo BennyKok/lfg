@@ -15,25 +15,54 @@ import {
 
 const COPILOT_ENV_KEYS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"] as const;
 
-describe("LFG MCP config merging", () => {
+describe("OMG MCP config merging", () => {
   const command = ["/usr/bin/bun", "/opt/lfg/src/cli.ts", "mcp"];
 
-  test("preserves OpenCode config while adding the local LFG server", () => {
+  test("preserves OpenCode config while adding the local OMG server", () => {
     expect(withOpencodeLfgMcp({ theme: "dark", mcp: { other: { enabled: true } } }, command)).toEqual({
       theme: "dark",
       mcp: {
         other: { enabled: true },
-        lfg: { type: "local", command, enabled: true },
+        omg: { type: "local", command, enabled: true },
       },
     });
   });
 
-  test("preserves Cursor config while adding the LFG server", () => {
+  test("preserves Cursor config while adding the OMG server", () => {
     expect(withCursorLfgMcp({ editor: {}, mcpServers: { other: { command: "other" } } }, command)).toEqual({
       editor: {},
       mcpServers: {
         other: { command: "other" },
-        lfg: { command: "/usr/bin/bun", args: ["/opt/lfg/src/cli.ts", "mcp"] },
+        omg: { command: "/usr/bin/bun", args: ["/opt/lfg/src/cli.ts", "mcp"] },
+      },
+    });
+  });
+
+  // Upgrading a box that already had the pre-rename registration must not leave
+  // both entries behind: they resolve to the same server, so every one of its
+  // ~30 tools would be registered twice, under two namespaces, in every session.
+  test("replaces the pre-rename OpenCode entry instead of merging over it", () => {
+    const merged = withOpencodeLfgMcp(
+      { mcp: { other: { enabled: true }, lfg: { type: "local", command: ["old"], enabled: true } } },
+      command,
+    );
+    expect(merged).toEqual({
+      mcp: {
+        other: { enabled: true },
+        omg: { type: "local", command, enabled: true },
+      },
+    });
+  });
+
+  test("replaces the pre-rename Cursor entry instead of merging over it", () => {
+    const merged = withCursorLfgMcp(
+      { mcpServers: { other: { command: "other" }, lfg: { command: "old", args: [] } } },
+      command,
+    );
+    expect(merged).toEqual({
+      mcpServers: {
+        other: { command: "other" },
+        omg: { command: "/usr/bin/bun", args: ["/opt/lfg/src/cli.ts", "mcp"] },
       },
     });
   });

@@ -152,7 +152,7 @@ export default function CodingAgentsPage({
                         {configured ? "Ready" : "Needs setup"}
                       </Badge>
                       <Badge variant="outline">
-                        {agent.status.lfgCapabilityAccess === "mcp" ? "LFG tools" : "LFG prompt only"}
+                        {agent.status.omgCapabilityAccess === "mcp" ? "OMG tools" : "OMG prompt only"}
                       </Badge>
                     </div>
                     <div className="mt-1 space-y-1">

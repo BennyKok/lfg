@@ -19,7 +19,7 @@ import { homedir } from "node:os";
 import { projectName } from "./projects";
 import { isCommandFileAgent } from "./coding-agent-adapters";
 import type { CodingAgentKind } from "./coding-agents";
-import { LFG_CAPABILITY_VERSION, stripLfgRuntimeContract } from "./lfg-capabilities.ts";
+import { OMG_CAPABILITY_VERSION, stripOmgRuntimeContract } from "./omg-capabilities.ts";
 import {
   cachedFingerprints,
   getCachedTranscriptPath,
@@ -519,7 +519,7 @@ export function managedLaunchRow(
     parentAgent: m.parentAgent ?? null,
     spawnedBy: m.spawnedBy ?? null,
     capabilityVersion: m.capabilityVersion ?? null,
-    capabilitiesStale: m.capabilityVersion !== LFG_CAPABILITY_VERSION,
+    capabilitiesStale: m.capabilityVersion !== OMG_CAPABILITY_VERSION,
     // Still booting counts as launching: the record says "running" but the
     // harness has not come up yet, and the card should say so rather than
     // present an agent that cannot take a message yet as ready.
@@ -557,7 +557,7 @@ function managedLineage(m: ManagedSession | undefined): Pick<
     parentAgent: m?.parentAgent ?? null,
     spawnedBy: m?.spawnedBy ?? null,
     capabilityVersion: m?.capabilityVersion ?? null,
-    capabilitiesStale: !!m && m.capabilityVersion !== LFG_CAPABILITY_VERSION,
+    capabilitiesStale: !!m && m.capabilityVersion !== OMG_CAPABILITY_VERSION,
     claudeAccountId: m?.claudeAccountId ?? null,
   };
 }
@@ -1353,7 +1353,7 @@ function stripConversationPrefix(text: string): string {
 // instead of what the human actually asked for. Transcript rendering keeps the
 // full text — the web client collapses the envelope there itself.
 function promptDisplayText(text: string): string {
-  return stripConversationPrefix(stripLfgRuntimeContract(text)).trim().replace(/\s+/g, " ");
+  return stripConversationPrefix(stripOmgRuntimeContract(text)).trim().replace(/\s+/g, " ");
 }
 
 function extractText(content: unknown): string {

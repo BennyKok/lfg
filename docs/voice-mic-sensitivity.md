@@ -1,6 +1,6 @@
 # Voice microphone sensitivity — how it works and how to make it less sensitive
 
-This documents how lfg decides when the microphone is "hearing you" and how to
+This documents how OMG decides when the microphone is "hearing you" and how to
 tune it so the mic is **less** sensitive (ignores background noise / room tone,
 waits longer before deciding you've stopped talking).
 

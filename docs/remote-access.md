@@ -18,7 +18,7 @@ relay, while `lfg connect` remains the generic path for any operator.
 LFG_TAILSCALE_SERVE=1 lfg setup
 ```
 
-This keeps `lfg` bound to loopback and lets `tailscale serve` front it on your
+This keeps OMG bound to loopback and lets `tailscale serve` front it on your
 tailnet. Nothing is exposed to the public internet, and your devices reach the
 UI at the box's Tailscale hostname.
 
@@ -32,7 +32,7 @@ inbound port: the box dials **out** to the relay over a WebSocket and holds it
 open, and the relay's own auth (a pairing code, then a persisted bearer token)
 is the boundary.
 
-No relay implementation ships with LFG. This is the generic client half of a
+No relay implementation ships with OMG. This is the generic client half of a
 documented protocol any relay operator can implement — see the wire protocol at
 the top of [`src/commands/connect.ts`](../src/commands/connect.ts).
 
@@ -44,15 +44,15 @@ After signing in once with `omg login`, run:
 omg connect
 ```
 
-The OMG CLI installs LFG when it is missing, discovers OMG's public relay URL,
+The OMG CLI installs OMG when it is missing, discovers OMG's public relay URL,
 mints a short-lived pairing code for the authenticated account, and invokes
 `lfg connect` without exposing the code to the clipboard. Later runs resume the
 saved OMG binding. Use `omg connect --new` only when you intentionally want a
-fresh binding, or `--no-install` to require an existing LFG install.
+fresh binding, or `--no-install` to require an existing OMG install.
 
 Install the command with `npm install --global @omg-dev/cli` (or
 `bun add --global @omg-dev/cli`). This convenience wrapper is operator-specific;
-the LFG command and wire protocol below remain provider-agnostic.
+the OMG command and wire protocol below remain provider-agnostic.
 
 ### Custom relay
 

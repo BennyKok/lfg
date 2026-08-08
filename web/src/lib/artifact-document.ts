@@ -34,11 +34,11 @@ const ARTIFACT_PALETTES: Record<ArtifactTheme, Record<string, string>> = {
  * Shorthands for the three tokens artifacts reach for most, published alongside
  * the canonical names.
  *
- * An artifact that guesses `--lfg-artifact-bg` gets nothing back and silently
+ * An artifact that guesses `--omg-artifact-bg` gets nothing back and silently
  * falls through to its own hardcoded fallback — which is how a card ends up
- * with LFG's dark surfaces and the artifact's light text. Answering the common
+ * with OMG's dark surfaces and the artifact's light text. Answering the common
  * guess costs three declarations. `muted-fg` is here because the near miss is
- * the expensive one: `--lfg-artifact-muted` exists but is a *surface*, so text
+ * the expensive one: `--omg-artifact-muted` exists but is a *surface*, so text
  * painted with it disappears into its own background.
  */
 const ARTIFACT_ALIASES: Record<string, string> = {
@@ -47,6 +47,12 @@ const ARTIFACT_ALIASES: Record<string, string> = {
   "muted-fg": "muted-foreground",
 };
 
+// Token prefixes, new first. Artifacts published before the OMG rename hardcode
+// `--lfg-artifact-*` and are still served from disk by this same bridge, so both
+// prefixes are emitted with identical values — an old card must not lose its
+// theming because the brand changed. New artifacts are told about `--omg-*` only.
+const ARTIFACT_TOKEN_PREFIXES = ["--omg-artifact-", "--lfg-artifact-"] as const;
+
 /**
  * Theme bridge for scripted artifacts.
  *
@@ -54,15 +60,15 @@ const ARTIFACT_ALIASES: Record<string, string> = {
  * frame has its own document, so it receives the same semantic palette as
  * literal custom properties. This stylesheet is inserted before authored CSS:
  * an artifact's intentional colors still win, while unstyled/theme-aware
- * documents follow LFG automatically.
+ * documents follow OMG automatically.
  */
 function artifactThemeBridge(theme: ArtifactTheme): string {
   const palette = ARTIFACT_PALETTES[theme];
-  const variables = [
-    ...Object.entries(palette).map(([name, value]) => `--lfg-artifact-${name}:${value}`),
-    ...Object.entries(ARTIFACT_ALIASES).map(([alias, name]) => `--lfg-artifact-${alias}:${palette[name]}`),
-  ].join(";");
-  return `<style id="lfg-artifact-theme">:root{color-scheme:${theme};${variables}}html,body{background:var(--lfg-artifact-surface);color:var(--lfg-artifact-foreground)}a{color:var(--lfg-artifact-accent)}</style>`;
+  const variables = ARTIFACT_TOKEN_PREFIXES.flatMap((prefix) => [
+    ...Object.entries(palette).map(([name, value]) => `${prefix}${name}:${value}`),
+    ...Object.entries(ARTIFACT_ALIASES).map(([alias, name]) => `${prefix}${alias}:${palette[name]}`),
+  ]).join(";");
+  return `<style id="omg-artifact-theme">:root{color-scheme:${theme};${variables}}html,body{background:var(--omg-artifact-surface);color:var(--omg-artifact-foreground)}a{color:var(--omg-artifact-accent)}</style>`;
 }
 
 /**

@@ -1,13 +1,13 @@
 # DigitalOcean
 
-DigitalOcean has two useful paths for `lfg`:
+DigitalOcean has two useful paths for OMG:
 
 - App Platform via `.do/app.yaml` for a containerized demo.
 - A Droplet with cloud-init or `scripts/setup.sh` for real day-to-day agent use.
 
 ## App Platform
 
-The `.do/app.yaml` spec builds the shared Dockerfile and starts `lfg` on port
+The `.do/app.yaml` spec builds the shared Dockerfile and starts OMG on port
 `8766`. The Dockerfile builds from the source tree App Platform checks out —
 there is no bundle to publish first.
 
@@ -18,7 +18,7 @@ target repo/account:
 [![Deploy to DO](https://www.deploytodo.com/do-btn-blue.svg)](https://cloud.digitalocean.com/apps/new?repo=https://github.com/BennyKok/omg.dev/tree/main)
 ```
 
-Do not expose the app publicly unless you add authentication in front of `lfg`.
+Do not expose the app publicly unless you add authentication in front of OMG.
 
 ## Droplet
 

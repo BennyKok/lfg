@@ -1,7 +1,7 @@
 {
-  "name": "lfg",
-  "short_name": "lfg",
-  "description": "Live view + control for lfg coding sessions and agents.",
+  "name": "omg",
+  "short_name": "omg",
+  "description": "Live view + control for omg coding sessions and agents.",
   "id": "/lfg-hs-2026-08-05",
   "start_url": "/",
   "scope": "/",

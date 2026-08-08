@@ -1,23 +1,23 @@
 <a href="https://omg.dev">
-  <img src="https://raw.githubusercontent.com/BennyKok/omg.dev/main/docs/images/lfg-icon.png" alt="lfg icon" width="96" />
+  <img src="https://raw.githubusercontent.com/BennyKok/omg.dev/main/docs/images/lfg-icon.png" alt="omg icon" width="96" />
 </a>
 
-# lfg
+# omg
 
 **Run your AI coding agents on your own machine — and drive them from your phone.**
 
-*The open-source agent control plane behind [omg.dev](https://omg.dev). The CLI is `lfg`.*
+*The open-source agent control plane behind [omg.dev](https://omg.dev). The CLI is `omg` (`lfg` still works).*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![GitHub stars](https://img.shields.io/github/stars/BennyKok/omg.dev?style=flat)](https://github.com/BennyKok/omg.dev/stargazers)
 [![npm](https://img.shields.io/npm/v/@omg-dev/cli?label=%40omg-dev%2Fcli)](https://www.npmjs.com/package/@omg-dev/cli)
 
-[Quick start](#quick-start) · [Why lfg](#why-lfg) · [Agents](#connect-a-coding-agent) · [Remote access](#reach-it-from-your-phone) · [Security](#security)
+[Quick start](#quick-start) · [Why omg](#why-omg) · [Agents](#connect-a-coding-agent) · [Remote access](#reach-it-from-your-phone) · [Security](#security)
 
 <p>
-  <img src="https://raw.githubusercontent.com/BennyKok/omg.dev/main/docs/images/lfg-screenshot-1.jpg" alt="lfg web UI" width="31%" />
-  <img src="https://raw.githubusercontent.com/BennyKok/omg.dev/main/docs/images/lfg-screenshot-2.jpg" alt="lfg scheduled agents" width="31%" />
-  <img src="https://raw.githubusercontent.com/BennyKok/omg.dev/main/docs/images/lfg-screenshot-3.jpg" alt="lfg usage limits" width="31%" />
+  <img src="https://raw.githubusercontent.com/BennyKok/omg.dev/main/docs/images/lfg-screenshot-1.jpg" alt="omg web UI" width="31%" />
+  <img src="https://raw.githubusercontent.com/BennyKok/omg.dev/main/docs/images/lfg-screenshot-2.jpg" alt="omg scheduled agents" width="31%" />
+  <img src="https://raw.githubusercontent.com/BennyKok/omg.dev/main/docs/images/lfg-screenshot-3.jpg" alt="omg usage limits" width="31%" />
 </p>
 
 ---
@@ -26,13 +26,13 @@ Running one coding agent in a terminal is fine. Running five is not: they die
 when you close the laptop, you can't tell which one is stuck waiting on a
 permission prompt, and you have to be at your desk to answer it.
 
-`lfg` turns a Linux box or macOS workstation into a private control plane for
+`omg` turns a Linux box or macOS workstation into a private control plane for
 Claude Code, Codex, OpenCode, Cursor, Grok, Hermes, Pi, and GitHub Copilot. Each
 agent runs in a long-lived `tmux` session that survives disconnects. The
 transcript streams to a web UI you can install as a PWA — so you can check on
 work, answer prompts, and steer from your phone.
 
-**You bring your own agent accounts.** `lfg` drives CLIs you already own and
+**You bring your own agent accounts.** `omg` drives CLIs you already own and
 authenticate. It does not resell tokens and has no model of its own.
 
 ## Quick start
@@ -44,7 +44,7 @@ curl -fsSL https://raw.githubusercontent.com/BennyKok/omg.dev/main/scripts/setup
 Then open **http://127.0.0.1:8766**.
 
 That's the whole install. The script provisions Bun, `tmux`, and `git`,
-downloads the latest release, writes `.env`, and starts `lfg` as a user service
+downloads the latest release, writes `.env`, and starts `omg` as a user service
 bound to loopback. On a fresh Ubuntu/Debian box, add
 `LFG_INSTALL_SYSTEM_DEPS=1` so it may `apt-get` the base packages.
 
@@ -73,7 +73,7 @@ the curious.
 - At least one coding agent CLI — see [below](#connect-a-coding-agent)
 - Optional: [Tailscale](https://tailscale.com) for private remote access
 
-## Why lfg?
+## Why omg?
 
 - **Run agents where your code lives.** Sessions execute on your machine, in
   your repos, with your local CLIs and credentials — not a remote sandbox you
@@ -86,7 +86,7 @@ the curious.
   disconnect, and pick up exactly where they were when you come back.
 - **Keep it private.** The server binds to loopback by default and is designed
   to be exposed through Tailscale, not the public internet.
-- **Delegate with lineage.** LFG MCP tools spawn subagents that stay visible in
+- **Delegate with lineage.** OMG MCP tools spawn subagents that stay visible in
   the UI, inherit parent context, and report progress back.
 - **Show the work.** Agents can display verification media, publish updatable
   HTML dashboards, and post finished results to the Shipped feed.
@@ -95,9 +95,9 @@ the curious.
 
 ## Connect a coding agent
 
-`lfg` drives agent CLIs that you own and authenticate. Open **Settings → Coding
+`omg` drives agent CLIs that you own and authenticate. Open **Settings → Coding
 agents** in the web UI to install one, check its binary path and auth state, and
-register LFG's MCP server with it.
+register OMG's MCP server with it.
 
 | Agent | Command | Notes |
 | --- | --- | --- |
@@ -108,59 +108,59 @@ register LFG's MCP server with it.
 | Grok | `grok` | |
 | Hermes | `hermes` | |
 | GitHub Copilot | `copilot` | Needs Node 22+ |
-| Pi | *bundled* | Ships with LFG (`@earendil-works/pi-coding-agent`); no separate install |
+| Pi | *bundled* | Ships with OMG (`@earendil-works/pi-coding-agent`); no separate install |
 
 OAuth-based agents need a one-time terminal or browser login. API-key providers
 read env vars such as `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` from `.env`. Pi
 authenticates via `ANTHROPIC_API_KEY` or `~/.pi/agent/auth.json`.
 
-**Settings → Coding agents → Install MCP** registers LFG MCP with Claude, Codex,
+**Settings → Coding agents → Install MCP** registers OMG MCP with Claude, Codex,
 OpenCode, Grok, and Cursor when those CLIs are present. (Hermes, Copilot, and Pi
 have no MCP registration surface.) The setup script does this automatically for
 Claude and Codex when they are already installed.
 
 ## Reach it from your phone
 
-`lfg` binds to loopback and has **no authentication of its own** — it trusts the
+`omg` binds to loopback and has **no authentication of its own** — it trusts the
 network you put it behind. There are two supported ways to reach it remotely:
 
 **Tailscale (recommended).** The simplest choice if you only open the UI from
 your own devices:
 
 ```bash
-LFG_TAILSCALE_SERVE=1 lfg setup
+OMG_TAILSCALE_SERVE=1 omg setup
 ```
 
 **A relay (experimental).** For the case Tailscale can't cover — rendering a
 session from your box on a *public* web origin:
 
 ```bash
-LFG_RELAY_URL=wss://your-relay.example/connect lfg connect ABC123   # outbound only, no inbound port
+OMG_RELAY_URL=wss://your-relay.example/connect omg connect ABC123   # outbound only, no inbound port
 ```
 
-No relay ships with LFG itself; the protocol is generic and any operator can
+No relay ships with OMG itself; the protocol is generic and any operator can
 implement it. [omg.dev](https://omg.dev) runs one, and its CLI configures the
 pairing for you in a single command:
 
 ```bash
 npm install --global @omg-dev/cli
 omg login
-omg connect        # installs LFG if needed, then pairs and connects
+omg connect        # installs OMG if needed, then pairs and connects
 ```
 
 Full comparison, the pairing flow, and opt-in session lifecycle events:
 **[docs/remote-access.md](./docs/remote-access.md)**.
 
-Do not put `lfg` on the public internet without your own auth in front of it.
+Do not put `omg` on the public internet without your own auth in front of it.
 See [Security](#security).
 
 ## Security
 
-`lfg` launches AI agents with shell access on your machine. The control API is
+`omg` launches AI agents with shell access on your machine. The control API is
 unauthenticated by design because it is meant to run on loopback and be reached
 privately through Tailscale.
 
-**Do not expose `lfg` directly to the public internet.** Read
+**Do not expose `omg` directly to the public internet.** Read
 [SECURITY.md](./SECURITY.md) before sharing access.
 
 ## Don't want to run a box?
@@ -168,42 +168,42 @@ privately through Tailscale.
 [![Deploy on omg.dev](https://omg.dev/deploy-badge.svg?v=2)](https://omg.dev/sandbox/templates/lfg)
 
 [omg.dev](https://omg.dev) is the hosted version, run by the same author — a
-cloud machine with `lfg` already running, so there's nothing to install and no
+cloud machine with `omg` already running, so there's nothing to install and no
 server to provision. There's a free tier, and it's entirely optional: everything
 above works forever without an account.
 
 One click on [omg.dev/sandbox/templates/lfg](https://omg.dev/sandbox/templates/lfg)
-gives you a workspace with the LFG web UI already up. Workspaces hibernate when
+gives you a workspace with the OMG web UI already up. Workspaces hibernate when
 idle and wake on the same URL.
 
 > **Which should I pick?** Install locally if you want agents working on the
-> repos and authenticated CLIs already on your machine — that is what `lfg` is
+> repos and authenticated CLIs already on your machine — that is what `omg` is
 > for. Use omg.dev to try it in seconds, or when you would rather not run a box
 > at all. A fresh hosted workspace has no agent CLIs signed in, and agents work
 > on repos you clone *into* it. More detail in [deploy/omg](./deploy/omg/README.md).
 
 ## Managing an install
 
-From LFG itself:
+From OMG itself:
 
 ```bash
-lfg setup                     # update and re-run idempotent provisioning
-lfg uninstall                 # remove LFG; keep sessions and config for reinstall
-lfg uninstall --purge --yes   # also permanently delete sessions and config
+omg setup                     # update and re-run idempotent provisioning
+omg uninstall                 # remove OMG; keep sessions and config for reinstall
+omg uninstall --purge --yes   # also permanently delete sessions and config
 ```
 
 Or through the omg.dev CLI, which wraps the same lifecycle:
 
 ```bash
-omg computer setup                     # install LFG (no omg.dev account needed)
+omg computer setup                     # install OMG (no omg.dev account needed)
 omg computer status                    # inspect the local install and pairing
-omg computer update                    # update an existing LFG installation
-omg computer uninstall                 # remove LFG; preserve sessions and config
-omg computer uninstall --purge --yes   # also permanently delete local LFG data
+omg computer update                    # update an existing OMG installation
+omg computer uninstall                 # remove OMG; preserve sessions and config
+omg computer uninstall --purge --yes   # also permanently delete local OMG data
 ```
 
 `update` never installs a missing computer, and `uninstall` delegates cleanup to
-LFG instead of guessing which files it owns. Removal stops LFG's service and
+OMG instead of guessing which files it owns. Removal stops OMG's service and
 deletes its command, MCP registrations, and release files. Shared prerequisites
 such as Bun, Tailscale, `tmux`, and coding-agent CLIs are left alone; source
 checkouts are preserved unless explicitly purged.
@@ -211,15 +211,15 @@ checkouts are preserved unless explicitly purged.
 ## Commands
 
 ```bash
-lfg serve                      # web UI + control server
-lfg setup                      # rerun provisioning/update flow
-lfg uninstall                  # remove LFG while preserving sessions and config
-lfg connect <code>             # reach this box through a relay (see docs/remote-access.md)
-lfg mcp                        # stdio MCP server for LFG session tools
-lfg agents list                # list markdown-defined insight agents
-lfg agents run <name>          # run an insight agent
-lfg subagent models            # list runtime sub-agent providers/models
-lfg subagent create --prompt "..." --agent codex-aisdk
+omg serve                      # web UI + control server
+omg setup                      # rerun provisioning/update flow
+omg uninstall                  # remove OMG while preserving sessions and config
+omg connect <code>             # reach this box through a relay (see docs/remote-access.md)
+omg mcp                        # stdio MCP server for OMG session tools
+omg agents list                # list markdown-defined insight agents
+omg agents run <name>          # run an insight agent
+omg subagent models            # list runtime sub-agent providers/models
+omg subagent create --prompt "..." --agent codex-aisdk
 ```
 
 From a source checkout, use `bun run <command>` (e.g. `bun run serve`) — the
@@ -227,21 +227,22 @@ surface is identical.
 
 ## MCP tools
 
-`lfg mcp` talks to the local `lfg serve` API and exposes LFG's session tools to
-any MCP client. Prefer LFG's own subagent tools over a client's generic "spawn
+`omg mcp` talks to the local `omg serve` API and exposes OMG's session tools to
+any MCP client. Prefer OMG's own subagent tools over a client's generic "spawn
 agent" helper so children stay visible in the UI, inherit parent and user
 context, and can run on any configured harness.
 
 | Area | Tools |
 | --- | --- |
-| Sessions | `lfg_list_sessions`, `lfg_get_session_tree`, `lfg_get_session_messages`, `lfg_send_session_message`, `lfg_close_session` |
-| Origin delivery | `lfg_send_to_origin` |
-| Presentation | `lfg_display_image`, `lfg_display_video`, `lfg_publish_artifact`, `lfg_refresh_artifact`, `lfg_ship` |
-| Delegation | `lfg_create_subagent`, `lfg_delegate_to_agent`, `lfg_delegate_design_task`, `lfg_delegate_backend_task`, `lfg_list_subagents`, `lfg_reparent_session` |
-| Human input | `lfg_ask_user`, `lfg_input` |
-| Catalog | `lfg_capabilities`, `lfg_list_repos`, `lfg_list_models` |
+| Sessions | `omg_list_sessions`, `omg_find_sessions`, `omg_get_session_tree`, `omg_get_session_messages`, `omg_send_session_message`, `omg_close_session` |
+| Origin delivery | `omg_send_to_origin` |
+| Presentation | `omg_display_image`, `omg_display_video`, `omg_publish_artifact`, `omg_refresh_artifact`, `omg_delete_artifact`, `omg_ship` |
+| Delegation | `omg_create_subagent`, `omg_delegate_to_agent`, `omg_delegate_design_task`, `omg_delegate_backend_task`, `omg_list_subagents`, `omg_reparent_session` |
+| Auto agents | `omg_list_auto_agents`, `omg_compose_auto_agent`, `omg_save_auto_agent`, `omg_run_auto_agent`, `omg_delete_auto_agent`, `omg_list_findings`, `omg_update_finding` |
+| Human input | `omg_ask_user`, `omg_input` |
+| Catalog | `omg_capabilities`, `omg_list_repos`, `omg_list_models` |
 
-Managed sessions launched with an initial task receive a versioned **LFG runtime
+Managed sessions launched with an initial task receive a versioned **OMG runtime
 contract** (when to show media, publish artifacts, ask the user, delegate, or
 ship). Sessions started on an older contract are marked in the UI so they can be
 closed and resumed to pick up the current tool catalog.
@@ -268,7 +269,7 @@ These are the ones most people touch:
 | `OMG_REPOS_ROOT` | Directory scanned for git repos. |
 | `ANTHROPIC_API_KEY` | Optional API key for Claude / Pi flows. |
 | `OMG_<AGENT>_PATH` | Override a CLI's binary path (`OMG_CLAUDE_PATH`, `OMG_CODEX_PATH`, `OMG_OPENCODE_PATH`, `OMG_CURSOR_PATH`, `OMG_HERMES_PATH`, `OMG_PI_PATH`, `OMG_COPILOT_PATH`). |
-| `OMG_RELAY_URL` | Relay WebSocket URL for `lfg connect`. See [docs/remote-access.md](./docs/remote-access.md). |
+| `OMG_RELAY_URL` | Relay WebSocket URL for `omg connect`. See [docs/remote-access.md](./docs/remote-access.md). |
 | `OMG_INSTALL_CHANNEL` | Install channel: `source`, `release`, or `container`. Usually set by setup/deploy. |
 
 Other groups: agent-specific behaviour (`OMG_COPILOT_ALLOW_ALL_TOOLS`,
@@ -300,10 +301,10 @@ authenticated CLIs.
 
 Platform-specific account, networking, and secret requirements live in each
 `deploy/*/README.md`. In short: keep public networking off unless you put auth
-in front of `lfg`, prefer Tailscale for remote access, and scope provider keys
+in front of `omg`, prefer Tailscale for remote access, and scope provider keys
 to that environment only.
 
-## Embedding LFG in your own product
+## Embedding OMG in your own product
 
 Every release publishes `@lfg-dev/protocol`, `@lfg-dev/client`, `@lfg-dev/react`,
 and `@lfg-dev/app` — the last being the exact full application the standalone
@@ -331,7 +332,8 @@ Issues and pull requests are welcome. Please read
 > **Repository renamed (2026-08-05).** This project now lives at
 > [`github.com/BennyKok/omg.dev`](https://github.com/BennyKok/omg.dev)
 > (formerly `BennyKok/lfg`). GitHub redirects the old web and git URLs; update
-> bookmarks and `git remote` when convenient. The CLI is still `lfg`.
+> bookmarks and `git remote` when convenient. The CLI is now `omg`; `lfg` remains
+> installed as an alias.
 
 ## License
 

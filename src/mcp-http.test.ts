@@ -4,15 +4,15 @@
 // process per session"). That change was justified by "the MCP server holds no
 // state" — true of everything except the one thing that mattered: the identity
 // of the calling session, which a stdio child got for free from LFG_SESSION_ID
-// and the shared `lfg serve` process cannot. Every session-scoped tool
-// (lfg_display_image, lfg_display_video, lfg_publish_artifact, lfg_input,
-// lfg_send_to_origin) silently failed with "sessionId required" for five days
+// and the shared `omg serve` process cannot. Every session-scoped tool
+// (omg_display_image, omg_display_video, omg_publish_artifact, omg_input,
+// omg_send_to_origin) silently failed with "sessionId required" for five days
 // across 21 sessions, and the session-ownership guards degraded to no-ops.
 //
 // These tests run with LFG_SESSION_ID unset, which is what the serve process
 // actually looks like — the bug is invisible in any test that leaves it set.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { serveLfgMcpRequest } from "./mcp-http.ts";
+import { serveOmgMcpRequest } from "./mcp-http.ts";
 
 const SESSION = "ba4522bc-6607-4691-b69e-8b99cfb3ead2";
 const OTHER = "99999999-2222-4222-8222-222222222222";
@@ -56,9 +56,9 @@ async function callTool(
     "content-type": "application/json",
     accept: "application/json, text/event-stream",
   };
-  if (opts.session && opts.header) headers["x-lfg-session-id"] = opts.session;
+  if (opts.session && opts.header) headers["x-omg-session-id"] = opts.session;
 
-  const res = await serveLfgMcpRequest(
+  const res = await serveOmgMcpRequest(
     new Request(url.toString(), {
       method: "POST",
       headers,
@@ -82,7 +82,7 @@ async function callTool(
 describe("caller identity over the shared MCP endpoint", () => {
   test("display_image publishes to the calling session named on the request", async () => {
     const reply = await callTool(
-      "lfg_display_image",
+      "omg_display_image",
       { path: "/tmp/shot.png", caption: "a screenshot" },
       { session: SESSION },
     );
@@ -97,7 +97,7 @@ describe("caller identity over the shared MCP endpoint", () => {
 
   test("a client that cannot carry a query string may send the session header", async () => {
     const reply = await callTool(
-      "lfg_display_video",
+      "omg_display_video",
       { path: "/tmp/clip.mp4" },
       { session: SESSION, header: true },
     );
@@ -110,7 +110,7 @@ describe("caller identity over the shared MCP endpoint", () => {
 
   test("an explicit sessionId argument still wins over the request's identity", async () => {
     await callTool(
-      "lfg_display_image",
+      "omg_display_image",
       { path: "/tmp/shot.png", sessionId: OTHER },
       { session: SESSION },
     );
@@ -121,7 +121,7 @@ describe("caller identity over the shared MCP endpoint", () => {
   });
 
   test("an anonymous request still refuses to guess a session", async () => {
-    const reply = await callTool("lfg_display_image", { path: "/tmp/shot.png" });
+    const reply = await callTool("omg_display_image", { path: "/tmp/shot.png" });
 
     expect(reply.isError).toBe(true);
     expect(reply.text).toContain("sessionId required");
@@ -132,7 +132,7 @@ describe("caller identity over the shared MCP endpoint", () => {
     // This guard reads the caller too, so in the shared process it had quietly
     // become a no-op: any session could publish artifacts into any other.
     const reply = await callTool(
-      "lfg_publish_artifact",
+      "omg_publish_artifact",
       {
         html: "<html><body>hi</body></html>",
         id: "report",
@@ -143,6 +143,6 @@ describe("caller identity over the shared MCP endpoint", () => {
     );
 
     expect(reply.isError).toBe(true);
-    expect(reply.text).toContain("can only target their owning LFG session");
+    expect(reply.text).toContain("can only target their owning OMG session");
   });
 });

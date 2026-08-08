@@ -24,8 +24,8 @@ describe("authenticated artifacts", () => {
     expect(html).toContain('http-equiv="Content-Security-Policy"');
     expect(html).toContain("default-src 'none'");
     expect(html).toContain("color-scheme:dark");
-    expect(html).toContain("--lfg-artifact-surface:#1c1c1e");
-    expect(html).toContain("background:var(--lfg-artifact-surface)");
+    expect(html).toContain("--omg-artifact-surface:#1c1c1e");
+    expect(html).toContain("background:var(--omg-artifact-surface)");
     expect(html.indexOf("Content-Security-Policy")).toBeLessThan(
       html.indexOf("<title>"),
     );
@@ -36,7 +36,7 @@ describe("authenticated artifacts", () => {
       "<html><head><style>body{background:hotpink}</style></head><body>ok</body></html>",
       "dark",
     );
-    expect(html.indexOf('id="lfg-artifact-theme"')).toBeLessThan(
+    expect(html.indexOf('id="omg-artifact-theme"')).toBeLessThan(
       html.indexOf("background:hotpink"),
     );
   });
@@ -48,7 +48,7 @@ describe("authenticated artifacts", () => {
   });
 
   test("stamps the card's theme where CSS can select on it", () => {
-    // A card is themed by LFG, not the desktop, so an artifact keying dark mode
+    // A card is themed by OMG, not the desktop, so an artifact keying dark mode
     // off prefers-color-scheme paints its light branch over dark surfaces.
     const html = secureArtifactDocument(
       '<!doctype html><html lang="en"><head></head><body>ok</body></html>',
@@ -68,9 +68,18 @@ describe("authenticated artifacts", () => {
 
   test("publishes short aliases for the tokens artifacts reach for", () => {
     const html = secureArtifactDocument("<main>ok</main>", "dark");
-    // The near miss is the expensive one: --lfg-artifact-muted is a surface, so
+    // The near miss is the expensive one: --omg-artifact-muted is a surface, so
     // text painted with it disappears into its own background.
-    expect(html).toContain("--lfg-artifact-muted-fg:rgba(235, 235, 245, 0.6)");
+    expect(html).toContain("--omg-artifact-muted-fg:rgba(235, 235, 245, 0.6)");
+    expect(html).toContain("--omg-artifact-bg:#000000");
+    expect(html).toContain("--omg-artifact-fg:#ffffff");
+  });
+
+  test("still emits the pre-rename token spelling", () => {
+    // Artifacts published before the OMG rename hardcode --lfg-artifact-* and
+    // are still served by this bridge. The alias must carry identical values.
+    const html = secureArtifactDocument("<main>ok</main>", "dark");
+    expect(html).toContain("--lfg-artifact-surface:#1c1c1e");
     expect(html).toContain("--lfg-artifact-bg:#000000");
     expect(html).toContain("--lfg-artifact-fg:#ffffff");
   });

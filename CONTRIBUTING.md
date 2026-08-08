@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for your interest in lfg! This is a self-hosted tool for running AI coding
+Thanks for your interest in OMG! This is a self-hosted tool for running AI coding
 agents on your own box — contributions that keep it simple, private, and easy to
 self-host are very welcome.
 

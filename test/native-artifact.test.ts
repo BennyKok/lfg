@@ -158,16 +158,31 @@ describe("renderer selection", () => {
 describe("the base stylesheet", () => {
   test("bridges the host theme through semantic artifact variables", () => {
     expect(NATIVE_ARTIFACT_BASE_CSS).toContain(
-      "--lfg-artifact-surface: var(--card, #ffffff)",
+      "--omg-artifact-surface: var(--card, #ffffff)",
     );
     expect(NATIVE_ARTIFACT_BASE_CSS).toContain(
-      "background: var(--lfg-artifact-surface)",
+      "background: var(--omg-artifact-surface)",
     );
     expect(NATIVE_ARTIFACT_BASE_CSS).toContain(
-      "color: var(--lfg-artifact-foreground)",
+      "color: var(--omg-artifact-foreground)",
     );
     expect(NATIVE_ARTIFACT_BASE_CSS).toContain("color-scheme: inherit");
     expect(NATIVE_ARTIFACT_BASE_CSS).not.toContain("background: #ffffff");
+  });
+
+  test("keeps the pre-rename token spelling working", () => {
+    // Every artifact published before the OMG rename hardcodes --lfg-artifact-*
+    // and is still rendered by this stylesheet. Dropping the alias would not
+    // fail anything loudly — the card would just quietly fall back to its own
+    // hardcoded colors and stop following the app theme.
+    for (const token of ["background", "surface", "foreground", "accent"]) {
+      expect(NATIVE_ARTIFACT_BASE_CSS).toContain(
+        `--lfg-artifact-${token}: var(--omg-artifact-${token})`,
+      );
+    }
+    expect(NATIVE_ARTIFACT_BASE_CSS).toContain(
+      "--lfg-artifact-muted-fg: var(--omg-artifact-muted-foreground)",
+    );
   });
 
   test("artifact surfaces do not force a light utility background", () => {

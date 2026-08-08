@@ -19,9 +19,9 @@ import {
   sourceUpdateStatus,
 } from "../self-update.ts";
 import { compressedAssetResponse, maybeCompressResponse } from "../http-compress.ts";
-import { serveLfgMcpRequest } from "../mcp-http.ts";
+import { serveOmgMcpRequest } from "../mcp-http.ts";
 import * as pwaBootLog from "../pwa-boot-log.ts";
-import { shortSessionId } from "../lfg-capabilities.ts";
+import { shortSessionId } from "../omg-capabilities.ts";
 import {
   getCachedResumableSession,
   updateResumableUser,
@@ -1310,6 +1310,20 @@ function err(status: number, message: string) {
   return json({ error: message }, { status });
 }
 
+/**
+ * The session a caller claims to be, for the routes that gate on owning it.
+ *
+ * Two spellings, because the sender and this reader do not ship together: the
+ * MCP layer now sends X-OMG-Session-ID, but the web app and any agent process
+ * started before the OMG rename still send X-LFG-Session-ID. Accepting only one
+ * turns an ownership check into a 403 on a request that is in fact authorised.
+ */
+function callerSessionHeader(req: Request): string | null {
+  return (
+    req.headers.get("x-omg-session-id") ?? req.headers.get("x-lfg-session-id") ?? null
+  );
+}
+
 /** The one response path for a previously committed session-creation key. */
 async function replaySessionCreation(record: ManagedSession): Promise<Response> {
   const active = listManaged().find((row) => row.tmuxName === record.tmuxName);
@@ -2074,7 +2088,7 @@ export async function cmdServe() {
       // POST (requests), GET (server-initiated stream) and DELETE (teardown),
       // so the transport owns method handling rather than this router.
       if (path === "/mcp") {
-        return await serveLfgMcpRequest(req);
+        return await serveOmgMcpRequest(req);
       }
 
       if (path === "/api/live/ws") {
@@ -4861,8 +4875,8 @@ a{color:#60a5fa}
           return json({ deliveries: listOriginDeliveries(m[1], limit) });
         }
         if (m && req.method === "POST") {
-          if (req.headers.get("x-lfg-session-id") !== m[1]) {
-            return err(403, "origin delivery requires the owning LFG session");
+          if (callerSessionHeader(req) !== m[1]) {
+            return err(403, "origin delivery requires the owning OMG session");
           }
           const body = (await req.json().catch(() => null)) as {
             text?: string;
@@ -4912,8 +4926,8 @@ a{color:#60a5fa}
         // before its stable id and file disappear.
         const m = path.match(/^\/api\/sessions\/([0-9a-fA-F-]{36})\/artifacts\/([a-z0-9-]+)$/);
         if (m && req.method === "DELETE") {
-          if (req.headers.get("x-lfg-session-id") !== m[1]) {
-            return err(403, "artifact deletion requires the owning LFG session");
+          if (callerSessionHeader(req) !== m[1]) {
+            return err(403, "artifact deletion requires the owning OMG session");
           }
           const artifact = getImageArtifact(m[2]);
           if (!artifact) return err(404, "artifact not found");
@@ -5031,8 +5045,8 @@ a{color:#60a5fa}
             "refreshTimeoutSeconds",
             "refreshEnabled",
           ].some((key) => Object.prototype.hasOwnProperty.call(body, key));
-          if (hasRefreshChanges && req.headers.get("x-lfg-session-id") !== m[1]) {
-            return err(403, "refresh configuration requires the owning LFG session");
+          if (hasRefreshChanges && callerSessionHeader(req) !== m[1]) {
+            return err(403, "refresh configuration requires the owning OMG session");
           }
           if (!body.html?.trim() && (!body.id || !hasRefreshChanges)) {
             return err(400, "html required unless updating an existing refresh configuration");
@@ -5097,8 +5111,8 @@ a{color:#60a5fa}
         // session and the durable artifact owner before host execution begins.
         const m = path.match(/^\/api\/sessions\/([0-9a-fA-F-]{36})\/artifacts\/html\/([a-z0-9-]+)\/refresh$/);
         if (m && (req.method === "GET" || req.method === "POST")) {
-          if (req.headers.get("x-lfg-session-id") !== m[1]) {
-            return err(403, "artifact refresh requires the owning LFG session");
+          if (callerSessionHeader(req) !== m[1]) {
+            return err(403, "artifact refresh requires the owning OMG session");
           }
           const artifact = getImageArtifact(m[2]);
           if (!artifact || artifact.media !== "html") return err(404, "html artifact not found");

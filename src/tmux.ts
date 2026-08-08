@@ -4,7 +4,7 @@
 import { readFileSync, writeFileSync, existsSync, realpathSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { reposRoot } from "./projects";
-import { LFG_CAPABILITY_VERSION, withLfgRuntimeContract } from "./lfg-capabilities.ts";
+import { OMG_CAPABILITY_VERSION, withOmgRuntimeContract } from "./omg-capabilities.ts";
 import {
   CLAUDE_PLATFORM_ENV_KEYS,
   claudeOauthToken,
@@ -115,7 +115,7 @@ function addSessionEnv(
   if (i < 0) return;
   const env: string[] = [];
   if (sessionId) env.push("-e", `LFG_SESSION_ID=${sessionId}`);
-  env.push("-e", `LFG_CAPABILITY_VERSION=${LFG_CAPABILITY_VERSION}`);
+  env.push("-e", `OMG_CAPABILITY_VERSION=${OMG_CAPABILITY_VERSION}`);
   // The assigned user rides along so anything the session spawns (lfg MCP,
   // `lfg subagent`) can tag ITS children to the same user even when the parent
   // chain isn't resolvable at create time (headless/cron callers).
@@ -173,7 +173,7 @@ export function containedAgentCommand(
   ];
   if (process.env.PATH) argv.push(`--setenv=PATH=${process.env.PATH}`);
   if (opts.lfgSessionId) argv.push(`--setenv=LFG_SESSION_ID=${opts.lfgSessionId}`);
-  argv.push(`--setenv=LFG_CAPABILITY_VERSION=${LFG_CAPABILITY_VERSION}`);
+  argv.push(`--setenv=OMG_CAPABILITY_VERSION=${OMG_CAPABILITY_VERSION}`);
   if (opts.lfgUser) argv.push(`--setenv=LFG_USER=${opts.lfgUser}`);
   return [...argv, "--", ...command];
 }
@@ -204,7 +204,7 @@ function spawnManagedHarness(
   const sessionId = opts.lfgSessionId?.trim() || undefined;
   const env: Record<string, string> = { ...process.env } as Record<string, string>;
   if (sessionId) env.LFG_SESSION_ID = sessionId;
-  env.LFG_CAPABILITY_VERSION = LFG_CAPABILITY_VERSION;
+  env.OMG_CAPABILITY_VERSION = OMG_CAPABILITY_VERSION;
   if (opts.lfgUser) env.LFG_USER = opts.lfgUser;
   else delete env.LFG_USER;
   // Always name + idle-timeout the browser, including parent (non-slice) harness
@@ -220,7 +220,7 @@ function spawnManagedHarness(
   if (capture) {
     writeFileSync(capture, JSON.stringify({ cmd, cwd: opts.cwd, env: {
       LFG_SESSION_ID: env.LFG_SESSION_ID,
-      LFG_CAPABILITY_VERSION: env.LFG_CAPABILITY_VERSION,
+      OMG_CAPABILITY_VERSION: env.OMG_CAPABILITY_VERSION,
       LFG_USER: env.LFG_USER,
       AGENT_BROWSER_SESSION: env.AGENT_BROWSER_SESSION,
       AGENT_BROWSER_IDLE_TIMEOUT_MS: env.AGENT_BROWSER_IDLE_TIMEOUT_MS,
@@ -611,7 +611,7 @@ export function spawnManagedSession(opts: {
   // `--` terminates option parsing so the variadic --add-dir can't swallow the
   // positional prompt as a second directory (which strands the new session at
   // an empty composer — the first message never gets submitted).
-  const prompt = withLfgRuntimeContract(opts.prompt);
+  const prompt = withOmgRuntimeContract(opts.prompt);
   if (prompt?.trim()) claudeArgv.push("--", prompt);
   const argv = [
     "tmux",
@@ -693,7 +693,7 @@ export function spawnManagedCodexSession(opts: {
   ];
   if (opts.model) argv.push("--model", opts.model);
   if (opts.thinkingLevel) argv.push("-c", `reasoning_effort=${JSON.stringify(opts.thinkingLevel)}`);
-  const prompt = withLfgRuntimeContract(opts.prompt);
+  const prompt = withOmgRuntimeContract(opts.prompt);
   if (prompt?.trim()) argv.push("--", prompt);
   addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser, opts.name);
   containTmuxCommand(argv, codexBin(), opts.containInAgentSlice, opts);
@@ -737,7 +737,7 @@ export function managedGrokSessionArgv(opts: ManagedGrokSessionOptions): string[
   // xhigh/max carried over from another agent would stop the session launching.
   const effort = grokEffortFor(opts.thinkingLevel);
   if (effort) argv.push("--effort", effort);
-  const prompt = withLfgRuntimeContract(opts.prompt);
+  const prompt = withOmgRuntimeContract(opts.prompt);
   if (prompt?.trim()) argv.push("--", prompt);
   addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser, opts.name);
   return argv;
@@ -785,7 +785,7 @@ export function managedCopilotSessionArgv(opts: ManagedCopilotSessionOptions): s
   ];
   if (process.env.LFG_COPILOT_ALLOW_ALL_TOOLS === "1") argv.push("--allow-all-tools");
   if (opts.model) argv.push("--model", opts.model);
-  const prompt = withLfgRuntimeContract(opts.prompt);
+  const prompt = withOmgRuntimeContract(opts.prompt);
   if (prompt?.trim()) argv.push("-i", prompt);
   addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser, opts.name);
   return argv;
@@ -828,7 +828,7 @@ export function managedCursorSessionArgv(opts: ManagedCursorSessionOptions): str
   ];
   if (opts.nativeSessionId) argv.push("--resume", opts.nativeSessionId);
   if (opts.model && opts.model !== "auto") argv.push("--model", opts.model);
-  const prompt = withLfgRuntimeContract(opts.prompt);
+  const prompt = withOmgRuntimeContract(opts.prompt);
   if (prompt?.trim()) argv.push(prompt);
   addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser, opts.name);
   return argv;
@@ -973,7 +973,7 @@ export function spawnManagedAisdkSession(opts: {
   const claudeAccountId = opts.claudeAccountId ?? resolveClaudeAccount()?.id;
   if (claudeAccountId) argv.push("--claude-account", claudeAccountId);
   if (opts.recoveredAt) argv.push("--recovered-at", String(opts.recoveredAt));
-  const prompt = withLfgRuntimeContract(opts.prompt);
+  const prompt = withOmgRuntimeContract(opts.prompt);
   if (prompt?.trim()) argv.push("--", prompt);
   return spawnManagedHarness(argv, {
     name: opts.name,
@@ -1022,7 +1022,7 @@ export function spawnManagedCodexAisdkSession(opts: {
   if (opts.thinkingLevel) argv.push("--thinking-level", opts.thinkingLevel);
   if (opts.resume) argv.push("--resume", opts.resume);
   if (opts.recoveredAt) argv.push("--recovered-at", String(opts.recoveredAt));
-  const prompt = withLfgRuntimeContract(opts.prompt);
+  const prompt = withOmgRuntimeContract(opts.prompt);
   if (prompt?.trim()) argv.push("--", prompt);
   return spawnManagedHarness(argv, {
     name: opts.name,
@@ -1114,7 +1114,7 @@ export function spawnManagedOpencodeAisdkSession(opts: {
   ];
   if (opts.resume) argv.push("--resume", opts.resume);
   if (opts.recoveredAt) argv.push("--recovered-at", String(opts.recoveredAt));
-  const prompt = withLfgRuntimeContract(opts.prompt);
+  const prompt = withOmgRuntimeContract(opts.prompt);
   if (prompt?.trim()) argv.push("--", prompt);
   return spawnManagedHarness(argv, {
     name: opts.name,

@@ -3,7 +3,7 @@
 The streaming half of a high-performance realtime voice path. Replaces batch
 whisper/Parakeet with a model that emits transcripts **as the user speaks**.
 
-> **Status: not currently wired into lfg.** This server's only client was the
+> **Status: not currently wired into OMG.** This server's only client was the
 > LiveKit voice worker (`deploy/voice/agent.py`), which was removed along with
 > the phone-call feature. `serve` reads neither `STT_UPSTREAM` nor `STT_WS_URL`
 > — `/api/voice/stt` and `/api/voice/stt-stream` go through
@@ -45,7 +45,7 @@ restarting the worker — no other agent change required:
 STT_WS_URL=ws://<gpu-box-or-tailnet-host>:8088
 ```
 
-`STT_WS_URL` was read by the removed LiveKit worker; nothing in lfg reads it
+`STT_WS_URL` was read by the removed LiveKit worker; nothing in OMG reads it
 today.
 
 ## Env knobs (server.py)

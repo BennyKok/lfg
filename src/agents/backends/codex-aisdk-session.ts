@@ -30,7 +30,7 @@ import {
   currentBootId,
 } from "../../aisdk-registry.ts";
 import type { SessionMsg } from "../../sessions.ts";
-import { sessionTitleFromPrompt } from "../../lfg-capabilities.ts";
+import { sessionTitleFromPrompt } from "../../omg-capabilities.ts";
 import { indexSessionMessagesDirect, reindexFileHistoryUnderSessionKey } from "../../transcript-index.ts";
 import { makeDraftPublisher } from "./draft.ts";
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";

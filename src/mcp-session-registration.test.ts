@@ -15,7 +15,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { lfgMcpServers } from "./config.ts";
+import { omgMcpServers } from "./config.ts";
 
 const BACKENDS = join(import.meta.dir, "agents", "backends");
 
@@ -36,10 +36,10 @@ describe("session identity reaches every agent launcher", () => {
     expect(drivers.length).toBeGreaterThan(0);
 
     // Match the spread call, not the identifier: an import left behind after
-    // the call site was removed would satisfy a bare `includes("lfgMcpServers")`
+    // the call site was removed would satisfy a bare `includes("omgMcpServers")`
     // and wave the regression straight through.
     const unwired = drivers
-      .filter((f) => !/\.\.\.\s*lfgMcpServers\(/.test(f.text))
+      .filter((f) => !/\.\.\.\s*omgMcpServers\(/.test(f.text))
       .map((f) => f.name);
     expect(unwired).toEqual([]);
   });
@@ -57,7 +57,7 @@ describe("session identity reaches every agent launcher", () => {
   });
 });
 
-describe("lfgMcpServers", () => {
+describe("omgMcpServers", () => {
   const originalSessionId = process.env.LFG_SESSION_ID;
   const originalBase = process.env.LFG_BASE;
 
@@ -71,9 +71,9 @@ describe("lfgMcpServers", () => {
   test("names the session in the endpoint URL", () => {
     process.env.LFG_BASE = "http://127.0.0.1:8766";
     try {
-      expect(lfgMcpServers("ba4522bc-6607-4691-b69e-8b99cfb3ead2")).toEqual({
+      expect(omgMcpServers("ba4522bc-6607-4691-b69e-8b99cfb3ead2")).toEqual({
         mcpServers: {
-          lfg: {
+          omg: {
             type: "http",
             url: "http://127.0.0.1:8766/mcp?session=ba4522bc-6607-4691-b69e-8b99cfb3ead2",
           },
@@ -88,7 +88,7 @@ describe("lfgMcpServers", () => {
     process.env.LFG_BASE = "http://127.0.0.1:8766";
     process.env.LFG_SESSION_ID = "ambient-session";
     try {
-      expect(lfgMcpServers().mcpServers?.lfg.url).toContain("session=ambient-session");
+      expect(omgMcpServers().mcpServers?.omg.url).toContain("session=ambient-session");
     } finally {
       restore();
     }
@@ -99,8 +99,8 @@ describe("lfgMcpServers", () => {
     try {
       // An empty object leaves the user-scope registration in charge rather
       // than pointing the agent at a URL naming no session.
-      expect(lfgMcpServers()).toEqual({});
-      expect(lfgMcpServers("   ")).toEqual({});
+      expect(omgMcpServers()).toEqual({});
+      expect(omgMcpServers("   ")).toEqual({});
     } finally {
       restore();
     }

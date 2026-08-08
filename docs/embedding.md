@@ -1,4 +1,4 @@
-# Embedding the LFG application
+# Embedding the OMG application
 
 Every release publishes four immutable packages:
 
@@ -7,10 +7,10 @@ Every release publishes four immutable packages:
 | `@lfg-dev/protocol` | Shared wire types |
 | `@lfg-dev/client` | Authenticated HTTP and multiplexed live transport |
 | `@lfg-dev/react` | Smaller headless / session surfaces |
-| `@lfg-dev/app` | The exact full LFG application used by the standalone web UI |
+| `@lfg-dev/app` | The exact full OMG application used by the standalone web UI |
 
 React hosts mount the full application with their own transport and asset
-origin. LFG keeps its internal navigation in a memory router, so it does not
+origin. OMG keeps its internal navigation in a memory router, so it does not
 take over the host product's URL:
 
 ```tsx
@@ -27,11 +27,11 @@ import "@lfg-dev/app/styles.css";
 />
 ```
 
-Standalone LFG and embedded hosts therefore render one visual component tree;
+Standalone OMG and embedded hosts therefore render one visual component tree;
 only authentication, API origin, and outer product navigation belong to the
 host.
 
 ## Related
 
 - [embed-host-protocol.md](./embed-host-protocol.md) — the iframe embed contract
-  (`?embed=1`), for hosts that frame LFG rather than importing it.
+  (`?embed=1`), for hosts that frame OMG rather than importing it.

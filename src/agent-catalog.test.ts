@@ -79,7 +79,7 @@ function codingAgent(
     status: {
       configured: true,
       accountConnected,
-      lfgCapabilityAccess: "mcp" as const,
+      omgCapabilityAccess: "mcp" as const,
       checks: [],
       instructions: [],
       canAutoSetup: false,

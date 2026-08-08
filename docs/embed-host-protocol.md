@@ -1,7 +1,7 @@
 # Embed host protocol
 
-LFG runs framed inside omg's Computer surface (`https://<box>/?embed=1`). Embed
-mode hides LFG's own header, settings, user picker and onboarding — the host
+OMG runs framed inside omg's Computer surface (`https://<box>/?embed=1`). Embed
+mode hides OMG's own header, settings, user picker and onboarding — the host
 owns account UX. This document is the contract between the two.
 
 ## Detection
@@ -13,16 +13,16 @@ cross-origin iframe is accepted as defence in depth. See `web/src/lib/embed.ts`.
 
 | Message | Meaning |
 | --- | --- |
-| `{ type: "omg:computer-host-resume" }` | The host tab returned to the foreground. LFG restarts infinite CSS/WAAPI animations that WebKit left suspended (`web/src/embedded-animation-recovery.ts`). |
+| `{ type: "omg:computer-host-resume" }` | The host tab returned to the foreground. OMG restarts infinite CSS/WAAPI animations that WebKit left suspended (`web/src/embedded-animation-recovery.ts`). |
 
 ## Frame → host: `lfg:session-created`
 
-Embedded LFG posts exactly one message, when the framed user creates a session
+Embedded OMG posts exactly one message, when the framed user creates a session
 from this tab:
 
 ```js
 window.parent.postMessage(
-  { type: "lfg:session-created", sessionId: "<lfg session id>" },
+  { type: "lfg:session-created", sessionId: "<omg session id>" },
   hostOrigin, // never "*"
 )
 ```
@@ -33,7 +33,7 @@ window.parent.postMessage(
 - **Emitted when** embed mode is on (`readLocationEmbedFlag()`), the frame has
   a real parent window, and a target origin resolved. Sessions created outside
   this tab (iMessage, CLI, subagents) do not produce the event.
-- **Payload** is the two fields above and nothing else. LFG does not read a
+- **Payload** is the two fields above and nothing else. OMG does not read a
   reply, keep host state, or own any billing/upgrade UI — the host decides what
   to do with the signal (e.g. showing its upgrade prompt after the user's first
   session).
@@ -48,7 +48,7 @@ Resolved once at document load (`web/src/lib/embed-host-signal.ts`), in order:
    params (`session`, `embed`) in the URL.
 2. `document.referrer` — the embedding page for a framed document.
 
-Only `http:`/`https:` origins are accepted. If neither source yields one, LFG
+Only `http:`/`https:` origins are accepted. If neither source yields one, OMG
 stays silent rather than posting to `*`.
 
 ### Host side
@@ -65,12 +65,12 @@ window.addEventListener("message", (event) => {
 ## Embedded first-run gate
 
 With settings and onboarding hidden, a fresh box has no place to connect a
-coding agent. When neither Claude nor Codex is connected, embedded LFG shows a
+coding agent. When neither Claude nor Codex is connected, embedded OMG shows a
 single card offering those two
 (`web/src/components/embedded-connect-gate.tsx`). It drives the existing
 `/api/coding-agents/:kind/auth` login and the shared auth dialog; once either
 provider reports `configured` (on the CLI kind or its ai-sdk sibling), the card
-disappears and the normal session UI renders. Standalone LFG is unchanged — it
+disappears and the normal session UI renders. Standalone OMG is unchanged — it
 still uses `OnboardingFlow`.
 
 The predicate is deliberately scoped to those two providers rather than "any
