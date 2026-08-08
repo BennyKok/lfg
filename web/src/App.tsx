@@ -3551,7 +3551,9 @@ const MicButton = forwardRef<
 
 // Composer send button. A quick tap steers with the current message; when text
 // is present, a long press queues it without interrupting. With an empty
-// composer, long press remains push-to-talk.
+// composer, long press remains push-to-talk. The keyboard twin of the long
+// press is Cmd/Ctrl+Enter, handled on the composer textarea — a pointer-only
+// gesture left desktop with no way to reach queueing at all.
 function ComposerSendButton({
   canSend,
   sending,
@@ -3795,7 +3797,7 @@ function ComposerSendButton({
         recording
           ? "Release to send · drag away or Esc to cancel"
           : canSend
-            ? "Tap to steer · hold to queue"
+            ? "Tap to steer · hold (or ⌘/Ctrl+Enter) to queue"
             : "Hold to talk"
       }
       style={reactiveStyle}
@@ -12278,6 +12280,13 @@ function SessionChatBody({
     const text = (overrideText ?? messageText).trim();
     const files = attachments;
     if (!sid || (!text && !files.length)) return;
+    // Queueing is otherwise indistinguishable from steering: the bubble lands
+    // either way, and the only difference — whether the running turn survived —
+    // shows up seconds later, if at all. The old queue chips above the composer
+    // were removed for being noise; this says the one thing they were there to
+    // say, once, and only when the distinction is real (an idle session cannot
+    // be interrupted, so both modes behave identically).
+    const queuedBehindTurn = mode === "queue" && chatBusy;
     messageInputRef.current?.blur();
     const stashed = stagePromptSend({
       contextKey: stashContext,
@@ -12350,6 +12359,7 @@ function SessionChatBody({
       setAttachments([]);
       forgetAllUploads();
       setSending(false);
+      if (queuedBehindTurn) toast.success("Queued — the current turn keeps running");
       void onRefresh().catch((err) => {
         onError(err instanceof Error ? err.message : String(err));
       });
@@ -12451,10 +12461,16 @@ function SessionChatBody({
                 insetEnd
                 onPaste={files.onPasteFiles}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    e.currentTarget.form?.requestSubmit();
+                  if (e.key !== "Enter" || e.shiftKey) return;
+                  e.preventDefault();
+                  // Cmd/Ctrl+Enter is the keyboard twin of holding the send
+                  // button: queue behind the running turn instead of
+                  // interrupting it. Plain Enter still steers.
+                  if (e.metaKey || e.ctrlKey) {
+                    void sendMessage(undefined, undefined, "queue");
+                    return;
                   }
+                  e.currentTarget.form?.requestSubmit();
                 }}
                 placeholder={
                   attachments.length
