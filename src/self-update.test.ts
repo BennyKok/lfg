@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   extractReleaseArchive,
+  installReleaseBundle,
   releaseUpdateStatus,
   restartCommand,
   sourceUpdateStatus,
@@ -123,6 +124,73 @@ describe("release extraction", () => {
       else process.env.TAR_OPTIONS = priorTarOptions;
     }
     expect(readFileSync(join(target, "src", "index.ts"), "utf8")).toBe("new\n");
+  });
+});
+
+describe("installing a release bundle", () => {
+  /** Pack `lfg/` from a staged tree into a tarball, the way release.sh does. */
+  function packBundle(root: string, name: string): string {
+    const archive = join(root, `${name}.tar.gz`);
+    const packed = Bun.spawnSync(["tar", "-C", join(root, name), "-czf", archive, "lfg"]);
+    expect(packed.exitCode, packed.stderr.toString()).toBe(0);
+    return archive;
+  }
+
+  function stage(root: string, name: string, files: Record<string, string>): void {
+    for (const [path, contents] of Object.entries(files)) {
+      const full = join(root, name, "lfg", path);
+      mkdirSync(join(full, ".."), { recursive: true });
+      writeFileSync(full, contents);
+    }
+  }
+
+  // The regression this exists for: a platform bundle ships node_modules
+  // resolved and pruned for this OS/arch, and the updater used to delete it and
+  // re-resolve from npm. A bundle install has an empty Bun cache, so that meant
+  // re-downloading the whole graph the update had just delivered.
+  test("keeps the dependencies a platform bundle shipped", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lfg-bundle-install-"));
+    cleanup.push(root);
+    stage(root, "platform", {
+      "package.json": JSON.stringify({ name: "omg", version: "9.9.9" }),
+      "src/cli.ts": "new\n",
+      "node_modules/left-pad/index.js": "shipped\n",
+    });
+    const archive = packBundle(root, "platform");
+
+    const target = join(root, "install");
+    mkdirSync(join(target, "node_modules", "left-pad"), { recursive: true });
+    writeFileSync(join(target, "node_modules", "left-pad", "index.js"), "old\n");
+    // A package the new release no longer depends on.
+    mkdirSync(join(target, "node_modules", "dropped-dep"), { recursive: true });
+    writeFileSync(join(target, "node_modules", "dropped-dep", "index.js"), "stale\n");
+
+    const result = await installReleaseBundle(archive, target);
+    expect(result.dependenciesInstalled).toBe(false);
+    expect(readFileSync(join(target, "node_modules", "left-pad", "index.js"), "utf8")).toBe("shipped\n");
+    // Extracting over the old tree would have left this behind.
+    expect(existsSync(join(target, "node_modules", "dropped-dep"))).toBe(false);
+    expect(readFileSync(join(target, "src", "cli.ts"), "utf8")).toBe("new\n");
+  });
+
+  // The other half of the same rule: skipping must key off what the bundle
+  // carried, not off "node_modules exists" — which is true on every re-install.
+  test("still installs when a neutral bundle lands on an existing tree", async () => {
+    const root = mkdtempSync(join(tmpdir(), "lfg-bundle-install-"));
+    cleanup.push(root);
+    stage(root, "neutral", {
+      "package.json": JSON.stringify({ name: "omg", version: "9.9.9", dependencies: {} }),
+      "src/cli.ts": "new\n",
+    });
+    const archive = packBundle(root, "neutral");
+
+    const target = join(root, "install");
+    mkdirSync(join(target, "node_modules", "left-pad"), { recursive: true });
+    writeFileSync(join(target, "node_modules", "left-pad", "index.js"), "old\n");
+
+    const result = await installReleaseBundle(archive, target);
+    expect(result.dependenciesInstalled).toBe(true);
+    expect(existsSync(join(target, "node_modules", "left-pad"))).toBe(false);
   });
 });
 

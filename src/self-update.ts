@@ -3,6 +3,7 @@ import {
   constants,
   existsSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
 } from "node:fs";
@@ -124,6 +125,51 @@ export async function extractReleaseArchive(
     root,
     { ...process.env, TAR_OPTIONS: "" },
   );
+}
+
+function hasEntries(dir: string): boolean {
+  try {
+    return readdirSync(dir).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Extract a downloaded release over an install and make its dependencies match.
+ *
+ * A per-platform bundle ships node_modules already resolved and pruned for this
+ * OS/arch, which is the whole reason it exists. Reinstalling on top of it was
+ * the slowest possible update: a bundle install never populates Bun's cache, so
+ * every dependency the download just delivered got fetched from npm a second
+ * time — and the pruned-away musl builds came back with them.
+ *
+ * The old tree is removed *before* extraction, not after, so two things hold at
+ * once: what lands is exactly the bundle's tree rather than a merge that keeps
+ * files this release deleted, and node_modules existing afterwards proves the
+ * bundle shipped it. That second part is what makes skipping safe — a neutral
+ * bundle (which carries no dependencies) still installs, even when the install
+ * it replaced had a full node_modules sitting there.
+ *
+ * Returns whether a target-side install was needed.
+ */
+export async function installReleaseBundle(
+  archive: string,
+  root: string,
+): Promise<{ dependenciesInstalled: boolean }> {
+  const modules = join(root, "node_modules");
+  rmSync(modules, { recursive: true, force: true });
+
+  const extract = await extractReleaseArchive(archive, root);
+  if (!extract.ok) throw new Error(extract.stderr || "Could not extract the release bundle.");
+
+  if (hasEntries(modules)) return { dependenciesInstalled: false };
+
+  const installResult = await run([process.execPath, "install", "--production"], root);
+  if (!installResult.ok) {
+    throw new Error(installResult.stderr || installResult.stdout || "Dependency installation failed.");
+  }
+  return { dependenciesInstalled: true };
 }
 
 function short(sha: string): string {
@@ -431,14 +477,7 @@ export async function applyReleaseUpdate(
       throw new Error("The release bundle contains unsafe paths.");
     }
 
-    const extract = await extractReleaseArchive(archive, root);
-    if (!extract.ok) throw new Error(extract.stderr || "Could not extract the release bundle.");
-
-    rmSync(join(root, "node_modules"), { recursive: true, force: true });
-    const installResult = await run([process.execPath, "install", "--production"], root);
-    if (!installResult.ok) {
-      throw new Error(installResult.stderr || installResult.stdout || "Dependency installation failed.");
-    }
+    await installReleaseBundle(archive, root);
 
     const currentVersion = installedVersion(root) || status.latestVersion;
     return {

@@ -110,4 +110,26 @@ describe("skipping the target-side install", () => {
   test("an install with no dependencies still resolves them", () => {
     expect(source).toContain('"$BUN_BIN" install --production');
   });
+
+  // The skip above is only honest if node_modules cannot predate the bundle.
+  // Wiping after extraction (or not at all) breaks it two ways: a platform
+  // bundle merges into the old tree and keeps files this release dropped, and a
+  // neutral bundle over an existing install reads as "shipped" and skips the
+  // install it needs.
+  test("the previous dependency tree is cleared before extraction", () => {
+    const wipeAt = source.indexOf('rm -rf "$LFG_DIR/node_modules"');
+    const extractAt = source.indexOf('extract_release_archive "$TMP_TGZ" "$LFG_DIR"');
+    expect(wipeAt, "node_modules is never cleared").toBeGreaterThan(-1);
+    expect(extractAt).toBeGreaterThan(-1);
+    expect(wipeAt).toBeLessThan(extractAt);
+  });
+
+  // "Do not touch dependencies" has to mean exactly that, or the escape hatch
+  // leaves an install with no node_modules at all.
+  test("LFG_SKIP_BUN_INSTALL keeps the existing dependencies", () => {
+    const guarded = source.match(
+      /if \[ "\$\{LFG_SKIP_BUN_INSTALL:-0}" != "1" \]; then\n\s*rm -rf "\$LFG_DIR\/node_modules"\n\s*fi/,
+    );
+    expect(guarded, "the pre-extraction wipe ignores LFG_SKIP_BUN_INSTALL").not.toBeNull();
+  });
 });

@@ -525,6 +525,19 @@ else
     say "Checksum verified."
   fi
   mkdir -p "$LFG_DIR"
+  # Clear the previous dependency tree BEFORE extracting, so that afterwards
+  # node_modules exists only if this bundle shipped one. Two reasons:
+  #   - a platform bundle laid over an older node_modules merges two trees and
+  #     keeps every file the new release dropped;
+  #   - "node_modules exists" would otherwise be true on any re-run, so a
+  #     neutral bundle installed over an existing tree would skip the install it
+  #     actually needs and run new code against old dependencies.
+  # The install branch below removed the directory anyway, so nothing extra is
+  # thrown away. LFG_SKIP_BUN_INSTALL means "do not touch dependencies", so that
+  # escape hatch keeps whatever is already there.
+  if [ "${LFG_SKIP_BUN_INSTALL:-0}" != "1" ]; then
+    rm -rf "$LFG_DIR/node_modules"
+  fi
   say "Extracting into ${LFG_DIR}..."
   extract_release_archive "$TMP_TGZ" "$LFG_DIR"
   rm -f "$TMP_TGZ" "$TMP_TGZ.sha256"
@@ -539,7 +552,6 @@ else
     say "Dependencies shipped with $ASSET - skipping install."
   else
     say "Installing production dependencies on this machine..."
-    rm -rf "$LFG_DIR/node_modules"
     ( cd "$LFG_DIR" && unset CI && "$BUN_BIN" install --production )
   fi
 fi
