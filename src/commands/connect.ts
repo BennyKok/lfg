@@ -1342,14 +1342,50 @@ async function runConnectLoop(explicitComputerUrl?: string): Promise<void> {
   }
 }
 
-async function printStatus(): Promise<void> {
+/**
+ * Machine-readable pairing state, for the omg.dev CLI.
+ *
+ * The two CLIs used to communicate through this command's prose: the router
+ * matched /^lfg connect: paired as .+ via (\S+) \(since / against the human
+ * output. That is a contract enforced by a regex over a log line, in a
+ * different repository, with nothing to catch it — reword the sentence, even
+ * while tidying branding, and pairing silently stops resolving. Anything that
+ * needs to *parse* this asks for --json.
+ */
+export type ConnectStatusJson = {
+  paired: boolean;
+  boxId: string | null;
+  relayUrl: string | null;
+  pairedAt: string | null;
+  computerUrl: string | null;
+};
+
+export async function connectStatusJson(): Promise<ConnectStatusJson> {
   const creds = await readCredentials();
   if (!creds) {
-    console.log("lfg connect: not paired with any relay.");
+    return { paired: false, boxId: null, relayUrl: null, pairedAt: null, computerUrl: null };
+  }
+  return {
+    paired: true,
+    boxId: creds.boxId,
+    relayUrl: creds.relayUrl,
+    pairedAt: new Date(creds.pairedAt).toISOString(),
+    computerUrl: creds.computerUrl ?? null,
+  };
+}
+
+async function printStatus(asJson = false): Promise<void> {
+  if (asJson) {
+    console.log(JSON.stringify(await connectStatusJson()));
     return;
   }
-  console.log(`lfg connect: paired as ${creds.boxId} via ${creds.relayUrl} (since ${new Date(creds.pairedAt).toISOString()})`);
-  console.log(`lfg connect: public URL ${creds.computerUrl ?? "not set (reconnect with --url <public-url>)"}`);
+  const creds = await readCredentials();
+  if (!creds) {
+    console.log("omg connect: not paired with any relay.");
+    return;
+  }
+  console.log(`omg connect: paired as ${creds.boxId} via ${creds.relayUrl} (since ${new Date(creds.pairedAt).toISOString()})`);
+  console.log(`omg connect: public URL ${creds.computerUrl ?? "not set (reconnect with --url <public-url>)"}`);
 }
 
 async function disconnect(): Promise<void> {
@@ -1372,7 +1408,7 @@ export async function cmdConnect(args: string[]): Promise<void> {
   const [sub, ...rest] = positional;
   switch (sub) {
     case "status":
-      return printStatus();
+      return printStatus(rest.includes("--json"));
     case "disconnect":
       return disconnect();
     case "help":
