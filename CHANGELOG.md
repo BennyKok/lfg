@@ -2,6 +2,14 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - Fix: setup failed when an agent CLI was missing (v0.1.316)
+
+- **`omg setup` aborted with "setup failed at line 472" on any machine missing
+  an agent CLI**, which is most machines. Introduced in v0.1.315 alongside the
+  quieter setup output: the new probe returned a non-zero status in a context
+  where `set -e` treats that as fatal, so the first agent you did not have
+  ended the run. Existing installs kept working; only re-running setup broke.
+
 ## August 8, 2026 - `omg update`, and a setup that reports instead of narrating (v0.1.315)
 
 - **`omg update` updates this machine.** It was reachable before — a button in
