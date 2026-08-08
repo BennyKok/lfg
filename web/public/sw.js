@@ -115,14 +115,14 @@ async function syncAppBadge() {
   }
 }
 
-async function showLfgNotification(title, options) {
+async function showOmgNotification(title, options) {
   await self.registration.showNotification(title, options);
   await syncAppBadge();
 }
 
 async function showLatest(payload) {
   if (payload?.title) {
-    await showLfgNotification(payload.title, {
+    await showOmgNotification(payload.title, {
       body: payload.body || "",
       icon: "/icon.svg",
       badge: "/icon-maskable.svg",
@@ -144,7 +144,7 @@ async function showLatest(payload) {
   const asked = await fetchJson(feedUrl);
   const notification = asked?.notification || null;
   if (notification?.title) {
-    await showLfgNotification(notification.title, {
+    await showOmgNotification(notification.title, {
       body: notification.body || "",
       icon: "/icon.svg",
       badge: "/icon-maskable.svg",
@@ -158,7 +158,7 @@ async function showLatest(payload) {
   const q = (asked?.questions || [])[0] || null;
   if (q) {
     const opts = Array.isArray(q.options) && q.options.length ? ` — ${q.options.join(" / ")}` : "";
-    await showLfgNotification("lfg needs your input", {
+    await showOmgNotification("omg needs your input", {
       body: (q.question || "A question is waiting") + opts,
       icon: "/icon.svg",
       badge: "/icon-maskable.svg",
@@ -176,7 +176,7 @@ async function showLatest(payload) {
   const title = f?.title || "lfg";
   const body =
     f?.suggest || (Array.isArray(f?.reasoning) ? f.reasoning[0] : "") || "New activity in your sessions";
-  await showLfgNotification(title, {
+  await showOmgNotification(title, {
     body,
     icon: "/icon.svg",
     badge: "/icon-maskable.svg",

@@ -1,27 +1,27 @@
 import type {
-  LfgLiveChannel,
-  LfgLiveMessage,
-  LfgMessage,
-  LfgMessagesResponse,
-  LfgSendResponse,
-  LfgSession,
-  LfgSessionsResponse,
-  LfgTranscriptEvent,
-} from "@lfg-dev/protocol";
+  OmgLiveChannel,
+  OmgLiveMessage,
+  OmgMessage,
+  OmgMessagesResponse,
+  OmgSendResponse,
+  OmgSession,
+  OmgSessionsResponse,
+  OmgTranscriptEvent,
+} from "@omg-dev/protocol";
 
 export type {
-  LfgAiStreamPart,
-  LfgLiveChannel,
-  LfgLiveMessage,
-  LfgMessage,
-  LfgQueueMessage,
-  LfgSession,
-  LfgSessionPrompt,
-  LfgStatusRow,
-  LfgTranscriptEvent,
-} from "@lfg-dev/protocol";
+  OmgAiStreamPart,
+  OmgLiveChannel,
+  OmgLiveMessage,
+  OmgMessage,
+  OmgQueueMessage,
+  OmgSession,
+  OmgSessionPrompt,
+  OmgStatusRow,
+  OmgTranscriptEvent,
+} from "@omg-dev/protocol";
 
-export interface LfgSocket {
+export interface OmgSocket {
   binaryType: BinaryType;
   readonly readyState: number;
   send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void;
@@ -32,13 +32,13 @@ export interface LfgSocket {
   addEventListener(type: "error", listener: () => void): void;
 }
 
-export interface LfgUploadProgress {
+export interface OmgUploadProgress {
   loaded: number;
   total: number;
   lengthComputable: boolean;
 }
 
-export interface LfgTransport {
+export interface OmgTransport {
   /**
    * Authenticated raw HTTP access for application surfaces that consume
    * streams, blobs, or response headers. Small data clients can stay on
@@ -53,7 +53,7 @@ export interface LfgTransport {
   upload?(
     path: string,
     init: RequestInit,
-    onProgress: (progress: LfgUploadProgress) => void,
+    onProgress: (progress: OmgUploadProgress) => void,
   ): Promise<Response>;
   request<T>(path: string, init?: RequestInit): Promise<T>;
   /**
@@ -61,18 +61,18 @@ export interface LfgTransport {
    * transcripts and terminals. Hosts own this boundary just like HTTP: an
    * embedded surface must never infer a socket origin from `location`.
    */
-  openSocket(path: string): Promise<LfgSocket>;
-  openLiveSocket(): Promise<LfgSocket>;
+  openSocket(path: string): Promise<OmgSocket>;
+  openLiveSocket(): Promise<OmgSocket>;
 }
 
-export interface LfgGrant {
+export interface OmgGrant {
   token: string;
   expiresAt: number;
 }
 
 export interface CreateGrantTransportOptions {
   baseUrl: string;
-  getGrant: (input: { forceRefresh: boolean }) => Promise<LfgGrant>;
+  getGrant: (input: { forceRefresh: boolean }) => Promise<OmgGrant>;
   fetch?: typeof globalThis.fetch;
   WebSocket?: typeof globalThis.WebSocket;
   XMLHttpRequest?: typeof globalThis.XMLHttpRequest;
@@ -153,7 +153,7 @@ function uploadWithXhr(
   XMLHttpRequestImpl: typeof globalThis.XMLHttpRequest,
   url: string,
   init: RequestInit,
-  onProgress: (progress: LfgUploadProgress) => void,
+  onProgress: (progress: OmgUploadProgress) => void,
 ): Promise<Response> {
   return new Promise((resolve, reject) => {
     const request = new XMLHttpRequestImpl();
@@ -212,15 +212,15 @@ export function createSameOriginTransport(
     WebSocket?: typeof globalThis.WebSocket;
     XMLHttpRequest?: typeof globalThis.XMLHttpRequest;
   } = {},
-): LfgTransport {
+): OmgTransport {
   const fetchImpl = input.fetch ?? globalThis.fetch;
   const WebSocketImpl = input.WebSocket ?? globalThis.WebSocket;
   const XMLHttpRequestImpl = input.XMLHttpRequest ?? globalThis.XMLHttpRequest;
-  const openSocket = async (path: string): Promise<LfgSocket> => {
+  const openSocket = async (path: string): Promise<OmgSocket> => {
     const protocol = globalThis.location?.protocol === "https:" ? "wss:" : "ws:";
     return new WebSocketImpl(
       `${protocol}//${globalThis.location.host}${normalizedPath(path)}`,
-    ) as LfgSocket;
+    ) as OmgSocket;
   };
   return {
     fetch(path: string, init?: RequestInit): Promise<Response> {
@@ -231,7 +231,7 @@ export function createSameOriginTransport(
           upload(
             path: string,
             init: RequestInit,
-            onProgress: (progress: LfgUploadProgress) => void,
+            onProgress: (progress: OmgUploadProgress) => void,
           ): Promise<Response> {
             return uploadWithXhr(XMLHttpRequestImpl, path, init, onProgress);
           },
@@ -248,12 +248,12 @@ export function createSameOriginTransport(
   };
 }
 
-export function createGrantTransport(options: CreateGrantTransportOptions): LfgTransport {
+export function createGrantTransport(options: CreateGrantTransportOptions): OmgTransport {
   const fetchImpl = options.fetch ?? globalThis.fetch;
   const WebSocketImpl = options.WebSocket ?? globalThis.WebSocket;
   const XMLHttpRequestImpl = options.XMLHttpRequest ?? globalThis.XMLHttpRequest;
   const baseUrl = normalizeBaseUrl(options.baseUrl);
-  let cached: LfgGrant | null = null;
+  let cached: OmgGrant | null = null;
 
   const grant = async (forceRefresh = false) => {
     if (
@@ -291,7 +291,7 @@ export function createGrantTransport(options: CreateGrantTransportOptions): LfgT
     ? async (
         path: string,
         init: RequestInit,
-        onProgress: (progress: LfgUploadProgress) => void,
+        onProgress: (progress: OmgUploadProgress) => void,
       ): Promise<Response> => {
         const execute = async (forceRefresh: boolean) => {
           const current = await grant(forceRefresh);
@@ -310,12 +310,12 @@ export function createGrantTransport(options: CreateGrantTransportOptions): LfgT
       }
     : null;
 
-  const openSocket = async (path: string): Promise<LfgSocket> => {
+  const openSocket = async (path: string): Promise<OmgSocket> => {
     const current = await grant(false);
     return new WebSocketImpl(
       socketUrl(baseUrl, path),
       [`lfg-bearer.${current.token}`],
-    ) as LfgSocket;
+    ) as OmgSocket;
   };
 
   return {
@@ -332,26 +332,26 @@ export function createGrantTransport(options: CreateGrantTransportOptions): LfgT
   };
 }
 
-export type LfgConnectionStatus =
+export type OmgConnectionStatus =
   | "connecting"
   | "live"
   | "reconnecting"
   | "offline";
 
-export interface LfgConnectionState {
-  status: LfgConnectionStatus;
+export interface OmgConnectionState {
+  status: OmgConnectionStatus;
   attempt: number;
 }
 
-type TranscriptListener = (event: LfgTranscriptEvent) => void;
-type ConnectionListener = (state: LfgConnectionState) => void;
+type TranscriptListener = (event: OmgTranscriptEvent) => void;
+type ConnectionListener = (state: OmgConnectionState) => void;
 
-function channelId(channel: LfgLiveChannel): string {
+function channelId(channel: OmgLiveChannel): string {
   return `${channel.kind}:${channel.key}`;
 }
 
-export class LfgLiveConnection {
-  private socket: LfgSocket | null = null;
+export class OmgLiveConnection {
+  private socket: OmgSocket | null = null;
   private disposed = false;
   private connecting = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -361,14 +361,14 @@ export class LfgLiveConnection {
   private sentChannels = new Set<string>();
   private pendingFlush = false;
   private connectionListeners = new Set<ConnectionListener>();
-  private connectionState: LfgConnectionState = {
+  private connectionState: OmgConnectionState = {
     status: "connecting",
     attempt: 0,
   };
 
-  constructor(private readonly transport: LfgTransport) {}
+  constructor(private readonly transport: OmgTransport) {}
 
-  get state(): LfgConnectionState {
+  get state(): OmgConnectionState {
     return this.connectionState;
   }
 
@@ -418,7 +418,7 @@ export class LfgLiveConnection {
     this.closeSocket();
   }
 
-  private publishConnection(state: LfgConnectionState): void {
+  private publishConnection(state: OmgConnectionState): void {
     this.connectionState = state;
     for (const listener of this.connectionListeners) listener(state);
   }
@@ -456,7 +456,7 @@ export class LfgLiveConnection {
         socket.addEventListener("message", (event) => {
           if (this.socket !== socket || typeof event.data !== "string") return;
           try {
-            this.handleMessage(JSON.parse(event.data) as LfgLiveMessage);
+            this.handleMessage(JSON.parse(event.data) as OmgLiveMessage);
           } catch {
             // A malformed frame is isolated to that frame.
           }
@@ -505,10 +505,10 @@ export class LfgLiveConnection {
     queueMicrotask(() => {
       this.pendingFlush = false;
       if (!this.socket || this.socket.readyState !== SOCKET_OPEN) return;
-      const channels: LfgLiveChannel[] = [];
+      const channels: OmgLiveChannel[] = [];
       for (const sessionId of this.listeners.keys()) {
         if (this.sentChannels.has(sessionId)) continue;
-        const channel: LfgLiveChannel = { kind: "transcript", key: sessionId };
+        const channel: OmgLiveChannel = { kind: "transcript", key: sessionId };
         const cursor = this.cursors.get(channelId(channel));
         if (cursor) channel.resumeFromSeq = cursor;
         channels.push(channel);
@@ -524,13 +524,13 @@ export class LfgLiveConnection {
     return true;
   }
 
-  private emit(sessionId: string, event: LfgTranscriptEvent): void {
+  private emit(sessionId: string, event: OmgTranscriptEvent): void {
     const listeners = this.listeners.get(sessionId);
     if (!listeners) return;
     for (const listener of listeners) listener(event);
   }
 
-  private handleMessage(message: LfgLiveMessage): void {
+  private handleMessage(message: OmgLiveMessage): void {
     if (message.t === "ping") {
       this.send({ t: "pong", ...(message.id ? { id: message.id } : {}) });
       return;
@@ -564,7 +564,7 @@ export class LfgLiveConnection {
           ...message.delta,
           t: message.delta.t,
           sid: message.delta.sid ?? message.key,
-        } as LfgLiveMessage);
+        } as OmgLiveMessage);
         return;
       }
       if (message.t === "error") {
@@ -604,35 +604,35 @@ export class LfgLiveConnection {
   }
 }
 
-export class LfgClient {
-  readonly live: LfgLiveConnection;
-  private sessions: LfgSession[] | null = null;
+export class OmgClient {
+  readonly live: OmgLiveConnection;
+  private sessions: OmgSession[] | null = null;
 
-  constructor(readonly transport: LfgTransport) {
-    this.live = new LfgLiveConnection(transport);
+  constructor(readonly transport: OmgTransport) {
+    this.live = new OmgLiveConnection(transport);
   }
 
-  peekSessions(): LfgSession[] | null {
+  peekSessions(): OmgSession[] | null {
     return this.sessions;
   }
 
-  async listSessions(): Promise<LfgSession[]> {
-    const response = await this.transport.request<LfgSessionsResponse>("/api/sessions", {
+  async listSessions(): Promise<OmgSession[]> {
+    const response = await this.transport.request<OmgSessionsResponse>("/api/sessions", {
       cache: "no-store",
     });
     this.sessions = Array.isArray(response.sessions) ? response.sessions : [];
     return this.sessions;
   }
 
-  async getMessages(sessionId: string, limit = 80): Promise<LfgMessagesResponse> {
-    return this.transport.request<LfgMessagesResponse>(
+  async getMessages(sessionId: string, limit = 80): Promise<OmgMessagesResponse> {
+    return this.transport.request<OmgMessagesResponse>(
       `/api/sessions/${encodeURIComponent(sessionId)}/messages?limit=${limit}`,
       { cache: "no-store" },
     );
   }
 
-  async sendMessage(sessionId: string, text: string): Promise<LfgSendResponse> {
-    return this.transport.request<LfgSendResponse>(
+  async sendMessage(sessionId: string, text: string): Promise<OmgSendResponse> {
+    return this.transport.request<OmgSendResponse>(
       `/api/sessions/${encodeURIComponent(sessionId)}/send`,
       {
         method: "POST",

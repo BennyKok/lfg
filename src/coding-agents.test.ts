@@ -9,8 +9,8 @@ import {
   listCodingAgents,
   parseAuthOutput,
   startToolAuth,
-  withCursorLfgMcp,
-  withOpencodeLfgMcp,
+  withCursorOmgMcp,
+  withOpencodeOmgMcp,
 } from "./coding-agents.ts";
 
 const COPILOT_ENV_KEYS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"] as const;
@@ -19,7 +19,7 @@ describe("OMG MCP config merging", () => {
   const command = ["/usr/bin/bun", "/opt/lfg/src/cli.ts", "mcp"];
 
   test("preserves OpenCode config while adding the local OMG server", () => {
-    expect(withOpencodeLfgMcp({ theme: "dark", mcp: { other: { enabled: true } } }, command)).toEqual({
+    expect(withOpencodeOmgMcp({ theme: "dark", mcp: { other: { enabled: true } } }, command)).toEqual({
       theme: "dark",
       mcp: {
         other: { enabled: true },
@@ -29,7 +29,7 @@ describe("OMG MCP config merging", () => {
   });
 
   test("preserves Cursor config while adding the OMG server", () => {
-    expect(withCursorLfgMcp({ editor: {}, mcpServers: { other: { command: "other" } } }, command)).toEqual({
+    expect(withCursorOmgMcp({ editor: {}, mcpServers: { other: { command: "other" } } }, command)).toEqual({
       editor: {},
       mcpServers: {
         other: { command: "other" },
@@ -42,7 +42,7 @@ describe("OMG MCP config merging", () => {
   // both entries behind: they resolve to the same server, so every one of its
   // ~30 tools would be registered twice, under two namespaces, in every session.
   test("replaces the pre-rename OpenCode entry instead of merging over it", () => {
-    const merged = withOpencodeLfgMcp(
+    const merged = withOpencodeOmgMcp(
       { mcp: { other: { enabled: true }, lfg: { type: "local", command: ["old"], enabled: true } } },
       command,
     );
@@ -55,7 +55,7 @@ describe("OMG MCP config merging", () => {
   });
 
   test("replaces the pre-rename Cursor entry instead of merging over it", () => {
-    const merged = withCursorLfgMcp(
+    const merged = withCursorOmgMcp(
       { mcpServers: { other: { command: "other" }, lfg: { command: "old", args: [] } } },
       command,
     );

@@ -1,4 +1,4 @@
-import type { LfgChatMessage } from "./lfg-chat-transport";
+import type { OmgChatMessage } from "./omg-chat-transport";
 
 // Session-switch transcript cache.
 //
@@ -14,7 +14,7 @@ import type { LfgChatMessage } from "./lfg-chat-transport";
 // session stays mounted, so the cached paint is usually already correct.
 
 export type TranscriptCacheEntry = {
-  messages: LfgChatMessage[];
+  messages: OmgChatMessage[];
   nextBefore: number | null;
   at: number;
 };
@@ -42,7 +42,7 @@ export function readTranscriptCache(sid: string): TranscriptCacheEntry | null {
 
 export function writeTranscriptCache(
   sid: string,
-  messages: LfgChatMessage[],
+  messages: OmgChatMessage[],
   nextBefore: number | null,
 ) {
   if (!sid) return;
@@ -53,7 +53,7 @@ export function writeTranscriptCache(
 
 // Keep the cached page in sync as live events land, without disturbing LRU
 // order or creating an entry for a session we never loaded a page for.
-export function updateTranscriptCacheMessages(sid: string, messages: LfgChatMessage[]) {
+export function updateTranscriptCacheMessages(sid: string, messages: OmgChatMessage[]) {
   const entry = cache.get(sid);
   if (!entry) return;
   entry.messages = messages;
@@ -87,7 +87,7 @@ function whenIdle(run: () => void) {
  */
 export function prefetchTranscripts(
   orderedSids: string[],
-  load: (sid: string) => Promise<{ messages: LfgChatMessage[]; nextBefore: number | null }>,
+  load: (sid: string) => Promise<{ messages: OmgChatMessage[]; nextBefore: number | null }>,
 ) {
   for (const sid of orderedSids
     .filter((sid) => sid && !attempted.has(sid) && !cache.has(sid))

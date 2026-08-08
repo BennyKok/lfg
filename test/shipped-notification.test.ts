@@ -41,7 +41,7 @@ describe("shipped notifications", () => {
     expect(worker).toContain("async function syncAppBadge()");
     expect(worker).toContain("await self.navigator.setAppBadge(visible.length)");
     expect(worker).toContain("await self.navigator.clearAppBadge()");
-    expect(worker).toContain("await showLfgNotification(notification.title");
+    expect(worker).toContain("await showOmgNotification(notification.title");
   });
 
   test("acknowledges OS notifications from the Notification Center", async () => {

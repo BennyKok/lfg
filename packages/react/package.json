@@ -1,7 +1,17 @@
 {
-  "name": "@lfg-dev/react",
+  "name": "@omg-dev/react",
   "version": "0.1.84",
-  "description": "Embeddable React surfaces for LFG.",
+  "description": "Embeddable React surfaces for OMG.",
+  "license": "MIT",
+  "homepage": "https://omg.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BennyKok/omg.dev.git",
+    "directory": "packages/react"
+  },
+  "bugs": {
+    "url": "https://github.com/BennyKok/omg.dev/issues"
+  },
   "type": "module",
   "sideEffects": [
     "./dist/styles.css"
@@ -20,8 +30,8 @@
     "build": "rm -rf dist && bun x tsc -p tsconfig.build.json && cp src/styles.css dist/styles.css"
   },
   "dependencies": {
-    "@lfg-dev/client": "workspace:*",
-    "@lfg-dev/protocol": "workspace:*"
+    "@omg-dev/client": "workspace:*",
+    "@omg-dev/protocol": "workspace:*"
   },
   "peerDependencies": {
     "react": ">=19",
@@ -33,10 +43,7 @@
     "react": "^19.2.4",
     "react-dom": "^19.2.4"
   },
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/BennyKok/omg.dev.git",
-    "directory": "packages/react"
+  "publishConfig": {
+    "access": "public"
   }
 }

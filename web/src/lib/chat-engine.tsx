@@ -4,28 +4,28 @@
 // else, so `ai`, `@ai-sdk/*` and `zod` — 137 KB minified — load when a session
 // is opened rather than before the session list can paint. Everything that
 // reads the chat state stays in the main chunk and gets it through
-// LfgChatContext.
+// OmgChatContext.
 import { useChat } from "@ai-sdk/react";
 import type { ChatTransport } from "ai";
 import type { ReactNode } from "react";
-import { LfgChatContext } from "./chat-context";
-import type { LfgChatMessage } from "./lfg-chat-transport";
+import { OmgChatContext } from "./chat-context";
+import type { OmgChatMessage } from "./omg-chat-transport";
 
-export default function LfgChatEngine({
+export default function OmgChatEngine({
   id,
   transport,
   onError,
   children,
 }: {
   id: string;
-  transport: ChatTransport<LfgChatMessage> | undefined;
+  transport: ChatTransport<OmgChatMessage> | undefined;
   onError: (message: string) => void;
   children: ReactNode;
 }) {
-  const chat = useChat<LfgChatMessage>({
+  const chat = useChat<OmgChatMessage>({
     id,
     transport,
     onError: (err) => onError(err.message),
   });
-  return <LfgChatContext.Provider value={chat}>{children}</LfgChatContext.Provider>;
+  return <OmgChatContext.Provider value={chat}>{children}</OmgChatContext.Provider>;
 }

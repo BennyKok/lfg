@@ -25,7 +25,7 @@
 
 // The hashed entry chunk this document loaded, e.g. "index-ab12cd.js". Present
 // only in a production `vite build`; null under dev/HMR. Mirrors main.tsx.
-import { lfgErrorSink, lfgFetch } from "./lfg-client";
+import { omgErrorSink, omgFetch } from "./omg-client";
 import { isClientErrorNoise } from "../../../src/client-error-policy.ts";
 
 export const BUILD_ID =
@@ -158,7 +158,7 @@ export function reportError(r: Report): boolean {
     };
     // Fire-and-forget. keepalive lets it survive a navigation/reload triggered
     // by the error. Any failure is swallowed — never re-enter the handlers.
-    void lfgFetch("/api/client-error", {
+    void omgFetch("/api/client-error", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -183,7 +183,7 @@ export function reportError(r: Report): boolean {
  * MAX_REPORTS_PER_LOAD and dedups by signature.
  */
 function mirrorToCentralSink(r: Report): void {
-  const sink = lfgErrorSink();
+  const sink = omgErrorSink();
   if (!sink?.url) return;
   try {
     void fetch(sink.url, {

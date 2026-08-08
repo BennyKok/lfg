@@ -43,8 +43,8 @@ function launchRecovered(
     name: managed.tmuxName,
     cwd: managed.cwd || entry.cwd,
     model: managed.model || entry.model,
-    lfgSessionId: managed.sessionId || entry.sessionId,
-    lfgUser: assignedUser,
+    omgSessionId: managed.sessionId || entry.sessionId,
+    omgUser: assignedUser,
     recoveredAt,
   };
   if (entry.agent === "codex") {

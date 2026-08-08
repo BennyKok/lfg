@@ -67,7 +67,7 @@ const tabRoute = createRoute({
 
 const routeTree = rootRoute.addChildren([indexRoute, tabRoute]);
 
-export function createLfgRouter(history?: RouterHistory) {
+export function createOmgRouter(history?: RouterHistory) {
   return createRouter({
     routeTree,
     defaultPreload: false,
@@ -89,7 +89,7 @@ export function createLfgRouter(history?: RouterHistory) {
   });
 }
 
-export const router = createLfgRouter();
+export const router = createOmgRouter();
 
 declare module "@tanstack/react-router" {
   interface Register {

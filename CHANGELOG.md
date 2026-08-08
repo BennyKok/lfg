@@ -2,6 +2,25 @@
 
 Recent product updates and deployment notes.
 
+## August 8, 2026 - The embeddable packages move to npm as @omg-dev (v0.1.306)
+
+- **`@omg-dev/protocol`, `@omg-dev/client`, `@omg-dev/react` and `@omg-dev/app`
+  are published to npm.** `npm install @omg-dev/app @omg-dev/client` is now all
+  it takes to embed the application. Until now these were not on the registry at
+  all — each release attached tarballs to its GitHub release and rewrote the
+  packages' own dependencies into download URLs, so embedding meant pinning
+  asset links by hand.
+- **A release installs as one consistent set.** The four are versioned together
+  off the release tag and depend on each other by exact version, so
+  `@omg-dev/client` can never resolve against a `@omg-dev/protocol` it did not
+  ship with — a mismatch that would typecheck and then disagree on the wire.
+- **The old `@lfg-dev` names are gone rather than aliased.** Nothing was ever
+  published under them, so there is nobody to keep compatible. Exported types
+  and components follow the same rename: `OmgAppSurface`, `OmgTransport`,
+  `OmgSettingsPage` and the rest.
+- Each tag still attaches its package tarballs to the GitHub release, as the
+  record of exactly what that version shipped.
+
 ## August 8, 2026 - The folder picker finds its way back (v0.1.305)
 
 - **A deleted project folder no longer traps the picker.** "Choose a project"

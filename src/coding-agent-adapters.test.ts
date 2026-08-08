@@ -101,8 +101,8 @@ describe("coding agent adapter contract", () => {
       cwd: "/tmp/lfg-test",
       prompt: "hello",
       model: "auto",
-      lfgSessionId: "session-id",
-      lfgUser: "user@example.com",
+      omgSessionId: "session-id",
+      omgUser: "user@example.com",
     });
 
     expect(argv).toContain("--yolo");
@@ -161,7 +161,7 @@ describe("coding agent adapter contract", () => {
       cwd: "/tmp/lfg-test",
       prompt: "continue",
       resume: nativeSessionId,
-      lfgSessionId: nativeSessionId,
+      omgSessionId: nativeSessionId,
     });
 
     expect(argv.slice(argv.indexOf("--resume"), argv.indexOf("--resume") + 2)).toEqual([
@@ -175,7 +175,7 @@ describe("coding agent adapter contract", () => {
     const argv = containedAgentCommand(["/usr/bin/example-agent", "--task", "hello"], {
       name: "lfg-test",
       cwd: "/tmp/lfg-test",
-      lfgSessionId: "session-id",
+      omgSessionId: "session-id",
     });
     if (process.platform !== "linux") return;
     expect(argv).toContain("--slice=lfg-agents.slice");
@@ -193,7 +193,7 @@ describe("coding agent adapter contract", () => {
       name: "lfg-parent",
       cwd: "/tmp/lfg-test",
       prompt: "hello",
-      lfgSessionId: "session-id",
+      omgSessionId: "session-id",
     });
     // tmux -e pairs — present even when containInAgentSlice is false/omitted
     expect(argv).toContain("AGENT_BROWSER_SESSION=lfg-parent");
@@ -213,8 +213,8 @@ describe("coding agent adapter contract", () => {
         cwd: "/tmp/lfg-test",
         prompt: "hello",
         model: "claude-sonnet-4.5",
-        lfgSessionId: "session-id",
-        lfgUser: "user@example.com",
+        omgSessionId: "session-id",
+        omgUser: "user@example.com",
       });
 
       // -p / --prompt puts Copilot into programmatic one-shot mode, which exits

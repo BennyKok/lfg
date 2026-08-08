@@ -1,15 +1,15 @@
-export type LfgSessionStatus =
+export type OmgSessionStatus =
   | "ok"
   | "blocked";
 
-export type LfgSessionStatusReason =
+export type OmgSessionStatusReason =
   | "model_unavailable"
   | "out_of_credits"
   | "provider_auth"
   | "provider_error"
   | null;
 
-export interface LfgSession {
+export interface OmgSession {
   agent?: string;
   agentLabel?: string | null;
   pid?: number;
@@ -34,13 +34,13 @@ export interface LfgSession {
   spawnedBy?: string | null;
   capabilityVersion?: string | null;
   capabilitiesStale?: boolean;
-  status?: LfgSessionStatus;
-  statusReason?: LfgSessionStatusReason;
+  status?: OmgSessionStatus;
+  statusReason?: OmgSessionStatusReason;
   statusDetail?: string | null;
   busy?: boolean;
 }
 
-export interface LfgMessage {
+export interface OmgMessage {
   id?: string;
   role?: string;
   kind?: string;
@@ -61,7 +61,7 @@ export interface LfgMessage {
   catchUp?: boolean;
 }
 
-export interface LfgAiStreamPart {
+export interface OmgAiStreamPart {
   type: "text-delta" | "text-start" | "text-end" | "error" | string;
   id?: string;
   delta?: string;
@@ -70,103 +70,103 @@ export interface LfgAiStreamPart {
   ts?: number;
 }
 
-export interface LfgPromptOption {
+export interface OmgPromptOption {
   index: number;
   label: string;
   selected?: boolean;
 }
 
-export interface LfgSessionPrompt {
+export interface OmgSessionPrompt {
   question?: string;
-  options: LfgPromptOption[];
+  options: OmgPromptOption[];
 }
 
-export interface LfgQueueMessage {
+export interface OmgQueueMessage {
   id: string;
   text: string;
   status: "pending" | "sending" | "queued" | "failed" | "delivered";
   error?: string;
 }
 
-export type LfgLiveChannelKind =
+export type OmgLiveChannelKind =
   | "transcript"
   | "status"
   | "agent_run";
 
-export interface LfgLiveChannel {
-  kind: LfgLiveChannelKind;
+export interface OmgLiveChannel {
+  kind: OmgLiveChannelKind;
   key: string;
   resumeFromSeq?: number;
 }
 
-export interface LfgStatusRow {
+export interface OmgStatusRow {
   sessionId: string | null;
   busy?: boolean;
   title?: string | null;
   lastUserText?: string | null;
   lastActivityAt?: number | null;
-  status?: LfgSessionStatus;
-  statusReason?: LfgSessionStatusReason;
+  status?: OmgSessionStatus;
+  statusReason?: OmgSessionStatusReason;
   statusDetail?: string | null;
   model?: string | null;
 }
 
-export type LfgLiveMessage =
-  | { t: "batch"; sid: string; messages?: LfgMessage[]; nextBefore?: number | null }
-  | { t: "msg"; sid: string; message?: LfgMessage; m?: LfgMessage }
-  | { t: "ai_part"; sid: string; part?: LfgAiStreamPart }
-  | { t: "queue"; sid: string; queue?: LfgQueueMessage[] }
+export type OmgLiveMessage =
+  | { t: "batch"; sid: string; messages?: OmgMessage[]; nextBefore?: number | null }
+  | { t: "msg"; sid: string; message?: OmgMessage; m?: OmgMessage }
+  | { t: "ai_part"; sid: string; part?: OmgAiStreamPart }
+  | { t: "queue"; sid: string; queue?: OmgQueueMessage[] }
   | { t: "busy"; sid: string; busy?: boolean }
-  | { t: "prompt"; sid: string; prompt?: LfgSessionPrompt | null }
+  | { t: "prompt"; sid: string; prompt?: OmgSessionPrompt | null }
   | {
       t: "snapshot";
-      kind: LfgLiveChannelKind;
+      kind: OmgLiveChannelKind;
       key: string;
       sid?: string;
       seq?: number;
-      messages?: LfgMessage[];
+      messages?: OmgMessage[];
       nextBefore?: number | null;
     }
   | {
       t: "delta";
-      kind: LfgLiveChannelKind;
+      kind: OmgLiveChannelKind;
       key: string;
       seq?: number;
       delta?: {
         t?: string;
         sid?: string;
-        message?: LfgMessage;
-        m?: LfgMessage;
-        part?: LfgAiStreamPart;
+        message?: OmgMessage;
+        m?: OmgMessage;
+        part?: OmgAiStreamPart;
         busy?: boolean;
-        prompt?: LfgSessionPrompt | null;
-        queue?: LfgQueueMessage[];
+        prompt?: OmgSessionPrompt | null;
+        queue?: OmgQueueMessage[];
       };
     }
-  | { t: "resumed"; kind: LfgLiveChannelKind; key: string; seq?: number; fromSeq?: number; toSeq?: number; replayed?: number }
-  | { t: "gap"; kind: LfgLiveChannelKind; key: string; seq?: number }
-  | { t: "status"; rows?: LfgStatusRow[]; kind?: LfgLiveChannelKind; key?: string; seq?: number }
+  | { t: "resumed"; kind: OmgLiveChannelKind; key: string; seq?: number; fromSeq?: number; toSeq?: number; replayed?: number }
+  | { t: "gap"; kind: OmgLiveChannelKind; key: string; seq?: number }
+  | { t: "status"; rows?: OmgStatusRow[]; kind?: OmgLiveChannelKind; key?: string; seq?: number }
   | { t: "ping"; id?: string }
   | { t: "pong"; id?: string }
-  | { t: "error"; sid?: string; kind?: LfgLiveChannelKind; key?: string; seq?: number; message?: string; code?: string };
+  | { t: "error"; sid?: string; kind?: OmgLiveChannelKind; key?: string; seq?: number; message?: string; code?: string };
 
-export interface LfgSessionsResponse {
-  sessions: LfgSession[];
+export interface OmgSessionsResponse {
+  sessions: OmgSession[];
 }
 
-export interface LfgMessagesResponse {
-  messages: LfgMessage[];
+export interface OmgMessagesResponse {
+  messages: OmgMessage[];
   nextBefore?: number | null;
 }
 
-export interface LfgSendResponse {
-  msg?: LfgQueueMessage;
+export interface OmgSendResponse {
+  msg?: OmgQueueMessage;
 }
 
-export type LfgTranscriptEvent =
-  | { type: "snapshot"; messages: LfgMessage[]; nextBefore: number | null }
-  | { type: "message"; message: LfgMessage }
-  | { type: "ai_part"; part: LfgAiStreamPart }
+export type OmgTranscriptEvent =
+  | { type: "snapshot"; messages: OmgMessage[]; nextBefore: number | null }
+  | { type: "message"; message: OmgMessage }
+  | { type: "ai_part"; part: OmgAiStreamPart }
   | { type: "busy"; busy: boolean }
-  | { type: "prompt"; prompt: LfgSessionPrompt | null }
+  | { type: "prompt"; prompt: OmgSessionPrompt | null }
   | { type: "error"; error: string };

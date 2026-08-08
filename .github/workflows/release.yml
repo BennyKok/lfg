@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: write # create releases + upload assets
+  id-token: write # npm provenance attestation for the published packages
 
 jobs:
   build:
@@ -27,6 +28,11 @@ jobs:
       # `secrets` is not allowed in step `if:` — surface them as env first.
       NPM_REGISTRY: ${{ secrets.NPM_REGISTRY }}
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+      # Publishing to npmjs is a different credential from NPM_TOKEN, which
+      # authenticates *reads* against the private provider registry. Keeping
+      # them separate means a read token can never publish, and the publish
+      # token is never written into the default registry config.
+      NPM_PUBLISH_TOKEN: ${{ secrets.NPM_PUBLISH_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -64,6 +70,57 @@ jobs:
         # truth). Deps + web are already built above, so skip reinstalling.
         run: SKIP_INSTALL=1 bash scripts/release.sh
 
+      # Publish the four public packages to npm under @omg-dev.
+      #
+      # --registry is explicit and NOT taken from NPM_REGISTRY. That secret
+      # points at the private registry hosting the "vibes" provider, and the
+      # step above writes it into ~/.npmrc as the default registry — so an
+      # unqualified `npm publish` here would push the public packages to a
+      # private registry and silently succeed. Naming the registry per command,
+      # with its own token, keeps consuming and publishing separate.
+      #
+      # Only runs for a real tag: a workflow_dispatch dev build has no version
+      # to publish, and burning a version number is not undoable.
+      #
+      # A missing token warns instead of skipping silently. Gating the whole
+      # step on the secret would mean a release that quietly ships no packages
+      # and a green checkmark saying it worked — the release log has to say why
+      # nothing was published.
+      - name: Publish packages to npm
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NPM_PUBLISH_TOKEN:-}" ]; then
+            echo "::warning title=npm publish skipped::NPM_PUBLISH_TOKEN is not set, so @omg-dev/* was NOT published for this tag. Add the secret and re-run this workflow to publish."
+            exit 0
+          fi
+          REG="https://registry.npmjs.org"
+          echo "//registry.npmjs.org/:_authToken=${NPM_PUBLISH_TOKEN}" > "$HOME/.npmrc.publish"
+          # Dependency order, not glob order. `dist/omg-dev-*.tgz` expands
+          # alphabetically to app, client, protocol, react — publishing app
+          # first, whose pinned dependency on protocol does not exist on the
+          # registry yet. npm does not validate that at publish time, so the
+          # result is a window where a published package cannot be installed.
+          for pkg in protocol client react app; do
+            tgz="$(ls dist/omg-dev-${pkg}-*.tgz)"
+            name="$(tar -xzOf "$tgz" package/package.json | jq -r .name)"
+            version="$(tar -xzOf "$tgz" package/package.json | jq -r .version)"
+            # Re-running a release must not fail the workflow. A version that is
+            # already on the registry is the expected outcome of a re-run, not
+            # an error — and npm cannot overwrite it anyway.
+            if npm view "$name@$version" version --registry "$REG" >/dev/null 2>&1; then
+              echo "already published: $name@$version"
+              continue
+            fi
+            echo "publishing $name@$version"
+            npm publish "$tgz" \
+              --registry "$REG" \
+              --userconfig "$HOME/.npmrc.publish" \
+              --access public \
+              --provenance
+          done
+          rm -f "$HOME/.npmrc.publish"
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
@@ -71,15 +128,19 @@ jobs:
           # lfg-bundle.tar.gz is the same tarball under its pre-rename name —
           # every setup.sh already on a machine asks for it by name, so dropping
           # it would break `latest` for every existing installer.
+          #
+          # The package tarballs stay attached even though they are on npm now:
+          # they are what the bundle's own pruned manifest can fall back to, and
+          # an attached artifact is the record of exactly what a tag shipped.
           tag_name: ${{ inputs.tag || github.ref_name }}
           files: |
             dist/omg-bundle.tar.gz
             dist/omg-bundle.tar.gz.sha256
             dist/lfg-bundle.tar.gz
             dist/lfg-bundle.tar.gz.sha256
-            dist/lfg-dev-protocol-*.tgz
-            dist/lfg-dev-client-*.tgz
-            dist/lfg-dev-react-*.tgz
-            dist/lfg-dev-app-*.tgz
+            dist/omg-dev-protocol-*.tgz
+            dist/omg-dev-client-*.tgz
+            dist/omg-dev-react-*.tgz
+            dist/omg-dev-app-*.tgz
           fail_on_unmatched_files: true
           generate_release_notes: true

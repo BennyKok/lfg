@@ -19,8 +19,8 @@ import {
   TerminalSquare,
   X,
 } from "lucide-react";
-import type { LfgSocket } from "@lfg-dev/client";
-import { lfgFetch, openLfgSocket } from "@/lib/lfg-client";
+import type { OmgSocket } from "@omg-dev/client";
+import { omgFetch, openOmgSocket } from "@/lib/omg-client";
 
 // One WASM load per page, shared across mount/unmount of the tab.
 let ghosttyReady: Promise<void> | null = null;
@@ -849,7 +849,7 @@ export function TermView({
 } = {}) {
   const [termSession, setTermSession] = useState(() => localStorage.getItem("lfg_term_session") || "main");
   const hostRef = useRef<HTMLDivElement>(null);
-  const wsRef = useRef<LfgSocket | null>(null);
+  const wsRef = useRef<OmgSocket | null>(null);
   const termRef = useRef<InstanceType<typeof GhosttyTerminal> | null>(null);
   const [status, setStatus] = useState<"connecting" | "open" | "reconnecting" | "closed">("connecting");
   // URLs detected in the output stream → rendered as tappable chips, since a
@@ -1102,9 +1102,9 @@ export function TermView({
     async function connect() {
       if (disposed || !term || opening || wsRef.current) return;
       opening = true;
-      let ws: LfgSocket;
+      let ws: OmgSocket;
       try {
-        ws = await openLfgSocket(
+        ws = await openOmgSocket(
           `/api/term?${connTarget}&cols=${term.cols}&rows=${term.rows}`,
         );
       } catch {
@@ -1226,7 +1226,7 @@ export function TermView({
     let alive = true;
     const poll = async () => {
       try {
-        const r = await lfgFetch(`/api/term/scan?${connTarget}`);
+        const r = await omgFetch(`/api/term/scan?${connTarget}`);
         const d = await r.json();
         if (alive && Array.isArray(d.urls) && d.urls.length)
           setLinks((prev) => mergeUrls(prev, d.urls));

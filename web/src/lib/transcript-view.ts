@@ -12,13 +12,13 @@ function toolName(text?: string): string {
   return (text || "").split(":")[0].trim().split(/\s+/)[0] || "";
 }
 
-export function isLfgOutputTool(message: TranscriptViewMessage): boolean {
+export function isOmgOutputTool(message: TranscriptViewMessage): boolean {
   if (message.kind !== "tool_use") return false;
   const name = toolName(message.text);
   return name === "lfg_output" || name.endsWith("__lfg_output");
 }
 
-function lfgOutputText(message: TranscriptViewMessage): string | null {
+function omgOutputText(message: TranscriptViewMessage): string | null {
   const raw = message.text || "";
   const separator = raw.indexOf(":");
   if (separator < 0) return null;
@@ -44,9 +44,9 @@ export function messagesForTranscriptView<T extends TranscriptViewMessage>(
     if (message.kind === "image" || message.kind === "video" || message.kind === "html") {
       return [message];
     }
-    if (!isLfgOutputTool(message)) return [];
+    if (!isOmgOutputTool(message)) return [];
 
-    const text = lfgOutputText(message);
+    const text = omgOutputText(message);
     if (!text) return [];
     return [{
       ...message,

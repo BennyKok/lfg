@@ -22,7 +22,7 @@ import { Flame } from "lucide-react";
 import NumberFlow, { NumberFlowGroup } from "@number-flow/react";
 import { cn } from "@/lib/utils";
 import { haptic } from "@/lib/haptics";
-import { lfgAssetUrl } from "@/lib/lfg-client";
+import { omgAssetUrl } from "@/lib/omg-client";
 import {
   useUsageFeed,
   type ProviderUsage,
@@ -79,14 +79,14 @@ const TONE = {
 
 function agentIconSrc(kind: string): string {
   const v = `?v=${AGENT_ICON_VERSION}`;
-  if (kind === "codex" || kind === "codex-aisdk") return lfgAssetUrl(`/agent-codex.svg${v}`);
-  if (kind === "grok") return lfgAssetUrl(`/agent-grok.svg${v}`);
-  if (kind === "cursor") return lfgAssetUrl(`/agent-cursor.svg${v}`);
-  if (kind === "hermes") return lfgAssetUrl(`/agent-hermes.svg${v}`);
-  if (kind === "opencode") return lfgAssetUrl(`/agent-opencode.svg${v}`);
-  if (kind === "pi") return lfgAssetUrl(`/agent-pi.svg${v}`);
-  if (kind === "copilot") return lfgAssetUrl(`/agent-copilot.svg${v}`);
-  return lfgAssetUrl(`/agent-claude.svg${v}`);
+  if (kind === "codex" || kind === "codex-aisdk") return omgAssetUrl(`/agent-codex.svg${v}`);
+  if (kind === "grok") return omgAssetUrl(`/agent-grok.svg${v}`);
+  if (kind === "cursor") return omgAssetUrl(`/agent-cursor.svg${v}`);
+  if (kind === "hermes") return omgAssetUrl(`/agent-hermes.svg${v}`);
+  if (kind === "opencode") return omgAssetUrl(`/agent-opencode.svg${v}`);
+  if (kind === "pi") return omgAssetUrl(`/agent-pi.svg${v}`);
+  if (kind === "copilot") return omgAssetUrl(`/agent-copilot.svg${v}`);
+  return omgAssetUrl(`/agent-claude.svg${v}`);
 }
 
 function isTextEditingElement(el: Element | null): boolean {

@@ -1,7 +1,17 @@
 {
-  "name": "@lfg-dev/client",
+  "name": "@omg-dev/client",
   "version": "0.1.84",
-  "description": "Transport-agnostic LFG API client and multiplexed live connection.",
+  "description": "Transport-agnostic OMG API client and multiplexed live connection.",
+  "license": "MIT",
+  "homepage": "https://omg.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BennyKok/omg.dev.git",
+    "directory": "packages/client"
+  },
+  "bugs": {
+    "url": "https://github.com/BennyKok/omg.dev/issues"
+  },
   "type": "module",
   "sideEffects": false,
   "files": [
@@ -17,12 +27,9 @@
     "build": "rm -rf dist && bun x tsc -p tsconfig.build.json"
   },
   "dependencies": {
-    "@lfg-dev/protocol": "workspace:*"
+    "@omg-dev/protocol": "workspace:*"
   },
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/BennyKok/omg.dev.git",
-    "directory": "packages/client"
+  "publishConfig": {
+    "access": "public"
   }
 }

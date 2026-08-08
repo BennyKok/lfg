@@ -1,13 +1,13 @@
-import type { LfgTransport } from "@lfg-dev/client";
+import type { OmgTransport } from "@omg-dev/client";
 import type { JSX } from "react";
 
-export { createGrantTransport } from "@lfg-dev/client";
+export { createGrantTransport } from "@omg-dev/client";
 export type {
   CreateGrantTransportOptions,
-  LfgGrant,
-  LfgSocket,
-  LfgTransport,
-} from "@lfg-dev/client";
+  OmgGrant,
+  OmgSocket,
+  OmgTransport,
+} from "@omg-dev/client";
 
 /**
  * Central sink for client errors raised inside the surface, in addition to the
@@ -16,7 +16,7 @@ export type {
  * paused or unreachable — the usual state when the surface itself crashed — it
  * is the only copy of the report that survives.
  */
-export interface LfgErrorSink {
+export interface OmgErrorSink {
   /** Absolute URL that accepts a POSTed JSON error report. */
   url: string;
   /** Short label for which host surface this is, e.g. "omg-dashboard". */
@@ -32,8 +32,8 @@ export interface EmbeddedViewer {
   avatar?: string;
 }
 
-export interface LfgAppSurfaceProps {
-  transport: LfgTransport;
+export interface OmgAppSurfaceProps {
+  transport: OmgTransport;
   assetBaseUrl?: string;
   sessionId?: string | null;
   className?: string;
@@ -48,32 +48,32 @@ export interface LfgAppSurfaceProps {
    * session ownership, filtering, or authorization semantics.
    */
   viewer?: EmbeddedViewer;
-  errorSink?: LfgErrorSink;
+  errorSink?: OmgErrorSink;
 }
 
-export declare function LfgAppSurface(
-  props: LfgAppSurfaceProps,
+export declare function OmgAppSurface(
+  props: OmgAppSurfaceProps,
 ): JSX.Element;
 
 /**
  * Machine-owned settings pages a host can mount on their own, underneath its
  * own account and plan UI, instead of reimplementing them.
  */
-export type LfgSettingsPage =
+export type OmgSettingsPage =
   | "settings"
   | "coding-agents"
   | "auto"
   | "storage"
   | "more";
 
-export interface LfgSettingsSurfaceProps {
-  transport: LfgTransport;
+export interface OmgSettingsSurfaceProps {
+  transport: OmgTransport;
   assetBaseUrl?: string;
   /**
    * Which page to show. CONTROLLED when the host also passes `onNavigate`:
    * changing this prop navigates the surface, no remount required.
    */
-  page?: LfgSettingsPage;
+  page?: OmgSettingsPage;
   /**
    * Called when the surface navigates itself — the user tapped "Coding
    * agents", "Storage", "More", or a back link inside a page.
@@ -85,11 +85,11 @@ export interface LfgSettingsSurfaceProps {
    * host doesn't route are reported too — ignore the ones you don't handle;
    * the surface navigates internally either way.
    */
-  onNavigate?: (page: LfgSettingsPage) => void;
+  onNavigate?: (page: OmgSettingsPage) => void;
   className?: string;
-  errorSink?: LfgErrorSink;
+  errorSink?: OmgErrorSink;
 }
 
-export declare function LfgSettingsSurface(
-  props: LfgSettingsSurfaceProps,
+export declare function OmgSettingsSurface(
+  props: OmgSettingsSurfaceProps,
 ): JSX.Element;

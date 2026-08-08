@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api } from "@/lib/lfg-client";
+import { api } from "@/lib/omg-client";
 
 export type UsageWindow = {
   label: string;

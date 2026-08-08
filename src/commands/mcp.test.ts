@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { closeLfgSession, findLfgSessions, sendToOrigin } from "./mcp.ts";
+import { closeOmgSession, findOmgSessions, sendToOrigin } from "./mcp.ts";
 
 const originalFetch = globalThis.fetch;
 const originalBase = process.env.LFG_BASE;
@@ -13,7 +13,7 @@ afterEach(() => {
   else process.env.LFG_SESSION_ID = originalSessionId;
 });
 
-describe("closeLfgSession", () => {
+describe("closeOmgSession", () => {
   test("closes an exact target through the public session close API", async () => {
     process.env.LFG_BASE = "http://127.0.0.1:9876";
     process.env.LFG_SESSION_ID = "caller-session";
@@ -23,7 +23,7 @@ describe("closeLfgSession", () => {
       return Response.json({ ok: true });
     }) as typeof fetch;
 
-    await expect(closeLfgSession(" target-session ")).resolves.toEqual({
+    await expect(closeOmgSession(" target-session ")).resolves.toEqual({
       closed: true,
       sessionId: "target-session",
     });
@@ -36,7 +36,7 @@ describe("closeLfgSession", () => {
 
   test("refuses to close the calling session", async () => {
     process.env.LFG_SESSION_ID = "same-session";
-    await expect(closeLfgSession("same-session")).rejects.toThrow(
+    await expect(closeOmgSession("same-session")).rejects.toThrow(
       "omg_close_session cannot close the calling session",
     );
   });
@@ -57,7 +57,7 @@ describe("short session ids", () => {
       return Response.json({ ok: true });
     }) as typeof fetch;
 
-    await expect(closeLfgSession("abcd1234")).resolves.toEqual({
+    await expect(closeOmgSession("abcd1234")).resolves.toEqual({
       closed: true,
       sessionId: "abcd1234",
     });
@@ -74,7 +74,7 @@ describe("short session ids", () => {
       return Response.json({ ok: true });
     }) as typeof fetch;
 
-    await closeLfgSession(FULL);
+    await closeOmgSession(FULL);
     expect(urls).toEqual([`http://127.0.0.1:9876/api/sessions/${FULL}/close`]);
   });
 
@@ -93,7 +93,7 @@ describe("short session ids", () => {
       return Response.json({ ok: true });
     }) as typeof fetch;
 
-    await expect(closeLfgSession("beefbeef")).rejects.toThrow("ambiguous");
+    await expect(closeOmgSession("beefbeef")).rejects.toThrow("ambiguous");
   });
 
   test("falls back to historical sessions when nothing live matches", async () => {
@@ -109,14 +109,14 @@ describe("short session ids", () => {
       return Response.json({ ok: true });
     }) as typeof fetch;
 
-    await expect(closeLfgSession("dead1234")).resolves.toMatchObject({ closed: true });
+    await expect(closeOmgSession("dead1234")).resolves.toMatchObject({ closed: true });
     expect(urls).toContain(
       "http://127.0.0.1:9876/api/sessions/dead1234-1111-4111-8111-111111111111/close",
     );
   });
 });
 
-describe("findLfgSessions", () => {
+describe("findOmgSessions", () => {
   test("queries the historical session API with composable filters", async () => {
     process.env.LFG_BASE = "http://127.0.0.1:9876";
     let request: { url: string; init?: RequestInit } | undefined;
@@ -125,7 +125,7 @@ describe("findLfgSessions", () => {
       return Response.json({ sessions: [], candidateTotal: 0, scanned: 0, truncated: false });
     }) as typeof fetch;
 
-    await expect(findLfgSessions({
+    await expect(findOmgSessions({
       sessionId: "abcd",
       user: "dev@example.com",
       project: "/repos/lfg",

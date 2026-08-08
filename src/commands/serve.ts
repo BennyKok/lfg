@@ -1559,7 +1559,7 @@ function childSubagentDepth(parent: ParentableSession, sessions: ParentableSessi
   return depth;
 }
 
-function withLfgSubagentContract(
+function withOmgSubagentContract(
   prompt: string | undefined,
   opts: { parentSessionId?: string; depth?: number | null },
 ): string {
@@ -3865,8 +3865,8 @@ a{color:#60a5fa}
                 model: resumeModel,
                 key: sessionId,
                 resume: resumeHandle,
-                lfgSessionId: sessionId,
-                lfgUser: assignedUser,
+                omgSessionId: sessionId,
+                omgUser: assignedUser,
               })
             : cachedResume.backend === "opencode"
               ? spawnManagedOpencodeAisdkSession({
@@ -3876,8 +3876,8 @@ a{color:#60a5fa}
                   model: resumeModel,
                   key: sessionId,
                   resume: resumeHandle,
-                  lfgSessionId: sessionId,
-                  lfgUser: assignedUser,
+                  omgSessionId: sessionId,
+                  omgUser: assignedUser,
                 })
               : cachedResume.backend === "pi"
                 ? spawnManagedPiSession({
@@ -3887,8 +3887,8 @@ a{color:#60a5fa}
                     model: resumeModel,
                     key: sessionId,
                     resume: resumeHandle,
-                    lfgSessionId: sessionId,
-                    lfgUser: assignedUser,
+                    omgSessionId: sessionId,
+                    omgUser: assignedUser,
                   })
                 : spawnManagedAisdkSession({
                     name: tmuxName,
@@ -3896,8 +3896,8 @@ a{color:#60a5fa}
                     prompt,
                     model: resumeModel,
                     sessionId,
-                    lfgSessionId: sessionId,
-                    lfgUser: assignedUser,
+                    omgSessionId: sessionId,
+                    omgUser: assignedUser,
                     claudeAccountId: pinnedClaudeAccountId,
                   });
           if (!spawned.ok) {
@@ -3963,8 +3963,8 @@ a{color:#60a5fa}
                 prompt,
                 model: resumeModel,
                 resume: sessionId,
-                lfgSessionId: sessionId,
-                lfgUser: assignedUser,
+                omgSessionId: sessionId,
+                omgUser: assignedUser,
               })
             : spawnManagedCursorSession({
                 name: tmuxName,
@@ -3972,8 +3972,8 @@ a{color:#60a5fa}
                 prompt,
                 model: resumeModel,
                 nativeSessionId: sessionId,
-                lfgSessionId: sessionId,
-                lfgUser: assignedUser,
+                omgSessionId: sessionId,
+                omgUser: assignedUser,
               });
           if (!spawned.ok) {
             removeManaged(tmuxName);
@@ -4014,7 +4014,7 @@ a{color:#60a5fa}
             model: model ?? "gpt-5.5",
             key,
             resume: sessionId,
-            lfgUser: body?.user,
+            omgUser: body?.user,
           });
           if (!r.ok) return err(502, r.error || "failed to resume session");
           addManaged({
@@ -4079,7 +4079,7 @@ a{color:#60a5fa}
           model: claudeResumeModel,
           sessionId,
           prompt: resumePrompt,
-          lfgUser: body?.user,
+          omgUser: body?.user,
           claudeAccountId: pinnedClaudeAccountId,
         });
         if (!r.ok) {
@@ -4402,7 +4402,7 @@ a{color:#60a5fa}
         const worktree = cwdResolved.worktree;
         let prompt = body?.prompt;
         if (spawnedBy === "subagent") {
-          prompt = withLfgSubagentContract(prompt, {
+          prompt = withOmgSubagentContract(prompt, {
             parentSessionId: parent?.sessionId ?? parent?.nativeSessionId ?? parentId,
             depth: subagentDepth,
           });
@@ -4483,7 +4483,7 @@ a{color:#60a5fa}
         if (assignedUser) assignUser(tmuxName, assignedUser);
         const r: { ok: boolean; error?: string; nativeSessionId?: string } =
           agent === "codex"
-            ? spawnManagedCodexSession({ name: tmuxName, cwd, prompt, model: resolvedModel, thinkingLevel, lfgSessionId: launchId, lfgUser: assignedUser, containInAgentSlice: isSubagent })
+            ? spawnManagedCodexSession({ name: tmuxName, cwd, prompt, model: resolvedModel, thinkingLevel, omgSessionId: launchId, omgUser: assignedUser, containInAgentSlice: isSubagent })
             : agent === "grok"
               ? spawnManagedGrokSession({
                   name: tmuxName,
@@ -4491,8 +4491,8 @@ a{color:#60a5fa}
                   prompt,
                   model: resolvedModel ?? GROK_DEFAULT_MODEL,
                   thinkingLevel,
-                  lfgSessionId: launchId,
-                  lfgUser: assignedUser,
+                  omgSessionId: launchId,
+                  omgUser: assignedUser,
                   containInAgentSlice: isSubagent,
                 })
             : agent === "cursor"
@@ -4501,8 +4501,8 @@ a{color:#60a5fa}
                   cwd,
                   prompt,
                   model: resolvedModel ?? "auto",
-                  lfgSessionId: launchId,
-                  lfgUser: assignedUser,
+                  omgSessionId: launchId,
+                  omgUser: assignedUser,
                   containInAgentSlice: isSubagent,
                 })
             : agent === "copilot"
@@ -4511,8 +4511,8 @@ a{color:#60a5fa}
                   cwd,
                   prompt,
                   model: resolvedModel,
-                  lfgSessionId: launchId,
-                  lfgUser: assignedUser,
+                  omgSessionId: launchId,
+                  omgUser: assignedUser,
                   containInAgentSlice: isSubagent,
                 })
             : agent === "aisdk"
@@ -4523,8 +4523,8 @@ a{color:#60a5fa}
                   model: resolvedModel ?? "opus",
                   sessionId: aisdkSessionId!,
                   thinkingLevel,
-                  lfgSessionId: launchId,
-                  lfgUser: assignedUser,
+                  omgSessionId: launchId,
+                  omgUser: assignedUser,
                   containInAgentSlice: isSubagent,
                   claudeAccountId,
                 })
@@ -4536,8 +4536,8 @@ a{color:#60a5fa}
                     model: resolvedModel ?? "gpt-5.5",
                     key: codexAisdkKey!,
                     thinkingLevel,
-                    lfgSessionId: launchId,
-                    lfgUser: assignedUser,
+                    omgSessionId: launchId,
+                    omgUser: assignedUser,
                     containInAgentSlice: isSubagent,
                   })
                 : agent === "opencode"
@@ -4547,8 +4547,8 @@ a{color:#60a5fa}
                       prompt,
                       model: resolvedModel ?? opencodeDefault!,
                       key: opencodeKey!,
-                      lfgSessionId: launchId,
-                      lfgUser: assignedUser,
+                      omgSessionId: launchId,
+                      omgUser: assignedUser,
                       containInAgentSlice: isSubagent,
                     })
                   : agent === "pi"
@@ -4559,11 +4559,11 @@ a{color:#60a5fa}
                         model: resolvedModel ?? PI_DEFAULT_MODEL,
                         key: piKey!,
                         thinkingLevel,
-                        lfgSessionId: launchId,
-                        lfgUser: assignedUser,
+                        omgSessionId: launchId,
+                        omgUser: assignedUser,
                         containInAgentSlice: isSubagent,
                       })
-                    : spawnManagedSession({ name: tmuxName, cwd, prompt, model: resolvedModel, thinkingLevel, lfgSessionId: launchId, lfgUser: assignedUser, containInAgentSlice: isSubagent, claudeAccountId });
+                    : spawnManagedSession({ name: tmuxName, cwd, prompt, model: resolvedModel, thinkingLevel, omgSessionId: launchId, omgUser: assignedUser, containInAgentSlice: isSubagent, claudeAccountId });
         if (!r.ok) {
           // The caller received no committed session. Release the claim so a
           // corrected retry can create one; normal closes retain their claim.

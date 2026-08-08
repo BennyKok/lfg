@@ -136,8 +136,8 @@ function addSessionEnv(
 type AgentContainment = {
   name: string;
   cwd: string;
-  lfgSessionId?: string | null;
-  lfgUser?: string | null;
+  omgSessionId?: string | null;
+  omgUser?: string | null;
 };
 
 /**
@@ -172,9 +172,9 @@ export function containedAgentCommand(
     ...Object.entries(agentBrowserEnv(opts.name)).flatMap(([k, v]) => [`--setenv=${k}=${v}`]),
   ];
   if (process.env.PATH) argv.push(`--setenv=PATH=${process.env.PATH}`);
-  if (opts.lfgSessionId) argv.push(`--setenv=LFG_SESSION_ID=${opts.lfgSessionId}`);
+  if (opts.omgSessionId) argv.push(`--setenv=LFG_SESSION_ID=${opts.omgSessionId}`);
   argv.push(`--setenv=OMG_CAPABILITY_VERSION=${OMG_CAPABILITY_VERSION}`);
-  if (opts.lfgUser) argv.push(`--setenv=LFG_USER=${opts.lfgUser}`);
+  if (opts.omgUser) argv.push(`--setenv=LFG_USER=${opts.omgUser}`);
   return [...argv, "--", ...command];
 }
 
@@ -201,11 +201,11 @@ function spawnManagedHarness(
   command: string[],
   opts: AgentContainment & { containInAgentSlice?: boolean },
 ): ManagedHarnessSpawnResult {
-  const sessionId = opts.lfgSessionId?.trim() || undefined;
+  const sessionId = opts.omgSessionId?.trim() || undefined;
   const env: Record<string, string> = { ...process.env } as Record<string, string>;
   if (sessionId) env.LFG_SESSION_ID = sessionId;
   env.OMG_CAPABILITY_VERSION = OMG_CAPABILITY_VERSION;
-  if (opts.lfgUser) env.LFG_USER = opts.lfgUser;
+  if (opts.omgUser) env.LFG_USER = opts.omgUser;
   else delete env.LFG_USER;
   // Always name + idle-timeout the browser, including parent (non-slice) harness
   // spawns. containInAgentSlice still only wraps subagents in systemd-run.
@@ -580,8 +580,8 @@ export function spawnManagedSession(opts: {
   // sessionId/transcript, so the caller resolves the live id from the pidfile
   // afterwards (same as a fresh spawn). The full prior history is preserved.
   resume?: string;
-  lfgSessionId?: string;
-  lfgUser?: string | null;
+  omgSessionId?: string;
+  omgUser?: string | null;
   containInAgentSlice?: boolean;
   claudeAccountId?: string;
 }): { ok: boolean; error?: string } {
@@ -623,7 +623,7 @@ export function spawnManagedSession(opts: {
     opts.cwd,
     ...claudeLaunchCommandForAccount(claudeArgv, opts.claudeAccountId),
   ];
-  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser, opts.name);
+  addSessionEnv(argv, opts.omgSessionId, opts.omgUser, opts.name);
   containTmuxCommand(argv, claudeBin(), opts.containInAgentSlice, opts);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
@@ -668,8 +668,8 @@ export function spawnManagedCodexSession(opts: {
   prompt?: string;
   model?: string;
   thinkingLevel?: string;
-  lfgSessionId?: string;
-  lfgUser?: string | null;
+  omgSessionId?: string;
+  omgUser?: string | null;
   containInAgentSlice?: boolean;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
@@ -695,7 +695,7 @@ export function spawnManagedCodexSession(opts: {
   if (opts.thinkingLevel) argv.push("-c", `reasoning_effort=${JSON.stringify(opts.thinkingLevel)}`);
   const prompt = withOmgRuntimeContract(opts.prompt);
   if (prompt?.trim()) argv.push("--", prompt);
-  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser, opts.name);
+  addSessionEnv(argv, opts.omgSessionId, opts.omgUser, opts.name);
   containTmuxCommand(argv, codexBin(), opts.containInAgentSlice, opts);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
@@ -710,8 +710,8 @@ export type ManagedGrokSessionOptions = {
   model?: string;
   thinkingLevel?: string;
   resume?: string;
-  lfgSessionId?: string;
-  lfgUser?: string | null;
+  omgSessionId?: string;
+  omgUser?: string | null;
   containInAgentSlice?: boolean;
 };
 
@@ -739,7 +739,7 @@ export function managedGrokSessionArgv(opts: ManagedGrokSessionOptions): string[
   if (effort) argv.push("--effort", effort);
   const prompt = withOmgRuntimeContract(opts.prompt);
   if (prompt?.trim()) argv.push("--", prompt);
-  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser, opts.name);
+  addSessionEnv(argv, opts.omgSessionId, opts.omgUser, opts.name);
   return argv;
 }
 
@@ -758,8 +758,8 @@ export type ManagedCopilotSessionOptions = {
   cwd: string;
   prompt?: string;
   model?: string;
-  lfgSessionId?: string;
-  lfgUser?: string | null;
+  omgSessionId?: string;
+  omgUser?: string | null;
   containInAgentSlice?: boolean;
 };
 
@@ -787,7 +787,7 @@ export function managedCopilotSessionArgv(opts: ManagedCopilotSessionOptions): s
   if (opts.model) argv.push("--model", opts.model);
   const prompt = withOmgRuntimeContract(opts.prompt);
   if (prompt?.trim()) argv.push("-i", prompt);
-  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser, opts.name);
+  addSessionEnv(argv, opts.omgSessionId, opts.omgUser, opts.name);
   return argv;
 }
 
@@ -806,8 +806,8 @@ export type ManagedCursorSessionOptions = {
   cwd: string;
   prompt?: string;
   model?: string;
-  lfgSessionId?: string;
-  lfgUser?: string | null;
+  omgSessionId?: string;
+  omgUser?: string | null;
   nativeSessionId?: string;
   containInAgentSlice?: boolean;
 };
@@ -830,7 +830,7 @@ export function managedCursorSessionArgv(opts: ManagedCursorSessionOptions): str
   if (opts.model && opts.model !== "auto") argv.push("--model", opts.model);
   const prompt = withOmgRuntimeContract(opts.prompt);
   if (prompt?.trim()) argv.push(prompt);
-  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser, opts.name);
+  addSessionEnv(argv, opts.omgSessionId, opts.omgUser, opts.name);
   return argv;
 }
 
@@ -913,8 +913,8 @@ export function spawnManagedHermesSession(opts: {
   cwd: string;
   model?: string;
   provider?: string;
-  lfgSessionId?: string;
-  lfgUser?: string | null;
+  omgSessionId?: string;
+  omgUser?: string | null;
 }): { ok: boolean; error?: string } {
   const dec = new TextDecoder();
   const argv = [
@@ -932,7 +932,7 @@ export function spawnManagedHermesSession(opts: {
   ];
   if (opts.model) argv.push("--model", opts.model);
   if (opts.provider) argv.push("--provider", opts.provider);
-  addSessionEnv(argv, opts.lfgSessionId, opts.lfgUser, opts.name);
+  addSessionEnv(argv, opts.omgSessionId, opts.omgUser, opts.name);
   const create = Bun.spawnSync(argv);
   if (create.exitCode !== 0)
     return { ok: false, error: dec.decode(create.stderr) || "new-session failed" };
@@ -948,8 +948,8 @@ export function spawnManagedAisdkSession(opts: {
   model: string;
   sessionId: string;
   thinkingLevel?: string;
-  lfgSessionId?: string;
-  lfgUser?: string | null;
+  omgSessionId?: string;
+  omgUser?: string | null;
   containInAgentSlice?: boolean;
   claudeAccountId?: string;
   recoveredAt?: number;
@@ -978,8 +978,8 @@ export function spawnManagedAisdkSession(opts: {
   return spawnManagedHarness(argv, {
     name: opts.name,
     cwd: opts.cwd,
-    lfgSessionId: opts.lfgSessionId ?? opts.sessionId,
-    lfgUser: opts.lfgUser,
+    omgSessionId: opts.omgSessionId ?? opts.sessionId,
+    omgUser: opts.omgUser,
     containInAgentSlice: opts.containInAgentSlice,
   });
 }
@@ -996,8 +996,8 @@ export function spawnManagedCodexAisdkSession(opts: {
   model: string;
   key: string;
   thinkingLevel?: string;
-  lfgSessionId?: string;
-  lfgUser?: string | null;
+  omgSessionId?: string;
+  omgUser?: string | null;
   containInAgentSlice?: boolean;
   // When set, resume this existing codex rollout/thread instead of starting a
   // fresh persistent thread — the harness seeds its threadId with it.
@@ -1027,8 +1027,8 @@ export function spawnManagedCodexAisdkSession(opts: {
   return spawnManagedHarness(argv, {
     name: opts.name,
     cwd: opts.cwd,
-    lfgSessionId: opts.lfgSessionId ?? opts.key,
-    lfgUser: opts.lfgUser,
+    omgSessionId: opts.omgSessionId ?? opts.key,
+    omgUser: opts.omgUser,
     containInAgentSlice: opts.containInAgentSlice,
   });
 }
@@ -1045,8 +1045,8 @@ export function spawnManagedPiSession(opts: {
   model: string;
   key: string;
   thinkingLevel?: string;
-  lfgSessionId?: string;
-  lfgUser?: string | null;
+  omgSessionId?: string;
+  omgUser?: string | null;
   containInAgentSlice?: boolean;
   // When set, resume this existing pi session file instead of starting a fresh
   // one — the harness passes it through as `--session <id>`.
@@ -1074,8 +1074,8 @@ export function spawnManagedPiSession(opts: {
   return spawnManagedHarness(argv, {
     name: opts.name,
     cwd: opts.cwd,
-    lfgSessionId: opts.lfgSessionId ?? opts.key,
-    lfgUser: opts.lfgUser,
+    omgSessionId: opts.omgSessionId ?? opts.key,
+    omgUser: opts.omgUser,
     containInAgentSlice: opts.containInAgentSlice,
   });
 }
@@ -1092,8 +1092,8 @@ export function spawnManagedOpencodeAisdkSession(opts: {
   prompt?: string;
   model: string;
   key: string;
-  lfgSessionId?: string;
-  lfgUser?: string | null;
+  omgSessionId?: string;
+  omgUser?: string | null;
   resume?: string;
   containInAgentSlice?: boolean;
   recoveredAt?: number;
@@ -1119,8 +1119,8 @@ export function spawnManagedOpencodeAisdkSession(opts: {
   return spawnManagedHarness(argv, {
     name: opts.name,
     cwd: opts.cwd,
-    lfgSessionId: opts.lfgSessionId ?? opts.key,
-    lfgUser: opts.lfgUser,
+    omgSessionId: opts.omgSessionId ?? opts.key,
+    omgUser: opts.omgUser,
     containInAgentSlice: opts.containInAgentSlice,
   });
 }

@@ -41,7 +41,7 @@ describe("LFG icon assets", () => {
       "web/src/components/embedded-connect-gate.tsx",
     ]) {
       const ui = await readFile(path, "utf8");
-      expect(ui).not.toContain('lfgAssetUrl("/icon.svg")');
+      expect(ui).not.toContain('omgAssetUrl("/icon.svg")');
     }
 
     const server = await readFile("src/commands/serve.ts", "utf8");

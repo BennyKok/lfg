@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import type { LfgChatMessage } from "../web/src/lib/lfg-chat-transport.ts";
+import type { OmgChatMessage } from "../web/src/lib/omg-chat-transport.ts";
 import {
   clearTranscriptCache,
   readTranscriptCache,
@@ -7,8 +7,8 @@ import {
   writeTranscriptCache,
 } from "../web/src/lib/transcript-cache.ts";
 
-function msg(id: string): LfgChatMessage {
-  return { id, role: "assistant", parts: [{ type: "text", text: id }] } as LfgChatMessage;
+function msg(id: string): OmgChatMessage {
+  return { id, role: "assistant", parts: [{ type: "text", text: id }] } as OmgChatMessage;
 }
 
 describe("transcript cache", () => {

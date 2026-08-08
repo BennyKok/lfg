@@ -95,7 +95,7 @@ describe("authenticated artifacts", () => {
       "utf8",
     );
     const native = readFileSync("web/src/components/native-artifact.tsx", "utf8");
-    expect(component).toContain("lfgFetch(path");
+    expect(component).toContain("omgFetch(path");
     expect(component).toContain("URL.createObjectURL");
     expect(component).toContain("URL.revokeObjectURL(objectUrl)");
     expect(component).toContain("aspectRatio:");
@@ -108,7 +108,7 @@ describe("authenticated artifacts", () => {
     expect(app).toContain("<AuthenticatedArtifactVideo");
     // HTML artifacts render through the native renderer, which fetches through
     // the transport itself (asserted in native-artifact.test.ts).
-    expect(native).toContain("lfgFetch(requestPath");
+    expect(native).toContain("omgFetch(requestPath");
     expect(app).toMatch(/<NativeArtifact(Embed|Thumbnail)?\b/);
     // The failure this guards: an artifact rendered from a raw URL instead of
     // the transport shows the surrounding Vibes app instead of the artifact.

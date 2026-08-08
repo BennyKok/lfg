@@ -15,7 +15,7 @@ import { Check, Github } from "lucide-react";
 import { Button } from "./ui/button";
 import type { ConnectOption, ToolConnectOption } from "../lib/embedded-connect";
 import { LFG_SMALL_ICON_PATH } from "../lib/icon-assets";
-import { lfgAssetUrl } from "../lib/lfg-client";
+import { omgAssetUrl } from "../lib/omg-client";
 
 export function EmbeddedConnectGate({
   options,
@@ -46,7 +46,7 @@ export function EmbeddedConnectGate({
       <div className="my-auto w-full max-w-sm py-6">
         <div className="mb-4 flex items-center justify-between gap-2">
           <img
-            src={lfgAssetUrl(LFG_SMALL_ICON_PATH)}
+            src={omgAssetUrl(LFG_SMALL_ICON_PATH)}
             alt="lfg"
             className="size-7 shrink-0"
           />

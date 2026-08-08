@@ -12,7 +12,7 @@
 // subscribed or the tab is hidden. Paging past the head ("load more") stays
 // with the caller — only the head is shared, because only the head changes.
 
-import { api } from "./lfg-client";
+import { api } from "./omg-client";
 import { readFeedCache, writeFeedCache, SHIPPED_FEED_KEY } from "./feed-cache";
 
 /** Covers both consumers: the feed's first page and the sidebar's scan window

@@ -19,7 +19,7 @@ import {
 } from "./lib/embedded-connect";
 import { emitSessionCreatedToHost } from "./lib/embed-host-signal";
 import { LFG_SMALL_ICON_PATH } from "./lib/icon-assets";
-import { api, lfgAssetUrl, lfgFetch, lfgUpload } from "./lib/lfg-client";
+import { api, omgAssetUrl, omgFetch, omgUpload } from "./lib/omg-client";
 import { cacheProjectFilter, readCachedProjectFilter } from "./lib/project-filter";
 import { resolveRosterUser } from "./lib/roster-user";
 import { uploadFile as uploadFileThroughTransport } from "./lib/upload";
@@ -40,7 +40,7 @@ import {
   restartContinuousAnimations,
 } from "./embedded-animation-recovery";
 import { lazy } from "react";
-import { useLfgChat } from "./lib/chat-context";
+import { useOmgChat } from "./lib/chat-context";
 import {
   AGENT_ICON_VERSION,
   ArtifactViewerContext,
@@ -60,7 +60,7 @@ import {
 
 // Dynamic: this is what keeps the AI SDK out of the entry chunk. See
 // SessionChat and web/src/lib/chat-engine.tsx.
-const LfgChatEngine = lazy(() => import("./lib/chat-engine"));
+const OmgChatEngine = lazy(() => import("./lib/chat-engine"));
 
 /** Warm the chat chunk once the app is idle, so opening a session never waits on it. */
 export function prefetchChatEngine(): void {
@@ -83,14 +83,14 @@ import {
 } from "./cron";
 import { liveTransportMode, useLiveSocket, type ConnectionState } from "./useLiveSocket";
 import {
-  LfgChatStreamOwnership,
-  LfgChatTransport,
-  appendLfgTranscriptEvent,
-  lfgMessagesToUIMessages,
-  lfgUIMessagesToMessages,
-  type LfgChatMessage,
-  type LfgTranscriptSubscribe,
-} from "./lib/lfg-chat-transport";
+  OmgChatStreamOwnership,
+  OmgChatTransport,
+  appendOmgTranscriptEvent,
+  omgMessagesToUIMessages,
+  omgUIMessagesToMessages,
+  type OmgChatMessage,
+  type OmgTranscriptSubscribe,
+} from "./lib/omg-chat-transport";
 import {
   prefetchTranscripts,
   readTranscriptCache,
@@ -1245,7 +1245,7 @@ function uploadFile<T>(
   onProgress: (progress: number) => void,
 ): Promise<T> {
   return uploadFileThroughTransport(
-    lfgUpload,
+    omgUpload,
     path,
     file,
     contentType,
@@ -1340,7 +1340,7 @@ function evlog(event: string, fields: Record<string, unknown> = {}) {
       path: location.pathname + location.search,
       ...fields,
     });
-    void lfgFetch("/api/evlog", {
+    void omgFetch("/api/evlog", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: payload,
@@ -2023,7 +2023,7 @@ function logFindingAction(
   path: "reply" | "execute" | "copy" | "dismiss",
   hadText: boolean,
 ): void {
-  void lfgFetch(`/api/auto/findings/${findingId}/action`, {
+  void omgFetch(`/api/auto/findings/${findingId}/action`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path, hadText }),
@@ -2715,7 +2715,7 @@ function useDictation(opts: {
         offset += c.length;
       }
       try {
-        const res = await lfgFetch("/api/voice/stt", {
+        const res = await omgFetch("/api/voice/stt", {
           method: "POST",
           headers: { "Content-Type": "application/octet-stream" },
           body: floatToWav(merged, s.rate),
@@ -4763,14 +4763,14 @@ export function App() {
     setViewerArtifact((current) => {
       if (!current) {
         try {
-          window.history.pushState({ lfgArtifactViewer: true }, "");
+          window.history.pushState({ omgArtifactViewer: true }, "");
         } catch {}
       }
       return artifact;
     });
   }, []);
   const closeArtifactViewer = useCallback(() => {
-    if (window.history.state?.lfgArtifactViewer) {
+    if (window.history.state?.omgArtifactViewer) {
       // Balanced close: pop our own entry; the popstate handler clears state.
       window.history.back();
     } else {
@@ -4986,7 +4986,7 @@ export function App() {
   // full-screen onboarding flow is showing. See loadCore for the gate.
   const [onboarding, setOnboarding] = useState<OnboardingState | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [lfgVersion, setLfgVersion] = useState("unknown");
+  const [omgVersion, setOmgVersion] = useState("unknown");
   const [repos, setRepos] = useState<Repo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -5349,7 +5349,7 @@ export function App() {
 
   const loadCore = useCallback(async () => {
     const payload = await fetchBootstrap<BootstrapPayload>();
-    setLfgVersion(payload.version || "unknown");
+    setOmgVersion(payload.version || "unknown");
     setOnboarding(payload.onboarding ?? null);
     // First-run gate: a brand-new install has no roster (env or stored
     // profiles), no sessions, and no completed onboarding. The flag is sticky
@@ -6761,7 +6761,7 @@ export function App() {
     return (
       <OnboardingFlow
         onboarding={onboarding}
-        version={lfgVersion}
+        version={omgVersion}
         codingAgents={codingAgents}
         repos={repos}
         identity={identity}
@@ -7507,7 +7507,7 @@ function ProductBrand({
   if (!hosted) {
     return (
       <img
-        src={lfgAssetUrl(LFG_SMALL_ICON_PATH)}
+        src={omgAssetUrl(LFG_SMALL_ICON_PATH)}
         alt="lfg"
         className="mx-1 size-6 shrink-0 rounded-md"
       />
@@ -8525,7 +8525,7 @@ function OnboardingFlow({
         <div className="mb-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
             <img
-              src={lfgAssetUrl(LFG_SMALL_ICON_PATH)}
+              src={omgAssetUrl(LFG_SMALL_ICON_PATH)}
               alt="lfg"
               className="size-7 shrink-0"
             />
@@ -8897,7 +8897,7 @@ function WhoAreYou({
       <div className="w-full max-w-sm">
         <div className="mb-4 flex items-center gap-2">
           <img
-            src={lfgAssetUrl(LFG_SMALL_ICON_PATH)}
+            src={omgAssetUrl(LFG_SMALL_ICON_PATH)}
             alt="lfg"
             className="size-7 shrink-0"
           />
@@ -9319,7 +9319,7 @@ function LiveView({
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
-  onSubscribeTranscript?: LfgTranscriptSubscribe;
+  onSubscribeTranscript?: OmgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
   onRenameSession: RenameSession;
   onRemove: (sid: string) => void;
@@ -9803,7 +9803,7 @@ function RailStage({
   messagesBySid: Record<string, Message[]>;
   busyBySid: Record<string, boolean>;
   promptsBySid: Record<string, SessionPrompt | null>;
-  onSubscribeTranscript?: LfgTranscriptSubscribe;
+  onSubscribeTranscript?: OmgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
   onRenameSession: RenameSession;
   onRemove: (sid: string) => void;
@@ -11998,7 +11998,7 @@ async function loadTranscriptPage(sid: string) {
     `/api/sessions/${encodeURIComponent(sid)}/messages?limit=80`,
   );
   return {
-    messages: lfgMessagesToUIMessages(Array.isArray(page.messages) ? page.messages : []),
+    messages: omgMessagesToUIMessages(Array.isArray(page.messages) ? page.messages : []),
     nextBefore: page.nextBefore ?? null,
   };
 }
@@ -12009,7 +12009,7 @@ type SessionChatProps = {
   prompt: SessionPrompt | null;
   error: string | null;
   onError: (error: string | null) => void;
-  onSubscribeTranscript?: LfgTranscriptSubscribe;
+  onSubscribeTranscript?: OmgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
   onDictatingChange?: (recording: boolean) => void;
 };
@@ -12034,20 +12034,20 @@ function SessionChat(props: SessionChatProps) {
   const chatTransport = useMemo(
     () =>
       sid
-        ? new LfgChatTransport({ sessionId: sid, subscribeTranscript: onSubscribeTranscript })
+        ? new OmgChatTransport({ sessionId: sid, subscribeTranscript: onSubscribeTranscript })
         : undefined,
     [sid, onSubscribeTranscript],
   );
   const reportError = useCallback((message: string) => onError(message), [onError]);
   return (
     <Suspense fallback={<SessionChatSkeleton />}>
-      <LfgChatEngine
+      <OmgChatEngine
         id={sid ?? "missing-session"}
         transport={chatTransport}
         onError={reportError}
       >
         <SessionChatBody {...props} />
-      </LfgChatEngine>
+      </OmgChatEngine>
     </Suspense>
   );
 }
@@ -12118,11 +12118,11 @@ function SessionChatBody({
   // SessionChat is reused when the focused card changes. Ownership is scoped
   // by sid so a still-finishing send in the old card cannot suppress an
   // externally-driven event in the newly focused card.
-  const [ownedChatStreams] = useState(() => new LfgChatStreamOwnership());
+  const [ownedChatStreams] = useState(() => new OmgChatStreamOwnership());
   // Provided by the lazily-loaded engine wrapping this component.
-  const chat = useLfgChat();
+  const chat = useOmgChat();
   const { messages: uiMessages, setMessages, sendMessage: sendChatMessage, status: chatStatus } = chat;
-  const chatMessages = useMemo(() => lfgUIMessagesToMessages(uiMessages), [uiMessages]);
+  const chatMessages = useMemo(() => omgUIMessagesToMessages(uiMessages), [uiMessages]);
   // Busy straight from the transcript subscription: the harness flips it the
   // moment it starts a turn, ahead of the ~1s status-poll row that feeds the
   // `busy` prop, so the working indicator tracks the session even for turns
@@ -12186,7 +12186,7 @@ function SessionChatBody({
     )
       .then((page) => {
         if (cancelled) return;
-        const history = lfgMessagesToUIMessages(Array.isArray(page.messages) ? page.messages : []);
+        const history = omgMessagesToUIMessages(Array.isArray(page.messages) ? page.messages : []);
         const historyIds = new Set(history.map((message) => message.id));
         // Anything the user had already paged in above this window stays put, in
         // its original order — the fresh page only replaces the tail it covers.
@@ -12197,7 +12197,7 @@ function SessionChatBody({
             )
           : [];
         const keptIds = new Set(olderKept.map((message) => message.id));
-        let settled: LfgChatMessage[] = history;
+        let settled: OmgChatMessage[] = history;
         setMessages((current) => {
           // Messages that landed live while this fetch was in flight and aren't
           // in the page yet — they're newest, so they belong at the end.
@@ -12236,7 +12236,7 @@ function SessionChatBody({
       }
       if (event.type === "busy") setLiveBusy(event.busy);
       setMessages((current) => {
-        const next = appendLfgTranscriptEvent(current, event, {
+        const next = appendOmgTranscriptEvent(current, event, {
           streamActive: ownedChatStreams.owns(sid),
         });
         // Keep the cached page current so the next re-open paints the newest
@@ -12254,10 +12254,10 @@ function SessionChatBody({
       `/api/sessions/${encodeURIComponent(sid)}/messages?page=backward&before=${before}&limit=80`,
       { cache: "no-store" },
     );
-    const older = lfgMessagesToUIMessages(Array.isArray(page.messages) ? page.messages : []);
+    const older = omgMessagesToUIMessages(Array.isArray(page.messages) ? page.messages : []);
     setNextBefore(page.nextBefore ?? null);
     if (!older.length) return (page.nextBefore ?? null) !== null;
-    let settled: LfgChatMessage[] = older;
+    let settled: OmgChatMessage[] = older;
     setMessages((current) => {
       const existing = new Set(current.map((message) => message.id));
       const prepend = older.filter((message) => !existing.has(message.id));
@@ -12325,7 +12325,7 @@ function SessionChatBody({
             {
               text: outgoingText,
               metadata: {
-                lfgMessage: {
+                omgMessage: {
                   role: "user",
                   kind: "text",
                   text: outgoingText,
@@ -13269,7 +13269,7 @@ function SessionTitleSheet({
   promptsBySid: Record<string, SessionPrompt | null>;
   origin: DOMRect;
   onSwitch: (sid: string) => void;
-  onSubscribeTranscript?: LfgTranscriptSubscribe;
+  onSubscribeTranscript?: OmgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
   onRenameSession: RenameSession;
   onRemove: (sid: string) => void;
@@ -14103,7 +14103,7 @@ const SessionCard = memo(function SessionCard({
   messages: Message[];
   busy: boolean;
   prompt: SessionPrompt | null;
-  onSubscribeTranscript?: LfgTranscriptSubscribe;
+  onSubscribeTranscript?: OmgTranscriptSubscribe;
   onRefresh: () => Promise<void>;
   onRenameSession: RenameSession;
   onRemove: (sid: string) => void;
@@ -15203,7 +15203,7 @@ function UserBubble({ html, pending }: { html: string; pending?: boolean }) {
 // LFG's launch contract travels inside the first user turn because several
 // agent CLIs have no separate system-prompt channel. Keep it available for
 // inspection without making the user read through it to find their own task.
-function LfgInstructionsBlock({
+function OmgInstructionsBlock({
   instructions,
   version,
 }: {
@@ -15470,7 +15470,7 @@ function MessageBubble({
   const sendMorphRef = useSendMorph<HTMLDivElement>(
     message.role === "user" && !!message.pending,
   );
-  const lfgEnvelope = useMemo(
+  const omgEnvelope = useMemo(
     () => (message.role === "user" ? parseOmgPromptEnvelope(message.text || "") : null),
     [message.role, message.text],
   );
@@ -15480,11 +15480,11 @@ function MessageBubble({
     () =>
       message.role === "user"
         ? renderableUserContent(
-            lfgEnvelope?.task ?? message.text ?? "",
-            lfgEnvelope ? undefined : message.html,
+            omgEnvelope?.task ?? message.text ?? "",
+            omgEnvelope ? undefined : message.html,
           )
         : { html: "", attachments: [] as MessageAttachment[] },
-    [message.role, message.text, message.html, lfgEnvelope],
+    [message.role, message.text, message.html, omgEnvelope],
   );
   if (isRequestInterruptedMessage(message)) {
     return (
@@ -15628,10 +15628,10 @@ function MessageBubble({
         {/* w-full keeps each 85% cap resolving against a definite width. The
             launch contract is visually separate from the user's actual task. */}
         <div className="flex w-full min-w-0 flex-col items-end gap-1.5">
-          {lfgEnvelope ? (
-            <LfgInstructionsBlock
-              instructions={lfgEnvelope.instructions}
-              version={lfgEnvelope.version}
+          {omgEnvelope ? (
+            <OmgInstructionsBlock
+              instructions={omgEnvelope.instructions}
+              version={omgEnvelope.version}
             />
           ) : null}
           {userContent.attachments.length > 0 ? (
@@ -15640,7 +15640,7 @@ function MessageBubble({
           {/* A caption is optional: attach an image with nothing typed and the
               picture is the whole message, with no empty bubble under it. */}
           {userContent.html ? (
-            <MessageActions text={lfgEnvelope?.task ?? message.text ?? ""} isUser>
+            <MessageActions text={omgEnvelope?.task ?? message.text ?? ""} isUser>
               <UserBubble html={userContent.html} pending={message.pending} />
             </MessageActions>
           ) : null}
@@ -19452,7 +19452,7 @@ function VoiceSettingsSection() {
 
   useEffect(() => {
     let alive = true;
-    void lfgFetch("/api/voice/config")
+    void omgFetch("/api/voice/config")
       .then((r) => (r.ok ? r.json() : null))
       .then((d: VoiceConfig | null) => {
         if (alive && d) setCfg(d);
@@ -19467,7 +19467,7 @@ function VoiceSettingsSection() {
     setCfg((c) => (c ? { ...c, settings: { ...c.settings, ...patch } } : c));
     setSaving(true);
     try {
-      const r = await lfgFetch("/api/voice/config", {
+      const r = await omgFetch("/api/voice/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
@@ -20486,7 +20486,7 @@ export type ShipPost = {
 //
 // Still visibility-gated and still sticky once shown: a page of tiles is a page
 // of fetches, and re-mounting on scroll-back would throw away parsed documents.
-function LfgUpdateSection() {
+function OmgUpdateSection() {
   const [info, setInfo] = useState<InstallUpdateInfo | null>(null);
   const [checking, setChecking] = useState(true);
   const [updating, setUpdating] = useState(false);
@@ -20768,7 +20768,7 @@ function SettingsView({
         onChange={onSettingsChange}
       />
 
-      <LfgUpdateSection />
+      <OmgUpdateSection />
 
       {/* More — the long tail lives on its own page so this one stays scannable. */}
       <section className="space-y-2">

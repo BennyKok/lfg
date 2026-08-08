@@ -1,7 +1,17 @@
 {
-  "name": "@lfg-dev/protocol",
+  "name": "@omg-dev/protocol",
   "version": "0.1.84",
-  "description": "Typed public protocol for LFG sessions and live streams.",
+  "description": "Typed public protocol for OMG sessions and live streams.",
+  "license": "MIT",
+  "homepage": "https://omg.dev",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BennyKok/omg.dev.git",
+    "directory": "packages/protocol"
+  },
+  "bugs": {
+    "url": "https://github.com/BennyKok/omg.dev/issues"
+  },
   "type": "module",
   "sideEffects": false,
   "files": [
@@ -16,10 +26,7 @@
   "scripts": {
     "build": "rm -rf dist && bun x tsc -p tsconfig.build.json"
   },
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/BennyKok/omg.dev.git",
-    "directory": "packages/protocol"
+  "publishConfig": {
+    "access": "public"
   }
 }

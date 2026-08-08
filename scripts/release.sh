@@ -158,12 +158,12 @@ if gh release view "$VERSION" --repo "$REPO_SLUG" >/dev/null 2>&1; then
   gh release upload "$VERSION" \
     "$OUT_DIR/$ASSET" "$OUT_DIR/$ASSET.sha256" \
     "$OUT_DIR/$LEGACY_ASSET" "$OUT_DIR/$LEGACY_ASSET.sha256" \
-    "$OUT_DIR"/lfg-dev-*.tgz \
+    "$OUT_DIR"/omg-dev-*.tgz \
     --repo "$REPO_SLUG" --clobber
 else
   gh release create "$VERSION" \
     "$OUT_DIR/$ASSET" "$OUT_DIR/$ASSET.sha256" \
-    "$OUT_DIR/$LEGACY_ASSET" "$OUT_DIR/$LEGACY_ASSET.sha256" "$OUT_DIR"/lfg-dev-*.tgz \
+    "$OUT_DIR/$LEGACY_ASSET" "$OUT_DIR/$LEGACY_ASSET.sha256" "$OUT_DIR"/omg-dev-*.tgz \
     --repo "$REPO_SLUG" --title "$VERSION" --generate-notes
 fi
 say "Done. Latest-release install URL:"

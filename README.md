@@ -311,10 +311,16 @@ to that environment only.
 
 ## Embedding OMG in your own product
 
-Every release publishes `@lfg-dev/protocol`, `@lfg-dev/client`, `@lfg-dev/react`,
-and `@lfg-dev/app` — the last being the exact full application the standalone
-web UI runs. React hosts mount it with their own transport and asset origin. See
-**[docs/embedding.md](./docs/embedding.md)**.
+Every release publishes `@omg-dev/protocol`, `@omg-dev/client`, `@omg-dev/react`,
+and `@omg-dev/app` to npm — the last being the exact full application the
+standalone web UI runs. React hosts mount it with their own transport and asset
+origin:
+
+```bash
+npm install @omg-dev/app @omg-dev/client
+```
+
+See **[docs/embedding.md](./docs/embedding.md)**.
 
 ## Project layout
 

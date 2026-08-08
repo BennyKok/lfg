@@ -11,11 +11,11 @@
 // nothing into this chunk.
 import { createContext, useContext } from "react";
 import type { UseChatHelpers } from "@ai-sdk/react";
-import type { LfgChatMessage } from "./lfg-chat-transport";
+import type { OmgChatMessage } from "./omg-chat-transport";
 
-export type LfgChat = UseChatHelpers<LfgChatMessage>;
+export type OmgChat = UseChatHelpers<OmgChatMessage>;
 
-export const LfgChatContext = createContext<LfgChat | null>(null);
+export const OmgChatContext = createContext<OmgChat | null>(null);
 
 /**
  * The chat state for the surrounding session, from the lazily-loaded engine.
@@ -24,8 +24,8 @@ export const LfgChatContext = createContext<LfgChat | null>(null);
  * engine's Suspense boundary, so a null here means the tree was assembled
  * wrong, and a silent undefined would surface much later as an empty chat.
  */
-export function useLfgChat(): LfgChat {
-  const chat = useContext(LfgChatContext);
-  if (!chat) throw new Error("useLfgChat must be rendered inside the chat engine");
+export function useOmgChat(): OmgChat {
+  const chat = useContext(OmgChatContext);
+  if (!chat) throw new Error("useOmgChat must be rendered inside the chat engine");
   return chat;
 }

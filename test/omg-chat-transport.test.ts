@@ -3,24 +3,24 @@ import {
   createSameOriginTransport,
 } from "../packages/client/src/index.ts";
 import {
-  LfgChatStreamOwnership,
-  LfgChatTransport,
-  appendLfgTranscriptEvent,
-  type LfgChatMessage,
-  type LfgTranscriptEvent,
-} from "../web/src/lib/lfg-chat-transport.ts";
+  OmgChatStreamOwnership,
+  OmgChatTransport,
+  appendOmgTranscriptEvent,
+  type OmgChatMessage,
+  type OmgTranscriptEvent,
+} from "../web/src/lib/omg-chat-transport.ts";
 import {
-  configureLfgTransport,
-  openLfgSocket,
-} from "../web/src/lib/lfg-client.ts";
+  configureOmgTransport,
+  openOmgSocket,
+} from "../web/src/lib/omg-client.ts";
 
 afterEach(() => {
-  configureLfgTransport(createSameOriginTransport());
+  configureOmgTransport(createSameOriginTransport());
 });
 
-describe("LfgChatTransport", () => {
+describe("OmgChatTransport", () => {
   test("claims stream ownership synchronously and scopes overlapping sends by session", async () => {
-    const ownership = new LfgChatStreamOwnership();
+    const ownership = new OmgChatStreamOwnership();
     let finishFirst!: () => void;
     let finishSecond!: () => void;
 
@@ -43,12 +43,12 @@ describe("LfgChatTransport", () => {
   });
 
   test("lets the active chat stream exclusively own assistant transcript events", () => {
-    const streamed: LfgChatMessage[] = [{
+    const streamed: OmgChatMessage[] = [{
       id: "sdk-generated-message",
       role: "assistant",
       parts: [{ type: "text", text: "One response", state: "done" }],
     }];
-    const event: LfgTranscriptEvent = {
+    const event: OmgTranscriptEvent = {
       type: "message",
       message: {
         id: "durable-transcript-message",
@@ -59,12 +59,12 @@ describe("LfgChatTransport", () => {
       },
     };
 
-    // useChat already owns this event through LfgChunkEmitter. The passive
+    // useChat already owns this event through OmgChunkEmitter. The passive
     // transcript listener must not append the durable form alongside it.
-    expect(appendLfgTranscriptEvent(streamed, event, { streamActive: true })).toBe(streamed);
+    expect(appendOmgTranscriptEvent(streamed, event, { streamActive: true })).toBe(streamed);
 
     // Externally-driven turns have no useChat stream and still land normally.
-    expect(appendLfgTranscriptEvent(streamed, event)).toHaveLength(2);
+    expect(appendOmgTranscriptEvent(streamed, event)).toHaveLength(2);
   });
 
   test("routes feature sockets through the host-configured transport", async () => {
@@ -76,7 +76,7 @@ describe("LfgChatTransport", () => {
       close() {},
       addEventListener() {},
     };
-    configureLfgTransport({
+    configureOmgTransport({
       async fetch() {
         return new Response("{}", { status: 200 });
       },
@@ -92,13 +92,13 @@ describe("LfgChatTransport", () => {
       },
     });
 
-    expect(await openLfgSocket("/api/term?session=main")).toBe(socket);
+    expect(await openOmgSocket("/api/term?session=main")).toBe(socket);
     expect(paths).toEqual(["/api/term?session=main"]);
   });
 
   test("sends through the host-configured transport instead of the embedding page origin", async () => {
     const calls: Array<{ path: string; method: string; body: string }> = [];
-    configureLfgTransport({
+    configureOmgTransport({
       async fetch(path, init) {
         calls.push({
           path,
@@ -118,13 +118,13 @@ describe("LfgChatTransport", () => {
       },
     });
 
-    const transport = new LfgChatTransport({
+    const transport = new OmgChatTransport({
       sessionId: "session-1",
       subscribeTranscript: () => () => {},
     });
     await transport.sendMessages({
       messages: [{ id: "user-1", role: "user", parts: [{ type: "text", text: "hello" }] }],
-    } as Parameters<LfgChatTransport["sendMessages"]>[0]);
+    } as Parameters<OmgChatTransport["sendMessages"]>[0]);
 
     expect(calls).toEqual([{
       path: "/api/sessions/session-1/send",
@@ -134,8 +134,8 @@ describe("LfgChatTransport", () => {
   });
 
   test("turns repeated reset snapshots into incremental deltas", async () => {
-    let listener: ((event: LfgTranscriptEvent) => void) | undefined;
-    const transport = new LfgChatTransport({
+    let listener: ((event: OmgTranscriptEvent) => void) | undefined;
+    const transport = new OmgChatTransport({
       sessionId: "session-1",
       fetch: async () => new Response("{}", { status: 200 }),
       subscribeTranscript: (_sid, next) => {
@@ -148,7 +148,7 @@ describe("LfgChatTransport", () => {
 
     const stream = await transport.sendMessages({
       messages: [{ id: "user-1", role: "user", parts: [{ type: "text", text: "hello" }] }],
-    } as Parameters<LfgChatTransport["sendMessages"]>[0]);
+    } as Parameters<OmgChatTransport["sendMessages"]>[0]);
     const chunksPromise = (async () => {
       const chunks = [];
       for await (const chunk of stream) chunks.push(chunk);

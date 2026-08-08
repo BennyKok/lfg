@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  isLfgOutputTool,
+  isOmgOutputTool,
   messagesForTranscriptView,
 } from "../web/src/lib/transcript-view.ts";
 
@@ -39,9 +39,9 @@ describe("experimental transcript view", () => {
   });
 
   test("recognizes direct and namespaced LFG output tools", () => {
-    expect(isLfgOutputTool({ kind: "tool_use", text: "lfg_output: {}" })).toBe(true);
-    expect(isLfgOutputTool({ kind: "tool_use", text: "mcp__lfg__lfg_output: {}" })).toBe(true);
-    expect(isLfgOutputTool({ kind: "tool_use", text: "lfg_input: {}" })).toBe(false);
+    expect(isOmgOutputTool({ kind: "tool_use", text: "lfg_output: {}" })).toBe(true);
+    expect(isOmgOutputTool({ kind: "tool_use", text: "mcp__lfg__lfg_output: {}" })).toBe(true);
+    expect(isOmgOutputTool({ kind: "tool_use", text: "lfg_input: {}" })).toBe(false);
   });
 
   test("drops output calls without displayable text while retaining their artifact", () => {

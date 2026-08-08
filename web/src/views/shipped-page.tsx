@@ -28,7 +28,7 @@ import {
   readFeedCache,
   writeFeedCache,
 } from "../lib/feed-cache";
-import { api } from "../lib/lfg-client";
+import { api } from "../lib/omg-client";
 import {
   NOTIFICATION_READ_STATE_EVENT,
   markAllNotificationsRead,

@@ -22,7 +22,7 @@ const common = {
   cwd,
   prompt: "continue",
   model: "test-model",
-  lfgSessionId: resume,
+  omgSessionId: resume,
 };
 
 // These cases intentionally mirror /api/sessions/resume. Historical Claude

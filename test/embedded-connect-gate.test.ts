@@ -371,7 +371,7 @@ describe("host-mounted settings navigation", () => {
     // router shows ONE url for five different screens: the device back button
     // leaves the whole surface instead of going up a page, and no page inside
     // it is linkable.
-    expect(embedded).toContain("onNavigate?: (page: LfgSettingsPage) => void");
+    expect(embedded).toContain("onNavigate?: (page: OmgSettingsPage) => void");
     expect(embedded).toContain('router.subscribe("onResolved"');
     // Controlled: the host echoing back the page we just reported must not
     // navigate a second time.
@@ -380,7 +380,7 @@ describe("host-mounted settings navigation", () => {
     );
     // The published types are hand-written, so they drift silently unless
     // pinned alongside the implementation.
-    expect(dts).toContain("onNavigate?: (page: LfgSettingsPage) => void");
+    expect(dts).toContain("onNavigate?: (page: OmgSettingsPage) => void");
   });
 
   test("only real settings pages are reported outward", () => {

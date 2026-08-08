@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { visibilityRecoveryAction } from "./live-visibility";
-import { api, lfgFetch, openLfgLiveSocket } from "./lib/lfg-client";
+import { api, omgFetch, openOmgLiveSocket } from "./lib/omg-client";
 
 type Session = {
   agent?: string;
@@ -137,7 +137,7 @@ function evlog(event: string, fields: Record<string, unknown> = {}) {
       path: location.pathname + location.search,
       ...fields,
     });
-    void lfgFetch("/api/evlog", {
+    void omgFetch("/api/evlog", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: payload,
@@ -676,7 +676,7 @@ export function useLiveSocket(
         status: prev.status === "offline" ? "offline" : prev.attempt > 0 ? "reconnecting" : "connecting",
       }));
       openingRef.current = true;
-      void openLfgLiveSocket().then((openedSocket) => {
+      void openOmgLiveSocket().then((openedSocket) => {
         openingRef.current = false;
         const ws = openedSocket as WebSocket;
         if (closedByHookRef.current) {

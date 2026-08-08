@@ -441,7 +441,7 @@ function claudeEnvFor(configDir: string | null): Record<string, string | undefin
 export const MCP_SERVER_NAME = "omg";
 export const MCP_SERVER_NAME_LEGACY = "lfg";
 
-async function hasClaudeLfgMcp(): Promise<boolean> {
+async function hasClaudeOmgMcp(): Promise<boolean> {
   const claude = claudePath();
   if (!claude) return false;
   // Registered means registered *everywhere a session can run*: one unregistered
@@ -456,7 +456,7 @@ async function hasClaudeLfgMcp(): Promise<boolean> {
   return perDir.every(Boolean);
 }
 
-async function hasCodexLfgMcp(): Promise<boolean> {
+async function hasCodexOmgMcp(): Promise<boolean> {
   const codex = codexPath();
   const args = mcpCommandArgs();
   if (!codex || !args) return false;
@@ -465,7 +465,7 @@ async function hasCodexLfgMcp(): Promise<boolean> {
   return args.every((part) => out.text.includes(part));
 }
 
-async function commandHasLfgMcp(binary: string | null): Promise<boolean> {
+async function commandHasOmgMcp(binary: string | null): Promise<boolean> {
   if (!binary) return false;
   const out = await commandOutputAsync([binary, "mcp", "list"]);
   // Only the new name counts as installed, so a box still carrying the old
@@ -473,16 +473,16 @@ async function commandHasLfgMcp(binary: string | null): Promise<boolean> {
   return out.ok && new RegExp(`\\b${MCP_SERVER_NAME}\\b`, "i").test(out.text);
 }
 
-function hasOpencodeLfgMcp(): Promise<boolean> {
-  return commandHasLfgMcp(opencodePath());
+function hasOpencodeOmgMcp(): Promise<boolean> {
+  return commandHasOmgMcp(opencodePath());
 }
 
-function hasGrokLfgMcp(): Promise<boolean> {
-  return commandHasLfgMcp(grokPath());
+function hasGrokOmgMcp(): Promise<boolean> {
+  return commandHasOmgMcp(grokPath());
 }
 
-function hasCursorLfgMcp(): Promise<boolean> {
-  return commandHasLfgMcp(cursorPath());
+function hasCursorOmgMcp(): Promise<boolean> {
+  return commandHasOmgMcp(cursorPath());
 }
 
 // `grok login` writes ~/.grok/auth.json as a map of issuer::client-id -> entry,
@@ -943,11 +943,11 @@ export async function listSetupChecks(): Promise<SetupCheck[]> {
   // event loop while running, so live sockets and ordinary API responses stay
   // responsive even when this cache is cold.
   const [claudeMcp, codexMcp, opencodeMcp, grokMcp, cursorMcp] = await Promise.all([
-    claude ? hasClaudeLfgMcp() : Promise.resolve(false),
-    codex ? hasCodexLfgMcp() : Promise.resolve(false),
-    opencode ? hasOpencodeLfgMcp() : Promise.resolve(false),
-    grok ? hasGrokLfgMcp() : Promise.resolve(false),
-    cursor ? hasCursorLfgMcp() : Promise.resolve(false),
+    claude ? hasClaudeOmgMcp() : Promise.resolve(false),
+    codex ? hasCodexOmgMcp() : Promise.resolve(false),
+    opencode ? hasOpencodeOmgMcp() : Promise.resolve(false),
+    grok ? hasGrokOmgMcp() : Promise.resolve(false),
+    cursor ? hasCursorOmgMcp() : Promise.resolve(false),
   ]);
   const checks: CodingAgentCheck[] = [
     { label: "Bun", ok: !!bunPath(), detail: bunPath() ?? "not found" },
@@ -1061,7 +1061,7 @@ function mergeJsonConfig(path: string, update: (current: Record<string, unknown>
   writeFileSync(path, JSON.stringify(next, null, 2));
 }
 
-export function withOpencodeLfgMcp(current: Record<string, unknown>, args: string[]): Record<string, unknown> {
+export function withOpencodeOmgMcp(current: Record<string, unknown>, args: string[]): Record<string, unknown> {
   const mcp = typeof current.mcp === "object" && current.mcp !== null
     ? current.mcp as Record<string, unknown>
     : {};
@@ -1077,7 +1077,7 @@ export function withOpencodeLfgMcp(current: Record<string, unknown>, args: strin
   };
 }
 
-export function withCursorLfgMcp(current: Record<string, unknown>, args: string[]): Record<string, unknown> {
+export function withCursorOmgMcp(current: Record<string, unknown>, args: string[]): Record<string, unknown> {
   const mcpServers = typeof current.mcpServers === "object" && current.mcpServers !== null
     ? current.mcpServers as Record<string, unknown>
     : {};
@@ -1094,7 +1094,7 @@ export function withCursorLfgMcp(current: Record<string, unknown>, args: string[
 async function installOpencodeMcp(args: string[]): Promise<void> {
   const path = join(userHome(), ".config", "opencode", "opencode.json");
   await mkdir(dirname(path), { recursive: true });
-  mergeJsonConfig(path, (current) => withOpencodeLfgMcp(current, args));
+  mergeJsonConfig(path, (current) => withOpencodeOmgMcp(current, args));
 }
 
 function installGrokMcp(grok: string, args: string[]): void {
@@ -1107,7 +1107,7 @@ function installGrokMcp(grok: string, args: string[]): void {
 async function installCursorMcp(args: string[]): Promise<void> {
   const path = join(userHome(), ".cursor", "mcp.json");
   await mkdir(dirname(path), { recursive: true });
-  mergeJsonConfig(path, (current) => withCursorLfgMcp(current, args));
+  mergeJsonConfig(path, (current) => withCursorOmgMcp(current, args));
   const cursor = cursorPath();
   if (cursor) commandOutput([cursor, "mcp", "enable", MCP_SERVER_NAME]);
 }

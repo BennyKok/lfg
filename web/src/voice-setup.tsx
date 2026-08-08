@@ -10,7 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { lfgFetch } from "@/lib/lfg-client";
+import { omgFetch } from "@/lib/omg-client";
 
 // Only speech-to-text remains; TTS/spoken replies were removed. Kept as a type
 // (rather than inlined) so a future output capability slots back in cleanly.
@@ -83,7 +83,7 @@ async function fetchVoiceConfig(): Promise<VoiceConfig | null> {
   const gen = generation;
   inflight = (async () => {
     try {
-      const response = await lfgFetch("/api/voice/config", { cache: "no-store" });
+      const response = await omgFetch("/api/voice/config", { cache: "no-store" });
       if (!response.ok) return null;
       const cfg = (await response.json()) as VoiceConfig;
       if (gen === generation) cached = { cfg, at: Date.now() };
@@ -211,7 +211,7 @@ export function VoiceSetupDialog() {
     setMessage("");
     try {
       const selection = { sttProvider: provider.id };
-      const response = await lfgFetch("/api/voice/config", {
+      const response = await omgFetch("/api/voice/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ providerId: provider.id, apiKey: apiKey.trim(), ...selection }),

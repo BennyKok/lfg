@@ -22,13 +22,13 @@
 
 export const LFG_SESSION_CREATED_MESSAGE = "lfg:session-created";
 
-export type LfgSessionCreatedMessage = {
+export type OmgSessionCreatedMessage = {
   type: typeof LFG_SESSION_CREATED_MESSAGE;
   /** LFG session id of the session this frame just created. */
   sessionId: string;
 };
 
-export function sessionCreatedMessage(sessionId: string): LfgSessionCreatedMessage {
+export function sessionCreatedMessage(sessionId: string): OmgSessionCreatedMessage {
   return { type: LFG_SESSION_CREATED_MESSAGE, sessionId };
 }
 

@@ -7,7 +7,7 @@
 // ends up saving nothing.
 import { createContext, useContext, useMemo } from "react";
 import type { ClaudeAccountInfo, CodingAgentInfo, Session } from "../App";
-import { lfgAssetUrl } from "./lfg-client";
+import { omgAssetUrl } from "./omg-client";
 import { cn } from "./utils";
 
 export const AGENT_ICON_VERSION = "20260718";
@@ -18,14 +18,14 @@ export const AGENT_ICON_VERSION = "20260718";
  */
 export function agentIconSrc(agent?: string): string {
   const v = `?v=${AGENT_ICON_VERSION}`;
-  if (agent === "codex" || agent === "codex-aisdk") return lfgAssetUrl(`/agent-codex.svg${v}`);
-  if (agent === "grok") return lfgAssetUrl(`/agent-grok.svg${v}`);
-  if (agent === "cursor") return lfgAssetUrl(`/agent-cursor.svg${v}`);
-  if (agent === "hermes") return lfgAssetUrl(`/agent-hermes.svg${v}`);
-  if (agent === "opencode") return lfgAssetUrl(`/agent-opencode.svg${v}`);
-  if (agent === "pi") return lfgAssetUrl(`/agent-pi.svg${v}`);
-  if (agent === "copilot") return lfgAssetUrl(`/agent-copilot.svg${v}`);
-  return lfgAssetUrl(`/agent-claude.svg${v}`);
+  if (agent === "codex" || agent === "codex-aisdk") return omgAssetUrl(`/agent-codex.svg${v}`);
+  if (agent === "grok") return omgAssetUrl(`/agent-grok.svg${v}`);
+  if (agent === "cursor") return omgAssetUrl(`/agent-cursor.svg${v}`);
+  if (agent === "hermes") return omgAssetUrl(`/agent-hermes.svg${v}`);
+  if (agent === "opencode") return omgAssetUrl(`/agent-opencode.svg${v}`);
+  if (agent === "pi") return omgAssetUrl(`/agent-pi.svg${v}`);
+  if (agent === "copilot") return omgAssetUrl(`/agent-copilot.svg${v}`);
+  return omgAssetUrl(`/agent-claude.svg${v}`);
 }
 
 export function agentIconAlt(agent?: string): string {

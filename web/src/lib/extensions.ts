@@ -23,12 +23,12 @@ export interface ExtensionNavTab {
   render: () => ReactNode;
 }
 
-export interface LfgExtension {
+export interface OmgExtension {
   id: string;
   navTabs?: ExtensionNavTab[];
 }
 
-let extensions: LfgExtension[] = [];
+let extensions: OmgExtension[] = [];
 const listeners = new Set<() => void>();
 function emit() {
   // New array identity so useSyncExternalStore sees a change.
@@ -37,7 +37,7 @@ function emit() {
 }
 
 /** Called by external extension bundles (via window.lfg) to contribute UI. */
-export function registerExtension(ext: LfgExtension) {
+export function registerExtension(ext: OmgExtension) {
   if (!ext || typeof ext.id !== "string") return;
   if (extensions.some((e) => e.id === ext.id)) return; // idempotent
   extensions = [...extensions, ext];
@@ -53,7 +53,7 @@ function snapshot() {
 }
 
 /** React hook: the live list of registered extensions (re-renders on register). */
-export function useExtensions(): LfgExtension[] {
+export function useExtensions(): OmgExtension[] {
   return useSyncExternalStore(subscribe, snapshot, snapshot);
 }
 

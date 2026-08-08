@@ -25,7 +25,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { lfgFetch } from "@/lib/lfg-client";
+import { omgFetch } from "@/lib/omg-client";
 import { lazyWithReload } from "@/lib/lazy-with-reload";
 import { buildFilePatch } from "@/lib/session-file-patch";
 import type { SessionFile, SessionTree, ThemeType } from "./types";
@@ -35,7 +35,7 @@ const FileViewer = lazyWithReload("session-file-viewer", () => import("./FileVie
 const FileEditor = lazyWithReload("session-file-editor", () => import("./FileEditor"));
 
 async function getJson<T>(path: string): Promise<T> {
-  const res = await lfgFetch(path);
+  const res = await omgFetch(path);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((data as { error?: string })?.error || `${res.status}`);
   return data as T;
@@ -210,7 +210,7 @@ function SessionFilesViewer({ sid, onClose }: { sid: string; onClose: () => void
 
     setSend({ kind: "sending" });
     try {
-      const res = await lfgFetch(`/api/sessions/${sid}/send`, {
+      const res = await omgFetch(`/api/sessions/${sid}/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // Queued rather than steered: the agent finishes its current turn and

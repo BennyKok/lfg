@@ -4,32 +4,32 @@ import {
   createMemoryHistory,
   type AnyRouter,
 } from "@tanstack/react-router";
-import type { LfgTransport } from "@lfg-dev/client";
+import type { OmgTransport } from "@omg-dev/client";
 
 import "./index.css";
 import { RootErrorBoundary } from "./App";
 import { AppDialogProvider } from "./components/ui/app-dialog";
-import { configureLfgTransport, type LfgErrorSink } from "./lib/lfg-client";
+import { configureOmgTransport, type OmgErrorSink } from "./lib/omg-client";
 import { BareSurfaceProvider } from "./lib/bare-surface";
 import {
   EmbeddedHostOptionsProvider,
   type EmbeddedViewer,
 } from "./lib/embedded-host-options";
 import { claimSurfaceAttribute } from "./lib/surface-attribute";
-import { createLfgRouter } from "./router";
+import { createOmgRouter } from "./router";
 
 export type { EmbeddedViewer } from "./lib/embedded-host-options";
 
-export { createGrantTransport } from "@lfg-dev/client";
+export { createGrantTransport } from "@omg-dev/client";
 export type {
   CreateGrantTransportOptions,
-  LfgGrant,
-  LfgSocket,
-  LfgTransport,
-} from "@lfg-dev/client";
+  OmgGrant,
+  OmgSocket,
+  OmgTransport,
+} from "@omg-dev/client";
 
-export interface LfgAppSurfaceProps {
-  transport: LfgTransport;
+export interface OmgAppSurfaceProps {
+  transport: OmgTransport;
   assetBaseUrl?: string;
   sessionId?: string | null;
   className?: string;
@@ -52,7 +52,7 @@ export interface LfgAppSurfaceProps {
    * usual state when the surface itself crashed — it is the only copy that
    * survives. Omit it and reporting stays purely transport-local.
    */
-  errorSink?: LfgErrorSink;
+  errorSink?: OmgErrorSink;
 }
 
 function initialPath(sessionId?: string | null): string {
@@ -70,21 +70,21 @@ function initialPath(sessionId?: string | null): string {
  * is what keeps the two products from drifting into different answers for
  * the same setting.
  */
-export type LfgSettingsPage =
+export type OmgSettingsPage =
   | "settings"
   | "coding-agents"
   | "auto"
   | "storage"
   | "more";
 
-export interface LfgSettingsSurfaceProps {
-  transport: LfgTransport;
+export interface OmgSettingsSurfaceProps {
+  transport: OmgTransport;
   assetBaseUrl?: string;
   /**
    * Which page to show. CONTROLLED when the host also passes `onNavigate`:
    * changing this prop navigates the surface, no remount required.
    */
-  page?: LfgSettingsPage;
+  page?: OmgSettingsPage;
   /**
    * Called when the surface navigates itself — the user tapped "Coding
    * agents", "Storage", "More", or a back link inside a page.
@@ -99,12 +99,12 @@ export interface LfgSettingsSurfaceProps {
    * and ignore the rest; the surface navigates internally either way, so an
    * unhandled page still works.
    */
-  onNavigate?: (page: LfgSettingsPage) => void;
+  onNavigate?: (page: OmgSettingsPage) => void;
   className?: string;
-  errorSink?: LfgErrorSink;
+  errorSink?: OmgErrorSink;
 }
 
-const SETTINGS_PAGES: readonly LfgSettingsPage[] = [
+const SETTINGS_PAGES: readonly OmgSettingsPage[] = [
   "settings",
   "coding-agents",
   "auto",
@@ -112,9 +112,9 @@ const SETTINGS_PAGES: readonly LfgSettingsPage[] = [
   "more",
 ];
 
-function pathToSettingsPage(pathname: string): LfgSettingsPage | null {
+function pathToSettingsPage(pathname: string): OmgSettingsPage | null {
   const seg = pathname.split("/").filter(Boolean)[0];
-  const page = (seg ? decodeURIComponent(seg) : "settings") as LfgSettingsPage;
+  const page = (seg ? decodeURIComponent(seg) : "settings") as OmgSettingsPage;
   return SETTINGS_PAGES.includes(page) ? page : null;
 }
 
@@ -125,20 +125,20 @@ function pathToSettingsPage(pathname: string): LfgSettingsPage | null {
  * only the entry route differs. The host supplies the transport, so which
  * machine these settings belong to is entirely the host's decision.
  */
-export function LfgSettingsSurface({
+export function OmgSettingsSurface({
   transport,
   assetBaseUrl,
   page = "settings",
   onNavigate,
   className,
   errorSink,
-}: LfgSettingsSurfaceProps) {
+}: OmgSettingsSurfaceProps) {
   // The host owns the header, the back affordance and the account, so this
   // surface renders sections only — declared to the tree below, not to a
   // module global that a coexisting full-app surface would also read.
-  configureLfgTransport(transport, { assetBaseUrl, errorSink });
+  configureOmgTransport(transport, { assetBaseUrl, errorSink });
   const [router] = useState<AnyRouter>(() =>
-    createLfgRouter(
+    createOmgRouter(
       createMemoryHistory({ initialEntries: [`/${page}?embed=true`] }),
     ),
   );
@@ -197,7 +197,7 @@ export function LfgSettingsSurface({
  * router's error component and RootErrorBoundary only ever see throws from
  * inside this tree.
  */
-export function LfgAppSurface({
+export function OmgAppSurface({
   transport,
   assetBaseUrl,
   sessionId,
@@ -205,13 +205,13 @@ export function LfgAppSurface({
   connectionOnboarding = true,
   viewer,
   errorSink,
-}: LfgAppSurfaceProps) {
+}: OmgAppSurfaceProps) {
   // A full LFG app is the sole owner of its runtime transport. Install it
   // synchronously so child effects cannot race the host boundary; there is no
   // cleanup that can revert another Strict Mode mount back to same-origin.
-  configureLfgTransport(transport, { assetBaseUrl, errorSink });
+  configureOmgTransport(transport, { assetBaseUrl, errorSink });
   const [router] = useState<AnyRouter>(() =>
-    createLfgRouter(
+    createOmgRouter(
       createMemoryHistory({ initialEntries: [initialPath(sessionId)] }),
     ),
   );

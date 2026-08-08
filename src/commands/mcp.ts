@@ -270,7 +270,7 @@ async function activeSessionId(input?: string): Promise<string> {
   return await resolveSid(sessionId);
 }
 
-export async function closeLfgSession(sessionIdInput: string) {
+export async function closeOmgSession(sessionIdInput: string) {
   if (!sessionIdInput.trim()) throw new Error("sessionId required");
   // Resolve before the self-close check so a short id can't slip past it.
   const sessionId = await resolveSid(sessionIdInput);
@@ -289,7 +289,7 @@ export async function closeLfgSession(sessionIdInput: string) {
   return { closed: data.ok !== false, sessionId: shortSid(sessionId) };
 }
 
-export type FindLfgSessionsInput = {
+export type FindOmgSessionsInput = {
   sessionId?: string;
   user?: string;
   project?: string;
@@ -300,7 +300,7 @@ export type FindLfgSessionsInput = {
   scanLimit?: number;
 };
 
-export async function findLfgSessions(input: FindLfgSessionsInput) {
+export async function findOmgSessions(input: FindOmgSessionsInput) {
   return api("/api/sessions/find", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -579,7 +579,7 @@ export function buildOmgMcpServer(): McpServer {
       },
     },
     async (input) => {
-      const found = (await findLfgSessions(input)) as {
+      const found = (await findOmgSessions(input)) as {
         sessions?: Array<Record<string, unknown> & { sessionId?: string | null }>;
       };
       return result({
@@ -684,7 +684,7 @@ export function buildOmgMcpServer(): McpServer {
         sessionId: z.string().min(1).describe("Exact OMG session id returned by omg_list_sessions."),
       },
     },
-    async ({ sessionId }) => result(await closeLfgSession(sessionId)),
+    async ({ sessionId }) => result(await closeOmgSession(sessionId)),
   );
 
   server.registerTool(

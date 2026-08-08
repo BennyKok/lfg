@@ -8,7 +8,7 @@ import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState
 import { createPortal } from "react-dom";
 import { Check, ChevronDown, Columns2, FileCode, FileDiff, GitBranch, Loader2, Minus, Plus, Rows3, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { lfgFetch } from "@/lib/lfg-client";
+import { omgFetch } from "@/lib/omg-client";
 import { lazyWithReload } from "@/lib/lazy-with-reload";
 
 // The Files panel and everything under it (@pierre/trees, @pierre/diffs' editor,
@@ -52,7 +52,7 @@ type DiffStat = { isWorktree: boolean; merged: boolean; files: number; additions
 type DiffStyle = "unified" | "split";
 
 async function getJson<T>(path: string): Promise<T> {
-  const res = await lfgFetch(path);
+  const res = await omgFetch(path);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error((data as { error?: string })?.error || `${res.status}`);
   return data as T;

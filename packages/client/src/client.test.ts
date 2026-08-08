@@ -1,13 +1,13 @@
 import { expect, test } from "bun:test";
 import {
-  LfgLiveConnection,
+  OmgLiveConnection,
   createGrantTransport,
   createSameOriginTransport,
-  type LfgSocket,
-  type LfgTransport,
+  type OmgSocket,
+  type OmgTransport,
 } from "./index";
 
-class FakeSocket implements LfgSocket {
+class FakeSocket implements OmgSocket {
   binaryType: BinaryType = "blob";
   readyState = 0;
   sent: Array<string | ArrayBufferLike | Blob | ArrayBufferView> = [];
@@ -115,7 +115,7 @@ class FakeXMLHttpRequest {
 test("many transcript subscriptions share one socket and one batched subscribe frame", async () => {
   const socket = new FakeSocket();
   let opens = 0;
-  const transport: LfgTransport = {
+  const transport: OmgTransport = {
     fetch: async () => new Response(),
     request: async () => ({}) as never,
     openSocket: async () => socket,
@@ -124,7 +124,7 @@ test("many transcript subscriptions share one socket and one batched subscribe f
       return socket;
     },
   };
-  const live = new LfgLiveConnection(transport);
+  const live = new OmgLiveConnection(transport);
   const offA = live.subscribeTranscript("a", () => {});
   const offB = live.subscribeTranscript("b", () => {});
   await Promise.resolve();

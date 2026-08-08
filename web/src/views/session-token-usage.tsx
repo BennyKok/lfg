@@ -1,6 +1,6 @@
 import type { Session } from "../App";
 import { titleForSession } from "../lib/session-ui";
-import { api } from "../lib/lfg-client";
+import { api } from "../lib/omg-client";
 import { Reasoning } from "@/components/ai-elements/reasoning";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";

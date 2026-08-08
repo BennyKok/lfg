@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 
 import { artifactRequestPath } from "../lib/artifact-document";
-import { lfgFetch } from "../lib/lfg-client";
+import { omgFetch } from "../lib/omg-client";
 import { cn } from "../lib/utils";
 import { ImageLightbox } from "./ImageLightbox";
 
@@ -22,7 +22,7 @@ function useArtifactBlobUrl(path: string | null): ArtifactLoad<string> {
     const controller = new AbortController();
     let objectUrl: string | null = null;
     setState({ status: "loading", value: null });
-    void lfgFetch(path, { signal: controller.signal })
+    void omgFetch(path, { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error(`artifact ${response.status}`);
         objectUrl = URL.createObjectURL(await response.blob());

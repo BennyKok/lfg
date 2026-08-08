@@ -1,9 +1,17 @@
 #!/usr/bin/env bash
 #
-# Build the public LFG packages and, unless --build-only is passed, pack
-# release-ready tarballs. Internal workspace dependencies are rewritten to the
-# immutable GitHub release assets for this exact LFG version, so consumers do
-# not need a private registry or a moving git branch.
+# Build the public OMG packages and, unless --build-only is passed, pack
+# release-ready tarballs.
+#
+# Internal workspace dependencies are rewritten to the EXACT published version,
+# not a range: the four packages are versioned in lockstep off the root
+# package.json and share wire types, so a consumer that resolved
+# @omg-dev/client 0.1.5 against @omg-dev/protocol 0.1.9 would typecheck and then
+# disagree at runtime. Exact pinning makes a release one indivisible set.
+#
+# These used to be rewritten to immutable GitHub release asset URLs, because the
+# packages were not on npm. They are now published to the public registry under
+# @omg-dev, so a plain semver dependency resolves for everyone.
 
 set -euo pipefail
 
@@ -11,7 +19,6 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 OUT_DIR="$ROOT/dist"
-REPO_SLUG="${LFG_REPO_SLUG:-BennyKok/omg.dev}"
 VERSION="$(bun -e 'console.log(JSON.parse(require("node:fs").readFileSync("package.json","utf8")).version)')"
 PACKAGES=(protocol client react)
 
@@ -27,8 +34,8 @@ if [ "${1:-}" = "--build-only" ]; then
 fi
 
 mkdir -p "$OUT_DIR"
-rm -f "$OUT_DIR"/lfg-dev-*.tgz
-STAGE="$(mktemp -d "${TMPDIR:-/tmp}/lfg-packages.XXXXXX")"
+rm -f "$OUT_DIR"/omg-dev-*.tgz
+STAGE="$(mktemp -d "${TMPDIR:-/tmp}/omg-packages.XXXXXX")"
 trap 'rm -rf "$STAGE"' EXIT
 
 for package in "${PACKAGES[@]}"; do
@@ -40,20 +47,16 @@ for package in "${PACKAGES[@]}"; do
 
   MANIFEST="$package_stage/package.json" \
   VERSION="$VERSION" \
-  REPO_SLUG="$REPO_SLUG" \
   bun -e '
 const fs = require("node:fs");
 const manifest = process.env.MANIFEST;
 const version = process.env.VERSION;
-const repo = process.env.REPO_SLUG;
 const json = JSON.parse(fs.readFileSync(manifest, "utf8"));
 json.version = version;
 for (const section of ["dependencies", "optionalDependencies"]) {
   for (const [name, value] of Object.entries(json[section] || {})) {
-    if (!name.startsWith("@lfg-dev/") || value !== "workspace:*") continue;
-    const short = name.slice("@lfg-dev/".length);
-    json[section][name] =
-      `https://github.com/${repo}/releases/download/v${version}/lfg-dev-${short}-${version}.tgz`;
+    if (!name.startsWith("@omg-dev/") || value !== "workspace:*") continue;
+    json[section][name] = version;
   }
 }
 delete json.scripts;
@@ -72,20 +75,16 @@ cp LICENSE "$app_stage/LICENSE"
 
 MANIFEST="$app_stage/package.json" \
 VERSION="$VERSION" \
-REPO_SLUG="$REPO_SLUG" \
 bun -e '
 const fs = require("node:fs");
 const manifest = process.env.MANIFEST;
 const version = process.env.VERSION;
-const repo = process.env.REPO_SLUG;
 const json = JSON.parse(fs.readFileSync(manifest, "utf8"));
 json.version = version;
 for (const section of ["dependencies", "optionalDependencies"]) {
   for (const [name, value] of Object.entries(json[section] || {})) {
-    if (!name.startsWith("@lfg-dev/") || value !== "workspace:*") continue;
-    const short = name.slice("@lfg-dev/".length);
-    json[section][name] =
-      `https://github.com/${repo}/releases/download/v${version}/lfg-dev-${short}-${version}.tgz`;
+    if (!name.startsWith("@omg-dev/") || value !== "workspace:*") continue;
+    json[section][name] = version;
   }
 }
 delete json.scripts;

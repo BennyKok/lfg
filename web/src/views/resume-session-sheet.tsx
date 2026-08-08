@@ -6,7 +6,7 @@ import {
   useNumberedClaudeAccounts,
 } from "../lib/session-ui";
 import type { ClaudeAccountInfo, ResumableSession, Session } from "../App";
-import { api } from "../lib/lfg-client";
+import { api } from "../lib/omg-client";
 import {
   PROMPT_STASH_EVENT,
   clearPromptStash,

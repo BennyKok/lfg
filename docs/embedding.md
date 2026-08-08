@@ -1,24 +1,33 @@
 # Embedding the OMG application
 
-Every release publishes four immutable packages:
+Every release publishes four packages to npm under the `@omg-dev` scope:
 
 | Package | What it is |
 | --- | --- |
-| `@lfg-dev/protocol` | Shared wire types |
-| `@lfg-dev/client` | Authenticated HTTP and multiplexed live transport |
-| `@lfg-dev/react` | Smaller headless / session surfaces |
-| `@lfg-dev/app` | The exact full OMG application used by the standalone web UI |
+| `@omg-dev/protocol` | Shared wire types |
+| `@omg-dev/client` | Authenticated HTTP and multiplexed live transport |
+| `@omg-dev/react` | Smaller headless / session surfaces |
+| `@omg-dev/app` | The exact full OMG application used by the standalone web UI |
+
+```bash
+npm install @omg-dev/app @omg-dev/client
+```
+
+The four are versioned in lockstep off the release tag and depend on each other
+by exact version, so a release installs as one consistent set — `@omg-dev/client`
+never resolves against a `@omg-dev/protocol` it did not ship with. Each tag's
+tarballs stay attached to its GitHub release too, as the record of what shipped.
 
 React hosts mount the full application with their own transport and asset
 origin. OMG keeps its internal navigation in a memory router, so it does not
 take over the host product's URL:
 
 ```tsx
-import { createGrantTransport } from "@lfg-dev/client";
-import { LfgAppSurface } from "@lfg-dev/app";
-import "@lfg-dev/app/styles.css";
+import { createGrantTransport } from "@omg-dev/client";
+import { OmgAppSurface } from "@omg-dev/app";
+import "@omg-dev/app/styles.css";
 
-<LfgAppSurface
+<OmgAppSurface
   transport={createGrantTransport({
     baseUrl: "https://sessions.example",
     getGrant: mintSignedSessionGrant,

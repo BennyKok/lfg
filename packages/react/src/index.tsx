@@ -10,21 +10,21 @@ import {
   type ReactNode,
 } from "react";
 import {
-  type LfgClient,
-  type LfgConnectionState,
-  type LfgMessage,
-  type LfgSession,
-  type LfgTranscriptEvent,
-} from "@lfg-dev/client";
+  type OmgClient,
+  type OmgConnectionState,
+  type OmgMessage,
+  type OmgSession,
+  type OmgTranscriptEvent,
+} from "@omg-dev/client";
 
-const ClientContext = createContext<LfgClient | null>(null);
+const ClientContext = createContext<OmgClient | null>(null);
 
-export interface LfgProviderProps {
-  client: LfgClient;
+export interface OmgProviderProps {
+  client: OmgClient;
   children: ReactNode;
 }
 
-export function LfgProvider({ client, children }: LfgProviderProps) {
+export function OmgProvider({ client, children }: OmgProviderProps) {
   return (
     <ClientContext.Provider value={client}>
       {children}
@@ -32,13 +32,13 @@ export function LfgProvider({ client, children }: LfgProviderProps) {
   );
 }
 
-export function useLfgClient(): LfgClient {
+export function useOmgClient(): OmgClient {
   const client = useContext(ClientContext);
-  if (!client) throw new Error("useLfgClient must be used inside LfgProvider");
+  if (!client) throw new Error("useOmgClient must be used inside OmgProvider");
   return client;
 }
 
-export interface LfgComputerSurfaceProps {
+export interface OmgComputerSurfaceProps {
   className?: string;
   title?: string;
   selectedSessionId?: string | null;
@@ -48,7 +48,7 @@ export interface LfgComputerSurfaceProps {
   pollIntervalMs?: number;
 }
 
-function sessionTitle(session: LfgSession): string {
+function sessionTitle(session: OmgSession): string {
   return (
     session.title?.trim() ||
     session.lastUserText?.trim() ||
@@ -57,14 +57,14 @@ function sessionTitle(session: LfgSession): string {
   );
 }
 
-function sessionSubtitle(session: LfgSession): string {
+function sessionSubtitle(session: OmgSession): string {
   const agent = session.agentLabel || session.agent || "Agent";
   return session.project ? `${agent} · ${session.project}` : agent;
 }
 
-function sortSessions(sessions: LfgSession[]): LfgSession[] {
+function sortSessions(sessions: OmgSession[]): OmgSession[] {
   return [...sessions]
-    .filter((session): session is LfgSession & { sessionId: string } => !!session.sessionId)
+    .filter((session): session is OmgSession & { sessionId: string } => !!session.sessionId)
     .sort(
       (a, b) =>
         (b.lastActivityAt ?? b.startedAt ?? 0) -
@@ -72,14 +72,14 @@ function sortSessions(sessions: LfgSession[]): LfgSession[] {
     );
 }
 
-function messageKey(message: LfgMessage, index: number): string {
+function messageKey(message: OmgMessage, index: number): string {
   return (
     message.id ||
     `${message.role ?? "unknown"}:${message.kind ?? "unknown"}:${message.ts ?? index}:${index}`
   );
 }
 
-function mergeMessage(messages: LfgMessage[], incoming: LfgMessage): LfgMessage[] {
+function mergeMessage(messages: OmgMessage[], incoming: OmgMessage): OmgMessage[] {
   const withoutMatchingOptimistic =
     incoming.role === "user" && incoming.text
       ? messages.filter(
@@ -102,9 +102,9 @@ function mergeMessage(messages: LfgMessage[], incoming: LfgMessage): LfgMessage[
 }
 
 function applyTranscriptEvent(
-  messages: LfgMessage[],
-  event: LfgTranscriptEvent,
-): LfgMessage[] {
+  messages: OmgMessage[],
+  event: OmgTranscriptEvent,
+): OmgMessage[] {
   if (event.type === "snapshot") {
     const optimistic = messages.filter((message) => message.pending);
     return [...event.messages, ...optimistic].slice(-100);
@@ -155,7 +155,7 @@ function StatusDot({
   connection,
 }: {
   busy: boolean;
-  connection: LfgConnectionState;
+  connection: OmgConnectionState;
 }) {
   const state = busy
     ? "working"
@@ -174,7 +174,7 @@ function StatusDot({
 function EmptyComputer({
   onNewSession,
   onOpenFullComputer,
-}: Pick<LfgComputerSurfaceProps, "onNewSession" | "onOpenFullComputer">) {
+}: Pick<OmgComputerSurfaceProps, "onNewSession" | "onOpenFullComputer">) {
   return (
     <div className="lfgc-empty">
       <div className="lfgc-empty-orb" aria-hidden="true">
@@ -198,7 +198,7 @@ function EmptyComputer({
   );
 }
 
-export function LfgComputerSurface({
+export function OmgComputerSurface({
   className,
   title = "Computer",
   selectedSessionId: controlledSessionId,
@@ -206,22 +206,22 @@ export function LfgComputerSurface({
   onNewSession,
   onOpenFullComputer,
   pollIntervalMs = 5_000,
-}: LfgComputerSurfaceProps) {
-  const client = useLfgClient();
+}: OmgComputerSurfaceProps) {
+  const client = useOmgClient();
   const cached = client.peekSessions();
-  const [sessions, setSessions] = useState<LfgSession[] | null>(
+  const [sessions, setSessions] = useState<OmgSession[] | null>(
     cached ? sortSessions(cached) : null,
   );
   const [internalSessionId, setInternalSessionId] = useState<string | null>(
     controlledSessionId ?? null,
   );
-  const [messages, setMessages] = useState<LfgMessage[]>([]);
+  const [messages, setMessages] = useState<OmgMessage[]>([]);
   const [messagesLoading, setMessagesLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [composer, setComposer] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [connection, setConnection] = useState<LfgConnectionState>(
+  const [connection, setConnection] = useState<OmgConnectionState>(
     client.live.state,
   );
   const threadEndRef = useRef<HTMLDivElement | null>(null);
@@ -326,7 +326,7 @@ export function LfgComputerSurface({
     setComposer("");
     setSending(true);
     setBusy(true);
-    const optimistic: LfgMessage = {
+    const optimistic: OmgMessage = {
       id: `optimistic-${Date.now()}`,
       role: "user",
       kind: "text",
@@ -551,13 +551,13 @@ export function LfgComputerSurface({
   );
 }
 
-export function createLfgComputerSurface(
-  client: LfgClient,
-  props: LfgComputerSurfaceProps = {},
+export function createOmgComputerSurface(
+  client: OmgClient,
+  props: OmgComputerSurfaceProps = {},
 ) {
   return (
-    <LfgProvider client={client}>
-      <LfgComputerSurface {...props} />
-    </LfgProvider>
+    <OmgProvider client={client}>
+      <OmgComputerSurface {...props} />
+    </OmgProvider>
   );
 }

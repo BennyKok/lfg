@@ -1,7 +1,7 @@
 import type { ChatTransport, UIMessage, UIMessageChunk } from "ai";
-import { lfgFetch } from "./lfg-client";
+import { omgFetch } from "./omg-client";
 
-export type LfgMessage = {
+export type OmgMessage = {
   id?: string;
   role?: string;
   kind?: string;
@@ -20,7 +20,7 @@ export type LfgMessage = {
   catchUp?: boolean;
 };
 
-export type LfgAiStreamPart = {
+export type OmgAiStreamPart = {
   type: "text-delta" | "text-start" | "text-end" | "error" | string;
   id?: string;
   delta?: string;
@@ -29,25 +29,25 @@ export type LfgAiStreamPart = {
   ts?: number;
 };
 
-export type LfgChatMetadata = {
-  lfgMessage?: LfgMessage;
+export type OmgChatMetadata = {
+  omgMessage?: OmgMessage;
 };
 
-export type LfgChatDataParts = {
-  lfgMessage: LfgMessage;
+export type OmgChatDataParts = {
+  omgMessage: OmgMessage;
 };
 
-export type LfgChatMessage = UIMessage<LfgChatMetadata, LfgChatDataParts>;
+export type OmgChatMessage = UIMessage<OmgChatMetadata, OmgChatDataParts>;
 
-export type LfgTranscriptEvent =
-  | { type: "message"; message: LfgMessage }
-  | { type: "ai_part"; part: LfgAiStreamPart }
+export type OmgTranscriptEvent =
+  | { type: "message"; message: OmgMessage }
+  | { type: "ai_part"; part: OmgAiStreamPart }
   | { type: "busy"; busy: boolean }
   | { type: "error"; error: string };
 
-export type LfgTranscriptSubscribe = (
+export type OmgTranscriptSubscribe = (
   sid: string,
-  listener: (event: LfgTranscriptEvent) => void,
+  listener: (event: OmgTranscriptEvent) => void,
 ) => () => void;
 
 // A focused chat consumes transcript events twice: once through useChat's
@@ -55,7 +55,7 @@ export type LfgTranscriptSubscribe = (
 // started outside this browser. The transport must claim a locally-started
 // stream before it can emit its first event; React status is intentionally not
 // involved because its render notification can lag behind that event.
-export class LfgChatStreamOwnership {
+export class OmgChatStreamOwnership {
   readonly #counts = new Map<string, number>();
 
   owns(sid: string): boolean {
@@ -74,10 +74,10 @@ export class LfgChatStreamOwnership {
   }
 }
 
-type LfgChatTransportOptions = {
+type OmgChatTransportOptions = {
   sessionId: string;
   apiBase?: string;
-  subscribeTranscript?: LfgTranscriptSubscribe;
+  subscribeTranscript?: OmgTranscriptSubscribe;
   fetch?: typeof globalThis.fetch;
 };
 
@@ -89,37 +89,37 @@ function normText(value?: string) {
   return (value || "").replace(/\s+/g, " ").trim();
 }
 
-function messageTs(message: LfgChatMessage) {
-  return message.metadata?.lfgMessage?.ts ?? 0;
+function messageTs(message: OmgChatMessage) {
+  return message.metadata?.omgMessage?.ts ?? 0;
 }
 
-function textFromUIParts(message: LfgChatMessage) {
+function textFromUIParts(message: OmgChatMessage) {
   return message.parts
     .filter((part): part is Extract<(typeof message.parts)[number], { type: "text" }> => part.type === "text")
     .map((part) => part.text)
     .join("");
 }
 
-function localMessageFromText(message: LfgMessage): LfgChatMessage {
+function localMessageFromText(message: OmgMessage): OmgChatMessage {
   const role = message.role === "user" || message.role === "system" ? message.role : "assistant";
   return {
     id: message.id ?? `${role}-${message.ts ?? Date.now()}-${normText(message.text).slice(0, 16)}`,
     role,
-    metadata: { lfgMessage: message },
+    metadata: { omgMessage: message },
     parts: [{ type: "text", text: message.text ?? "", state: "done" }],
   };
 }
 
-function localMessageFromData(message: LfgMessage): LfgChatMessage {
+function localMessageFromData(message: OmgMessage): OmgChatMessage {
   return {
     id: message.id ?? `lfg-${message.kind ?? "message"}-${message.ts ?? Date.now()}`,
     role: message.role === "user" || message.role === "system" ? message.role : "assistant",
-    metadata: { lfgMessage: message },
-    parts: [{ type: "data-lfgMessage", id: message.id, data: message }],
+    metadata: { omgMessage: message },
+    parts: [{ type: "data-omgMessage", id: message.id, data: message }],
   };
 }
 
-export function lfgMessagesToUIMessages(messages: LfgMessage[]): LfgChatMessage[] {
+export function omgMessagesToUIMessages(messages: OmgMessage[]): OmgChatMessage[] {
   return messages
     .filter((message) => !message.seed)
     .map((message) =>
@@ -129,11 +129,11 @@ export function lfgMessagesToUIMessages(messages: LfgMessage[]): LfgChatMessage[
     );
 }
 
-export function lfgUIMessagesToMessages(messages: LfgChatMessage[]): LfgMessage[] {
-  const out: LfgMessage[] = [];
+export function omgUIMessagesToMessages(messages: OmgChatMessage[]): OmgMessage[] {
+  const out: OmgMessage[] = [];
   for (const message of messages) {
     message.parts.forEach((part, index) => {
-      if (part.type === "data-lfgMessage") {
+      if (part.type === "data-omgMessage") {
         out.push(part.data);
         return;
       }
@@ -143,7 +143,7 @@ export function lfgUIMessagesToMessages(messages: LfgChatMessage[]): LfgMessage[
           role: "assistant",
           kind: "thinking",
           text: part.text,
-          ts: message.metadata?.lfgMessage?.ts,
+          ts: message.metadata?.omgMessage?.ts,
         });
         return;
       }
@@ -156,12 +156,12 @@ export function lfgUIMessagesToMessages(messages: LfgChatMessage[]): LfgMessage[
           url: part.url,
           mimeType: part.mediaType,
           name: part.filename,
-          ts: message.metadata?.lfgMessage?.ts,
+          ts: message.metadata?.omgMessage?.ts,
         });
         return;
       }
       if (part.type !== "text") return;
-      const base = message.metadata?.lfgMessage;
+      const base = message.metadata?.omgMessage;
       const streaming = message.role === "assistant" && part.state === "streaming";
       const id =
         index === 0
@@ -184,7 +184,7 @@ export function lfgUIMessagesToMessages(messages: LfgChatMessage[]): LfgMessage[
   return out.filter((message) => message.kind !== "text" || !!message.text || message.role !== "assistant");
 }
 
-function upsertLfgUIMessage(current: LfgChatMessage[], incoming: LfgChatMessage): LfgChatMessage[] {
+function upsertOmgUIMessage(current: OmgChatMessage[], incoming: OmgChatMessage): OmgChatMessage[] {
   const byIdIndex = current.findIndex((message) => message.id === incoming.id);
   if (byIdIndex >= 0) {
     if (current[byIdIndex] === incoming) return current;
@@ -194,11 +194,11 @@ function upsertLfgUIMessage(current: LfgChatMessage[], incoming: LfgChatMessage)
   }
 
   let next = current;
-  const incomingLfg = incoming.metadata?.lfgMessage;
+  const incomingLfg = incoming.metadata?.omgMessage;
   if (incomingLfg?.role === "user" && incomingLfg.kind === "text") {
     const incomingText = normText(incomingLfg.text);
     const pendingIndex = current.findIndex((message) => {
-      const lfg = message.metadata?.lfgMessage;
+      const lfg = message.metadata?.omgMessage;
       return (
         message.role === "user" &&
         !!lfg?.pending &&
@@ -234,7 +234,7 @@ function upsertLfgUIMessage(current: LfgChatMessage[], incoming: LfgChatMessage)
   return out;
 }
 
-function updateDraftText(current: LfgChatMessage[], part: LfgAiStreamPart): LfgChatMessage[] {
+function updateDraftText(current: OmgChatMessage[], part: OmgAiStreamPart): OmgChatMessage[] {
   if (!part.id) return current;
   const existingIndex = current.findIndex(
     (message) =>
@@ -244,7 +244,7 @@ function updateDraftText(current: LfgChatMessage[], part: LfgAiStreamPart): LfgC
   if (part.type === "text-end") {
     if (existingIndex < 0) return current;
     const existing = current[existingIndex];
-    const nextMessage: LfgChatMessage = {
+    const nextMessage: OmgChatMessage = {
       ...existing,
       parts: existing.parts.map((item) =>
         item.type === "text" ? { ...item, state: "done" as const } : item,
@@ -259,15 +259,15 @@ function updateDraftText(current: LfgChatMessage[], part: LfgAiStreamPart): LfgC
   if (!incoming && existingIndex >= 0) return current;
   if (existingIndex >= 0) {
     const existing = current[existingIndex];
-    const nextMessage: LfgChatMessage = {
+    const nextMessage: OmgChatMessage = {
       ...existing,
       metadata: {
-        lfgMessage: {
-          ...(existing.metadata?.lfgMessage ?? {}),
+        omgMessage: {
+          ...(existing.metadata?.omgMessage ?? {}),
           id: part.id,
           role: "assistant",
           kind: "text",
-          ts: part.ts ?? existing.metadata?.lfgMessage?.ts ?? Date.now(),
+          ts: part.ts ?? existing.metadata?.omgMessage?.ts ?? Date.now(),
         },
       },
       parts: existing.parts.map((item) =>
@@ -291,7 +291,7 @@ function updateDraftText(current: LfgChatMessage[], part: LfgAiStreamPart): LfgC
       id: part.id,
       role: "assistant",
       metadata: {
-        lfgMessage: {
+        omgMessage: {
           id: part.id,
           role: "assistant",
           kind: "text",
@@ -304,16 +304,16 @@ function updateDraftText(current: LfgChatMessage[], part: LfgAiStreamPart): LfgC
   ];
 }
 
-export function appendLfgTranscriptEvent(
-  current: LfgChatMessage[],
-  event: LfgTranscriptEvent,
+export function appendOmgTranscriptEvent(
+  current: OmgChatMessage[],
+  event: OmgTranscriptEvent,
   opts: { streamActive?: boolean } = {},
-): LfgChatMessage[] {
+): OmgChatMessage[] {
   if (event.type === "message") {
     if (event.message.seed) return current;
     if (opts.streamActive && event.message.role !== "user") return current;
-    const [message] = lfgMessagesToUIMessages([event.message]);
-    return message ? upsertLfgUIMessage(current, message) : current;
+    const [message] = omgMessagesToUIMessages([event.message]);
+    return message ? upsertOmgUIMessage(current, message) : current;
   }
   if (event.type === "ai_part") {
     return opts.streamActive ? current : updateDraftText(current, event.part);
@@ -334,7 +334,7 @@ export function appendLfgTranscriptEvent(
   return current;
 }
 
-class LfgChunkEmitter {
+class OmgChunkEmitter {
   private activeTextIds = new Set<string>();
   private textById: Record<string, string> = {};
   private closed = false;
@@ -347,7 +347,7 @@ class LfgChunkEmitter {
     private onClose?: () => void,
   ) {}
 
-  handle(event: LfgTranscriptEvent) {
+  handle(event: OmgTranscriptEvent) {
     if (this.closed) return;
     if (event.type === "error") {
       this.enqueue({ type: "error", errorText: event.error });
@@ -380,7 +380,7 @@ class LfgChunkEmitter {
     this.close();
   }
 
-  private handlePart(part: LfgAiStreamPart) {
+  private handlePart(part: OmgAiStreamPart) {
     if (!part.id) return;
     if (part.type === "text-end") {
       this.endText(part.id);
@@ -411,7 +411,7 @@ class LfgChunkEmitter {
     this.enqueue({ type: "text-delta", id: part.id, delta });
   }
 
-  private handleMessage(message: LfgMessage) {
+  private handleMessage(message: OmgMessage) {
     if (message.role === "user" && message.kind === "text") return;
     this.sawContent = true;
     this.clearFinishTimer();
@@ -435,7 +435,7 @@ class LfgChunkEmitter {
       this.finishSoon();
       return;
     }
-    this.enqueue({ type: "data-lfgMessage", id: message.id, data: message });
+    this.enqueue({ type: "data-omgMessage", id: message.id, data: message });
   }
 
   private startText(id: string) {
@@ -478,18 +478,18 @@ class LfgChunkEmitter {
   }
 }
 
-export class LfgChatTransport implements ChatTransport<LfgChatMessage> {
-  private readonly subscribeTranscript?: LfgTranscriptSubscribe;
+export class OmgChatTransport implements ChatTransport<OmgChatMessage> {
+  private readonly subscribeTranscript?: OmgTranscriptSubscribe;
   private readonly fetchImpl: (input: string, init?: RequestInit) => Promise<Response>;
   private readonly apiBase: string;
   private readonly usesConfiguredTransport: boolean;
   private readonly sessionId: string;
 
-  constructor({ sessionId, apiBase = "", subscribeTranscript, fetch: fetchImpl }: LfgChatTransportOptions) {
+  constructor({ sessionId, apiBase = "", subscribeTranscript, fetch: fetchImpl }: OmgChatTransportOptions) {
     this.sessionId = sessionId;
     this.apiBase = apiBase;
     this.subscribeTranscript = subscribeTranscript;
-    // The embedded app's host owns auth and routing through configureLfgTransport.
+    // The embedded app's host owns auth and routing through configureOmgTransport.
     // Falling back to window.fetch here bypassed that boundary and sent composer
     // POSTs to the host page's origin (app.omg.dev) instead of the selected LFG
     // instance. Use the configured transport whenever no explicit low-level
@@ -497,7 +497,7 @@ export class LfgChatTransport implements ChatTransport<LfgChatMessage> {
     // already the same-origin transport.
     this.usesConfiguredTransport = !fetchImpl && !apiBase;
     this.fetchImpl = fetchImpl ?? (this.usesConfiguredTransport
-      ? lfgFetch
+      ? omgFetch
       : globalThis.fetch.bind(globalThis));
   }
 
@@ -505,7 +505,7 @@ export class LfgChatTransport implements ChatTransport<LfgChatMessage> {
     messages,
     abortSignal,
     body,
-  }: Parameters<ChatTransport<LfgChatMessage>["sendMessages"]>[0]): Promise<ReadableStream<UIMessageChunk>> {
+  }: Parameters<ChatTransport<OmgChatMessage>["sendMessages"]>[0]): Promise<ReadableStream<UIMessageChunk>> {
     const text = this.extractLatestUserText(messages);
     if (!text) throw new Error("Cannot send an empty message");
     const stream = this.createStream(abortSignal);
@@ -528,7 +528,7 @@ export class LfgChatTransport implements ChatTransport<LfgChatMessage> {
 
   private createStream(abortSignal?: AbortSignal): ReadableStream<UIMessageChunk> {
     let unsubscribe: (() => void) | null = null;
-    let emitter: LfgChunkEmitter | null = null;
+    let emitter: OmgChunkEmitter | null = null;
     const sid = this.sessionId;
     return new ReadableStream<UIMessageChunk>({
       start: (controller) => {
@@ -541,7 +541,7 @@ export class LfgChatTransport implements ChatTransport<LfgChatMessage> {
           controller.close();
           return;
         }
-        emitter = new LfgChunkEmitter(controller, cleanup);
+        emitter = new OmgChunkEmitter(controller, cleanup);
         unsubscribe = this.subscribeTranscript(sid, (event) => emitter?.handle(event));
         abortSignal?.addEventListener("abort", () => {
           cleanup();
@@ -556,7 +556,7 @@ export class LfgChatTransport implements ChatTransport<LfgChatMessage> {
     });
   }
 
-  private extractLatestUserText(messages: LfgChatMessage[]) {
+  private extractLatestUserText(messages: OmgChatMessage[]) {
     for (let i = messages.length - 1; i >= 0; i--) {
       const message = messages[i];
       if (message.role !== "user") continue;

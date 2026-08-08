@@ -34,13 +34,13 @@ afterEach(() => {
 
 describe("dual-id Grok transcript after close", () => {
   test("getCachedTranscriptPath resolves LFG id via resume_handle or session_id", () => {
-    const lfgId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    const omgId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
     const nativeId = "019fcd86-16ec-7f03-b324-6e4162e99728";
     const path = `/tmp/fake-grok/${nativeId}/chat_history.jsonl`;
 
     upsertResumableRows([
       {
-        sessionId: lfgId,
+        sessionId: omgId,
         cwd: "/work",
         project: "lfg",
         title: "Closed Grok",
@@ -69,18 +69,18 @@ describe("dual-id Grok transcript after close", () => {
       },
     ]);
 
-    expect(getCachedTranscriptPath(lfgId)).toBe(path);
+    expect(getCachedTranscriptPath(omgId)).toBe(path);
     expect(getCachedTranscriptPath(nativeId)).toBe(path);
   });
 
   test("LFG-id dual-id row survives prune of unmanaged scan set", () => {
-    const lfgId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    const omgId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
     const nativeId = "019fcd85-0050-7e60-a086-59cbed975d06";
     const path = `/tmp/fake-grok/${nativeId}/chat_history.jsonl`;
 
     upsertResumableRows([
       {
-        sessionId: lfgId,
+        sessionId: omgId,
         cwd: "/work",
         project: "lfg",
         title: "Closed Grok",
@@ -111,11 +111,11 @@ describe("dual-id Grok transcript after close", () => {
 
     // Scanner only knows the native filesystem id — managed LFG alias must remain.
     pruneResumableExcept(new Set([nativeId]));
-    expect(getCachedTranscriptPath(lfgId)).toBe(path);
+    expect(getCachedTranscriptPath(omgId)).toBe(path);
   });
 
   test("resolveTranscript falls back to resume-cache for a closed dual-id session", async () => {
-    const lfgId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const omgId = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
     const nativeId = "019fcd6a-c307-7582-ac05-604b51573373";
     const dir = join(root, "grok-session");
     mkdirSync(dir, { recursive: true });
@@ -124,7 +124,7 @@ describe("dual-id Grok transcript after close", () => {
 
     upsertResumableRows([
       {
-        sessionId: lfgId,
+        sessionId: omgId,
         cwd: root,
         project: "lfg",
         title: "Closed Grok",
@@ -140,6 +140,6 @@ describe("dual-id Grok transcript after close", () => {
     ]);
 
     // No managed registry entry, no active Grok process — cache is the only map.
-    expect(await resolveTranscript(lfgId)).toBe(path);
+    expect(await resolveTranscript(omgId)).toBe(path);
   });
 });

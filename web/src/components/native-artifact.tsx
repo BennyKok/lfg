@@ -27,7 +27,7 @@ import {
   secureArtifactDocument,
   type ArtifactTheme,
 } from "../lib/artifact-document";
-import { lfgFetch } from "../lib/lfg-client";
+import { omgFetch } from "../lib/omg-client";
 import { THEME_CHANGE_EVENT } from "../lib/theme";
 import { cn } from "../lib/utils";
 
@@ -91,7 +91,7 @@ function useNativeArtifact(
   useEffect(() => {
     const controller = new AbortController();
     setState({ status: "loading", value: null });
-    void lfgFetch(requestPath, { signal: controller.signal })
+    void omgFetch(requestPath, { signal: controller.signal })
       .then(async (response) => {
         if (!response.ok) throw new Error(`artifact ${response.status}`);
         const source = await response.text();

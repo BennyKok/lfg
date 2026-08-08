@@ -74,7 +74,7 @@ type CodexConfigValue =
   | CodexConfigValue[]
   | { [key: string]: CodexConfigValue };
 
-function lfgMcpConfig(): { config?: { [key: string]: CodexConfigValue } } {
+function omgMcpConfig(): { config?: { [key: string]: CodexConfigValue } } {
   const sessionId = process.env.LFG_SESSION_ID?.trim();
   if (!sessionId) return {};
   return { config: { mcp_servers: { lfg: { env: { LFG_SESSION_ID: sessionId } } } } };
@@ -175,7 +175,7 @@ export async function pipeToCodexAiSdk(
   const codexPathOverride = resolveCodexPathOverride();
   const codex = new Codex({
     ...(codexPathOverride ? { codexPathOverride } : {}),
-    ...lfgMcpConfig(),
+    ...omgMcpConfig(),
   });
 
   log(`[runner] piping ${prompt.length} chars to codex via codex-sdk (${model})`);
@@ -250,7 +250,7 @@ export async function cmdCodexAisdkSession(argv: string[]): Promise<void> {
   // Omitting `env` inherits process.env (HOME → ~/.codex auth, LFG_* for MCP).
   const codex = new Codex({
     ...(codexPathOverride ? { codexPathOverride } : {}),
-    ...lfgMcpConfig(),
+    ...omgMcpConfig(),
   });
   let threadThinkingLevel = thinkingLevel;
   let thread = resumeThreadId
