@@ -4,6 +4,14 @@ Recent product updates and deployment notes.
 
 ## August 8, 2026 - The worktree sweeper stays in its lane (v0.1.314)
 
+- **The folder picker works on a brand-new install.** It could open on
+  "Opening…" with an empty listing and "folder does not exist", before anyone
+  had touched a setting: `.env` ships `OMG_REPOS_ROOT=` as documentation, and
+  an empty value was being read as a deliberate answer rather than a
+  placeholder. Empty and whitespace now count as unset — which repairs existing
+  installs with no `.env` edit — and setup fills the placeholder in place
+  instead of appending a second, conflicting assignment.
+
 - **The sweeper no longer deletes worktrees it didn't create.** `~/lfg-worktrees`
   is a shared directory, and the background cleanup treated everything in it as
   its own — so a hand-made worktree, release checkout or clone parked there was
